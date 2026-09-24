@@ -1200,6 +1200,24 @@ Agents load a skill's `SKILL.md` when a task matches its description and
 open its `references/` as needed. When you change an API, update the
 matching skill in the same change so agents don't learn the old one.
 
+### Skills in an app that uses Forge UI
+
+Install the three app-facing skills straight from this repo with the
+[`skills`](https://www.npmjs.com/package/skills) CLI. It clones with your
+GitHub credentials, so the GitHub CLI login that reads the registry works
+here too:
+
+```bash
+npx skills add jleva12/forge-ui --skill forge-ui forge-data forge-state -a claude-code -y
+```
+
+They're copied into the app's `.claude/skills/` and recorded in
+`skills-lock.json`; commit both so the whole team gets them, and run
+`npx skills update` to pull newer versions. Leave out `-a claude-code` to
+choose other agents (Cursor, Codex, …). `forge-registry` is for maintaining
+this repo, so apps don't need it. The CLI rejects a `SKILL.md` whose
+frontmatter isn't strict YAML — quote a `description` that contains `: `.
+
 ## Changing the design system
 
 1. Edit tokens in `src/index.css` or components in `src/components/`.
