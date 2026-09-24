@@ -7,7 +7,6 @@
     "zustand@^5.0.15"
   ],
   "registryDependencies": [
-    "@forge-ui/theme",
     "@forge-ui/context-store"
   ],
   "files": [

@@ -53,13 +53,19 @@ FORGE_UI_TOKEN=$(gh auth token) npx shadcn@latest init jleva12/forge-ui/base#mai
 
 This scaffolds a Vite + React app, writes its `components.json` with the
 `@forge-ui` registry and its `${FORGE_UI_TOKEN}` header (the placeholder,
-never the token), and installs everything: the theme, every primitive and
-component, the libraries and the AI assistant. The `base` item carries the
-preset settings, so don't add `--preset` — it replaces them. Other
-templates work too (`--template next`, `react-router`, …).
+never the token), and installs everything: every primitive and component,
+the libraries and the AI assistant. `src/index.css` is this repo's file
+byte for byte (`@forge-ui/index-css`), so colours, type sizes, radii and
+spacing match the demo exactly. The `base` item carries the preset
+settings, so don't add `--preset` — it replaces them. It's for the Vite
+template: it writes `src/index.css`, where Vite keeps its stylesheet.
 
 Afterwards, put the token in the new app's `.env.local` (see step 1 below)
-so later `shadcn add @forge-ui/…` commands can read the registry.
+so later `shadcn add @forge-ui/…` commands can read the registry. To pick
+up theme changes later, re-copy the stylesheet with
+`npx shadcn@latest add @forge-ui/index-css --overwrite`; don't add
+`@forge-ui/theme` or `@forge-ui/all` to such an app, because they merge the
+theme into the stylesheet a second time.
 
 To add Forge UI to an existing app instead, follow these steps:
 
@@ -203,7 +209,8 @@ copies `public/r` into `dist/r`.
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `@forge-ui/theme`                       | All tokens (light/dark), Geist, type scale, radii, elevation, orb utilities, focus ring, scrollbars, reduced motion                              |
 | `@forge-ui/all`                         | The theme, the theme provider, every primitive and component                                                                                     |
-| `@forge-ui/base`                        | A new app in one `shadcn init`: the registry and token header in `components.json`, then everything                                              |
+| `@forge-ui/index-css`                   | The theme as this repo's exact `src/index.css`, replacing a Vite app's stylesheet                                                                |
+| `@forge-ui/base`                        | A new Vite app in one `shadcn init`: registry and token header, the exact `index.css`, then everything                                           |
 | `@forge-ui/icon`                        | `Icon` + the workspace icon vocabulary                                                                                                           |
 | `@forge-ui/status`                      | `StatusBadge`, `StatusSymbol`, `ConnectionDot`, `CountBadge`, `Chip`, `RunStateIcon`                                                             |
 | `@forge-ui/avatars`                     | `WorkspaceOrb`, `AgentOrb`, `AgentAvatars`                                                                                                       |

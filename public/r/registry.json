@@ -1990,7 +1990,6 @@
         "zustand@^5.0.15"
       ],
       "registryDependencies": [
-        "@forge-ui/theme",
         "@forge-ui/context-store"
       ],
       "files": [
@@ -2376,8 +2375,27 @@
       ]
     },
     {
+      "name": "index-css",
+      "type": "registry:item",
+      "title": "Theme stylesheet (Vite)",
+      "description": "The theme as the repo's exact src/index.css, replacing a Vite app's stylesheet. Used by base; add with --overwrite to refresh it.",
+      "dependencies": [
+        "@fontsource-variable/geist",
+        "tw-animate-css",
+        "shadcn@^4.21.0"
+      ],
+      "files": [
+        {
+          "path": "src/index.css",
+          "type": "registry:file",
+          "target": "src/index.css"
+        }
+      ]
+    },
+    {
       "name": "base",
       "type": "registry:base",
+      "extends": "none",
       "title": "New Forge UI app",
       "description": "Sets up a new app: the @forge-ui registry with its FORGE_UI_TOKEN header, the theme, every component and every library.",
       "config": {
@@ -2394,8 +2412,73 @@
           }
         }
       },
+      "dependencies": [
+        "cn@^0.4.0"
+      ],
+      "files": [
+        {
+          "path": "src/lib/utils.ts",
+          "type": "registry:lib",
+          "target": "@lib/utils.ts"
+        }
+      ],
       "registryDependencies": [
-        "@forge-ui/all",
+        "@forge-ui/index-css",
+        "@forge-ui/theme-provider",
+        "@forge-ui/alert",
+        "@forge-ui/avatar",
+        "@forge-ui/badge",
+        "@forge-ui/breadcrumb",
+        "@forge-ui/button",
+        "@forge-ui/checkbox",
+        "@forge-ui/collapsible",
+        "@forge-ui/command",
+        "@forge-ui/context-menu",
+        "@forge-ui/dialog",
+        "@forge-ui/dropdown-menu",
+        "@forge-ui/empty",
+        "@forge-ui/field",
+        "@forge-ui/input",
+        "@forge-ui/input-group",
+        "@forge-ui/kbd",
+        "@forge-ui/label",
+        "@forge-ui/native-select",
+        "@forge-ui/popover",
+        "@forge-ui/progress",
+        "@forge-ui/select",
+        "@forge-ui/separator",
+        "@forge-ui/sheet",
+        "@forge-ui/skeleton",
+        "@forge-ui/spinner",
+        "@forge-ui/table",
+        "@forge-ui/tabs",
+        "@forge-ui/textarea",
+        "@forge-ui/toast",
+        "@forge-ui/toggle",
+        "@forge-ui/toggle-group",
+        "@forge-ui/tooltip",
+        "@forge-ui/icon",
+        "@forge-ui/status",
+        "@forge-ui/avatars",
+        "@forge-ui/app-shell",
+        "@forge-ui/icon-rail",
+        "@forge-ui/workspace-sidebar",
+        "@forge-ui/toolbar",
+        "@forge-ui/task-list",
+        "@forge-ui/kanban",
+        "@forge-ui/illustration",
+        "@forge-ui/empty-state",
+        "@forge-ui/settings-list",
+        "@forge-ui/integrations",
+        "@forge-ui/feedback",
+        "@forge-ui/activity",
+        "@forge-ui/task-sheet",
+        "@forge-ui/task-page",
+        "@forge-ui/run-log",
+        "@forge-ui/changes",
+        "@forge-ui/handoff",
+        "@forge-ui/metrics-table",
+        "@forge-ui/data-table",
         "@forge-ui/api-client",
         "@forge-ui/query-client",
         "@forge-ui/resource",

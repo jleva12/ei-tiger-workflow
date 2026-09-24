@@ -559,7 +559,10 @@ const userPreferences = {
   description:
     "UserPreferencesProvider and hooks: density, text size, contrast, motion and app-specific preferences, saved in the browser and applied to the page.",
   dependencies: [version("zustand")],
-  registryDependencies: [forge("theme"), forge("context-store")],
+  // The density, contrast and motion rules it switches live in the theme,
+  // which apps get from `theme`, `all` or `base`. Depending on `theme` here
+  // would make `base` merge it over the verbatim index.css.
+  registryDependencies: [forge("context-store")],
   files: ["user-preferences.ts", "user-preferences-provider.tsx"].map(
     (file) => ({
       path: `src/lib/${file}`,
@@ -720,6 +723,25 @@ const all = {
 }
 
 /**
+ * The theme as this repo's exact src/index.css — same tokens, type scale,
+ * spacing, comments and rule order — replacing a Vite app's stylesheet.
+ * `theme` merges the same CSS into an existing stylesheet instead, which
+ * reorders it (and moves the keyframes into @theme).
+ */
+const indexCss = {
+  name: "index-css",
+  type: "registry:item",
+  title: "Theme stylesheet (Vite)",
+  description:
+    "The theme as the repo's exact src/index.css, replacing a Vite app's stylesheet. Used by base; add with --overwrite to refresh it.",
+  // index.css imports shadcn/tailwind.css, so the shadcn package ships too.
+  dependencies: [...theme.dependencies, version("shadcn")],
+  files: [
+    { path: "src/index.css", type: "registry:file", target: "src/index.css" },
+  ],
+}
+
+/**
  * Starts a new app on Forge UI in one command:
  *   FORGE_UI_TOKEN=$(gh auth token) npx shadcn@latest init \
  *     jleva12/forge-ui/base#main --template vite --base base --name my-app
@@ -730,6 +752,9 @@ const all = {
 const appBase = {
   name: "base",
   type: "registry:base",
+  // Skip shadcn's default style: `init` merges its colours after files are
+  // written, over the verbatim stylesheet. Its lib/utils.ts ships below.
+  extends: "none",
   title: "New Forge UI app",
   description:
     "Sets up a new app: the @forge-ui registry with its FORGE_UI_TOKEN header, the theme, every component and every library.",
@@ -745,8 +770,15 @@ const appBase = {
       },
     },
   },
+  dependencies: [version("cn")],
+  files: [
+    { path: "src/lib/utils.ts", type: "registry:lib", target: "@lib/utils.ts" },
+  ],
+  // Everything in `all` except `theme`: its merge runs after files are
+  // written, so it would rewrite the verbatim stylesheet from `index-css`.
   registryDependencies: [
-    forge("all"),
+    forge("index-css"),
+    ...all.registryDependencies.filter((dep) => dep !== forge("theme")),
     forge("api-client"),
     forge("query-client"),
     forge("resource"),
@@ -778,6 +810,7 @@ const registry = {
     assistantThread,
     assistant,
     all,
+    indexCss,
     appBase,
   ],
 }

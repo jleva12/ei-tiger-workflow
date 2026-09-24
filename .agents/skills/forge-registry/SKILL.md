@@ -117,6 +117,11 @@ The `base` item (`registry:base`) starts new apps with
 its `config` writes the registry and token header into the new
 `components.json` and its `registryDependencies` install everything, so add
 new top-level libraries to it too. `REGISTRY_URL` overrides the URL it writes.
+`base` ships `src/index.css` verbatim through `index-css` and leaves
+`theme` out of its tree (with `extends: "none"` to skip shadcn's default
+style): `init` writes files first and merges CSS afterwards, so any item in
+the tree that carries `cssVars`/`css` — or depends on `theme` — rewrites
+the copied stylesheet. Keep `theme` out of other items' dependencies.
 Commit, push or tag only when the user asks.
 
 The ESLint config allows non-component exports from `src/components/ui`
