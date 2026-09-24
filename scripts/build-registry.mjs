@@ -19,6 +19,11 @@ const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"))
 // "Use it in another project" in the README.
 const homepage =
   process.env.REGISTRY_HOMEPAGE ?? "https://github.com/jleva12/forge-ui"
+// Where apps fetch items from; the `base` item writes it into a new app's
+// components.json. Override to host the same files somewhere else.
+const registryUrl =
+  process.env.REGISTRY_URL ??
+  "https://raw.githubusercontent.com/jleva12/forge-ui/main/public/r/{name}.json"
 
 /* -------------------------------------------------------------------------- */
 /* Minimal nested CSS parser (enough for index.css)                           */
@@ -714,6 +719,44 @@ const all = {
   ],
 }
 
+/**
+ * Starts a new app on Forge UI in one command:
+ *   FORGE_UI_TOKEN=$(gh auth token) npx shadcn@latest init \
+ *     jleva12/forge-ui/base#main --template vite --base base --name my-app
+ * `init` merges `config` into the new components.json (so the private
+ * @forge-ui registry and its token header are set up), then installs
+ * everything below.
+ */
+const appBase = {
+  name: "base",
+  type: "registry:base",
+  title: "New Forge UI app",
+  description:
+    "Sets up a new app: the @forge-ui registry with its FORGE_UI_TOKEN header, the theme, every component and every library.",
+  config: {
+    style: "base-rhea",
+    iconLibrary: "hugeicons",
+    menuColor: "inverted-translucent",
+    menuAccent: "subtle",
+    registries: {
+      "@forge-ui": {
+        url: registryUrl,
+        headers: { Authorization: "Bearer ${FORGE_UI_TOKEN}" },
+      },
+    },
+  },
+  registryDependencies: [
+    forge("all"),
+    forge("api-client"),
+    forge("query-client"),
+    forge("resource"),
+    forge("user"),
+    forge("preferences"),
+    forge("shell"),
+    forge("assistant"),
+  ],
+}
+
 const registry = {
   $schema: "https://ui.shadcn.com/schema/registry.json",
   name: "forge-ui",
@@ -735,6 +778,7 @@ const registry = {
     assistantThread,
     assistant,
     all,
+    appBase,
   ],
 }
 

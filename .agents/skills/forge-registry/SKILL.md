@@ -112,6 +112,11 @@ committed with it. `npm run registry:check` rebuilds and fails on
 uncommitted registry changes; the `Registry` workflow in
 `.github/workflows/registry.yml` runs it and `tsc -b` on every push.
 Releases are git tags (`v0.1.0`) that apps can pin in their registry URL.
+The `base` item (`registry:base`) starts new apps with
+`npx shadcn@latest init jleva12/forge-ui/base#main --template vite --base base`:
+its `config` writes the registry and token header into the new
+`components.json` and its `registryDependencies` install everything, so add
+new top-level libraries to it too. `REGISTRY_URL` overrides the URL it writes.
 Commit, push or tag only when the user asks.
 
 The ESLint config allows non-component exports from `src/components/ui`

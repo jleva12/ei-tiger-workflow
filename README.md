@@ -42,6 +42,27 @@ generated `registry.json` and `public/r/*.json` are committed, and apps read
 them from `raw.githubusercontent.com` with a GitHub token. There's no server
 to run.
 
+### Start a new app in one command
+
+With the GitHub CLI logged in (`gh auth login`) to an account that can read
+the repo:
+
+```bash
+FORGE_UI_TOKEN=$(gh auth token) npx shadcn@latest init jleva12/forge-ui/base#main --template vite --base base --name my-app
+```
+
+This scaffolds a Vite + React app, writes its `components.json` with the
+`@forge-ui` registry and its `${FORGE_UI_TOKEN}` header (the placeholder,
+never the token), and installs everything: the theme, every primitive and
+component, the libraries and the AI assistant. The `base` item carries the
+preset settings, so don't add `--preset` — it replaces them. Other
+templates work too (`--template next`, `react-router`, …).
+
+Afterwards, put the token in the new app's `.env.local` (see step 1 below)
+so later `shadcn add @forge-ui/…` commands can read the registry.
+
+To add Forge UI to an existing app instead, follow these steps:
+
 1. **Get a token that can read the repo.** Either:
    - a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)
      with _Repository access_ → _Only select repositories_ → `forge-ui`
@@ -182,6 +203,7 @@ copies `public/r` into `dist/r`.
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `@forge-ui/theme`                       | All tokens (light/dark), Geist, type scale, radii, elevation, orb utilities, focus ring, scrollbars, reduced motion                              |
 | `@forge-ui/all`                         | The theme, the theme provider, every primitive and component                                                                                     |
+| `@forge-ui/base`                        | A new app in one `shadcn init`: the registry and token header in `components.json`, then everything                                              |
 | `@forge-ui/icon`                        | `Icon` + the workspace icon vocabulary                                                                                                           |
 | `@forge-ui/status`                      | `StatusBadge`, `StatusSymbol`, `ConnectionDot`, `CountBadge`, `Chip`, `RunStateIcon`                                                             |
 | `@forge-ui/avatars`                     | `WorkspaceOrb`, `AgentOrb`, `AgentAvatars`                                                                                                       |

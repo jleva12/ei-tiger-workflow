@@ -1,0 +1,31 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "base",
+  "title": "New Forge UI app",
+  "description": "Sets up a new app: the @forge-ui registry with its FORGE_UI_TOKEN header, the theme, every component and every library.",
+  "registryDependencies": [
+    "@forge-ui/all",
+    "@forge-ui/api-client",
+    "@forge-ui/query-client",
+    "@forge-ui/resource",
+    "@forge-ui/user",
+    "@forge-ui/preferences",
+    "@forge-ui/shell",
+    "@forge-ui/assistant"
+  ],
+  "type": "registry:base",
+  "config": {
+    "style": "base-rhea",
+    "iconLibrary": "hugeicons",
+    "menuColor": "inverted-translucent",
+    "menuAccent": "subtle",
+    "registries": {
+      "@forge-ui": {
+        "url": "https://raw.githubusercontent.com/jleva12/forge-ui/main/public/r/{name}.json",
+        "headers": {
+          "Authorization": "Bearer ${FORGE_UI_TOKEN}"
+        }
+      }
+    }
+  }
+}
