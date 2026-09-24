@@ -1,0 +1,18 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "context-store",
+  "title": "Context store",
+  "description": "createContextStore: a Zustand store per React Provider, seeded from props or context, with typed selector hooks.",
+  "dependencies": [
+    "zustand@^5.0.15"
+  ],
+  "files": [
+    {
+      "path": "src/lib/context-store.tsx",
+      "content": "import { createContext, useContext, useState, type ReactNode } from \"react\"\nimport {\n  useStore as useZustandStore,\n  type ExtractState,\n  type StoreApi,\n} from \"zustand\"\n\n/** The Provider's `initial` prop: required unless the factory takes nothing. */\ntype InitialProp<Initial> = [Initial] extends [void]\n  ? { initial?: undefined }\n  : { initial: Initial }\n\nexport type ContextStoreProviderProps<Initial> = InitialProp<Initial> & {\n  children?: ReactNode\n}\n\nconst identity = <T,>(value: T) => value\n\n/**\n * A Zustand store per Provider, seeded from props or context.\n *\n * React context carries only the store (it never changes), so it never\n * re-renders anything; components subscribe to slices through `useStore`\n * selectors, as with a global Zustand store. Each `<Provider>` gets its own\n * store, created once from `initial`: later changes to `initial` don't reset\n * it (give the Provider a `key` to start over, or `setState` to sync).\n *\n * ```tsx\n * export const {\n *   Provider: BoardProvider,\n *   useStore: useBoardStore,\n *   useStoreApi: useBoardStoreApi,\n * } = createContextStore(\n *   (initial: { view: View }) =>\n *     createStore<BoardState>()((set) => ({\n *       ...initial,\n *       setView: (view) => set({ view }),\n *     })),\n *   { name: \"Board\" }\n * )\n *\n * <BoardProvider initial={{ view: \"kanban\" }}>…</BoardProvider>\n * const view = useBoardStore((s) => s.view)\n * ```\n *\n * The factory returns the store, so middleware (`persist`, `devtools`,\n * `subscribeWithSelector`) goes where it always does, inside `createStore`,\n * and `useStoreApi()` keeps its extra API (e.g. `.persist`).\n */\nexport function createContextStore<\n  Store extends StoreApi<unknown>,\n  Initial = void,\n>(\n  factory: (initial: Initial) => Store,\n  { name = \"ContextStore\" }: { name?: string } = {}\n) {\n  type State = ExtractState<Store>\n\n  const StoreContext = createContext<Store | null>(null)\n  StoreContext.displayName = `${name}Context`\n\n  function Provider({ initial, children }: ContextStoreProviderProps<Initial>) {\n    // Created once per Provider; `initial` only seeds it.\n    const [store] = useState(() => factory(initial as Initial))\n    return (\n      <StoreContext.Provider value={store}>{children}</StoreContext.Provider>\n    )\n  }\n  Provider.displayName = `${name}Provider`\n\n  /**\n   * The store itself, for reading or writing outside render (event\n   * handlers, effects) without subscribing: `getState()`, `setState()`,\n   * `subscribe()`.\n   */\n  function useStoreApi(): Store {\n    const store = useContext(StoreContext)\n    if (!store) {\n      throw new Error(`${name} hooks must be used inside <${name}Provider>.`)\n    }\n    return store\n  }\n\n  /**\n   * Subscribes to the store. With a selector, re-renders only when the\n   * selected value changes; wrap object-returning selectors in `useShallow`.\n   */\n  function useStore(): State\n  function useStore<T>(selector: (state: State) => T): T\n  function useStore<T>(selector: (state: State) => T = identity as never) {\n    return useZustandStore(useStoreApi(), selector)\n  }\n\n  return { Provider, useStore, useStoreApi, Context: StoreContext }\n}\n",
+      "type": "registry:lib",
+      "target": "@lib/context-store.tsx"
+    }
+  ],
+  "type": "registry:lib"
+}

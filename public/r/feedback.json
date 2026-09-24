@@ -1,0 +1,27 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "feedback",
+  "title": "Feedback",
+  "description": "Error callouts, preview banner, active filters and load more.",
+  "dependencies": [
+    "@base-ui/react@^1.8.0",
+    "class-variance-authority@^0.7.1",
+    "cn@^0.4.0",
+    "@hugeicons/react@^1.1.10",
+    "@hugeicons/core-free-icons@^4.3.5"
+  ],
+  "registryDependencies": [
+    "@forge-ui/alert",
+    "@forge-ui/button",
+    "@forge-ui/icon"
+  ],
+  "files": [
+    {
+      "path": "src/components/forge/feedback.tsx",
+      "content": "import * as React from \"react\"\nimport { cn } from \"cn\"\n\nimport {\n  Alert,\n  AlertAction,\n  AlertDescription,\n  AlertTitle,\n} from \"@/components/ui/alert\"\nimport { Button } from \"@/components/ui/button\"\nimport { Icon } from \"./icon\"\nimport type { IconProp } from \"./icons\"\n\n/**\n * Recoverable error callout: soft red surface, an info glyph, a title, the\n * reason and an optional retry action. Use it for connection failures and\n * inline form or action errors.\n */\nfunction ErrorCallout({\n  title,\n  action,\n  icon = \"info\",\n  className,\n  children,\n}: {\n  title?: React.ReactNode\n  action?: React.ReactNode\n  icon?: IconProp\n  className?: string\n  children?: React.ReactNode\n}) {\n  return (\n    <Alert\n      variant=\"error\"\n      className={cn(\n        \"gap-x-[13px] px-[15px] py-3 text-xs/[1.6] wrap-anywhere *:[svg]:translate-y-px\",\n        action && \"items-center pr-24\",\n        className\n      )}\n    >\n      <Icon icon={icon} />\n      {title && <AlertTitle className=\"font-medium\">{title}</AlertTitle>}\n      {children && (\n        <AlertDescription\n          className={cn(\"text-xs/[1.6]\", title && \"text-2xs/[1.6]\")}\n        >\n          {children}\n        </AlertDescription>\n      )}\n      {action && (\n        <AlertAction className=\"top-1/2 right-[15px] -translate-y-1/2\">\n          {action}\n        </AlertAction>\n      )}\n    </Alert>\n  )\n}\n\n/** Quiet banner noting a sample or read-only mode, with an exit link. */\nfunction PreviewBanner({\n  icon = \"layers\",\n  label,\n  explanation,\n  action,\n  onAction,\n  className,\n}: {\n  icon?: IconProp\n  label: React.ReactNode\n  explanation?: React.ReactNode\n  action?: React.ReactNode\n  onAction?: () => void\n  className?: string\n}) {\n  return (\n    <div\n      data-slot=\"preview-banner\"\n      className={cn(\n        \"flex items-center gap-[7px] px-0.5 pb-[15px] text-3xs text-muted-foreground @max-[600px]/shell:text-4xs\",\n        className\n      )}\n    >\n      <Icon icon={icon} size={14} />\n      <span>\n        {label}\n        {explanation && (\n          <span className=\"text-subtle @max-[600px]/shell:hidden\">\n            {\" \"}\n            · {explanation}\n          </span>\n        )}\n      </span>\n      {action && (\n        <button\n          type=\"button\"\n          onClick={onAction}\n          className=\"ml-auto flex items-center gap-1 underline underline-offset-3\"\n        >\n          {action}\n          <Icon icon=\"external\" size={13} />\n        </button>\n      )}\n    </div>\n  )\n}\n\n/** \"N matching tasks · filters\" summary with a clear action. */\nfunction ActiveFilters({\n  onClear,\n  clearLabel = \"Clear filters\",\n  className,\n  children,\n}: {\n  onClear?: () => void\n  clearLabel?: string\n  className?: string\n  children: React.ReactNode\n}) {\n  return (\n    <div\n      data-slot=\"active-filters\"\n      className={cn(\n        \"mb-4 flex items-center justify-between text-2xs text-muted-foreground\",\n        className\n      )}\n    >\n      <span>{children}</span>\n      <button\n        type=\"button\"\n        onClick={onClear}\n        className=\"flex items-center gap-[5px] transition-colors hover:text-foreground\"\n      >\n        {clearLabel}\n        <Icon icon=\"close\" size={12} />\n      </button>\n    </div>\n  )\n}\n\n/** Centered \"load more\" button with an explanatory caption. */\nfunction LoadMore({\n  label = \"Load more\",\n  hint,\n  className,\n  ...props\n}: React.ComponentProps<typeof Button> & {\n  label?: React.ReactNode\n  hint?: React.ReactNode\n}) {\n  return (\n    <div\n      data-slot=\"load-more\"\n      className={cn(\"my-5 flex flex-col items-center gap-2.5\", className)}\n    >\n      <Button variant=\"outline\" {...props}>\n        {label}\n      </Button>\n      {hint && <span className=\"text-3xs text-subtle\">{hint}</span>}\n    </div>\n  )\n}\n\nexport { ErrorCallout, PreviewBanner, ActiveFilters, LoadMore }\n",
+      "type": "registry:component",
+      "target": "@components/forge/feedback.tsx"
+    }
+  ],
+  "type": "registry:component"
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "icon",
+  "title": "Icon",
+  "description": "The workspace icon vocabulary (Hugeicons, 17px, 1.6 stroke).",
+  "dependencies": [
+    "@base-ui/react@^1.8.0",
+    "class-variance-authority@^0.7.1",
+    "cn@^0.4.0",
+    "@hugeicons/react@^1.1.10",
+    "@hugeicons/core-free-icons@^4.3.5"
+  ],
+  "registryDependencies": [],
+  "files": [
+    {
+      "path": "src/components/forge/icons.ts",
+      "content": "import type { IconSvgElement } from \"@hugeicons/react\"\nimport {\n  Activity01Icon,\n  Add01Icon,\n  Alert02Icon,\n  ArrowDown01Icon,\n  ArrowLeft01Icon,\n  ArrowRight01Icon,\n  ArrowUp01Icon,\n  ArrowUpRight01Icon,\n  Calendar03Icon,\n  Cancel01Icon,\n  CancelCircleIcon,\n  CheckmarkCircle02Icon,\n  Clock01Icon,\n  CodeIcon,\n  Coins01Icon,\n  Comment01Icon,\n  CommandIcon,\n  Copy01Icon,\n  DashboardSquare01Icon,\n  Download01Icon,\n  DragDropVerticalIcon,\n  File01Icon,\n  FilterHorizontalIcon,\n  Folder01Icon,\n  GitBranchIcon,\n  GitCommitIcon,\n  GitPullRequestIcon,\n  GridTableIcon,\n  Home01Icon,\n  InformationCircleIcon,\n  KanbanIcon,\n  Layers01Icon,\n  Link01Icon,\n  ListViewIcon,\n  Loading03Icon,\n  Message01Icon,\n  Moon02Icon,\n  MoreHorizontalIcon,\n  Notification01Icon,\n  PinIcon,\n  PlusSignCircleIcon,\n  RefreshIcon,\n  Robot01Icon,\n  Search01Icon,\n  Settings01Icon,\n  SidebarLeftIcon,\n  Sorting01Icon,\n  SparklesIcon,\n  StopCircleIcon,\n  Sun01Icon,\n  Task01Icon,\n  Tick02Icon,\n  UserGroupIcon,\n  ViewIcon,\n} from \"@hugeicons/core-free-icons\"\n\n/**\n * The Forge Workspace icon vocabulary: Hugeicons (free, stroke) rendered at\n * 17px with a 1.6 stroke. Names describe intent, not glyphs, so a product\n * can swap the underlying glyph without touching call sites.\n */\nexport const icons = {\n  // Navigation\n  home: Home01Icon,\n  search: Search01Icon,\n  bell: Notification01Icon,\n  folder: Folder01Icon,\n  task: Task01Icon,\n  team: UserGroupIcon,\n  dashboard: DashboardSquare01Icon,\n  layers: Layers01Icon,\n  settings: Settings01Icon,\n  sidebar: SidebarLeftIcon,\n  command: CommandIcon,\n  // Views\n  list: ListViewIcon,\n  kanban: KanbanIcon,\n  activity: Activity01Icon,\n  calendar: Calendar03Icon,\n  clock: Clock01Icon,\n  // Theme\n  sun: Sun01Icon,\n  moon: Moon02Icon,\n  // Direction\n  down: ArrowDown01Icon,\n  up: ArrowUp01Icon,\n  left: ArrowLeft01Icon,\n  right: ArrowRight01Icon,\n  external: ArrowUpRight01Icon,\n  // Actions\n  plus: Add01Icon,\n  addCircle: PlusSignCircleIcon,\n  refresh: RefreshIcon,\n  sort: Sorting01Icon,\n  filter: FilterHorizontalIcon,\n  close: Cancel01Icon,\n  more: MoreHorizontalIcon,\n  link: Link01Icon,\n  copy: Copy01Icon,\n  download: Download01Icon,\n  view: ViewIcon,\n  grip: DragDropVerticalIcon,\n  table: GridTableIcon,\n  pin: PinIcon,\n  stop: StopCircleIcon,\n  // Code\n  branch: GitBranchIcon,\n  commit: GitCommitIcon,\n  review: GitPullRequestIcon,\n  code: CodeIcon,\n  file: File01Icon,\n  // Agents and messages\n  robot: Robot01Icon,\n  message: Message01Icon,\n  comment: Comment01Icon,\n  sparkles: SparklesIcon,\n  coins: Coins01Icon,\n  // Status\n  check: Tick02Icon,\n  completed: CheckmarkCircle02Icon,\n  failed: CancelCircleIcon,\n  loading: Loading03Icon,\n  info: InformationCircleIcon,\n  warning: Alert02Icon,\n} satisfies Record<string, IconSvgElement>\n\nexport type IconName = keyof typeof icons\n\n/** An icon name from the Forge vocabulary, or any Hugeicons glyph object. */\nexport type IconProp = IconName | IconSvgElement\n\nexport const iconNames = Object.keys(icons) as IconName[]\n\nexport function resolveIcon(icon: IconProp): IconSvgElement {\n  return typeof icon === \"string\" ? icons[icon] : icon\n}\n",
+      "type": "registry:component",
+      "target": "@components/forge/icons.ts"
+    },
+    {
+      "path": "src/components/forge/icon.tsx",
+      "content": "import { HugeiconsIcon, type HugeiconsIconProps } from \"@hugeicons/react\"\n\nimport { resolveIcon, type IconProp } from \"./icons\"\n\ntype IconProps = Omit<HugeiconsIconProps, \"icon\" | \"size\"> & {\n  /** A Forge icon name (`\"home\"`) or a Hugeicons glyph object. */\n  icon: IconProp\n  /** Pixel size. 17px is the workspace default; controls resize icons via CSS. */\n  size?: number\n}\n\n/**\n * Decorative icon. Inside shadcn controls (Button, menu items, tabs) the\n * control sizes its icons, so `size` only matters in free-standing markup.\n */\nfunction Icon({ icon, size = 17, strokeWidth = 1.6, ...props }: IconProps) {\n  return (\n    <HugeiconsIcon\n      data-slot=\"icon\"\n      icon={resolveIcon(icon)}\n      size={size}\n      strokeWidth={strokeWidth}\n      aria-hidden=\"true\"\n      {...props}\n    />\n  )\n}\n\nexport { Icon }\n",
+      "type": "registry:component",
+      "target": "@components/forge/icon.tsx"
+    }
+  ],
+  "type": "registry:component"
+}

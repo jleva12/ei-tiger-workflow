@@ -1,0 +1,19 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "user",
+  "title": "User",
+  "description": "UserProvider: the signed-in user's context — display preferences plus roles and permissions — in one provider.",
+  "registryDependencies": [
+    "@forge-ui/user-preferences",
+    "@forge-ui/user-access"
+  ],
+  "files": [
+    {
+      "path": "src/lib/user-provider.tsx",
+      "content": "import * as React from \"react\"\n\nimport type { CustomUserPreferences } from \"@/lib/user-preferences\"\nimport {\n  UserAccessProvider,\n  type UserAccessProviderProps,\n} from \"@/lib/user-access-provider\"\nimport {\n  UserPreferencesProvider,\n  type UserPreferencesProviderProps,\n} from \"@/lib/user-preferences-provider\"\n\ntype PreferencesProp = Omit<UserPreferencesProviderProps, \"children\">\n\n// `preferences` is required once the app adds required custom preferences,\n// because their defaults are.\ntype Preferences =\n  Partial<CustomUserPreferences> extends CustomUserPreferences\n    ? { preferences?: PreferencesProp }\n    : { preferences: PreferencesProp }\n\nexport type UserProviderProps = Preferences & {\n  children?: React.ReactNode\n  /** Roles and permissions from your Casbin backend; see `UserAccessProvider`. */\n  access: Omit<UserAccessProviderProps, \"children\">\n}\n\n/**\n * The signed-in user's context in one provider: their display preferences\n * (`UserPreferencesProvider`) and their roles and permissions\n * (`UserAccessProvider`), each usable on its own too. Put it inside\n * `ThemeProvider`, and key it by the user's id.\n *\n * ```tsx\n * <UserProvider\n *   key={session.userId}\n *   access={{ load: loadAccess, fallback: <AppLoading /> }}\n *   preferences={{ initial: profile.preferences, onChange: savePreferences }}\n * >\n *   <App />\n * </UserProvider>\n * ```\n */\nexport function UserProvider({\n  children,\n  access,\n  preferences,\n}: UserProviderProps) {\n  return (\n    <UserPreferencesProvider {...(preferences as UserPreferencesProviderProps)}>\n      <UserAccessProvider {...access}>{children}</UserAccessProvider>\n    </UserPreferencesProvider>\n  )\n}\n",
+      "type": "registry:lib",
+      "target": "@lib/user-provider.tsx"
+    }
+  ],
+  "type": "registry:lib"
+}

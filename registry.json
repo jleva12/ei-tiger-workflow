@@ -1,0 +1,2379 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "forge-ui",
+  "homepage": "https://github.com/jleva12/forge-ui",
+  "items": [
+    {
+      "name": "theme",
+      "type": "registry:theme",
+      "title": "Forge Workspace theme",
+      "description": "Tokens (colours, tones, statuses, console, diff), Geist, the compact type scale, radii, elevation, orb utilities, focus ring, scrollbars and reduced motion.",
+      "dependencies": [
+        "@fontsource-variable/geist",
+        "tw-animate-css"
+      ],
+      "cssVars": {
+        "theme": {
+          "font-sans": "'Geist Variable', sans-serif",
+          "font-heading": "var(--font-sans)",
+          "font-mono": "ui-monospace, SFMono-Regular, Menlo, monospace",
+          "text-xs--line-height": "1.5",
+          "text-sm--line-height": "1.5",
+          "text-lg--line-height": "1.5",
+          "text-2xs": "0.6875rem",
+          "text-3xs": "0.625rem",
+          "text-4xs": "0.5625rem",
+          "color-sidebar-ring": "var(--sidebar-ring)",
+          "color-sidebar-border": "var(--sidebar-border)",
+          "color-sidebar-accent-foreground": "var(--sidebar-accent-foreground)",
+          "color-sidebar-accent": "var(--sidebar-accent)",
+          "color-sidebar-primary-foreground": "var(--sidebar-primary-foreground)",
+          "color-sidebar-primary": "var(--sidebar-primary)",
+          "color-sidebar-foreground": "var(--sidebar-foreground)",
+          "color-sidebar": "var(--sidebar)",
+          "color-chart-5": "var(--chart-5)",
+          "color-chart-4": "var(--chart-4)",
+          "color-chart-3": "var(--chart-3)",
+          "color-chart-2": "var(--chart-2)",
+          "color-chart-1": "var(--chart-1)",
+          "color-ring": "var(--ring)",
+          "color-input": "var(--input)",
+          "color-border": "var(--border)",
+          "color-destructive": "var(--destructive)",
+          "color-accent-foreground": "var(--accent-foreground)",
+          "color-accent": "var(--accent)",
+          "color-muted-foreground": "var(--muted-foreground)",
+          "color-muted": "var(--muted)",
+          "color-secondary-foreground": "var(--secondary-foreground)",
+          "color-secondary": "var(--secondary)",
+          "color-primary-foreground": "var(--primary-foreground)",
+          "color-primary": "var(--primary)",
+          "color-popover-foreground": "var(--popover-foreground)",
+          "color-popover": "var(--popover)",
+          "color-card-foreground": "var(--card-foreground)",
+          "color-card": "var(--card)",
+          "color-foreground": "var(--foreground)",
+          "color-background": "var(--background)",
+          "radius-sm": "calc(var(--radius) * 0.6)",
+          "radius-md": "calc(var(--radius) * 0.8)",
+          "radius-lg": "var(--radius)",
+          "radius-xl": "calc(var(--radius) * 1.4)",
+          "radius-2xl": "calc(var(--radius) * 1.8)",
+          "radius-3xl": "calc(var(--radius) * 2.2)",
+          "radius-4xl": "calc(var(--radius) * 2.6)",
+          "color-subtle": "var(--subtle)",
+          "color-nav-foreground": "var(--nav-foreground)",
+          "color-rail-foreground": "var(--rail-foreground)",
+          "color-focus": "var(--focus)",
+          "color-online": "var(--online)",
+          "color-offline": "var(--offline)",
+          "color-event": "var(--event)",
+          "color-event-error": "var(--event-error)",
+          "color-tone-neutral": "var(--tone-neutral)",
+          "color-tone-neutral-foreground": "var(--tone-neutral-foreground)",
+          "color-tone-amber": "var(--tone-amber)",
+          "color-tone-amber-foreground": "var(--tone-amber-foreground)",
+          "color-tone-pink": "var(--tone-pink)",
+          "color-tone-pink-foreground": "var(--tone-pink-foreground)",
+          "color-tone-green": "var(--tone-green)",
+          "color-tone-green-foreground": "var(--tone-green-foreground)",
+          "color-tone-red": "var(--tone-red)",
+          "color-tone-red-foreground": "var(--tone-red-foreground)",
+          "color-status-neutral": "var(--status-neutral)",
+          "color-status-neutral-foreground": "var(--status-neutral-foreground)",
+          "color-status-queued": "var(--status-queued)",
+          "color-status-queued-foreground": "var(--status-queued-foreground)",
+          "color-status-running": "var(--status-running)",
+          "color-status-running-foreground": "var(--status-running-foreground)",
+          "color-status-review": "var(--status-review)",
+          "color-status-review-foreground": "var(--status-review-foreground)",
+          "color-status-success": "var(--status-success)",
+          "color-status-success-foreground": "var(--status-success-foreground)",
+          "color-status-failed": "var(--status-failed)",
+          "color-status-failed-foreground": "var(--status-failed-foreground)",
+          "color-danger-surface": "var(--danger-surface)",
+          "color-danger-border": "var(--danger-border)",
+          "color-danger-foreground": "var(--danger-foreground)",
+          "color-warning-surface": "var(--warning-surface)",
+          "color-warning-foreground": "var(--warning-foreground)",
+          "color-success-surface": "var(--success-surface)",
+          "color-success-border": "var(--success-border)",
+          "color-success-foreground": "var(--success-foreground)",
+          "color-notice-surface": "var(--notice-surface)",
+          "color-notice-border": "var(--notice-border)",
+          "color-notice-foreground": "var(--notice-foreground)",
+          "color-notice-accent": "var(--notice-accent)",
+          "color-notice-icon-surface": "var(--notice-icon-surface)",
+          "color-notice-chip": "var(--notice-chip)",
+          "color-notice-chip-foreground": "var(--notice-chip-foreground)",
+          "color-signal-running": "var(--signal-running)",
+          "color-signal-success": "var(--signal-success)",
+          "color-signal-failed": "var(--signal-failed)",
+          "color-diff-added": "var(--diff-added)",
+          "color-diff-removed": "var(--diff-removed)",
+          "color-diff-insert": "var(--diff-insert)",
+          "color-diff-insert-gutter": "var(--diff-insert-gutter)",
+          "color-diff-delete": "var(--diff-delete)",
+          "color-diff-delete-gutter": "var(--diff-delete-gutter)",
+          "color-console": "var(--console)",
+          "color-console-raised": "var(--console-raised)",
+          "color-console-hover": "var(--console-hover)",
+          "color-console-control": "var(--console-control)",
+          "color-console-border": "var(--console-border)",
+          "color-console-foreground": "var(--console-foreground)",
+          "color-console-text": "var(--console-text)",
+          "color-console-muted": "var(--console-muted)",
+          "color-console-dim": "var(--console-dim)",
+          "color-console-faint": "var(--console-faint)",
+          "color-console-success": "var(--console-success)",
+          "color-console-danger": "var(--console-danger)",
+          "color-console-warning": "var(--console-warning)",
+          "color-console-link": "var(--console-link)",
+          "color-project-1": "var(--project-1)",
+          "color-project-2": "var(--project-2)",
+          "color-project-3": "var(--project-3)",
+          "color-project-4": "var(--project-4)",
+          "color-illustration-check": "var(--illustration-check)",
+          "color-illustration-check-foreground": "var(--illustration-check-foreground)",
+          "color-illustration-fail": "var(--illustration-fail)",
+          "color-illustration-fail-foreground": "var(--illustration-fail-foreground)",
+          "color-illustration-spark": "var(--illustration-spark)"
+        },
+        "light": {
+          "background": "oklch(0.998 0.002 260)",
+          "foreground": "oklch(0.235 0.009 260)",
+          "card": "oklch(0.998 0.002 260)",
+          "card-foreground": "oklch(0.235 0.009 260)",
+          "popover": "oklch(0.998 0.002 260)",
+          "popover-foreground": "oklch(0.235 0.009 260)",
+          "primary": "oklch(0.19 0.006 260)",
+          "primary-foreground": "oklch(0.985 0.003 260)",
+          "secondary": "oklch(0.97 0.003 260)",
+          "secondary-foreground": "oklch(0.235 0.009 260)",
+          "muted": "oklch(0.97 0.003 260)",
+          "muted-foreground": "oklch(0.53 0.014 260)",
+          "accent": "oklch(0.963 0.003 260)",
+          "accent-foreground": "oklch(0.235 0.009 260)",
+          "destructive": "oklch(0.577 0.245 27.325)",
+          "border": "oklch(0.925 0.004 260)",
+          "input": "oklch(0.935 0.004 260)",
+          "ring": "oklch(0.708 0 0)",
+          "chart-1": "oklch(0.87 0 0)",
+          "chart-2": "oklch(0.556 0 0)",
+          "chart-3": "oklch(0.439 0 0)",
+          "chart-4": "oklch(0.371 0 0)",
+          "chart-5": "oklch(0.269 0 0)",
+          "sidebar": "oklch(0.998 0.002 260)",
+          "sidebar-foreground": "oklch(0.235 0.009 260)",
+          "sidebar-primary": "oklch(0.19 0.006 260)",
+          "sidebar-primary-foreground": "oklch(0.985 0.003 260)",
+          "sidebar-accent": "oklch(0.97 0.003 260)",
+          "sidebar-accent-foreground": "oklch(0.235 0.009 260)",
+          "sidebar-border": "oklch(0.925 0.004 260)",
+          "sidebar-ring": "oklch(0.708 0 0)",
+          "subtle": "oklch(0.64 0.012 260)",
+          "nav-foreground": "oklch(0.42 0.012 260)",
+          "rail-foreground": "oklch(0.44 0.012 260)",
+          "focus": "oklch(0.65 0.12 260)",
+          "online": "oklch(0.66 0.13 157)",
+          "offline": "oklch(0.69 0.014 260)",
+          "event": "oklch(0.73 0.05 260)",
+          "event-error": "oklch(0.65 0.17 25)",
+          "tone-neutral": "oklch(0.972 0.004 260)",
+          "tone-neutral-foreground": "oklch(0.43 0.014 260)",
+          "tone-amber": "oklch(0.98 0.016 80)",
+          "tone-amber-foreground": "oklch(0.67 0.16 54)",
+          "tone-pink": "oklch(0.976 0.014 335)",
+          "tone-pink-foreground": "oklch(0.68 0.17 347)",
+          "tone-green": "oklch(0.978 0.022 155)",
+          "tone-green-foreground": "oklch(0.61 0.15 155)",
+          "tone-red": "oklch(0.977 0.015 25)",
+          "tone-red-foreground": "oklch(0.62 0.2 25)",
+          "status-neutral": "oklch(0.956 0.003 260)",
+          "status-neutral-foreground": "oklch(0.43 0.012 260)",
+          "status-queued": "oklch(0.934 0.033 256)",
+          "status-queued-foreground": "oklch(0.5 0.14 256)",
+          "status-running": "oklch(0.96 0.058 88)",
+          "status-running-foreground": "oklch(0.51 0.115 64)",
+          "status-review": "oklch(0.952 0.034 340)",
+          "status-review-foreground": "oklch(0.53 0.15 340)",
+          "status-success": "oklch(0.937 0.058 164)",
+          "status-success-foreground": "oklch(0.46 0.095 164)",
+          "status-failed": "oklch(0.936 0.036 20)",
+          "status-failed-foreground": "oklch(0.5 0.17 25)",
+          "danger-surface": "oklch(0.97 0.018 25)",
+          "danger-border": "oklch(0.89 0.045 25)",
+          "danger-foreground": "oklch(0.45 0.13 25)",
+          "warning-surface": "#fcf4e5",
+          "warning-foreground": "#976a16",
+          "success-surface": "#edf8f0",
+          "success-border": "#d5eddd",
+          "success-foreground": "#237d43",
+          "notice-surface": "#fbfaf6",
+          "notice-border": "#e9e6dd",
+          "notice-foreground": "#807b6f",
+          "notice-accent": "#9b813b",
+          "notice-icon-surface": "#ffffff",
+          "notice-chip": "#efebdf",
+          "notice-chip-foreground": "#857345",
+          "signal-running": "#bc9229",
+          "signal-success": "#289b50",
+          "signal-failed": "#ce5555",
+          "diff-added": "#218449",
+          "diff-removed": "#c04c50",
+          "diff-insert": "#e6ffec",
+          "diff-insert-gutter": "#ccffd8",
+          "diff-delete": "#ffebe9",
+          "diff-delete-gutter": "#ffd7d5",
+          "console": "#151920",
+          "console-raised": "#1b2029",
+          "console-hover": "#1d232d",
+          "console-control": "#303744",
+          "console-border": "#303642",
+          "console-foreground": "#d4d9e2",
+          "console-text": "#aeb8c9",
+          "console-muted": "#8b96a8",
+          "console-dim": "#727f93",
+          "console-faint": "#606b7e",
+          "console-success": "#80b99a",
+          "console-danger": "#f29a9a",
+          "console-warning": "#d4b663",
+          "console-link": "#9baecc",
+          "project-1": "#b5abd2",
+          "project-2": "#9abbb0",
+          "project-3": "#d7b38e",
+          "project-4": "#9badc9",
+          "illustration-check": "oklch(0.93 0.025 160)",
+          "illustration-check-foreground": "oklch(0.55 0.08 160)",
+          "illustration-fail": "oklch(0.94 0.03 22)",
+          "illustration-fail-foreground": "oklch(0.57 0.14 25)",
+          "illustration-spark": "oklch(0.66 0.11 70)",
+          "scrollbar-thumb": "oklch(0.64 0.008 260)",
+          "scrollbar-thumb-hover": "oklch(0.54 0.012 260)",
+          "scrollbar-thumb-active": "oklch(0.46 0.012 260)",
+          "radius": "0.5rem"
+        },
+        "dark": {
+          "background": "oklch(0.18 0.008 260)",
+          "foreground": "oklch(0.91 0.005 260)",
+          "card": "oklch(0.18 0.008 260)",
+          "card-foreground": "oklch(0.91 0.005 260)",
+          "popover": "oklch(0.22 0.009 260)",
+          "popover-foreground": "oklch(0.91 0.005 260)",
+          "primary": "oklch(0.92 0.005 260)",
+          "primary-foreground": "oklch(0.18 0.008 260)",
+          "secondary": "oklch(0.25 0.008 260)",
+          "secondary-foreground": "oklch(0.91 0.005 260)",
+          "muted": "oklch(0.235 0.008 260)",
+          "muted-foreground": "oklch(0.7 0.009 260)",
+          "accent": "oklch(0.26 0.008 260)",
+          "accent-foreground": "oklch(0.91 0.005 260)",
+          "destructive": "oklch(0.704 0.191 22.216)",
+          "border": "oklch(0.29 0.008 260)",
+          "input": "oklch(0.3 0.008 260)",
+          "ring": "oklch(0.556 0 0)",
+          "sidebar": "oklch(0.18 0.008 260)",
+          "sidebar-foreground": "oklch(0.91 0.005 260)",
+          "sidebar-primary": "oklch(0.92 0.005 260)",
+          "sidebar-primary-foreground": "oklch(0.18 0.008 260)",
+          "sidebar-accent": "oklch(0.235 0.008 260)",
+          "sidebar-accent-foreground": "oklch(0.91 0.005 260)",
+          "sidebar-border": "oklch(0.29 0.008 260)",
+          "sidebar-ring": "oklch(0.556 0 0)",
+          "subtle": "oklch(0.6 0.01 260)",
+          "nav-foreground": "oklch(0.7 0.009 260)",
+          "rail-foreground": "oklch(0.7 0.009 260)",
+          "tone-neutral": "oklch(0.235 0.01 260)",
+          "tone-amber": "oklch(0.26 0.025 75)",
+          "tone-pink": "oklch(0.26 0.025 335)",
+          "tone-green": "oklch(0.25 0.025 155)",
+          "tone-red": "oklch(0.25 0.025 25)",
+          "danger-surface": "oklch(0.27 0.035 25)",
+          "danger-border": "oklch(0.4 0.065 25)",
+          "danger-foreground": "oklch(0.8 0.08 25)",
+          "warning-surface": "#3a3020",
+          "warning-foreground": "#dfbc7c",
+          "success-surface": "#203326",
+          "success-border": "#34533d",
+          "success-foreground": "#8fc7a0",
+          "notice-surface": "#29281f",
+          "notice-border": "#3b382a",
+          "notice-foreground": "#b1aa94",
+          "notice-accent": "#c4ac70",
+          "notice-icon-surface": "#22221c",
+          "notice-chip": "#3e3828",
+          "notice-chip-foreground": "#cdbb8b",
+          "diff-added": "#81bf96",
+          "diff-removed": "#e49192",
+          "diff-insert": "#162f22",
+          "diff-insert-gutter": "#244b32",
+          "diff-delete": "#362024",
+          "diff-delete-gutter": "#54282c",
+          "illustration-check": "oklch(0.33 0.045 160)",
+          "illustration-check-foreground": "oklch(0.8 0.09 160)",
+          "illustration-fail": "oklch(0.33 0.055 25)",
+          "illustration-fail-foreground": "oklch(0.8 0.09 25)",
+          "scrollbar-thumb": "oklch(0.51 0.012 260)",
+          "scrollbar-thumb-hover": "oklch(0.64 0.012 260)",
+          "scrollbar-thumb-active": "oklch(0.73 0.012 260)"
+        }
+      },
+      "css": {
+        ":root": {
+          "--background": "oklch(0.998 0.002 260)",
+          "--foreground": "oklch(0.235 0.009 260)",
+          "--card": "oklch(0.998 0.002 260)",
+          "--card-foreground": "oklch(0.235 0.009 260)",
+          "--popover": "oklch(0.998 0.002 260)",
+          "--popover-foreground": "oklch(0.235 0.009 260)",
+          "--primary": "oklch(0.19 0.006 260)",
+          "--primary-foreground": "oklch(0.985 0.003 260)",
+          "--secondary": "oklch(0.97 0.003 260)",
+          "--secondary-foreground": "oklch(0.235 0.009 260)",
+          "--muted": "oklch(0.97 0.003 260)",
+          "--muted-foreground": "oklch(0.53 0.014 260)",
+          "--accent": "oklch(0.963 0.003 260)",
+          "--accent-foreground": "oklch(0.235 0.009 260)",
+          "--destructive": "oklch(0.577 0.245 27.325)",
+          "--border": "oklch(0.925 0.004 260)",
+          "--input": "oklch(0.935 0.004 260)",
+          "--ring": "oklch(0.708 0 0)",
+          "--chart-1": "oklch(0.87 0 0)",
+          "--chart-2": "oklch(0.556 0 0)",
+          "--chart-3": "oklch(0.439 0 0)",
+          "--chart-4": "oklch(0.371 0 0)",
+          "--chart-5": "oklch(0.269 0 0)",
+          "--sidebar": "oklch(0.998 0.002 260)",
+          "--sidebar-foreground": "oklch(0.235 0.009 260)",
+          "--sidebar-primary": "oklch(0.19 0.006 260)",
+          "--sidebar-primary-foreground": "oklch(0.985 0.003 260)",
+          "--sidebar-accent": "oklch(0.97 0.003 260)",
+          "--sidebar-accent-foreground": "oklch(0.235 0.009 260)",
+          "--sidebar-border": "oklch(0.925 0.004 260)",
+          "--sidebar-ring": "oklch(0.708 0 0)",
+          "--radius": "0.5rem",
+          "--text-ui": "0.875rem",
+          "--forge-row-height": "45px",
+          "--radius-chip": "4px",
+          "--radius-item": "5px",
+          "--radius-soft": "6px",
+          "--radius-control": "7px",
+          "--radius-card": "8px",
+          "--radius-band": "9px",
+          "--radius-dialog": "16px",
+          "--sheet-inset": "12px",
+          "--shadow-raised": "0 1px 3px oklch(0.2 0 0 / 5%)",
+          "--shadow-tab": "0 0 0 1px var(--border), 0 1px 2px oklch(0.2 0 0 / 4%)",
+          "--shadow-paper": "0 6px 15px oklch(0.3 0.02 260 / 4%)",
+          "--shadow-float": "0 8px 35px oklch(0.2 0.01 260 / 12%)",
+          "color-scheme": "light",
+          "--scrollbar-size": "8px"
+        },
+        ".dark": {
+          "--background": "oklch(0.18 0.008 260)",
+          "--foreground": "oklch(0.91 0.005 260)",
+          "--card": "oklch(0.18 0.008 260)",
+          "--card-foreground": "oklch(0.91 0.005 260)",
+          "--popover": "oklch(0.22 0.009 260)",
+          "--popover-foreground": "oklch(0.91 0.005 260)",
+          "--primary": "oklch(0.92 0.005 260)",
+          "--primary-foreground": "oklch(0.18 0.008 260)",
+          "--secondary": "oklch(0.25 0.008 260)",
+          "--secondary-foreground": "oklch(0.91 0.005 260)",
+          "--muted": "oklch(0.235 0.008 260)",
+          "--muted-foreground": "oklch(0.7 0.009 260)",
+          "--accent": "oklch(0.26 0.008 260)",
+          "--accent-foreground": "oklch(0.91 0.005 260)",
+          "--destructive": "oklch(0.704 0.191 22.216)",
+          "--border": "oklch(0.29 0.008 260)",
+          "--input": "oklch(0.3 0.008 260)",
+          "--ring": "oklch(0.556 0 0)",
+          "--sidebar": "oklch(0.18 0.008 260)",
+          "--sidebar-foreground": "oklch(0.91 0.005 260)",
+          "--sidebar-primary": "oklch(0.92 0.005 260)",
+          "--sidebar-primary-foreground": "oklch(0.18 0.008 260)",
+          "--sidebar-accent": "oklch(0.235 0.008 260)",
+          "--sidebar-accent-foreground": "oklch(0.91 0.005 260)",
+          "--sidebar-border": "oklch(0.29 0.008 260)",
+          "--sidebar-ring": "oklch(0.556 0 0)",
+          "color-scheme": "dark"
+        },
+        "@import \"@fontsource-variable/geist\"": {},
+        "@layer base": {
+          "*": {
+            "@apply border-border outline-ring/50": {}
+          },
+          "html": {
+            "@apply font-sans": {},
+            "font-size": "calc(100% * var(--forge-font-scale, 1))"
+          },
+          "body": {
+            "@apply bg-background text-foreground": {},
+            "font-size": "0.8125rem",
+            "-webkit-font-smoothing": "antialiased"
+          },
+          "button, input, textarea, select": {
+            "font": "inherit"
+          },
+          "button:not(:disabled), [role=\"button\"]:not(:disabled)": {
+            "cursor": "pointer"
+          },
+          "button:disabled": {
+            "cursor": "not-allowed"
+          }
+        },
+        "@utility bg-orb-workspace": {
+          "background": "radial-gradient(at 15% 15%, #86e5ef 0, transparent 55%), radial-gradient(at 20% 90%, #ffb65d 0, transparent 65%), radial-gradient(at 100% 10%, #5f7fdc 0, transparent 55%), conic-gradient(from 80deg, #a4dcad, #9d7ace, #f1a3c0, #67b6d7, #a4dcad)",
+          "box-shadow": "inset 0 0 0 1px oklch(0.9 0.03 260 / 40%)"
+        },
+        "@utility orb-agent-0": {
+          "background": "radial-gradient(at 18% 14%, #c7ffff 0, transparent 50%), conic-gradient(from 60deg, #f0b892, #e1a3e9, #7f8df5, #7ce7e0, #f0b892)"
+        },
+        "@utility orb-agent-1": {
+          "background": "radial-gradient(at 18% 14%, #fff5cc 0, transparent 50%), conic-gradient(from 30deg, #faaf93, #ff907b, #d593ed, #f2d694, #faaf93)"
+        },
+        "@utility orb-agent-2": {
+          "background": "radial-gradient(at 20% 8%, #e4cbff 0, transparent 40%), conic-gradient(from 20deg, #239de5, #e7a7e9, #9b62dd, #75c2ff, #239de5)"
+        },
+        "@utility orb-agent-3": {
+          "background": "radial-gradient(at 18% 14%, #c7ffff 0, transparent 50%), conic-gradient(from 60deg, #f0b892, #e1a3e9, #7f8df5, #7ce7e0, #f0b892)",
+          "filter": "hue-rotate(50deg)"
+        },
+        "@utility orb-agent-4": {
+          "background": "radial-gradient(at 18% 14%, #c7ffff 0, transparent 50%), conic-gradient(from 60deg, #f0b892, #e1a3e9, #7f8df5, #7ce7e0, #f0b892)",
+          "filter": "hue-rotate(130deg)"
+        },
+        "@utility scrollbar-dark": {
+          "color-scheme": "dark",
+          "--scrollbar-thumb": "oklch(0.51 0.012 260)",
+          "--scrollbar-thumb-hover": "oklch(0.64 0.012 260)",
+          "--scrollbar-thumb-active": "oklch(0.73 0.012 260)"
+        },
+        "@utility shimmer": {
+          "background-image": "linear-gradient(\n        90deg,\n        currentColor 35%,\n        color-mix(in oklab, currentColor 30%, transparent) 50%,\n        currentColor 65%\n    )",
+          "background-size": "250% 100%",
+          "background-clip": "text",
+          "-webkit-text-fill-color": "transparent",
+          "animation": "shimmer 2.2s linear infinite"
+        },
+        "@keyframes shimmer": {
+          "from": {
+            "background-position": "100% 0"
+          },
+          "to": {
+            "background-position": "0 0"
+          }
+        },
+        "@keyframes collapsible-down": {
+          "from": {
+            "height": "0"
+          },
+          "to": {
+            "height": "var(\n            --radix-collapsible-content-height,\n            var(--collapsible-panel-height, auto)\n        )"
+          }
+        },
+        "@keyframes collapsible-up": {
+          "from": {
+            "height": "var(\n            --radix-collapsible-content-height,\n            var(--collapsible-panel-height, auto)\n        )"
+          },
+          "to": {
+            "height": "0"
+          }
+        },
+        ":where(button, a, input, textarea, select, [tabindex=\"0\"])": {
+          "outline-offset": "3px"
+        },
+        ":where(button, a, [tabindex=\"0\"]):focus-visible": {
+          "outline": "2px solid var(--focus)"
+        },
+        "@media (forced-colors: none)": {
+          "*": {
+            "scrollbar-width": "thin",
+            "scrollbar-color": "var(--scrollbar-thumb) transparent"
+          },
+          "@supports selector(::-webkit-scrollbar)": {
+            "*": {
+              "scrollbar-width": "auto",
+              "scrollbar-color": "auto"
+            },
+            "*::-webkit-scrollbar": {
+              "width": "var(--scrollbar-size)",
+              "height": "var(--scrollbar-size)"
+            },
+            "*::-webkit-scrollbar-track,\n        *::-webkit-scrollbar-corner": {
+              "background": "transparent"
+            },
+            "*::-webkit-scrollbar-thumb": {
+              "min-height": "32px",
+              "min-width": "32px",
+              "border": "2px solid transparent",
+              "border-radius": "999px",
+              "background": "var(--scrollbar-thumb)",
+              "background-clip": "padding-box"
+            },
+            "*::-webkit-scrollbar-thumb:hover": {
+              "background-color": "var(--scrollbar-thumb-hover)"
+            },
+            "*::-webkit-scrollbar-thumb:active": {
+              "background-color": "var(--scrollbar-thumb-active)"
+            },
+            "*::-webkit-scrollbar-button": {
+              "display": "none"
+            }
+          }
+        },
+        "@media (prefers-reduced-motion: reduce)": {
+          "*, *::before, *::after": {
+            "animation-duration": ".01ms !important",
+            "animation-iteration-count": "1 !important",
+            "transition-duration": ".01ms !important",
+            "scroll-behavior": "auto !important"
+          }
+        },
+        ":root[data-forge-motion=\"reduce\"] *,\n:root[data-forge-motion=\"reduce\"] *::before,\n:root[data-forge-motion=\"reduce\"] *::after": {
+          "animation-duration": ".01ms !important",
+          "animation-iteration-count": "1 !important",
+          "transition-duration": ".01ms !important",
+          "scroll-behavior": "auto !important"
+        },
+        ":root[data-forge-density=\"compact\"]": {
+          "--spacing": "0.21875rem",
+          "--forge-row-height": "34px"
+        },
+        ":root[data-forge-contrast=\"more\"]": {
+          "--muted-foreground": "oklch(0.42 0.014 260)",
+          "--subtle": "oklch(0.5 0.012 260)",
+          "--nav-foreground": "oklch(0.32 0.012 260)",
+          "--border": "oklch(0.82 0.006 260)",
+          "--input": "oklch(0.8 0.006 260)"
+        },
+        ":root.dark[data-forge-contrast=\"more\"]": {
+          "--muted-foreground": "oklch(0.8 0.009 260)",
+          "--subtle": "oklch(0.72 0.01 260)",
+          "--nav-foreground": "oklch(0.82 0.009 260)",
+          "--border": "oklch(0.42 0.008 260)",
+          "--input": "oklch(0.44 0.008 260)"
+        },
+        "@media (prefers-contrast: more)": {
+          ":root[data-forge-contrast=\"system\"]": {
+            "--muted-foreground": "oklch(0.42 0.014 260)",
+            "--subtle": "oklch(0.5 0.012 260)",
+            "--nav-foreground": "oklch(0.32 0.012 260)",
+            "--border": "oklch(0.82 0.006 260)",
+            "--input": "oklch(0.8 0.006 260)"
+          },
+          ":root.dark[data-forge-contrast=\"system\"]": {
+            "--muted-foreground": "oklch(0.8 0.009 260)",
+            "--subtle": "oklch(0.72 0.01 260)",
+            "--nav-foreground": "oklch(0.82 0.009 260)",
+            "--border": "oklch(0.42 0.008 260)",
+            "--input": "oklch(0.44 0.008 260)"
+          }
+        }
+      }
+    },
+    {
+      "name": "theme-provider",
+      "type": "registry:component",
+      "title": "Theme provider",
+      "description": "Light/dark/system theme provider with a `d` shortcut.",
+      "files": [
+        {
+          "path": "src/components/theme-provider.tsx",
+          "type": "registry:component",
+          "target": "@components/theme-provider.tsx"
+        }
+      ]
+    },
+    {
+      "name": "alert",
+      "type": "registry:ui",
+      "title": "Alert",
+      "description": "Alert with the Forge error callout variant.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/alert.tsx",
+          "type": "registry:ui",
+          "target": "@ui/alert.tsx"
+        }
+      ]
+    },
+    {
+      "name": "avatar",
+      "type": "registry:ui",
+      "title": "Avatar",
+      "description": "Avatar primitive.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/avatar.tsx",
+          "type": "registry:ui",
+          "target": "@ui/avatar.tsx"
+        }
+      ]
+    },
+    {
+      "name": "badge",
+      "type": "registry:ui",
+      "title": "Badge",
+      "description": "Badge with 4px chip radius.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/badge.tsx",
+          "type": "registry:ui",
+          "target": "@ui/badge.tsx"
+        }
+      ]
+    },
+    {
+      "name": "breadcrumb",
+      "type": "registry:ui",
+      "title": "Breadcrumb",
+      "description": "Breadcrumb primitive.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/breadcrumb.tsx",
+          "type": "registry:ui",
+          "target": "@ui/breadcrumb.tsx"
+        }
+      ]
+    },
+    {
+      "name": "button",
+      "type": "registry:ui",
+      "title": "Button",
+      "description": "Button: 7px radius, 12px/450 labels, colour-only transitions.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/button.tsx",
+          "type": "registry:ui",
+          "target": "@ui/button.tsx"
+        }
+      ]
+    },
+    {
+      "name": "checkbox",
+      "type": "registry:ui",
+      "title": "Checkbox",
+      "description": "Bordered 4px checkbox.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/checkbox.tsx",
+          "type": "registry:ui",
+          "target": "@ui/checkbox.tsx"
+        }
+      ]
+    },
+    {
+      "name": "collapsible",
+      "type": "registry:ui",
+      "title": "Collapsible",
+      "description": "Collapsible primitive.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/collapsible.tsx",
+          "type": "registry:ui",
+          "target": "@ui/collapsible.tsx"
+        }
+      ]
+    },
+    {
+      "name": "command",
+      "type": "registry:ui",
+      "title": "Command",
+      "description": "cmdk command palette on the light 9px menu surface: 32px/12px items, quiet group headings and a dialog variant.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5",
+        "cmdk@^1.1.1"
+      ],
+      "registryDependencies": [
+        "@forge-ui/dialog",
+        "@forge-ui/input-group"
+      ],
+      "files": [
+        {
+          "path": "src/components/ui/command.tsx",
+          "type": "registry:ui",
+          "target": "@ui/command.tsx"
+        }
+      ]
+    },
+    {
+      "name": "context-menu",
+      "type": "registry:ui",
+      "title": "Context Menu",
+      "description": "Right-click menu on the light 9px menu surface, 32px/12px items.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/context-menu.tsx",
+          "type": "registry:ui",
+          "target": "@ui/context-menu.tsx"
+        }
+      ]
+    },
+    {
+      "name": "dialog",
+      "type": "registry:ui",
+      "title": "Dialog",
+      "description": "Dialog primitive.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button"
+      ],
+      "files": [
+        {
+          "path": "src/components/ui/dialog.tsx",
+          "type": "registry:ui",
+          "target": "@ui/dialog.tsx"
+        }
+      ]
+    },
+    {
+      "name": "dropdown-menu",
+      "type": "registry:ui",
+      "title": "Dropdown Menu",
+      "description": "Light 180px menus, 9px radius, 32px/12px items.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/dropdown-menu.tsx",
+          "type": "registry:ui",
+          "target": "@ui/dropdown-menu.tsx"
+        }
+      ]
+    },
+    {
+      "name": "empty",
+      "type": "registry:ui",
+      "title": "Empty",
+      "description": "Empty state primitive.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/empty.tsx",
+          "type": "registry:ui",
+          "target": "@ui/empty.tsx"
+        }
+      ]
+    },
+    {
+      "name": "field",
+      "type": "registry:ui",
+      "title": "Field",
+      "description": "Field, FieldGroup and friends.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [
+        "@forge-ui/label",
+        "@forge-ui/separator"
+      ],
+      "files": [
+        {
+          "path": "src/components/ui/field.tsx",
+          "type": "registry:ui",
+          "target": "@ui/field.tsx"
+        }
+      ]
+    },
+    {
+      "name": "input",
+      "type": "registry:ui",
+      "title": "Input",
+      "description": "Bordered input on the page background.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/input.tsx",
+          "type": "registry:ui",
+          "target": "@ui/input.tsx"
+        }
+      ]
+    },
+    {
+      "name": "input-group",
+      "type": "registry:ui",
+      "title": "Input Group",
+      "description": "Input group with addons.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button",
+        "@forge-ui/input",
+        "@forge-ui/textarea"
+      ],
+      "files": [
+        {
+          "path": "src/components/ui/input-group.tsx",
+          "type": "registry:ui",
+          "target": "@ui/input-group.tsx"
+        }
+      ]
+    },
+    {
+      "name": "kbd",
+      "type": "registry:ui",
+      "title": "Kbd",
+      "description": "Keyboard key with default, ghost and outline variants.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/kbd.tsx",
+          "type": "registry:ui",
+          "target": "@ui/kbd.tsx"
+        }
+      ]
+    },
+    {
+      "name": "label",
+      "type": "registry:ui",
+      "title": "Label",
+      "description": "Label primitive.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/label.tsx",
+          "type": "registry:ui",
+          "target": "@ui/label.tsx"
+        }
+      ]
+    },
+    {
+      "name": "native-select",
+      "type": "registry:ui",
+      "title": "Native Select",
+      "description": "Bordered native select.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/native-select.tsx",
+          "type": "registry:ui",
+          "target": "@ui/native-select.tsx"
+        }
+      ]
+    },
+    {
+      "name": "popover",
+      "type": "registry:ui",
+      "title": "Popover",
+      "description": "Popover with the band radius, hairline border and 12px text.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/popover.tsx",
+          "type": "registry:ui",
+          "target": "@ui/popover.tsx"
+        }
+      ]
+    },
+    {
+      "name": "progress",
+      "type": "registry:ui",
+      "title": "Progress",
+      "description": "Progress primitive.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/progress.tsx",
+          "type": "registry:ui",
+          "target": "@ui/progress.tsx"
+        }
+      ]
+    },
+    {
+      "name": "select",
+      "type": "registry:ui",
+      "title": "Select",
+      "description": "Select with a bordered trigger and the light 9px menu surface.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/select.tsx",
+          "type": "registry:ui",
+          "target": "@ui/select.tsx"
+        }
+      ]
+    },
+    {
+      "name": "separator",
+      "type": "registry:ui",
+      "title": "Separator",
+      "description": "Separator primitive.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/separator.tsx",
+          "type": "registry:ui",
+          "target": "@ui/separator.tsx"
+        }
+      ]
+    },
+    {
+      "name": "sheet",
+      "type": "registry:ui",
+      "title": "Sheet",
+      "description": "Sheet primitive.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button"
+      ],
+      "files": [
+        {
+          "path": "src/components/ui/sheet.tsx",
+          "type": "registry:ui",
+          "target": "@ui/sheet.tsx"
+        }
+      ]
+    },
+    {
+      "name": "skeleton",
+      "type": "registry:ui",
+      "title": "Skeleton",
+      "description": "Skeleton primitive.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/skeleton.tsx",
+          "type": "registry:ui",
+          "target": "@ui/skeleton.tsx"
+        }
+      ]
+    },
+    {
+      "name": "spinner",
+      "type": "registry:ui",
+      "title": "Spinner",
+      "description": "Spinner primitive.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/spinner.tsx",
+          "type": "registry:ui",
+          "target": "@ui/spinner.tsx"
+        }
+      ]
+    },
+    {
+      "name": "table",
+      "type": "registry:ui",
+      "title": "Table",
+      "description": "Table primitive.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/table.tsx",
+          "type": "registry:ui",
+          "target": "@ui/table.tsx"
+        }
+      ]
+    },
+    {
+      "name": "tabs",
+      "type": "registry:ui",
+      "title": "Tabs",
+      "description": "Tabs with 7px radius.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/tabs.tsx",
+          "type": "registry:ui",
+          "target": "@ui/tabs.tsx"
+        }
+      ]
+    },
+    {
+      "name": "textarea",
+      "type": "registry:ui",
+      "title": "Textarea",
+      "description": "Bordered textarea.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/textarea.tsx",
+          "type": "registry:ui",
+          "target": "@ui/textarea.tsx"
+        }
+      ]
+    },
+    {
+      "name": "toast",
+      "type": "registry:ui",
+      "title": "Toast",
+      "description": "Base UI toast, restyled as a bottom-centre notice.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button"
+      ],
+      "files": [
+        {
+          "path": "src/components/ui/toast.tsx",
+          "type": "registry:ui",
+          "target": "@ui/toast.tsx"
+        }
+      ]
+    },
+    {
+      "name": "toggle",
+      "type": "registry:ui",
+      "title": "Toggle",
+      "description": "Toggle with 7px radius.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/toggle.tsx",
+          "type": "registry:ui",
+          "target": "@ui/toggle.tsx"
+        }
+      ]
+    },
+    {
+      "name": "toggle-group",
+      "type": "registry:ui",
+      "title": "Toggle Group",
+      "description": "Toggle group.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [
+        "@forge-ui/toggle"
+      ],
+      "files": [
+        {
+          "path": "src/components/ui/toggle-group.tsx",
+          "type": "registry:ui",
+          "target": "@ui/toggle-group.tsx"
+        }
+      ]
+    },
+    {
+      "name": "tooltip",
+      "type": "registry:ui",
+      "title": "Tooltip",
+      "description": "Dark compact tooltip.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/tooltip.tsx",
+          "type": "registry:ui",
+          "target": "@ui/tooltip.tsx"
+        }
+      ]
+    },
+    {
+      "name": "icon",
+      "type": "registry:component",
+      "title": "Icon",
+      "description": "The workspace icon vocabulary (Hugeicons, 17px, 1.6 stroke).",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/forge/icons.ts",
+          "type": "registry:component",
+          "target": "@components/forge/icons.ts"
+        },
+        {
+          "path": "src/components/forge/icon.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/icon.tsx"
+        }
+      ]
+    },
+    {
+      "name": "status",
+      "type": "registry:component",
+      "title": "Status",
+      "description": "Status badges, band symbols, presence dots, chips and run-state icons.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/badge",
+        "@forge-ui/icon"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/variants.ts",
+          "type": "registry:component",
+          "target": "@components/forge/variants.ts"
+        },
+        {
+          "path": "src/components/forge/status.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/status.tsx"
+        }
+      ]
+    },
+    {
+      "name": "avatars",
+      "type": "registry:component",
+      "title": "Avatars",
+      "description": "Workspace orb and gradient agent avatars with tooltips.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/tooltip",
+        "@forge-ui/icon"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/avatars.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/avatars.tsx"
+        }
+      ]
+    },
+    {
+      "name": "app-shell",
+      "type": "registry:component",
+      "title": "App shell",
+      "description": "Container-query app shell: main panel, topbar, breadcrumb, view toolbar, content and footer.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/breadcrumb",
+        "@forge-ui/button",
+        "@forge-ui/kbd",
+        "@forge-ui/tooltip",
+        "@forge-ui/icon"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/app-shell-context.ts",
+          "type": "registry:component",
+          "target": "@components/forge/app-shell-context.ts"
+        },
+        {
+          "path": "src/components/forge/app-shell.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/app-shell.tsx"
+        }
+      ]
+    },
+    {
+      "name": "icon-rail",
+      "type": "registry:component",
+      "title": "Icon rail",
+      "description": "The 56px icon rail with tooltip shortcuts.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button",
+        "@forge-ui/tooltip",
+        "@forge-ui/icon"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/icon-rail.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/icon-rail.tsx"
+        }
+      ]
+    },
+    {
+      "name": "workspace-sidebar",
+      "type": "registry:component",
+      "title": "Workspace sidebar",
+      "description": "The 224px workspace navigation with brand, nav items, projects and status.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button",
+        "@forge-ui/kbd",
+        "@forge-ui/sheet",
+        "@forge-ui/app-shell",
+        "@forge-ui/icon",
+        "@forge-ui/status"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/workspace-sidebar.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/workspace-sidebar.tsx"
+        }
+      ]
+    },
+    {
+      "name": "toolbar",
+      "type": "registry:component",
+      "title": "Toolbar",
+      "description": "View tabs, layout switch, search field and toolbar buttons.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button",
+        "@forge-ui/input-group",
+        "@forge-ui/kbd",
+        "@forge-ui/tabs",
+        "@forge-ui/toggle-group",
+        "@forge-ui/icon"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/toolbar.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/toolbar.tsx"
+        }
+      ]
+    },
+    {
+      "name": "task-list",
+      "type": "registry:component",
+      "title": "Task list",
+      "description": "Collapsible pastel status bands and the flat task table.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button",
+        "@forge-ui/collapsible",
+        "@forge-ui/skeleton",
+        "@forge-ui/table",
+        "@forge-ui/avatars",
+        "@forge-ui/icon",
+        "@forge-ui/status"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/task-list.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/task-list.tsx"
+        }
+      ]
+    },
+    {
+      "name": "kanban",
+      "type": "registry:component",
+      "title": "Kanban",
+      "description": "Kanban board, columns and task cards.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/avatars",
+        "@forge-ui/status",
+        "@forge-ui/task-list"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/kanban.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/kanban.tsx"
+        }
+      ]
+    },
+    {
+      "name": "illustration",
+      "type": "registry:component",
+      "title": "Illustration",
+      "description": "CSS paper illustrations for empty, waiting, error, search, offline and other states.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/icon"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/illustration.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/illustration.tsx"
+        }
+      ]
+    },
+    {
+      "name": "empty-state",
+      "type": "registry:component",
+      "title": "Empty state",
+      "description": "Workspace, panel and page empty states.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/empty",
+        "@forge-ui/icon",
+        "@forge-ui/illustration"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/empty-state.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/empty-state.tsx"
+        }
+      ]
+    },
+    {
+      "name": "settings-list",
+      "type": "registry:component",
+      "title": "Settings list",
+      "description": "Divided settings rows: title and description beside a current value and one action.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/forge/settings-list.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/settings-list.tsx"
+        }
+      ]
+    },
+    {
+      "name": "integrations",
+      "type": "registry:component",
+      "title": "Integrations",
+      "description": "OAuth app connection rows with brand logos, account status and Connect, Manage or Reconnect.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button",
+        "@forge-ui/dropdown-menu",
+        "@forge-ui/spinner",
+        "@forge-ui/icon",
+        "@forge-ui/settings-list",
+        "@forge-ui/status"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/integrations.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/integrations.tsx"
+        },
+        {
+          "path": "src/components/forge/brand-logos.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/brand-logos.tsx"
+        }
+      ]
+    },
+    {
+      "name": "feedback",
+      "type": "registry:component",
+      "title": "Feedback",
+      "description": "Error callouts, preview banner, active filters and load more.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/alert",
+        "@forge-ui/button",
+        "@forge-ui/icon"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/feedback.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/feedback.tsx"
+        }
+      ]
+    },
+    {
+      "name": "activity",
+      "type": "registry:component",
+      "title": "Activity",
+      "description": "Event timeline, stat grid, view headings and footnotes.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/icon",
+        "@forge-ui/status"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/activity.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/activity.tsx"
+        }
+      ]
+    },
+    {
+      "name": "task-sheet",
+      "type": "registry:component",
+      "title": "Task sheet",
+      "description": "560px create/inspect sheets, compact forms, detail lists and plans.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/sheet",
+        "@forge-ui/icon"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/task-sheet.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/task-sheet.tsx"
+        }
+      ]
+    },
+    {
+      "name": "task-page",
+      "type": "registry:component",
+      "title": "Task page",
+      "description": "Detail page header, line tabs, submission layout, execution plan and notices.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button",
+        "@forge-ui/tabs",
+        "@forge-ui/icon",
+        "@forge-ui/status"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/task-page.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/task-page.tsx"
+        }
+      ]
+    },
+    {
+      "name": "run-log",
+      "type": "registry:component",
+      "title": "Run log",
+      "description": "Job list and the always-dark searchable log console.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button",
+        "@forge-ui/input",
+        "@forge-ui/icon",
+        "@forge-ui/illustration",
+        "@forge-ui/status"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/run-log.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/run-log.tsx"
+        }
+      ]
+    },
+    {
+      "name": "changes",
+      "type": "registry:component",
+      "title": "Changes",
+      "description": "Changed-file navigator and GitHub-style diff view.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/input-group",
+        "@forge-ui/icon"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/changes.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/changes.tsx"
+        }
+      ]
+    },
+    {
+      "name": "handoff",
+      "type": "registry:component",
+      "title": "Handoff",
+      "description": "Verification rounds, handoff iterations, verdicts and findings.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/collapsible",
+        "@forge-ui/table",
+        "@forge-ui/icon",
+        "@forge-ui/status"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/handoff.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/handoff.tsx"
+        }
+      ]
+    },
+    {
+      "name": "metrics-table",
+      "type": "registry:component",
+      "title": "Metrics table",
+      "description": "Grouped numeric tables with bands, subtotals and totals.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/table"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/metrics-table.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/metrics-table.tsx"
+        }
+      ]
+    },
+    {
+      "name": "data-table",
+      "type": "registry:component",
+      "title": "Data table",
+      "description": "Spreadsheet-grade TanStack Table v9 grid: typed filters, multi-sort, grouping and aggregation, column groups, pinning, resizing, drag to reorder or group, range selection with copy/paste, inline editing, virtualization, tree data, cell spanning, row drag, CSV export, context menu, status bar and persisted layouts.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5",
+        "@tanstack/react-table@^9.2.4",
+        "@tanstack/react-virtual@^3.14.13"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button",
+        "@forge-ui/checkbox",
+        "@forge-ui/context-menu",
+        "@forge-ui/dropdown-menu",
+        "@forge-ui/input",
+        "@forge-ui/input-group",
+        "@forge-ui/label",
+        "@forge-ui/popover",
+        "@forge-ui/select",
+        "@forge-ui/skeleton",
+        "@forge-ui/spinner",
+        "@forge-ui/table",
+        "@forge-ui/icon",
+        "@forge-ui/illustration",
+        "@forge-ui/status",
+        "@forge-ui/toolbar"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/data-table/body.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/body.tsx"
+        },
+        {
+          "path": "src/components/forge/data-table/cell-editor.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/cell-editor.tsx"
+        },
+        {
+          "path": "src/components/forge/data-table/cells.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/cells.tsx"
+        },
+        {
+          "path": "src/components/forge/data-table/context-menu.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/context-menu.tsx"
+        },
+        {
+          "path": "src/components/forge/data-table/context.ts",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/context.ts"
+        },
+        {
+          "path": "src/components/forge/data-table/data-table.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/data-table.tsx"
+        },
+        {
+          "path": "src/components/forge/data-table/density.ts",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/density.ts"
+        },
+        {
+          "path": "src/components/forge/data-table/filters.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/filters.tsx"
+        },
+        {
+          "path": "src/components/forge/data-table/header.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/header.tsx"
+        },
+        {
+          "path": "src/components/forge/data-table/index.ts",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/index.ts"
+        },
+        {
+          "path": "src/components/forge/data-table/layout.ts",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/layout.ts"
+        },
+        {
+          "path": "src/components/forge/data-table/status-bar.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/status-bar.tsx"
+        },
+        {
+          "path": "src/components/forge/data-table/table-config.ts",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/table-config.ts"
+        },
+        {
+          "path": "src/components/forge/data-table/toolbar.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/toolbar.tsx"
+        },
+        {
+          "path": "src/components/forge/data-table/types.ts",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/types.ts"
+        },
+        {
+          "path": "src/components/forge/data-table/utility-columns.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/utility-columns.tsx"
+        },
+        {
+          "path": "src/components/forge/data-table/utils.ts",
+          "type": "registry:component",
+          "target": "@components/forge/data-table/utils.ts"
+        }
+      ]
+    },
+    {
+      "name": "api-client",
+      "type": "registry:lib",
+      "title": "API client",
+      "description": "Axios wrapper: bearer auth, single-flight token refresh on 401, retries with backoff, and one ApiError type.",
+      "dependencies": [
+        "axios@^1.20.0"
+      ],
+      "files": [
+        {
+          "path": "src/lib/api/client.ts",
+          "type": "registry:lib",
+          "target": "@lib/api/client.ts"
+        },
+        {
+          "path": "src/lib/api/errors.ts",
+          "type": "registry:lib",
+          "target": "@lib/api/errors.ts"
+        },
+        {
+          "path": "src/lib/api/index.ts",
+          "type": "registry:lib",
+          "target": "@lib/api/index.ts"
+        }
+      ]
+    },
+    {
+      "name": "query-client",
+      "type": "registry:lib",
+      "title": "Query client",
+      "description": "TanStack Query client for @forge-ui/api-client: errors typed as ApiError, Retry-After-aware retries and one error-notice hook.",
+      "dependencies": [
+        "@tanstack/react-query@^5.103.2"
+      ],
+      "registryDependencies": [
+        "@forge-ui/api-client"
+      ],
+      "files": [
+        {
+          "path": "src/lib/api/query-client.ts",
+          "type": "registry:lib",
+          "target": "@lib/api/query-client.ts"
+        }
+      ]
+    },
+    {
+      "name": "resource",
+      "type": "registry:lib",
+      "title": "Resource",
+      "description": "createResource and createNestedResource: typed CRUD hooks for REST collections, with cache updates, optional optimistic updates and infinite lists.",
+      "dependencies": [
+        "@tanstack/react-query@^5.103.2"
+      ],
+      "registryDependencies": [
+        "@forge-ui/query-client"
+      ],
+      "files": [
+        {
+          "path": "src/lib/api/resource.ts",
+          "type": "registry:lib",
+          "target": "@lib/api/resource.ts"
+        }
+      ]
+    },
+    {
+      "name": "context-store",
+      "type": "registry:lib",
+      "title": "Context store",
+      "description": "createContextStore: a Zustand store per React Provider, seeded from props or context, with typed selector hooks.",
+      "dependencies": [
+        "zustand@^5.0.15"
+      ],
+      "files": [
+        {
+          "path": "src/lib/context-store.tsx",
+          "type": "registry:lib",
+          "target": "@lib/context-store.tsx"
+        }
+      ]
+    },
+    {
+      "name": "user-preferences",
+      "type": "registry:lib",
+      "title": "User preferences",
+      "description": "UserPreferencesProvider and hooks: density, text size, contrast, motion and app-specific preferences, saved in the browser and applied to the page.",
+      "dependencies": [
+        "zustand@^5.0.15"
+      ],
+      "registryDependencies": [
+        "@forge-ui/theme",
+        "@forge-ui/context-store"
+      ],
+      "files": [
+        {
+          "path": "src/lib/user-preferences.ts",
+          "type": "registry:lib",
+          "target": "@lib/user-preferences.ts"
+        },
+        {
+          "path": "src/lib/user-preferences-provider.tsx",
+          "type": "registry:lib",
+          "target": "@lib/user-preferences-provider.tsx"
+        }
+      ]
+    },
+    {
+      "name": "preferences",
+      "type": "registry:component",
+      "title": "Preferences",
+      "description": "Display settings panel: theme, density, text size, contrast and motion as segmented controls, with rows for app preferences.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button",
+        "@forge-ui/field",
+        "@forge-ui/toggle-group",
+        "@forge-ui/theme-provider",
+        "@forge-ui/user-preferences"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/preferences.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/preferences.tsx"
+        }
+      ]
+    },
+    {
+      "name": "user-access",
+      "type": "registry:lib",
+      "title": "User access",
+      "description": "UserAccessProvider, Guard and access hooks: the user's roles and permissions loaded once from a Casbin backend, checked locally with Casbin-style matching.",
+      "dependencies": [
+        "zustand@^5.0.15"
+      ],
+      "registryDependencies": [
+        "@forge-ui/context-store"
+      ],
+      "files": [
+        {
+          "path": "src/lib/user-access.ts",
+          "type": "registry:lib",
+          "target": "@lib/user-access.ts"
+        },
+        {
+          "path": "src/lib/user-access-provider.tsx",
+          "type": "registry:lib",
+          "target": "@lib/user-access-provider.tsx"
+        }
+      ]
+    },
+    {
+      "name": "user",
+      "type": "registry:lib",
+      "title": "User",
+      "description": "UserProvider: the signed-in user's context — display preferences plus roles and permissions — in one provider.",
+      "registryDependencies": [
+        "@forge-ui/user-preferences",
+        "@forge-ui/user-access"
+      ],
+      "files": [
+        {
+          "path": "src/lib/user-provider.tsx",
+          "type": "registry:lib",
+          "target": "@lib/user-provider.tsx"
+        }
+      ]
+    },
+    {
+      "name": "shell",
+      "type": "registry:component",
+      "title": "Dynamic shell",
+      "description": "ShellProvider, ShellLayout and hooks: the app shell's icon rail, sidebar sub nav and header driven by pages, with slots for page actions, toolbars and footers.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5",
+        "zustand@^5.0.15"
+      ],
+      "registryDependencies": [
+        "@forge-ui/app-shell",
+        "@forge-ui/icon-rail",
+        "@forge-ui/workspace-sidebar",
+        "@forge-ui/icon",
+        "@forge-ui/context-store",
+        "@forge-ui/user-access"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/shell/index.ts",
+          "type": "registry:component",
+          "target": "@components/forge/shell/index.ts"
+        },
+        {
+          "path": "src/components/forge/shell/shell-store.ts",
+          "type": "registry:component",
+          "target": "@components/forge/shell/shell-store.ts"
+        },
+        {
+          "path": "src/components/forge/shell/shell.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/shell/shell.tsx"
+        }
+      ]
+    },
+    {
+      "name": "assistant-thread",
+      "type": "registry:component",
+      "title": "Assistant thread",
+      "description": "assistant-ui thread, composer, conversation list, floating modal and trigger popover: streaming markdown, reasoning, tool groups, attachments, dictation, and slots for message headers, composer actions and triggers.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5",
+        "@assistant-ui/react@^0.15.22",
+        "@assistant-ui/react-markdown@^0.14.17",
+        "remark-gfm@^4.0.1",
+        "zustand@^5.0.15"
+      ],
+      "registryDependencies": [
+        "@forge-ui/avatar",
+        "@forge-ui/button",
+        "@forge-ui/collapsible",
+        "@forge-ui/dialog",
+        "@forge-ui/input",
+        "@forge-ui/skeleton",
+        "@forge-ui/textarea",
+        "@forge-ui/tooltip"
+      ],
+      "files": [
+        {
+          "path": "src/components/assistant-ui/elements/assistant-modal.aui.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/assistant-modal.aui.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/attachment.aui.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/attachment.aui.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/aui-icons.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/aui-icons.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/composer-trigger-popover.aui.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/composer-trigger-popover.aui.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/file.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/file.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/follow-up-suggestions.aui.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/follow-up-suggestions.aui.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/image.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/image.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/markdown-text.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/markdown-text.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/reasoning.aui.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/reasoning.aui.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/reasoning.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/reasoning.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/thread-list.aui.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/thread-list.aui.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/thread.aui.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/thread.aui.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/tool-fallback.aui.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/tool-fallback.aui.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/tool-group.aui.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/tool-group.aui.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/tooltip-icon-button.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/tooltip-icon-button.tsx"
+        },
+        {
+          "path": "src/hooks/use-attachment-src.ts",
+          "type": "registry:hook",
+          "target": "@hooks/use-attachment-src.ts"
+        },
+        {
+          "path": "src/hooks/use-copy-to-clipboard.ts",
+          "type": "registry:hook",
+          "target": "@hooks/use-copy-to-clipboard.ts"
+        }
+      ]
+    },
+    {
+      "name": "assistant",
+      "type": "registry:component",
+      "title": "Assistant",
+      "description": "Google ADK assistant, full screen in the workspace shell or as a floating launcher: conversations, agent hand-offs, artifacts, inline tool approvals, sign-in and input cards, / commands, voice input and an optional model section.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5",
+        "@assistant-ui/react@^0.15.22",
+        "@assistant-ui/react-google-adk@^0.0.32"
+      ],
+      "registryDependencies": [
+        "@forge-ui/assistant-thread",
+        "@forge-ui/button",
+        "@forge-ui/dropdown-menu",
+        "@forge-ui/input",
+        "@forge-ui/spinner",
+        "@forge-ui/app-shell",
+        "@forge-ui/avatars",
+        "@forge-ui/icon",
+        "@forge-ui/status",
+        "@forge-ui/workspace-sidebar"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/assistant/adk-toolkit.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/adk-toolkit.ts"
+        },
+        {
+          "path": "src/components/forge/assistant/adk.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/adk.tsx"
+        },
+        {
+          "path": "src/components/forge/assistant/assistant-context.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/assistant-context.ts"
+        },
+        {
+          "path": "src/components/forge/assistant/assistant-mark.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/assistant-mark.tsx"
+        },
+        {
+          "path": "src/components/forge/assistant/assistant-modal.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/assistant-modal.tsx"
+        },
+        {
+          "path": "src/components/forge/assistant/assistant-provider.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/assistant-provider.tsx"
+        },
+        {
+          "path": "src/components/forge/assistant/assistant-screen.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/assistant-screen.tsx"
+        },
+        {
+          "path": "src/components/forge/assistant/commands.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/commands.tsx"
+        },
+        {
+          "path": "src/components/forge/assistant/index.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/index.ts"
+        },
+        {
+          "path": "src/components/forge/assistant/model-settings.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/model-settings.ts"
+        },
+        {
+          "path": "src/components/forge/assistant/use-adk-assistant.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/use-adk-assistant.ts"
+        }
+      ]
+    },
+    {
+      "name": "all",
+      "type": "registry:item",
+      "title": "Everything",
+      "description": "The theme, every tuned primitive and every Forge component.",
+      "registryDependencies": [
+        "@forge-ui/theme",
+        "@forge-ui/theme-provider",
+        "@forge-ui/alert",
+        "@forge-ui/avatar",
+        "@forge-ui/badge",
+        "@forge-ui/breadcrumb",
+        "@forge-ui/button",
+        "@forge-ui/checkbox",
+        "@forge-ui/collapsible",
+        "@forge-ui/command",
+        "@forge-ui/context-menu",
+        "@forge-ui/dialog",
+        "@forge-ui/dropdown-menu",
+        "@forge-ui/empty",
+        "@forge-ui/field",
+        "@forge-ui/input",
+        "@forge-ui/input-group",
+        "@forge-ui/kbd",
+        "@forge-ui/label",
+        "@forge-ui/native-select",
+        "@forge-ui/popover",
+        "@forge-ui/progress",
+        "@forge-ui/select",
+        "@forge-ui/separator",
+        "@forge-ui/sheet",
+        "@forge-ui/skeleton",
+        "@forge-ui/spinner",
+        "@forge-ui/table",
+        "@forge-ui/tabs",
+        "@forge-ui/textarea",
+        "@forge-ui/toast",
+        "@forge-ui/toggle",
+        "@forge-ui/toggle-group",
+        "@forge-ui/tooltip",
+        "@forge-ui/icon",
+        "@forge-ui/status",
+        "@forge-ui/avatars",
+        "@forge-ui/app-shell",
+        "@forge-ui/icon-rail",
+        "@forge-ui/workspace-sidebar",
+        "@forge-ui/toolbar",
+        "@forge-ui/task-list",
+        "@forge-ui/kanban",
+        "@forge-ui/illustration",
+        "@forge-ui/empty-state",
+        "@forge-ui/settings-list",
+        "@forge-ui/integrations",
+        "@forge-ui/feedback",
+        "@forge-ui/activity",
+        "@forge-ui/task-sheet",
+        "@forge-ui/task-page",
+        "@forge-ui/run-log",
+        "@forge-ui/changes",
+        "@forge-ui/handoff",
+        "@forge-ui/metrics-table",
+        "@forge-ui/data-table"
+      ]
+    }
+  ]
+}

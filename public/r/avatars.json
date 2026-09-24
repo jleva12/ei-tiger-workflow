@@ -1,0 +1,26 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "avatars",
+  "title": "Avatars",
+  "description": "Workspace orb and gradient agent avatars with tooltips.",
+  "dependencies": [
+    "@base-ui/react@^1.8.0",
+    "class-variance-authority@^0.7.1",
+    "cn@^0.4.0",
+    "@hugeicons/react@^1.1.10",
+    "@hugeicons/core-free-icons@^4.3.5"
+  ],
+  "registryDependencies": [
+    "@forge-ui/tooltip",
+    "@forge-ui/icon"
+  ],
+  "files": [
+    {
+      "path": "src/components/forge/avatars.tsx",
+      "content": "import * as React from \"react\"\nimport { mergeProps } from \"@base-ui/react/merge-props\"\nimport { useRender } from \"@base-ui/react/use-render\"\nimport { cn } from \"cn\"\n\nimport {\n  Tooltip,\n  TooltipContent,\n  TooltipTrigger,\n} from \"@/components/ui/tooltip\"\nimport { Icon } from \"./icon\"\n\nconst agentOrbs = [\n  \"orb-agent-0\",\n  \"orb-agent-1\",\n  \"orb-agent-2\",\n  \"orb-agent-3\",\n  \"orb-agent-4\",\n] as const\n\ntype Agent = {\n  id: string\n  name: string\n  role?: string\n}\n\n/**\n * The workspace mark: a 22px rounded square with the reference's gradient.\n * Pass `render={<button />}` to make it interactive (e.g. a profile switch).\n */\nfunction WorkspaceOrb({\n  size = \"default\",\n  className,\n  render,\n  ...props\n}: useRender.ComponentProps<\"span\"> & { size?: \"default\" | \"lg\" }) {\n  return useRender({\n    defaultTagName: \"span\",\n    props: mergeProps<\"span\">(\n      {\n        className: cn(\n          \"inline-block size-[22px] shrink-0 rounded-(--radius-soft) bg-orb-workspace\",\n          size === \"lg\" && \"size-[26px]\",\n          className\n        ),\n      },\n      props\n    ),\n    render,\n    state: { slot: \"workspace-orb\" },\n  })\n}\n\n/** A single gradient agent avatar. `variant` picks one of five gradients. */\nfunction AgentOrb({\n  variant = 0,\n  size = \"default\",\n  className,\n  ...props\n}: React.ComponentProps<\"span\"> & {\n  variant?: number\n  size?: \"default\" | \"lg\"\n}) {\n  return (\n    <span\n      data-slot=\"agent-orb\"\n      className={cn(\n        \"inline-block size-[17px] shrink-0 rounded-full border-[1.5px] border-background\",\n        size === \"lg\" && \"size-[22px]\",\n        agentOrbs[Math.abs(variant) % agentOrbs.length],\n        className\n      )}\n      {...props}\n    />\n  )\n}\n\n/**\n * Overlapping agent orbs with name tooltips, capped at `max` with a `+N`\n * overflow. Renders a quiet \"No agents\" marker when the list is empty.\n */\nfunction AgentAvatars({\n  agents,\n  max = 5,\n  size = \"default\",\n  emptyLabel = \"No agents\",\n  hideEmptyLabel = false,\n  className,\n}: {\n  agents: Agent[]\n  max?: number\n  size?: \"default\" | \"lg\"\n  emptyLabel?: string\n  /** Show only the robot glyph when empty (dense tables). */\n  hideEmptyLabel?: boolean\n  className?: string\n}) {\n  if (!agents.length)\n    return (\n      <span\n        data-slot=\"agent-avatars\"\n        className={cn(\n          \"flex items-center justify-end gap-[5px] text-3xs whitespace-nowrap text-subtle\",\n          className\n        )}\n      >\n        <Icon icon=\"robot\" size={15} />\n        <span className={cn(hideEmptyLabel && \"sr-only\")}>{emptyLabel}</span>\n      </span>\n    )\n  return (\n    <div\n      data-slot=\"agent-avatars\"\n      role=\"group\"\n      aria-label={agents.map((agent) => agent.name).join(\", \")}\n      className={cn(\"flex items-center justify-end\", className)}\n    >\n      {agents.slice(0, max).map((agent, index) => (\n        <Tooltip key={agent.id}>\n          <TooltipTrigger\n            render={\n              <AgentOrb\n                tabIndex={0}\n                aria-label={agent.name}\n                variant={index}\n                size={size}\n                className={cn(\n                  \"-ml-1.5 first:ml-0\",\n                  size === \"lg\" && \"-ml-[5px]\"\n                )}\n              />\n            }\n          />\n          <TooltipContent>\n            {agent.name}\n            {agent.role && ` · ${agent.role}`}\n          </TooltipContent>\n        </Tooltip>\n      ))}\n      {agents.length > max && (\n        <span className=\"ml-[3px] text-4xs text-subtle\">\n          +{agents.length - max}\n        </span>\n      )}\n    </div>\n  )\n}\n\nexport { WorkspaceOrb, AgentOrb, AgentAvatars, type Agent }\n",
+      "type": "registry:component",
+      "target": "@components/forge/avatars.tsx"
+    }
+  ],
+  "type": "registry:component"
+}
