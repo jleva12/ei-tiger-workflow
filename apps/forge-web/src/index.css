@@ -122,6 +122,19 @@
   --tone-red: oklch(0.977 0.015 25);
   --tone-red-foreground: oklch(0.62 0.2 25);
 
+  /*
+   * Builder step kinds, by group: a tinted glyph tile. Firmer than the group
+   * tones (a small tile on a white card, not a full-width band), and clear
+   * of the hues that mean something on the canvas: green and red (success,
+   * error) and the notice amber (a person decides).
+   */
+  --kind-agent: oklch(0.945 0.035 290);
+  --kind-agent-foreground: oklch(0.55 0.16 290);
+  --kind-action: oklch(0.945 0.03 245);
+  --kind-action-foreground: oklch(0.54 0.14 250);
+  --kind-logic: oklch(0.945 0.035 345);
+  --kind-logic-foreground: oklch(0.56 0.17 350);
+
   /* Task status badges (dimmed with a filter in dark mode) */
   --status-neutral: oklch(0.956 0.003 260);
   --status-neutral-foreground: oklch(0.43 0.012 260);
@@ -262,6 +275,13 @@
   --tone-green: oklch(0.25 0.025 155);
   --tone-red: oklch(0.25 0.025 25);
 
+  --kind-agent: oklch(0.3 0.05 290);
+  --kind-agent-foreground: oklch(0.8 0.1 290);
+  --kind-action: oklch(0.3 0.045 250);
+  --kind-action-foreground: oklch(0.8 0.09 245);
+  --kind-logic: oklch(0.3 0.05 345);
+  --kind-logic-foreground: oklch(0.8 0.1 350);
+
   --danger-surface: oklch(0.27 0.035 25);
   --danger-border: oklch(0.4 0.065 25);
   --danger-foreground: oklch(0.8 0.08 25);
@@ -384,6 +404,13 @@
   --color-tone-green-foreground: var(--tone-green-foreground);
   --color-tone-red: var(--tone-red);
   --color-tone-red-foreground: var(--tone-red-foreground);
+
+  --color-kind-agent: var(--kind-agent);
+  --color-kind-agent-foreground: var(--kind-agent-foreground);
+  --color-kind-action: var(--kind-action);
+  --color-kind-action-foreground: var(--kind-action-foreground);
+  --color-kind-logic: var(--kind-logic);
+  --color-kind-logic-foreground: var(--kind-logic-foreground);
 
   --color-status-neutral: var(--status-neutral);
   --color-status-neutral-foreground: var(--status-neutral-foreground);

@@ -30,6 +30,9 @@ export type BuilderNouns = {
   steps: string
 }
 
+/** A tint for a kind's glyph tile, by the group it's in. */
+export type KindTone = "agent" | "action" | "logic"
+
 export type BuilderUi = {
   nouns: BuilderNouns
   /** What it builds, as an icon: the canvas tab, its sidebar entry. */
@@ -50,6 +53,11 @@ export type BuilderUi = {
   ownsName?: boolean
   /** Its steps' cards lift off the canvas with a shadow, not only when picked up. */
   raisedSteps?: boolean
+  /**
+   * Library groups whose kinds wear a tinted glyph tile, so a step's kind
+   * reads at a glance. Agent orbs, the ends and a person's steps keep theirs.
+   */
+  kindTones?: Partial<Record<string, KindTone>>
   /** Below the settings: how later steps read it, and what it can read. */
   DataSection?: React.ComponentType<{ id: string; step: BaseStep }>
   /** What the empty canvas suggests. */
