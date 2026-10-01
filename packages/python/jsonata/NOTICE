@@ -1,0 +1,19 @@
+Forge JSONata
+
+This package is a locally maintained derivative of jsonata-python 0.7.0:
+https://github.com/rayokota/jsonata-python
+Copyright Robert Yokota. Licensed under the Apache License, Version 2.0.
+
+The Python port also incorporates work from jsonata-java:
+Copyright Dashjoin GmbH. https://dashjoin.com
+Licensed under the Apache License, Version 2.0.
+
+The implementation and the conformance tests derive from JSONata:
+https://github.com/jsonata-js/jsonata
+Copyright IBM Corp. 2016, 2017, 2018. All Rights Reserved.
+Licensed under the MIT License, reproduced in LICENSE-JSONATA.
+Original per-file copyright and attribution notices are retained.
+
+Forge modifications include package namespacing, packaging, test discovery,
+local fixture paths, runtime-limit reuse and evaluation-context fixes documented
+in UPSTREAM.md. The upstream command-line interface is omitted.

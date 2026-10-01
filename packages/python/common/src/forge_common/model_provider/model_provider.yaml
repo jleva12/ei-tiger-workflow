@@ -1,0 +1,91 @@
+version: 1
+
+# OAuth gateway example. For direct OpenAI API-key authentication without
+# gateway credentials, use the adjacent model_provider.openai.yaml instead.
+# Providers can also coexist in this file; each active provider's environment
+# references must be configured. API-key auth uses:
+# auth:
+#   type: apiKey
+#   key: ${OPENAI_API_KEY}
+#
+# Every app reads this one file through forge_common.model_provider: the admin
+# API's assistant (FORGE_ADMIN_MODEL_PROVIDER_CONFIG), which offers each model
+# in its model picker as provider/model, and workflows' agent steps in the
+# async worker (HYBRID_WORKFLOWS__MODEL_PROVIDER_CONFIG). Both run the models
+# with forge_common.adk.models, which speaks openai-responses,
+# openai-completions, anthropic-messages and google-generative-ai, e.g. Gemini:
+#   google:
+#     name: Google Gemini
+#     baseUrl: https://generativelanguage.googleapis.com/v1beta
+#     api: google-generative-ai
+#     auth:
+#       type: apiKey
+#       key: ${GOOGLE_API_KEY}
+#     models:
+#       - id: gemini-3.5-flash
+#         name: Gemini 3.5 Flash
+#         reasoning: true
+#         input: [text, image]
+#         contextWindow: 1048576
+#         maxTokens: 65536
+
+default:
+  provider: company-gateway
+  model: company-model
+
+providers:
+  openai:
+    name: OpenAI API
+    baseUrl: https://api.openai.com/v1
+    api: openai-responses
+    authHeader: true
+    auth:
+      type: apiKey
+      key: ${OPENAI_API_KEY}
+    models:
+      - id: gpt-5.2
+        reasoning: true
+        input: [ text ]
+        contextWindow: 128000
+        maxTokens: 16384
+  company-gateway:
+    name: Company Model Gateway
+    baseUrl: ${MODEL_GATEWAY_BASE_URL}
+    api: openai-responses
+    authHeader: true
+    # These headers are sent with every model request to this gateway.
+    # Values can be static or resolved from the app's environment.
+    headers:
+      X-Company-Application: forge
+      # X-Company-Tenant: ${MODEL_GATEWAY_TENANT}
+    auth:
+      type: oauth2
+      tokenUrl: ${MODEL_GATEWAY_TOKEN_URL}
+      clientId: ${MODEL_GATEWAY_CLIENT_ID}
+      clientSecret: ${MODEL_GATEWAY_CLIENT_SECRET}
+      clientAuthentication: body
+      scopes:
+        - models.invoke
+      # Optional headers sent only to the OAuth token endpoint:
+      # tokenHeaders:
+      #   X-Company-Application: forge
+      # Optional values may also be literals or environment references:
+      # audience: ${MODEL_GATEWAY_AUDIENCE}
+      # accessToken: ${MODEL_GATEWAY_ACCESS_TOKEN}
+      # refreshToken: ${MODEL_GATEWAY_REFRESH_TOKEN}
+      # expiresAt: 2026-08-08T00:00:00Z
+    models:
+      - id: company-model
+        name: Company Model
+        reasoning: true
+        input: [text]
+        contextWindow: 128000
+        maxTokens: 16384
+        # Optional model-specific headers are merged over provider headers:
+        # headers:
+        #   X-Company-Route: workflows
+        cost:
+          input: 0
+          output: 0
+          cacheRead: 0
+          cacheWrite: 0

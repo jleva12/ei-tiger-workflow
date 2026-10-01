@@ -1,0 +1,9 @@
+# Root orchestration, matching the apps/packages monorepo layout: one
+# fragment per application module, with one shared MongoDB and Redis.
+# Use Docker Compose 2.20.3+ with --env-file .env.compose --env-file
+# .env.common (the Makefile passes both).
+include:
+  - path: ./compose.infrastructure.yaml
+  - path: ./apps/forge-web/compose.yaml
+  - path: ./apps/forge-admin-api/compose.yaml
+  - path: ./apps/forge-async-worker/compose.yaml

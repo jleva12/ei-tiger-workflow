@@ -1,0 +1,25 @@
+.git
+.idea
+.claude
+**/.claude
+.DS_Store
+.env
+.env.*
+**/.env
+**/.env.*
+*.log
+
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/.tanstack
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.coverage
+
+# Locally mounted keys never enter Git or build contexts.
+.secrets/

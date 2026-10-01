@@ -1,0 +1,46 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/forge-web",
+        "run",
+        "dev"
+      ],
+      "port": 5190
+    },
+    {
+      "name": "admin",
+      "runtimeExecutable": "make",
+      "runtimeArgs": [
+        "admin"
+      ],
+      "port": 8101
+    },
+    {
+      "name": "web-alt",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/forge-web",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5191"
+      ],
+      "port": 5191
+    },
+    {
+      "name": "async-worker-api",
+      "runtimeExecutable": "make",
+      "runtimeArgs": [
+        "async-worker-api"
+      ],
+      "port": 8104
+    }
+  ]
+}

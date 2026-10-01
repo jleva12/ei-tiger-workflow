@@ -1,0 +1,18 @@
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/forge-web/Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        # Local stack only (make web-token): baked into the bundle.
+        VITE_API_TOKEN: ${VITE_API_TOKEN:-}
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WEB_PORT:-18190}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 3s
+      retries: 6

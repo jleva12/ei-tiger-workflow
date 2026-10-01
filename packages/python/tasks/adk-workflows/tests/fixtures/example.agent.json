@@ -1,0 +1,749 @@
+{
+  "format": "forge.agent/v1",
+  "id": "ag_example0001",
+  "name": "Support desk",
+  "description": "Example: looks the customer up, works out what their message is about and how they feel, and routes it: bugs to a team that drafts a fix a person checks before it's emailed to each contact, billing to an agent whose refunds need an approval within 24 hours, and anything else to two researchers.",
+  "organization_id": "3f6c0000-0000-4000-8000-000000000001",
+  "nodes": [
+    {
+      "id": "start",
+      "kind": "start",
+      "name": "Start",
+      "config": {
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "message",
+            "customer_id"
+          ],
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "What the customer wrote."
+            },
+            "customer_id": {
+              "type": "string",
+              "description": "Who they are."
+            }
+          }
+        }
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "customer",
+      "kind": "http",
+      "name": "Look up the customer",
+      "config": {
+        "method": "GET",
+        "url": "https://api.example.com/customers/{{ input.customer_id }}",
+        "headers": [
+          {
+            "id": "h_accept",
+            "name": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "body": "",
+        "timeout_seconds": 30,
+        "retries": 0,
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "name",
+            "plan",
+            "contacts"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "plan": {
+              "type": "string",
+              "enum": [
+                "free",
+                "pro",
+                "enterprise"
+              ]
+            },
+            "contacts": {
+              "type": "array",
+              "description": "Where replies go.",
+              "items": {
+                "type": "string",
+                "format": "email"
+              }
+            }
+          }
+        }
+      },
+      "outputs": [
+        "success",
+        "error"
+      ]
+    },
+    {
+      "id": "triage",
+      "kind": "llm",
+      "name": "Triage",
+      "config": {
+        "description": "Works out what the customer's message is about.",
+        "instruction": "The customer wrote: {{ input.message }}\n\nSay whether it's about a BUG, BILLING or something ELSE, and sum it up in a sentence.",
+        "model": {
+          "provider": "",
+          "name": ""
+        },
+        "thinking_level": "",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "category",
+            "summary"
+          ],
+          "properties": {
+            "category": {
+              "type": "string",
+              "enum": [
+                "BUG",
+                "BILLING",
+                "ELSE"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            }
+          }
+        },
+        "include_contents": "default",
+        "disallow_transfer_to_parent": false,
+        "disallow_transfer_to_peers": false,
+        "max_output_tokens": null,
+        "sub_agents": [],
+        "mode": "single_turn"
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "sentiment",
+      "kind": "llm",
+      "name": "Sentiment",
+      "config": {
+        "description": "Reads how the customer feels.",
+        "instruction": "The customer wrote: {{ input.message }}\n\nHow do they feel: calm, annoyed or angry?",
+        "model": {
+          "provider": "",
+          "name": ""
+        },
+        "thinking_level": "",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "mood"
+          ],
+          "properties": {
+            "mood": {
+              "type": "string",
+              "enum": [
+                "calm",
+                "annoyed",
+                "angry"
+              ]
+            }
+          }
+        },
+        "include_contents": "default",
+        "disallow_transfer_to_parent": false,
+        "disallow_transfer_to_peers": false,
+        "max_output_tokens": null,
+        "sub_agents": [],
+        "mode": "single_turn"
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "read",
+      "kind": "merge",
+      "name": "Read the message",
+      "config": {
+        "mode": "all"
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "route",
+      "kind": "switch",
+      "name": "Route by category",
+      "config": {
+        "value": "previous.triage.category",
+        "cases": [
+          {
+            "id": "bug",
+            "value": "BUG"
+          },
+          {
+            "id": "billing",
+            "value": "BILLING"
+          }
+        ]
+      },
+      "outputs": [
+        "bug",
+        "billing",
+        "default"
+      ]
+    },
+    {
+      "id": "bug_team",
+      "kind": "sequential",
+      "name": "Bug team",
+      "config": {
+        "description": "Reproduces the bug, then drafts a fix and a reply.",
+        "sub_agents": [
+          {
+            "id": "reproduce",
+            "kind": "llm",
+            "name": "Reproducer",
+            "config": {
+              "description": "Works out how to reproduce the bug.",
+              "instruction": "The bug: {{ steps.triage.output.summary }}\n\nList the steps that reproduce it.",
+              "model": {
+                "provider": "",
+                "name": ""
+              },
+              "thinking_level": "",
+              "output_schema": {},
+              "include_contents": "default",
+              "disallow_transfer_to_parent": false,
+              "disallow_transfer_to_peers": false,
+              "max_output_tokens": null,
+              "sub_agents": []
+            }
+          },
+          {
+            "id": "draft_fix",
+            "kind": "llm",
+            "name": "Fix drafter",
+            "config": {
+              "description": "Drafts a fix and a reply to the customer.",
+              "instruction": "Using these steps to reproduce it: {{ state.reproduce }}\n\nDraft a fix, and a short reply to the customer.",
+              "model": {
+                "provider": "",
+                "name": ""
+              },
+              "thinking_level": "",
+              "output_schema": {},
+              "include_contents": "default",
+              "disallow_transfer_to_parent": false,
+              "disallow_transfer_to_peers": false,
+              "max_output_tokens": null,
+              "sub_agents": []
+            }
+          }
+        ]
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "check_fix",
+      "kind": "human_input",
+      "name": "Check the reply",
+      "config": {
+        "message": "Send this reply to {{ steps.customer.output.body.name }}? {{ previous }}",
+        "response_schema": {
+          "type": "object",
+          "required": [
+            "send"
+          ],
+          "properties": {
+            "send": {
+              "type": "boolean",
+              "description": "Whether to send it."
+            },
+            "changes": {
+              "type": "string",
+              "description": "What to change first."
+            }
+          }
+        }
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "send_it",
+      "kind": "if",
+      "name": "Send it?",
+      "config": {
+        "condition": "previous.send"
+      },
+      "outputs": [
+        "true",
+        "false"
+      ]
+    },
+    {
+      "id": "notify",
+      "kind": "loop",
+      "name": "Email each contact",
+      "config": {
+        "items": "steps.customer.output.body.contacts",
+        "item_name": "contact",
+        "max_iterations": 20,
+        "concurrency": 3
+      },
+      "outputs": [
+        "each",
+        "done"
+      ]
+    },
+    {
+      "id": "email",
+      "kind": "http",
+      "name": "Email the reply",
+      "config": {
+        "method": "POST",
+        "url": "https://hooks.example.com/support/replies",
+        "headers": [
+          {
+            "id": "h_ct",
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": "{\n  \"to\": contact,\n  \"reply\": steps.bug_team.output\n}",
+        "timeout_seconds": 30,
+        "retries": 0,
+        "output_schema": {}
+      },
+      "outputs": [
+        "success",
+        "error"
+      ]
+    },
+    {
+      "id": "sent",
+      "kind": "end",
+      "name": "Sent",
+      "config": {
+        "outcome": "succeeded",
+        "result": "steps.notify.output"
+      },
+      "outputs": []
+    },
+    {
+      "id": "held",
+      "kind": "end",
+      "name": "Held back",
+      "config": {
+        "outcome": "succeeded",
+        "result": "steps.check_fix.output"
+      },
+      "outputs": []
+    },
+    {
+      "id": "billing",
+      "kind": "llm",
+      "name": "Billing",
+      "config": {
+        "description": "Answers billing questions and works out any refund.",
+        "instruction": "Answer the customer's billing question: {{ input.message }}\n\nThey feel {{ steps.sentiment.output.mood }}. Say how much they're owed back, 0 if nothing.",
+        "model": {
+          "provider": "",
+          "name": ""
+        },
+        "thinking_level": "",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "answer",
+            "refund"
+          ],
+          "properties": {
+            "answer": {
+              "type": "string"
+            },
+            "refund": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Dollars owed back."
+            }
+          }
+        },
+        "include_contents": "default",
+        "disallow_transfer_to_parent": false,
+        "disallow_transfer_to_peers": false,
+        "max_output_tokens": null,
+        "sub_agents": [],
+        "mode": "single_turn"
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "owed",
+      "kind": "if",
+      "name": "Refund owed?",
+      "config": {
+        "condition": "previous.refund > 0"
+      },
+      "outputs": [
+        "true",
+        "false"
+      ]
+    },
+    {
+      "id": "approve_refund",
+      "kind": "approval",
+      "name": "Approve the refund",
+      "config": {
+        "message": "Refund {{ steps.billing.output.refund }} dollars to {{ steps.customer.output.body.name }}? {{ steps.billing.output.answer }}",
+        "approvers": "org:admin",
+        "timeout_hours": 24
+      },
+      "outputs": [
+        "approved",
+        "rejected"
+      ]
+    },
+    {
+      "id": "polish",
+      "kind": "loop_agent",
+      "name": "Polish the reply",
+      "config": {
+        "description": "Drafts the reply and critiques it until it's right.",
+        "sub_agents": [
+          {
+            "id": "writer",
+            "kind": "llm",
+            "name": "Writer",
+            "config": {
+              "description": "Writes the reply.",
+              "instruction": "Write the reply to the customer from this answer: {{ steps.billing.output.answer }}\n\nTake in any critique: {{ state.critic }}",
+              "model": {
+                "provider": "",
+                "name": ""
+              },
+              "thinking_level": "",
+              "output_schema": {},
+              "include_contents": "default",
+              "disallow_transfer_to_parent": false,
+              "disallow_transfer_to_peers": false,
+              "max_output_tokens": null,
+              "sub_agents": []
+            }
+          },
+          {
+            "id": "critic",
+            "kind": "llm",
+            "name": "Critic",
+            "config": {
+              "description": "Critiques the reply.",
+              "instruction": "Critique this reply: {{ state.writer }}\n\nIs it clear, kind and right?",
+              "model": {
+                "provider": "",
+                "name": ""
+              },
+              "thinking_level": "",
+              "output_schema": {},
+              "include_contents": "default",
+              "disallow_transfer_to_parent": false,
+              "disallow_transfer_to_peers": false,
+              "max_output_tokens": null,
+              "sub_agents": []
+            }
+          }
+        ],
+        "max_iterations": 3
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "replied",
+      "kind": "end",
+      "name": "Replied",
+      "config": {
+        "outcome": "succeeded",
+        "result": "state.writer"
+      },
+      "outputs": []
+    },
+    {
+      "id": "declined",
+      "kind": "end",
+      "name": "Refund declined",
+      "config": {
+        "outcome": "succeeded",
+        "result": "{\n  \"refund\": 0,\n  \"reason\": steps.approve_refund.output.comment\n}"
+      },
+      "outputs": []
+    },
+    {
+      "id": "research",
+      "kind": "parallel",
+      "name": "Research",
+      "config": {
+        "description": "Looks in the docs and the forum at once.",
+        "sub_agents": [
+          {
+            "id": "docs",
+            "kind": "llm",
+            "name": "Docs researcher",
+            "config": {
+              "description": "Looks in the product's docs.",
+              "instruction": "Find what the docs say about: {{ steps.triage.output.summary }}",
+              "model": {
+                "provider": "",
+                "name": ""
+              },
+              "thinking_level": "",
+              "output_schema": {},
+              "include_contents": "default",
+              "disallow_transfer_to_parent": false,
+              "disallow_transfer_to_peers": false,
+              "max_output_tokens": null,
+              "sub_agents": []
+            }
+          },
+          {
+            "id": "forum",
+            "kind": "llm",
+            "name": "Forum researcher",
+            "config": {
+              "description": "Looks in the community forum.",
+              "instruction": "Find what the forum says about: {{ steps.triage.output.summary }}",
+              "model": {
+                "provider": "",
+                "name": ""
+              },
+              "thinking_level": "",
+              "output_schema": {},
+              "include_contents": "default",
+              "disallow_transfer_to_parent": false,
+              "disallow_transfer_to_peers": false,
+              "max_output_tokens": null,
+              "sub_agents": []
+            }
+          }
+        ]
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "sum_up",
+      "kind": "transform",
+      "name": "Sum up",
+      "config": {
+        "expression": "{\n  \"docs\": state.docs,\n  \"forum\": state.forum\n}",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "docs",
+            "forum"
+          ],
+          "properties": {
+            "docs": {
+              "type": "string"
+            },
+            "forum": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "answered",
+      "kind": "end",
+      "name": "Answered",
+      "config": {
+        "outcome": "succeeded",
+        "result": ""
+      },
+      "outputs": []
+    },
+    {
+      "id": "unknown_customer",
+      "kind": "end",
+      "name": "Unknown customer",
+      "config": {
+        "outcome": "failed",
+        "result": "\"No customer on file: \" & input.customer_id"
+      },
+      "outputs": []
+    }
+  ],
+  "edges": [
+    {
+      "id": "start:next->customer",
+      "source": "start",
+      "source_output": "next",
+      "target": "customer"
+    },
+    {
+      "id": "customer:success->triage",
+      "source": "customer",
+      "source_output": "success",
+      "target": "triage"
+    },
+    {
+      "id": "customer:success->sentiment",
+      "source": "customer",
+      "source_output": "success",
+      "target": "sentiment"
+    },
+    {
+      "id": "customer:error->unknown_customer",
+      "source": "customer",
+      "source_output": "error",
+      "target": "unknown_customer"
+    },
+    {
+      "id": "triage:next->read",
+      "source": "triage",
+      "source_output": "next",
+      "target": "read"
+    },
+    {
+      "id": "sentiment:next->read",
+      "source": "sentiment",
+      "source_output": "next",
+      "target": "read"
+    },
+    {
+      "id": "read:next->route",
+      "source": "read",
+      "source_output": "next",
+      "target": "route"
+    },
+    {
+      "id": "route:bug->bug_team",
+      "source": "route",
+      "source_output": "bug",
+      "target": "bug_team"
+    },
+    {
+      "id": "route:billing->billing",
+      "source": "route",
+      "source_output": "billing",
+      "target": "billing"
+    },
+    {
+      "id": "route:default->research",
+      "source": "route",
+      "source_output": "default",
+      "target": "research"
+    },
+    {
+      "id": "bug_team:next->check_fix",
+      "source": "bug_team",
+      "source_output": "next",
+      "target": "check_fix"
+    },
+    {
+      "id": "check_fix:next->send_it",
+      "source": "check_fix",
+      "source_output": "next",
+      "target": "send_it"
+    },
+    {
+      "id": "send_it:true->notify",
+      "source": "send_it",
+      "source_output": "true",
+      "target": "notify"
+    },
+    {
+      "id": "send_it:false->held",
+      "source": "send_it",
+      "source_output": "false",
+      "target": "held"
+    },
+    {
+      "id": "notify:each->email",
+      "source": "notify",
+      "source_output": "each",
+      "target": "email"
+    },
+    {
+      "id": "email:success->notify",
+      "source": "email",
+      "source_output": "success",
+      "target": "notify"
+    },
+    {
+      "id": "notify:done->sent",
+      "source": "notify",
+      "source_output": "done",
+      "target": "sent"
+    },
+    {
+      "id": "billing:next->owed",
+      "source": "billing",
+      "source_output": "next",
+      "target": "owed"
+    },
+    {
+      "id": "owed:true->approve_refund",
+      "source": "owed",
+      "source_output": "true",
+      "target": "approve_refund"
+    },
+    {
+      "id": "owed:false->polish",
+      "source": "owed",
+      "source_output": "false",
+      "target": "polish"
+    },
+    {
+      "id": "approve_refund:approved->polish",
+      "source": "approve_refund",
+      "source_output": "approved",
+      "target": "polish"
+    },
+    {
+      "id": "approve_refund:rejected->declined",
+      "source": "approve_refund",
+      "source_output": "rejected",
+      "target": "declined"
+    },
+    {
+      "id": "polish:next->replied",
+      "source": "polish",
+      "source_output": "next",
+      "target": "replied"
+    },
+    {
+      "id": "research:next->sum_up",
+      "source": "research",
+      "source_output": "next",
+      "target": "sum_up"
+    },
+    {
+      "id": "sum_up:next->answered",
+      "source": "sum_up",
+      "source_output": "next",
+      "target": "answered"
+    }
+  ],
+  "layout": {},
+  "created_at": "2026-09-26T09:30:00.000Z",
+  "updated_at": "2026-09-26T09:30:00.000Z"
+}

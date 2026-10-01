@@ -1,0 +1,79 @@
+[project]
+name = "forge-async-worker"
+version = "0.3.0"
+description = "Generic async task worker: runs every installed task package's jobs (the workflows and ADK workflows tasks) off SAQ queues on Redis, each one tracked by the enhanced task framework"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "forge-tasks",
+  "enhanced-task-framework[mongo]",   # every job is a tracked run (runs, steps, audit, leases in MongoDB)
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  # SAQ (asyncio job queue) on Redis, and Redis job locks.
+  # SAQ is 0.x and the worker relies on its job and cron internals: pin the minor.
+  "saq[redis]>=0.26.4,<0.27",
+  "redis>=5",
+  # the background tasks API (forge-async-worker api), which the admin API calls
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  # structured logs for every logger, with request ids in the API (forge_common.logging)
+  "forge-common[logging]",
+]
+
+[project.optional-dependencies]
+# The task packages the image bundles. A task registers itself when installed
+# (entry point group "forge_async_worker.tasks"); HYBRID_ENABLED_TASKS picks the
+# ones a deployment builds, --queues the ones it serves.
+workflows = ["forge-task-workflows"]
+adk-workflows = ["forge-task-adk-workflows"]
+
+[project.scripts]
+forge-async-worker = "forge_async_worker.cli:main"
+
+[tool.uv.sources]
+forge-tasks = { path = "../../packages/python/tasks/task-sdk", editable = true }
+forge-task-workflows = { path = "../../packages/python/tasks/workflows", editable = true }
+forge-task-adk-workflows = { path = "../../packages/python/tasks/adk-workflows", editable = true }
+forge-jsonata = { path = "../../packages/python/jsonata", editable = true }
+forge-common = { path = "../../packages/python/common", editable = true }
+enhanced-task-framework = { path = "../../packages/python/enhanced-task-framework", editable = true }
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+  # Every bundled task package, so this environment runs their tests too.
+  "forge-task-workflows",
+  "forge-task-adk-workflows",
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "mypy>=1.10",
+  "ruff>=0.5",
+  "httpx>=0.27",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+  "redis: needs a running Redis (HYBRID_TEST_REDIS_URL); run with make async-worker-test-redis",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["forge_tasks", "forge_task_workflows", "forge_task_adk_workflows", "forge_async_worker", "forge_jsonata", "etf"]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = true

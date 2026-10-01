@@ -1,0 +1,770 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Forge workflow",
+  "description": "An organization's workflow: steps (nodes) joined by connections (edges), run from its start step.",
+  "type": "object",
+  "required": [
+    "format",
+    "id",
+    "name",
+    "entry",
+    "nodes",
+    "edges"
+  ],
+  "properties": {
+    "format": {
+      "const": "forge.workflow/v1"
+    },
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "organization_id": {
+      "type": "string"
+    },
+    "entry": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The ID of the start step every run starts at."
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/edge"
+      }
+    },
+    "layout": {
+      "type": "object",
+      "description": "Where the builder draws each step, by ID. Runners ignore it.",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "properties": {
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "stepId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,47}$",
+      "description": "Made by the builder, unique in the workflow and never reused; expressions read a step's output as steps.<id>.output."
+    },
+    "node": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "config",
+        "outputs"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stepId"
+        },
+        "kind": {
+          "enum": [
+            "entry",
+            "agent",
+            "approval",
+            "http",
+            "transform",
+            "delay",
+            "subworkflow",
+            "if",
+            "switch",
+            "match",
+            "loop",
+            "merge",
+            "end"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "config": {
+          "type": "object"
+        },
+        "outputs": {
+          "type": "array",
+          "description": "The IDs of the ways out of the step, in order.",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "entry"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_entry"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "agent"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_agent"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "approval"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_approval"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "http"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_http"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "transform"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_transform"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "delay"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_delay"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "subworkflow"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_subworkflow"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "if"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_if"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "switch"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_switch"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "match"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_match"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "loop"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_loop"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "merge"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_merge"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "end"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_end"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "edge": {
+      "type": "object",
+      "required": [
+        "id",
+        "source",
+        "source_output",
+        "target"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/stepId"
+        },
+        "source_output": {
+          "type": "string",
+          "description": "One of the source step's outputs."
+        },
+        "target": {
+          "$ref": "#/$defs/stepId"
+        }
+      }
+    },
+    "config_entry": {
+      "type": "object",
+      "description": "Where every run starts: the values it needs to begin.",
+      "required": [
+        "trigger",
+        "event_types",
+        "cron",
+        "timezone",
+        "input_schema"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "trigger": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "event",
+            "schedule"
+          ]
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true,
+          "description": "With an event trigger: the keys of the event types that start it."
+        },
+        "cron": {
+          "type": "string",
+          "description": "With a schedule trigger: a five-field cron expression."
+        },
+        "timezone": {
+          "type": "string",
+          "description": "An IANA time zone, e.g. Europe/London."
+        },
+        "input_schema": {
+          "type": "object",
+          "description": "With a manual trigger: a JSON Schema of the input whoever starts it gives; {} takes anything."
+        }
+      }
+    },
+    "config_agent": {
+      "type": "object",
+      "description": "An agent works on the run's data with your instructions.",
+      "required": [
+        "instructions",
+        "model",
+        "thinking_level",
+        "output",
+        "output_schema"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "instructions": {
+          "type": "string"
+        },
+        "model": {
+          "type": "object",
+          "description": "One of the models Forge offers (its model provider configuration's): the provider's key and the model's id. Both empty: the default.",
+          "required": [
+            "provider",
+            "name"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "provider": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        "thinking_level": {
+          "type": "string",
+          "enum": [
+            "",
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "description": "How long the model thinks before it answers: the level if the model offers it, else the nearest it does. Empty: the model's own."
+        },
+        "output": {
+          "type": "string",
+          "enum": [
+            "text",
+            "json"
+          ]
+        },
+        "output_schema": {
+          "type": "string",
+          "description": "With json output: a JSON Schema, as text."
+        }
+      }
+    },
+    "config_approval": {
+      "type": "object",
+      "description": "The run waits for a person to approve or reject.",
+      "required": [
+        "message",
+        "approvers",
+        "timeout_hours"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "approvers": {
+          "type": "string",
+          "enum": [
+            "org:admin",
+            "org:member"
+          ]
+        },
+        "timeout_hours": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0 waits until someone decides."
+        }
+      }
+    },
+    "config_http": {
+      "type": "object",
+      "description": "Calls a URL and hands on the response.",
+      "required": [
+        "method",
+        "url",
+        "headers",
+        "body",
+        "timeout_seconds",
+        "retries",
+        "output_schema"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
+          ]
+        },
+        "url": {
+          "type": "string"
+        },
+        "headers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "body": {
+          "type": "string",
+          "description": "A JSONata expression making the body; an object or list is sent as JSON."
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_schema": {
+          "type": "object",
+          "description": "A JSON Schema of the response's body; {} leaves it undeclared."
+        }
+      }
+    },
+    "config_transform": {
+      "type": "object",
+      "description": "Reshapes data with a JSONata expression.",
+      "required": [
+        "expression",
+        "output_schema"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "expression": {
+          "type": "string",
+          "description": "A JSONata expression: what the step hands on."
+        },
+        "output_schema": {
+          "type": "object",
+          "description": "A JSON Schema of what it makes; {} leaves it undeclared."
+        }
+      }
+    },
+    "config_delay": {
+      "type": "object",
+      "description": "Waits a while before going on.",
+      "required": [
+        "amount",
+        "unit"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "unit": {
+          "type": "string",
+          "enum": [
+            "seconds",
+            "minutes",
+            "hours",
+            "days"
+          ]
+        }
+      }
+    },
+    "config_subworkflow": {
+      "type": "object",
+      "description": "Runs another of the organization's workflows.",
+      "required": [
+        "workflow",
+        "wait"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "workflow": {
+          "type": "string",
+          "description": "Another workflow's ID."
+        },
+        "wait": {
+          "type": "boolean"
+        }
+      }
+    },
+    "config_if": {
+      "type": "object",
+      "description": "Takes one of two ways, on a condition.",
+      "required": [
+        "condition"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "condition": {
+          "type": "string",
+          "description": "A JSONata expression; true takes the True way."
+        }
+      }
+    },
+    "config_switch": {
+      "type": "object",
+      "description": "Routes on one value: to the case it equals.",
+      "required": [
+        "value",
+        "cases"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string",
+          "description": "A JSONata expression; the case it equals (as text) is taken."
+        },
+        "cases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "config_match": {
+      "type": "object",
+      "description": "Routes to the first rule whose condition holds.",
+      "required": [
+        "arms"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "arms": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "label",
+              "condition"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "condition": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "In order: the first rule whose JSONata condition is true is taken."
+        }
+      }
+    },
+    "config_loop": {
+      "type": "object",
+      "description": "Runs its body once for each item in a list.",
+      "required": [
+        "items",
+        "item_name",
+        "max_iterations",
+        "concurrency"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "string",
+          "description": "A JSONata expression giving a list."
+        },
+        "item_name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "config_merge": {
+      "type": "object",
+      "description": "Waits for the ways coming into it, then goes on as one.",
+      "required": [
+        "mode"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "all",
+            "any"
+          ]
+        }
+      }
+    },
+    "config_end": {
+      "type": "object",
+      "description": "Finishes the run, as succeeded or failed, with a result.",
+      "required": [
+        "outcome",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "succeeded",
+            "failed"
+          ]
+        },
+        "result": {
+          "type": "string",
+          "description": "A JSONata expression giving the workflow's result."
+        }
+      }
+    }
+  }
+}

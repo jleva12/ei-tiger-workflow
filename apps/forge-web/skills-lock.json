@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "forge-data": {
+      "source": "jleva12/forge-ui",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/forge-data/SKILL.md",
+      "computedHash": "3e838c717bf80ac73b9fadef1d60001535bf29082a7440fc3f763739fe6fdeab"
+    },
+    "forge-state": {
+      "source": "jleva12/forge-ui",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/forge-state/SKILL.md",
+      "computedHash": "d654b98e1c28ce3fa1796408f73ea8f753f7812b054f0c4cf9d3d32c791efee3"
+    },
+    "forge-ui": {
+      "source": "jleva12/forge-ui",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/forge-ui/SKILL.md",
+      "computedHash": "167d6684502752c861ab99c5b6e6e53d0e77ed91e4c977fe7a79958c955a1390"
+    }
+  }
+}

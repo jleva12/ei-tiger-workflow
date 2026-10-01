@@ -1,0 +1,99 @@
+# Direct OpenAI and Anthropic (Claude) API access with API keys; no OAuth
+# token endpoint or gateway credentials. Needs OPENAI_API_KEY and
+# ANTHROPIC_API_KEY (both in .env.common) and OPENAI_MODEL, the default.
+# Shared by the apps: select it with FORGE_ADMIN_MODEL_PROVIDER_CONFIG in the
+# admin API and HYBRID_WORKFLOWS__MODEL_PROVIDER_CONFIG in the async worker,
+# e.g.
+# ../../packages/python/common/src/forge_common/model_provider/model_provider.openai.yaml
+#
+# Limits, prices and thinking maps follow pi's own catalog for these models;
+# costs are USD per million tokens.
+version: 1
+default:
+  provider: openai
+  # One of the openai models below, e.g. gpt-5.2.
+  model: ${OPENAI_MODEL}
+providers:
+  openai:
+    name: OpenAI
+    baseUrl: https://api.openai.com/v1
+    api: openai-responses
+    authHeader: true
+    auth:
+      type: apiKey
+      key: ${OPENAI_API_KEY}
+    # Optional organization/project routing:
+    # headers:
+    #   OpenAI-Organization: ${OPENAI_ORGANIZATION}
+    #   OpenAI-Project: ${OPENAI_PROJECT}
+    models:
+      - id: gpt-5.6-sol
+        name: GPT-5.6 Sol
+        reasoning: true
+        thinkingLevelMap: { off: none, minimal: null, xhigh: xhigh }
+        input: [text, image]
+        contextWindow: 272000
+        maxTokens: 128000
+        cost: { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 }
+        compat: &gpt56
+          supportsStrictMode: true
+          supportsOpenAIGrammarTools: true
+          supportsAdditionalTools: true
+          supportsToolSearch: true
+          supportsExplicitPromptCacheMode: true
+      - id: gpt-5.6-terra
+        name: GPT-5.6 Terra
+        reasoning: true
+        thinkingLevelMap: { off: none, minimal: null, xhigh: xhigh }
+        input: [text, image]
+        contextWindow: 272000
+        maxTokens: 128000
+        cost: { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 }
+        compat: *gpt56
+      - id: gpt-5.6-luna
+        name: GPT-5.6 Luna
+        reasoning: true
+        thinkingLevelMap: { off: none, minimal: null, xhigh: xhigh }
+        input: [text, image]
+        contextWindow: 272000
+        maxTokens: 128000
+        cost: { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 }
+        compat: *gpt56
+      - id: gpt-5.2
+        name: GPT-5.2
+        reasoning: true
+        thinkingLevelMap: { off: none, minimal: null, xhigh: xhigh }
+        input: [text, image]
+        contextWindow: 400000
+        maxTokens: 128000
+        cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 }
+        compat:
+          supportsStrictMode: true
+          supportsOpenAIGrammarTools: true
+  anthropic:
+    name: Anthropic
+    baseUrl: https://api.anthropic.com
+    api: anthropic-messages
+    # Anthropic API keys go in x-api-key, which the API sends itself; a Bearer
+    # header would be read as an OAuth token.
+    authHeader: false
+    auth:
+      type: apiKey
+      key: ${ANTHROPIC_API_KEY}
+    models:
+      - id: claude-opus-5
+        name: Claude Opus 5
+        reasoning: true
+        # Adaptive thinking is always on: effort sets how much it thinks.
+        thinkingLevelMap: { off: null, xhigh: xhigh }
+        input: [text, image]
+        contextWindow: 1000000
+        # It can write up to 128K per reply; 64K is the usual cap for a
+        # streamed reply and leaves unstreamed ones time to finish.
+        maxTokens: 64000
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }
+        compat:
+          supportsMidConvoEffort: true
+          forceAdaptiveThinking: true
+          supportsTemperature: false
+          supportsStrictTools: true

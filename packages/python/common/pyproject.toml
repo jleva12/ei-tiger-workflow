@@ -1,0 +1,63 @@
+[project]
+name = "forge-common"
+version = "0.1.0"
+description = "Code the Forge Python apps and packages share, such as a Google ADK toolset whose tools never raise and the model provider configuration"
+readme = "README.md"
+# As old as the oldest codebase that shares it (the enhanced task framework).
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+# forge_common.adk
+adk = ["google-adk>=2.9.2"]
+# forge_common.model_provider: model_provider.yaml, its schema and OAuth2 tokens
+model-provider = ["httpx>=0.28", "pydantic>=2.11", "pyyaml>=6.0"]
+# forge_common.adk.models: ADK models from model_provider.yaml; LiteLLM speaks
+# the OpenAI and Anthropic APIs, Gemini is ADK's own
+adk-models = [
+    "forge-common[model-provider]",
+    "google-adk>=2.9.2",
+    "litellm>=1.83",
+]
+# forge_common.logging and forge_common.middleware: structlog for every logger,
+# and the request-id and access-log middleware
+logging = ["pydantic>=2.11", "starlette>=0.46", "structlog>=26.1.0"]
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "google-adk>=2.9.2",
+    "httpx>=0.28",
+    "litellm>=1.83",
+    "mypy>=1.18",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.2",
+    "pyyaml>=6.0",
+    "ruff>=0.16.9",
+    "starlette>=0.46",
+    "structlog>=26.1.0",
+    "types-pyyaml>=6.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests read the files a toolset wrote straight from their async bodies.
+"tests/**" = ["ASYNC240"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+check_untyped_defs = true

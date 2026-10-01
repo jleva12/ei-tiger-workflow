@@ -1,0 +1,125 @@
+# The async task worker (forge-async-worker), one deployment per queue.
+# MongoDB and Redis are shared services in compose.infrastructure.yaml.
+# Included by the root compose.yaml; run make async-worker or make up.
+# Settings come from apps/forge-async-worker/.env, whose ${NAME} references
+# Compose resolves from .env.common (the root Makefile passes it with
+# --env-file); the environment below overrides the connections to reach
+# mongo and redis. Its knobs are ASYNC_WORKER_* variables from .env.compose,
+# never HYBRID_*: Compose also interpolates this file from
+# apps/forge-async-worker/.env, whose native settings must not leak into the
+# containers.
+
+# One image, one deployment per queue: each serves its task type's queue and
+# schedules, with its own concurrency and replicas, so the task types scale
+# separately. Cron ticks still run once however many replicas serve a queue.
+x-async-worker: &async-worker
+  build:
+    context: ../..
+    dockerfile: apps/forge-async-worker/Dockerfile
+  image: forge-async-worker:local
+  init: true
+  restart: unless-stopped
+  depends_on:
+    mongo:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  env_file:
+    - path: ./.env
+      required: false
+  environment: &async-worker-environment
+    HYBRID_MONGO__URI: mongodb://${FORGE_MONGO_USER:-forge}:${FORGE_MONGO_PASSWORD:-local-forge}@mongo:27017/?authSource=admin&directConnection=true
+    HYBRID_REDIS_URL: redis://redis:6379/0
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=256m
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  # Running jobs get 30 seconds to finish, then go back to their queue; a run
+  # cut off is restarted by its redelivery.
+  stop_grace_period: ${ASYNC_WORKER_STOP_GRACE_PERIOD:-1m}
+
+services:
+  # The workflows queue: runs of organizations' workflows, which act as the
+  # member who ran them through the admin API's service routes (in this
+  # stack, with FORGE_WORKFLOWS_TOKEN from .env.common). A run that waits (an
+  # approval, a delay) lets its worker go, so modest concurrency serves many
+  # runs.
+  async-worker-workflows:
+    <<: *async-worker
+    command:
+      - forge-async-worker
+      - worker
+      - --ensure-schema
+      - --queues=workflows
+      - --concurrency=${ASYNC_WORKER_WORKFLOWS_CONCURRENCY:-8}
+    environment:
+      <<: *async-worker-environment
+      # The admin API in this stack (apps/forge-admin-api/compose.yaml).
+      # Called per step, so no depends_on: until it answers, those steps are
+      # retried.
+      HYBRID_WORKFLOWS__ADMIN_URL: http://admin:8091
+      HYBRID_WORKFLOWS__ADMIN_TOKEN: ${FORGE_WORKFLOWS_TOKEN:-}
+      HYBRID_WORKFLOWS__GOOGLE_API_KEY: ${FORGE_GOOGLE_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "forge-async-worker", "worker", "--check", "--queues=workflows"]
+      interval: 10s
+      timeout: 10s
+      start_period: 60s
+      retries: 6
+    deploy:
+      replicas: ${ASYNC_WORKER_WORKFLOWS_REPLICAS:-1}
+  # The adk_workflows queue: runs of organizations' ADK workflows, on Google
+  # ADK's graph engine. A run's state is its ADK session, in the admin MySQL
+  # (admin-mysql, with the admin API's credentials from .env.compose), where
+  # the admin API reads a run's steps. A run that waits (an approval, human
+  # input, a delay) lets its worker go.
+  async-worker-adk-workflows:
+    <<: *async-worker
+    command:
+      - forge-async-worker
+      - worker
+      - --ensure-schema
+      - --queues=adk_workflows
+      - --concurrency=${ASYNC_WORKER_ADK_WORKFLOWS_CONCURRENCY:-8}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      admin-mysql:
+        condition: service_healthy
+    environment:
+      <<: *async-worker-environment
+      HYBRID_ADK_WORKFLOWS__SESSION_DATABASE_URL: mysql+aiomysql://${ADMIN_MYSQL_USER:-forge_admin}:${ADMIN_MYSQL_PASSWORD:-local-admin}@admin-mysql:3306/${ADMIN_MYSQL_DATABASE:-forge_admin}
+      HYBRID_ADK_WORKFLOWS__GOOGLE_API_KEY: ${FORGE_GOOGLE_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "forge-async-worker", "worker", "--check", "--queues=adk_workflows"]
+      interval: 10s
+      timeout: 10s
+      start_period: 60s
+      retries: 6
+    deploy:
+      replicas: ${ASYNC_WORKER_ADK_WORKFLOWS_REPLICAS:-1}
+  # The background tasks API: what the task framework recorded of each organization's
+  # tasks, and resubmitting, restarting or abandoning one, for the admin API
+  # (with the token from .env.common). It runs no job itself: it queues them.
+  async-worker-api:
+    <<: *async-worker
+    command:
+      - forge-async-worker
+      - api
+      - --host=0.0.0.0
+    environment:
+      HYBRID_MONGO__URI: mongodb://${FORGE_MONGO_USER:-forge}:${FORGE_MONGO_PASSWORD:-local-forge}@mongo:27017/?authSource=admin&directConnection=true
+      HYBRID_REDIS_URL: redis://redis:6379/0
+      HYBRID_API__TOKEN: ${FORGE_ASYNC_WORKER_TOKEN:-}
+      HYBRID_API__PORT: "8094"
+    ports:
+      - "127.0.0.1:${ASYNC_WORKER_API_PORT:-18204}:8094"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8094/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 6

@@ -1,0 +1,101 @@
+/*
+ * The expression editor (CodeMirror) in Forge's terms: the field looks and
+ * focuses like an Input; `{{ … }}` in text reads as a small mono chip;
+ * tokens take the JSON view's colors; problems are wavy underlines in the
+ * danger and amber inks; completions, hovers and problems float on the
+ * menu surface (those are in the editor's theme, in expression-field.tsx,
+ * so they win over CodeMirror's own).
+ */
+
+.forge-expression .cm-editor {
+  min-height: 2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--background);
+  color: var(--foreground);
+  transition:
+    border-color 200ms,
+    box-shadow 200ms;
+}
+.forge-expression .cm-editor.cm-focused {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 30%, transparent);
+}
+.forge-expression[data-invalid] .cm-editor {
+  border-color: var(--destructive);
+}
+.forge-expression[data-invalid] .cm-editor.cm-focused {
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--destructive) 20%, transparent);
+}
+
+.forge-expression .cm-scroller {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+.forge-expression[data-mode="template"] .cm-scroller {
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+.forge-expression .cm-content {
+  padding: 0.3125rem 0;
+  caret-color: var(--foreground);
+}
+/* A multi-line field starts this many lines tall, then grows. */
+.forge-expression [data-rows] .cm-content {
+  min-height: calc(var(--rows) * 1.6em + 0.625rem);
+}
+.forge-expression .cm-line {
+  padding: 0 0.625rem;
+}
+/* Wrap between words, never inside a name; a long name scrolls. */
+.forge-expression .cm-lineWrapping {
+  word-break: normal;
+  overflow-wrap: normal;
+}
+.forge-expression .cm-placeholder {
+  color: var(--muted-foreground);
+}
+.forge-expression .cm-selectionBackground,
+.forge-expression .cm-focused .cm-selectionBackground {
+  background: color-mix(in oklch, var(--focus) 22%, transparent) !important;
+}
+.forge-expression .cm-cursor {
+  border-left-color: var(--foreground);
+}
+.forge-expression .cm-matchingBracket {
+  background: color-mix(in oklch, var(--foreground) 10%, transparent);
+  outline: none;
+}
+
+/* {{ … }} in text: a mono chip. */
+.forge-expression .cm-template {
+  border-radius: var(--radius-chip);
+  background: var(--muted);
+  padding: 0.0625rem 0.1875rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--foreground);
+}
+
+/* Problems. */
+.forge-expression .cm-editor .cm-lintRange {
+  background-image: none;
+  padding-bottom: 0;
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.forge-expression .cm-editor .cm-lintRange-error {
+  text-decoration-color: var(--destructive);
+}
+.forge-expression .cm-editor .cm-lintRange-warning {
+  text-decoration-color: var(--tone-amber-foreground);
+}
+.forge-expression .cm-editor .cm-lintRange-active {
+  background: color-mix(in oklch, var(--destructive) 8%, transparent);
+}

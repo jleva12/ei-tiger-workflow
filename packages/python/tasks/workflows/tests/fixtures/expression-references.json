@@ -1,0 +1,33 @@
+{
+  "data": {
+    "input": {"limit": 9, "text": "\" or true or \""},
+    "previous": {"count": 10, "priority": "high", "approved": true, "items": [1, 2], "weird}}field": 12},
+    "steps": {"measure": {"output": {"count": 10, "priority": "high"}}}
+  },
+  "cases": [
+    {"expression": "{{ steps.measure.output.count }} > 9", "value": true},
+    {"expression": "{{steps.measure.output.count}} < 9", "value": false},
+    {"expression": "{{ previous.count }} = 10", "value": true},
+    {"expression": "{{ previous.priority }} = \"high\"", "value": true},
+    {"expression": "{{ previous.count }} > {{ input.limit }} and {{ previous.approved }}", "value": true},
+    {"expression": "previous.count > 9 and previous.priority = \"high\"", "value": true},
+    {"expression": "{{ previous.count + 2 }} * 3", "value": 36},
+    {"expression": "{{ previous.items }}", "value": [1, 2]},
+    {"expression": "{{ previous.approved }}", "value": true},
+    {"expression": "{{ 0 }}", "value": 0},
+    {"expression": "{{ null }}", "value": null},
+    {"expression": "{{ input.text }} = \"safe\"", "value": false},
+    {"expression": "{{ previous.`weird}}field` }} = 12", "value": true},
+    {"expression": "{\"nested\": {\"count\": {{ previous.count }}}}", "value": {"nested": {"count": 10}}},
+    {"expression": "{{ {\"nested\": {\"count\": previous.count}} }}.nested.count", "value": 10},
+    {"expression": "\"{{ previous.count }}\"", "value": "{{ previous.count }}"},
+    {"expression": "'{{ previous.count }}'", "value": "{{ previous.count }}"},
+    {"expression": "\"quoted \\\"{{ value }}\\\"\"", "value": "quoted \"{{ value }}\""},
+    {"expression": "/* {{ untouched }} */ {{ previous.count }} / 2", "value": 5},
+    {"expression": "$contains(\"{{count}}\", /{{count}}/)", "value": true},
+    {"expression": "$contains(\"{{count}}\", /[{}]+count[{}]+/) and {{ previous.count }} > 9", "value": true},
+    {"expression": "{{ previous.count }} / {{ input.limit + 1 }} / 2", "value": 0.5},
+    {"expression": "{\"nested\": {\"count\": previous.count}}", "value": {"nested": {"count": 10}}}
+  ],
+  "invalid": ["{{ }}", "{{ previous.count > 9", "{{ previous.count } > 9", "{{ previous.count }} == 10"]
+}

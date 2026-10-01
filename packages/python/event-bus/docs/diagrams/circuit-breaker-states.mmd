@@ -1,0 +1,17 @@
+stateDiagram-v2
+    [*] --> Closed: Initial State
+
+    Closed --> Closed: record_success()
+    Closed --> Open: N consecutive failures<br/>(threshold reached)
+
+    Open --> Open: All calls rejected<br/>(CircuitOpenError)
+    Open --> HalfOpen: Recovery timeout elapsed
+
+    HalfOpen --> Closed: Probe calls succeed
+    HalfOpen --> Open: Any probe fails
+
+    state "Circuit Breaker States" as CBS {
+        Closed: All calls pass through
+        Open: All calls rejected instantly
+        HalfOpen: Limited probe calls allowed
+    }

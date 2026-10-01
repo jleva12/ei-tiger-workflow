@@ -1,0 +1,43 @@
+.DS_Store
+.idea/
+*.iml
+.env
+.env.local
+.env.*
+!.env.example
+!.env.compose.example
+!.env.common.example
+logs/
+*.log
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+
+# JavaScript and TypeScript workspaces
+node_modules/
+dist/
+dist-ssr/
+*.tsbuildinfo
+.tanstack/
+
+# Python applications and packages
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+
+# Locally mounted keys never enter Git or build contexts.
+.secrets/
+
+# Machine-local agent settings and generated design-tool state.
+.claude/settings.local.json
+.impeccable/config.local.json
+.impeccable/hook.cache.json
+.impeccable/hook.pending.json
+.impeccable/live/
+.impeccable/questions/
+.impeccable/review/

@@ -1,0 +1,78 @@
+[project]
+name = "forge-admin"
+version = "0.1.0"
+description = "Forge admin API: FastAPI over MySQL, managing organizations' workflows"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "aiomysql>=0.3.2",
+    "alembic>=1.20.0",
+    "casbin-async-sqlalchemy-adapter>=1.17.0",
+    # MySQL 8's caching_sha2_password sign-in, for aiomysql.
+    "cryptography>=50.0.1",
+    "fastapi>=0.141.1",
+    # The assistant's toolsets: ForgeBaseToolset's guard, and its models from
+    # the shared model_provider.yaml (packages/python/common); and structured
+    # logging with request ids (forge_common.logging).
+    "forge-common[adk,adk-models,logging]",
+    # The assistant's workflow drafts are checked as the runner reads them:
+    # its document model and every expression compiled (packages/python/tasks/workflows).
+    "forge-task-workflows",
+    "forge-task-adk-workflows",
+    "google-adk>=2.9.2",
+    "httpx2>=2.13.1",
+    "jsonschema>=4.26",
+    "pycasbin>=2.8.0",
+    "pydantic-settings>=2.15.0",
+    "pyjwt>=2.10",
+    # The assistant's screen configuration (agents/screens.yaml).
+    "pyyaml>=6.0",
+    "pymongo>=4.13",
+    "saq[redis]>=0.26.4,<0.27",
+    "sqlalchemy[asyncio]>=2.1.0",
+    "uvicorn[standard]>=0.53.0",
+]
+
+[project.scripts]
+forge-admin = "forge_admin.cli.serve:main"
+forge-admin-seed = "forge_admin.cli.seed:main"
+forge-admin-token = "forge_admin.cli.token:main"
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+forge-common = { path = "../../packages/python/common", editable = true }
+forge-task-workflows = { path = "../../packages/python/tasks/workflows", editable = true }
+forge-task-adk-workflows = { path = "../../packages/python/tasks/adk-workflows", editable = true }
+forge-tasks = { path = "../../packages/python/tasks/task-sdk", editable = true }
+forge-jsonata = { path = "../../packages/python/jsonata", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.9",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]
+
+[tool.ruff.lint.pycodestyle]
+# The formatter wraps code at 88; prose it cannot wrap (docstrings,
+# comments) may run to 100.
+max-line-length = 100
+
+[tool.ruff.lint.per-file-ignores]
+# Every revision imports sa and op from the template, used or not.
+"src/forge_admin/db/migrations/versions/*.py" = ["F401"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "mysql: needs a running MySQL; run with make admin-test-mysql",
+]

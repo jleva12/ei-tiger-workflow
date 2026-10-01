@@ -1,0 +1,636 @@
+"""baseline: users, organizations, access and events
+
+The schema of the admin database: the people roles are assigned to; the
+organizations, the one level of the hierarchy below the site; Casbin's
+policy lines with the roles and permissions they grant; and each
+organization's inbound events. Organizations' workflows live in MongoDB, not here.
+
+The default permissions, roles and grants are written once, here, so later
+edits made through the API are never reverted.
+
+Revision ID: 0001baseline
+Revises:
+Create Date: 2026-09-28 10:47:54.218548
+"""
+
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy.dialects import mysql
+
+revision: str = "0001baseline"
+down_revision: str | Sequence[str] | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+PERMISSIONS = {
+    "organizations:read": "View an organization, its workflows, events and runs",
+    "organizations:create": "Create organizations",
+    "organizations:update": "Rename or describe an organization",
+    "organizations:delete": "Delete an organization",
+    "members:read": "See who holds which role",
+    "members:update": "Assign and revoke roles",
+    "users:create": "Add people",
+    "users:update": "Edit people's names, email addresses and MS IDs",
+    "users:delete": "Remove people, revoking their roles",
+    "roles:create": "Create roles",
+    "roles:update": "Edit roles and the permissions they grant",
+    "roles:delete": "Delete roles",
+    "permissions:create": "Create permissions",
+    "permissions:update": "Edit permissions",
+    "permissions:delete": "Delete permissions",
+    "events:manage": (
+        "Turn on an organization's inbound events endpoint, rotate its token, "
+        "and define the event types it accepts with their schemas"
+    ),
+    "workflows:manage": "Make, change and delete the organization's workflows",
+    "workflows:run": (
+        "Run the organization's workflows, and decide approvals any member may"
+    ),
+    "workflows:approve": (
+        "Decide approvals of the organization's workflow runs that its "
+        "administrators decide"
+    ),
+    "background_tasks:manage": (
+        "Resubmit, restart and abandon the organization's workflow runs"
+    ),
+    "*:*": "Everything",
+}
+
+# key: (name, description, permission keys)
+ROLES: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "site:admin": (
+        "Site administrator",
+        "Sets up organizations and people, and can do everything everywhere.",
+        ("*:*",),
+    ),
+    "org:admin": (
+        "Organization administrator",
+        "Runs the organization: its members, inbound events, workflows and "
+        "their approvals, and their runs.",
+        (
+            "organizations:read",
+            "organizations:update",
+            "members:read",
+            "members:update",
+            "events:manage",
+            "workflows:manage",
+            "workflows:run",
+            "workflows:approve",
+            "background_tasks:manage",
+        ),
+    ),
+    "org:member": (
+        "Organization member",
+        "Works in the organization: builds and runs its workflows.",
+        (
+            "organizations:read",
+            "members:read",
+            "workflows:manage",
+            "workflows:run",
+        ),
+    ),
+    "org:viewer": (
+        "Organization viewer",
+        "Sees the organization, its workflows and their runs.",
+        ("organizations:read", "members:read"),
+    ),
+}
+
+permissions_table = sa.table(
+    "authz_permissions",
+    sa.column("resource", sa.String),
+    sa.column("action", sa.String),
+    sa.column("description", sa.Text),
+)
+roles_table = sa.table(
+    "authz_roles",
+    sa.column("key", sa.String),
+    sa.column("name", sa.String),
+    sa.column("description", sa.Text),
+)
+rules_table = sa.table(
+    "casbin_rule",
+    sa.column("ptype", sa.String),
+    sa.column("v0", sa.String),
+    sa.column("v1", sa.String),
+    sa.column("v2", sa.String),
+)
+
+
+def json_text() -> sa.Text:
+    """A JSON value kept as text, as written (forge_admin.db.base.JSONText)."""
+    return sa.Text().with_variant(mysql.MEDIUMTEXT(), "mysql")
+
+
+def add_defaults() -> None:
+    op.bulk_insert(
+        permissions_table,
+        [
+            {
+                "resource": key.split(":")[0],
+                "action": key.split(":")[1],
+                "description": text,
+            }
+            for key, text in PERMISSIONS.items()
+        ],
+    )
+    op.bulk_insert(
+        roles_table,
+        [
+            {"key": key, "name": name, "description": text}
+            for key, (name, text, _) in ROLES.items()
+        ],
+    )
+    op.bulk_insert(
+        rules_table,
+        [
+            {"ptype": "p", "v0": role, "v1": key.split(":")[0], "v2": key.split(":")[1]}
+            for role, (_, _, keys) in ROLES.items()
+            for key in keys
+        ],
+    )
+
+
+def upgrade() -> None:
+    # ### commands auto generated by Alembic - please adjust! ###
+    op.create_table(
+        "authz_permissions",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column(
+            "resource",
+            sa.String(length=255).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=255),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "action",
+            sa.String(length=100).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=100),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column("description", sa.Text(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_authz_permissions")),
+        sa.UniqueConstraint(
+            "resource", "action", name=op.f("uq_authz_permissions_resource")
+        ),
+    )
+    op.create_table(
+        "authz_roles",
+        sa.Column(
+            "key",
+            sa.String(length=100).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=100),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column("name", sa.String(length=200), nullable=False),
+        sa.Column("description", sa.Text(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.PrimaryKeyConstraint("key", name=op.f("pk_authz_roles")),
+    )
+    op.create_table(
+        "casbin_rule",
+        sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
+        sa.Column(
+            "ptype",
+            sa.String(length=8).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=8), "mysql"
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "v0",
+            sa.String(length=255).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=255),
+                "mysql",
+            ),
+            nullable=True,
+        ),
+        sa.Column(
+            "v1",
+            sa.String(length=255).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=255),
+                "mysql",
+            ),
+            nullable=True,
+        ),
+        sa.Column(
+            "v2",
+            sa.String(length=255).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=255),
+                "mysql",
+            ),
+            nullable=True,
+        ),
+        sa.Column(
+            "v3",
+            sa.String(length=255).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=255),
+                "mysql",
+            ),
+            nullable=True,
+        ),
+        sa.Column(
+            "v4",
+            sa.String(length=255).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=255),
+                "mysql",
+            ),
+            nullable=True,
+        ),
+        sa.Column(
+            "v5",
+            sa.String(length=255).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=255),
+                "mysql",
+            ),
+            nullable=True,
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_casbin_rule")),
+        sa.UniqueConstraint("ptype", "v0", "v1", "v2", name="uq_casbin_rule_line"),
+    )
+    op.create_index(
+        "ix_casbin_rule_ptype_v1_v2", "casbin_rule", ["ptype", "v1", "v2"], unique=False
+    )
+    op.create_table(
+        "organizations",
+        sa.Column(
+            "id",
+            sa.String(length=36).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=36),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column("name", sa.String(length=200), nullable=False),
+        sa.Column("description", sa.Text(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_organizations")),
+        sa.UniqueConstraint("name", name=op.f("uq_organizations_name")),
+    )
+    op.create_table(
+        "users",
+        sa.Column(
+            "id",
+            sa.String(length=255).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=255),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column("first_name", sa.String(length=100), nullable=False),
+        sa.Column("last_name", sa.String(length=100), nullable=False),
+        sa.Column("email", sa.String(length=320), nullable=False),
+        sa.Column(
+            "msid",
+            sa.String(length=64).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=64),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_users")),
+        sa.UniqueConstraint("email", name=op.f("uq_users_email")),
+        sa.UniqueConstraint("msid", name=op.f("uq_users_msid")),
+    )
+    op.create_table(
+        "organization_event_endpoints",
+        sa.Column(
+            "id",
+            sa.String(length=36).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=36),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "organization_id",
+            sa.String(length=36).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=36),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column("enabled", sa.Boolean(), nullable=False),
+        sa.Column(
+            "token_sha256",
+            sa.String(length=64).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=64),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "token_hint",
+            sa.String(length=8).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=8), "mysql"
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.ForeignKeyConstraint(
+            ["organization_id"],
+            ["organizations.id"],
+            name=op.f("fk_organization_event_endpoints_organization_id_organizations"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_organization_event_endpoints")),
+        sa.UniqueConstraint(
+            "organization_id",
+            name=op.f("uq_organization_event_endpoints_organization_id"),
+        ),
+    )
+    op.create_table(
+        "organization_event_types",
+        sa.Column(
+            "id",
+            sa.String(length=36).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=36),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "organization_id",
+            sa.String(length=36).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=36),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "key",
+            sa.String(length=100).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=100),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column("name", sa.String(length=200), nullable=False),
+        sa.Column("description", sa.Text(), nullable=False),
+        sa.Column(
+            "status",
+            sa.String(length=16).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=16),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column("payload_schema", json_text(), nullable=False),
+        sa.Column("schema_version", sa.Integer(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.ForeignKeyConstraint(
+            ["organization_id"],
+            ["organizations.id"],
+            name=op.f("fk_organization_event_types_organization_id_organizations"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_organization_event_types")),
+        sa.UniqueConstraint(
+            "organization_id",
+            "key",
+            name=op.f("uq_organization_event_types_organization_id"),
+        ),
+    )
+    op.create_table(
+        "organization_events",
+        sa.Column(
+            "id",
+            sa.String(length=36).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=36),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "organization_id",
+            sa.String(length=36).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=36),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "event_type_id",
+            sa.String(length=36).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=36),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column("schema_version", sa.Integer(), nullable=False),
+        sa.Column(
+            "status",
+            sa.String(length=16).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=16),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column("errors", sa.JSON(), nullable=False),
+        sa.Column("payload", json_text(), nullable=False),
+        sa.Column("idempotency_key", sa.String(length=255), nullable=True),
+        sa.Column("size_bytes", sa.Integer(), nullable=False),
+        sa.Column("content_type", sa.String(length=255), nullable=False),
+        sa.Column("user_agent", sa.String(length=500), nullable=False),
+        sa.Column(
+            "source_ip",
+            sa.String(length=64).with_variant(
+                mysql.VARCHAR(charset="ascii", collation="ascii_bin", length=64),
+                "mysql",
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql"),
+            server_default=sa.text("CURRENT_TIMESTAMP(6)"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_by", sa.String(length=255), server_default="system", nullable=False
+        ),
+        sa.ForeignKeyConstraint(
+            ["event_type_id"],
+            ["organization_event_types.id"],
+            name=op.f("fk_organization_events_event_type_id_organization_event_types"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["organization_id"],
+            ["organizations.id"],
+            name=op.f("fk_organization_events_organization_id_organizations"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_organization_events")),
+        sa.UniqueConstraint(
+            "event_type_id",
+            "idempotency_key",
+            name=op.f("uq_organization_events_event_type_id"),
+        ),
+    )
+    op.create_index(
+        "ix_organization_events_event_type_id_created_at",
+        "organization_events",
+        ["event_type_id", "created_at"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_organization_events_organization_id_created_at",
+        "organization_events",
+        ["organization_id", "created_at"],
+        unique=False,
+    )
+    # ### end Alembic commands ###
+    add_defaults()
+
+
+def downgrade() -> None:
+    # Dropping a table drops its indexes; MySQL won't drop one on its own
+    # while a foreign key needs it.
+    op.drop_table("organization_events")
+    op.drop_table("organization_event_types")
+    op.drop_table("organization_event_endpoints")
+    op.drop_table("users")
+    op.drop_table("organizations")
+    op.drop_table("casbin_rule")
+    op.drop_table("authz_roles")
+    op.drop_table("authz_permissions")

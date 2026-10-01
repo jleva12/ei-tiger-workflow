@@ -1,0 +1,107 @@
+# The admin API and MySQL, using the root stack's shared MongoDB and Redis.
+# Run from the repository root with make up (make admin runs the API natively).
+# Settings come from apps/forge-admin-api/.env, whose ${NAME} references Compose resolves
+# from .env.common (the root Makefile passes it with --env-file); the
+# environment below overrides the listener and points the service at
+# admin-mysql and mongo.
+
+# Shared by the API and the seed: the admin-mysql connection. The rest,
+# including the bearer token secret and the site administrator the seed adds,
+# comes from ./.env. Requests sign in with a bearer token, as in production.
+x-admin-environment: &admin-environment
+  FORGE_ADMIN_MYSQL_HOST: admin-mysql
+  FORGE_ADMIN_MYSQL_PORT: "3306"
+  FORGE_ADMIN_MYSQL_DATABASE: ${ADMIN_MYSQL_DATABASE:-forge_admin}
+  FORGE_ADMIN_MYSQL_USER: ${ADMIN_MYSQL_USER:-forge_admin}
+  FORGE_ADMIN_MYSQL_PASSWORD: ${ADMIN_MYSQL_PASSWORD:-local-admin}
+
+# Workflows use their own database on the shared local Atlas instance.
+x-mongo-uri: &mongo-uri mongodb://${FORGE_MONGO_USER:-forge}:${FORGE_MONGO_PASSWORD:-local-forge}@mongo:27017/?authSource=admin&directConnection=true
+
+x-admin-build: &admin-build
+  context: ../..
+  dockerfile: apps/forge-admin-api/Dockerfile
+
+services:
+  admin-mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${ADMIN_MYSQL_DATABASE:-forge_admin}
+      MYSQL_USER: ${ADMIN_MYSQL_USER:-forge_admin}
+      MYSQL_PASSWORD: ${ADMIN_MYSQL_PASSWORD:-local-admin}
+      MYSQL_ROOT_PASSWORD: ${ADMIN_MYSQL_ROOT_PASSWORD:-local-root}
+    ports:
+      - "127.0.0.1:${ADMIN_MYSQL_PORT:-13326}:3306"
+    volumes:
+      - admin-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_PASSWORD\" mysql --protocol=TCP -h 127.0.0.1 -u \"$$MYSQL_USER\" -D \"$$MYSQL_DATABASE\" -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 20
+  admin:
+    build: *admin-build
+    init: true
+    restart: unless-stopped
+    depends_on:
+      admin-mysql:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    env_file:
+      - path: ./.env
+        required: false
+    environment:
+      <<: *admin-environment
+      # The assistant links to this stack's web console.
+      FORGE_ADMIN_WEB_URL: http://localhost:${WEB_PORT:-18190}
+      FORGE_ADMIN_HOST: 0.0.0.0
+      FORGE_ADMIN_PORT: "8091"
+      FORGE_ADMIN_RELOAD: "false"
+      # The async worker's background tasks API, in this stack
+      # (apps/forge-async-worker/compose.yaml), with its token from
+      # .env.common. Called per request, so no depends_on: until it answers,
+      # background tasks report it unavailable.
+      FORGE_ADMIN_ASYNC_WORKER_URL: http://async-worker-api:8094
+      FORGE_ADMIN_ASYNC_WORKER_TOKEN: ${FORGE_ASYNC_WORKER_TOKEN:-}
+      # What the async worker's workflows task calls the service routes with.
+      FORGE_ADMIN_WORKFLOWS_TOKEN: ${FORGE_WORKFLOWS_TOKEN:-}
+      # Organizations' workflows, in their own database on the shared mongo.
+      FORGE_ADMIN_MONGO_URI: *mongo-uri
+      FORGE_ADMIN_MONGO_DATABASE: ${ADMIN_MONGO_DATABASE:-forge_admin}
+      # The async worker's job queues, where workflow runs are submitted, in
+      # this stack (apps/forge-async-worker/compose.yaml). Connected lazily,
+      # so no depends_on: starting a run reports it unavailable until it
+      # answers.
+      FORGE_ADMIN_EMBEDDING_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "127.0.0.1:${ADMIN_PORT:-18201}:8091"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 30s
+  # One-shot: applies migrations, which create the default roles and
+  # permissions, then adds the site administrator (FORGE_ADMIN_SITE_ADMIN_* in
+  # ./.env) to users with site:admin. make infrastructure runs it; the tools
+  # profile keeps it out of make up.
+  admin-seed:
+    build: *admin-build
+    profiles: [tools]
+    entrypoint: ["forge-admin-seed"]
+    restart: "no"
+    depends_on:
+      admin-mysql:
+        condition: service_healthy
+    env_file:
+      - path: ./.env
+        required: false
+    environment: *admin-environment
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+volumes:
+  admin-mysql-data:

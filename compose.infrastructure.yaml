@@ -1,0 +1,50 @@
+# Shared infrastructure for the admin API and the async worker. Included once
+# by compose.yaml. The admin API's MySQL (admin-mysql) lives in
+# apps/forge-admin-api/compose.yaml.
+services:
+  # Workflows (the admin API's forge_admin database) and the task framework's
+  # runs (the async worker's forge_tasks database). Atlas Local runs as a
+  # single-node replica set, so the task framework's run store gets
+  # transactions.
+  mongo:
+    image: mongodb/mongodb-atlas-local:8.3.9
+    # Atlas Local derives both the replica-set name and member address from
+    # its hostname. Keep it stable across container recreation. Existing
+    # volumes must retain their saved replica-set name via .env.compose.
+    hostname: ${FORGE_MONGO_HOSTNAME:-mongo}
+    restart: unless-stopped
+    environment:
+      MONGODB_INITDB_ROOT_USERNAME: ${FORGE_MONGO_USER:-forge}
+      MONGODB_INITDB_ROOT_PASSWORD: ${FORGE_MONGO_PASSWORD:-local-forge}
+      DO_NOT_TRACK: "1"
+    ports:
+      - "127.0.0.1:${FORGE_MONGO_PORT:-27037}:27017"
+    volumes:
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/runner", "healthcheck"]
+      interval: 5s
+      timeout: 10s
+      start_period: 60s
+      retries: 30
+  # The async worker's SAQ queues and locks, in database 0, where the admin
+  # API submits workflow runs. No eviction of queued jobs; AOF preserves the
+  # queues across container recreation.
+  redis:
+    image: redis:8.8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:${FORGE_REDIS_PORT:-16389}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  mongo-data:
+  mongo-config:
+  redis-data:

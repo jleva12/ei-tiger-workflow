@@ -1,0 +1,5 @@
+graph LR
+    A[CLOSED<br/>All calls pass] -->|5 consecutive failures| B[OPEN<br/>Calls rejected instantly]
+    B -->|30s recovery timeout| C[HALF-OPEN<br/>3 probe calls allowed]
+    C -->|Probes succeed| A
+    C -->|Any probe fails| B

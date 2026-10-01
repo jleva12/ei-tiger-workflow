@@ -1,0 +1,38 @@
+[project]
+name = "forge-jsonata"
+version = "0.1.0"
+description = "Locally maintained, dependency-free Python JSONata engine for Forge"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0 AND MIT"
+license-files = ["LICENSE", "LICENSE-JSONATA", "NOTICE"]
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+source-include = ["tests/**", "UPSTREAM.md", "upstream-manifest.json", "uv.lock"]
+
+[dependency-groups]
+dev = ["pytest>=9.1.1", "pytest-asyncio>=1.2", "pytest-timeout>=2.3", "ruff>=0.16.9"]
+# Tests the optional regex-engine hook; never a runtime dependency.
+re2 = ["google-re2>=1.1.20251105"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+timeout = 60
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# Retain upstream's local names and translated algorithms for easier comparison.
+"src/forge_jsonata/**" = ["E731", "E741", "F841"]
+"tests/upstream/**" = ["E711", "F841"]

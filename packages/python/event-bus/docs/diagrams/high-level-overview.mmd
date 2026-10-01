@@ -1,0 +1,37 @@
+graph TB
+    subgraph Publishers
+        SvcA[Order Service]
+        SvcB[Payment Service]
+        SvcC[Inventory Service]
+    end
+
+    subgraph EventBus["Event Bus"]
+        BUS[EventBus Orchestrator]
+        MW[Middleware Pipeline]
+        BP[Backpressure Controller]
+    end
+
+    subgraph Redis
+        STREAM[(Redis Streams<br/>Durable / Ordered)]
+        PUBSUB[(Redis Pub/Sub<br/>Instant Fan-out)]
+    end
+
+    subgraph Server Consumers
+        CG1[Consumer Group<br/>order-processor<br/>3 workers]
+        CG2[Consumer Group<br/>payment-handler<br/>2 workers]
+        DLQ[(Dead Letter Queue)]
+    end
+
+    subgraph Browser Clients
+        SSE1[SSE Subscriber<br/>Dashboard]
+        WS1[WebSocket Subscriber<br/>Live Feed]
+        WS2[WebSocket Subscriber<br/>Admin Panel]
+    end
+
+    SvcA & SvcB & SvcC -->|publish| BUS
+    BUS --> MW --> BP
+    BP -->|XADD| STREAM
+    BP -->|PUBLISH| PUBSUB
+    STREAM -->|XREADGROUP| CG1 & CG2
+    CG1 & CG2 -->|max retries exceeded| DLQ
+    PUBSUB -->|PSUBSCRIBE| SSE1 & WS1 & WS2

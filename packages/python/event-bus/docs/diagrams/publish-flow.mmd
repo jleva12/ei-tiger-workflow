@@ -1,0 +1,24 @@
+sequenceDiagram
+    participant App as Application
+    participant Bus as EventBus
+    participant MW as Middleware
+    participant BP as Backpressure
+    participant CB as Circuit Breaker
+    participant Stream as Redis Stream
+    participant PubSub as Redis Pub/Sub
+
+    App->>Bus: publish("orders.created", data)
+    Bus->>MW: before_publish(event)
+    MW-->>Bus: event (possibly transformed)
+    Bus->>BP: acquire semaphore
+    BP-->>Bus: OK (or raise BackpressureError)
+    Bus->>CB: ensure_closed()
+    CB-->>Bus: OK (or raise CircuitOpenError)
+    Bus->>Stream: XADD eventbus:stream:orders.created
+    Stream-->>Bus: message ID "1678886400000-0"
+    Bus->>PubSub: PUBLISH eventbus:channel:orders.created
+    Note over PubSub: Best-effort — failure here<br/>is non-fatal
+    PubSub-->>Bus: subscriber count
+    Bus->>BP: release semaphore
+    Bus->>MW: after_publish(event, stream_id)
+    Bus-->>App: "1678886400000-0"
