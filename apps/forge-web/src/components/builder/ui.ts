@@ -58,6 +58,8 @@ export type BuilderUi = {
    * reads at a glance. Agent orbs, the ends and a person's steps keep theirs.
    */
   kindTones?: Partial<Record<string, KindTone>>
+  /** A step's card leads its second line with its kind ("HTTP request · 30 s timeout"). */
+  kindLabels?: boolean
   /** Below the settings: how later steps read it, and what it can read. */
   DataSection?: React.ComponentType<{ id: string; step: BaseStep }>
   /** What the empty canvas suggests. */

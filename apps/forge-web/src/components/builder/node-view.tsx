@@ -69,6 +69,12 @@ export const FlowNodeView = React.memo(function FlowNodeView({
   const outputs = adapter.outputsOf(data)
   const branches = outputs.some((o) => o.branch)
   const summary = ui.summaryOf(data, lookups)
+  // Its kind leads the line under its name, unless the name already says it.
+  const kind =
+    ui.kindLabels && data.name.trim().toLowerCase() !== info.label.toLowerCase()
+      ? info.label
+      : undefined
+  const detail = [kind, ui.detailOf(data, lookups)].filter(Boolean).join(" · ")
 
   return (
     <div
@@ -97,7 +103,7 @@ export const FlowNodeView = React.memo(function FlowNodeView({
               info.person ? "text-notice-foreground" : "text-muted-foreground"
             )}
           >
-            {ui.detailOf(data, lookups)}
+            {detail}
           </span>
         </div>
         <IssueMark issues={issues} />

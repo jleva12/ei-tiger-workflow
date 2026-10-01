@@ -125,6 +125,7 @@ export const AGENT_UI: BuilderUi = {
   raisedSteps: true,
   // The library's groups, readable on the canvas: People and the ends keep their own looks.
   kindTones: { agents: "agent", actions: "action", logic: "logic" },
+  kindLabels: true,
   DataSection: AgentDataSection as BuilderUi["DataSection"],
   emptyCanvas:
     "Drag nodes here from the library, or click one to add it. Begin with Start.",
