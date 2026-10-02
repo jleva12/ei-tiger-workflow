@@ -5,9 +5,9 @@ import {
   useMatches,
 } from "@tanstack/react-router"
 
-import { AppLayout } from "@/components/app-layout"
-import { AppError } from "@/components/route-states"
-import { isSettingsSection, type SettingsSearch } from "@/lib/settings"
+import { AppLayout } from "@/app/app-layout"
+import { AppError } from "@/app/route-states"
+import { isSettingsSection, type SettingsSearch } from "@/app/settings/settings"
 
 export type RouterContext = {
   /** For loaders: `context.queryClient.ensureQueryData(tasks.detailOptions(id))`. */

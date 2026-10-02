@@ -27,7 +27,7 @@ from google.adk.sessions import DatabaseSessionService
 from google.genai import types
 from pymongo import MongoClient
 
-from forge_admin.agent_build import build_agent
+from forge_admin.adk_workflows.build import build_agent
 from forge_admin.api.app import PUBLIC_ROUTERS, ROUTERS
 from forge_admin.api.server import ApiServer
 from forge_admin.config import Settings

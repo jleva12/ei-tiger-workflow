@@ -1,7 +1,7 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router"
 
-import { AdminOnly } from "@/components/admin/admin-only"
-import { useAdminNav } from "@/components/admin/admin-nav"
+import { AdminOnly } from "@/features/admin/components/admin-only"
+import { useAdminNav } from "@/features/admin/components/admin-nav"
 
 /**
  * Site administration, under /admin: organizations and their members, users,

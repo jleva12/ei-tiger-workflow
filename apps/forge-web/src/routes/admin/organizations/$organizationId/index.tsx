@@ -1,20 +1,20 @@
 import * as React from "react"
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 
-import { LEVELS } from "@/components/admin/levels"
+import { LEVELS } from "@/features/admin/components/levels"
 import {
   NodeActions,
   NodeSummary,
   NodeUnavailable,
-} from "@/components/admin/node-page"
-import { OrganizationMembers } from "@/components/admin/organization-members"
+} from "@/features/admin/components/node-page"
+import { OrganizationMembers } from "@/features/admin/components/organization-members"
 import { PrimaryAction } from "@/components/forge/app-shell"
 import { Icon } from "@/components/forge/icon"
 import { ShellHeaderActions, useShellPage } from "@/components/forge/shell"
 import { Button } from "@/components/ui/button"
 import { useMyOrganizations } from "@/lib/access"
 import { organizations, useScopeAccess } from "@/lib/hierarchy"
-import { usePageContext } from "@/lib/page-context"
+import { usePageContext } from "@/features/assistant/lib/page-context"
 
 /**
  * An organization in site administration: its summary, and who holds which

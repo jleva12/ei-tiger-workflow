@@ -2,14 +2,14 @@ import * as React from "react"
 import { UserShield01Icon } from "@hugeicons/core-free-icons"
 import { createFileRoute } from "@tanstack/react-router"
 
-import { DeleteDialog } from "@/components/admin/delete-dialog"
-import { RoleSheet } from "@/components/admin/role-sheet"
+import { DeleteDialog } from "@/features/admin/components/delete-dialog"
+import { RoleSheet } from "@/features/admin/components/role-sheet"
 import {
   ADMIN_TABLE_FEATURES,
   DATE_TIME,
   PIN_ACTIONS,
-} from "@/components/admin/table-config"
-import { EmptyRows, RowMenu } from "@/components/admin/table-parts"
+} from "@/features/admin/components/table-config"
+import { EmptyRows, RowMenu } from "@/features/admin/components/table-parts"
 import { PrimaryAction } from "@/components/forge/app-shell"
 import {
   createColumnHelper,

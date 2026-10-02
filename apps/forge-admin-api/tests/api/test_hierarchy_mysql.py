@@ -12,7 +12,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from forge_admin.agents.person import Person, database_people
+from forge_admin.assistant.person import Person, database_people
 from forge_admin.config import Settings
 from forge_admin.db.session import create_engine
 

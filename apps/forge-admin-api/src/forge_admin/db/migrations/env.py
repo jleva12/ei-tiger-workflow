@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
 import forge_admin.models  # noqa: F401  registers every table on Base.metadata
-from forge_admin.agents import ADK_TABLES
+from forge_admin.assistant import ADK_TABLES
 from forge_admin.config import get_settings
 from forge_admin.db.base import Base
 from forge_admin.db.session import UTC_SESSION

@@ -24,9 +24,10 @@ app = server.create_app()  # built once, the same object afterwards
   sessionmaker and the Casbin enforcer at startup, and keeps them on
   `app.state` with the clients the routes use: the ADK workflow runs
   (`adk_runs`, the run store on the engine), the async worker's job queues on
-  Redis (`embedding`), the agents' (ADK workflows') MongoDB store
-  (`organization_agents`), the assistant (`agents`) and the ADK workflow
-  runs' sessions (`adk_run_sessions`, ADK's `DatabaseSessionService` on the
+  Redis (`embedding`, `adk_workflows/queue.py`), the agents' (ADK workflows')
+  MongoDB store (`organization_agents`, `adk_workflows/documents.py`), the
+  assistant (`agents`, `assistant/runtime.py`) and the ADK workflow runs'
+  sessions (`adk_run_sessions`, ADK's `DatabaseSessionService` on the
   engine). The queues and the MongoDB store are `None` when their settings
   are unset. Nothing connects until it's used, so the API starts while MySQL,
   MongoDB or Redis are down, and `/health/ready` reports MySQL.
@@ -53,13 +54,14 @@ src/forge_admin/
   __main__.py            python -m forge_admin: runs cli/serve.py
   config.py              FORGE_ADMIN_* settings
   env_files.py           .env's ${NAME} references to the repository's .env.common
-  document_store.py      Organizations' documents in MongoDB: one record per document, revisions, the store
-  agent_documents.py     Organizations' agents (ADK workflows) in MongoDB: checking documents, the store
-  agent.schema.json      The forge.agent/v1 format's JSON Schema (generated from the web console)
-  agent_build.py         Building a document into an ADK Workflow (forge_task_adk_workflows.graph)
-  adk_runs.py            ADK workflow runs: checking the input and the build, starting them, answers
-  embedding.py           The async worker's SAQ job queues on Redis, where jobs that take runs are queued
-  agents/                The assistant: Google ADK agents
+  adk_workflows/         Organizations' ADK workflows (agents in the API) and their runs
+    documents.py         Their documents in MongoDB: checking them, AgentStore
+    document_store.py    Organizations' documents in MongoDB: one record per document, revisions, the store
+    agent.schema.json    The forge.agent/v1 format's JSON Schema (generated from the web console)
+    build.py             Building a document into an ADK Workflow (forge_task_adk_workflows.graph)
+    runs.py              ADK workflow runs: checking the input and the build, starting them, answers
+    queue.py             The async worker's SAQ job queues on Redis, where jobs that take runs are queued
+  assistant/             The in-app assistant (the web console's Forge assistant): Google ADK agents
     __init__.py          ADK_TABLES: the tables ADK manages itself in the admin database
     forge.py             The supervisor, a specialist per toolset, and the toolsets
     screens.py           What the assistant has on each screen, from screens.yaml
@@ -77,7 +79,9 @@ src/forge_admin/
   api/                   The HTTP service
     app.py               ROUTERS, PUBLIC_ROUTERS and create_app(): what this service serves
     server.py            ApiServer: FastAPI app, lifespan, routers, middleware
-    routes/              One router per resource; common.py holds shared request pieces
+    routes/              One router per resource; common.py holds shared request pieces: adk_workflows.py
+                         (ADK workflows, /organizations/{id}/agents), adk_workflow_runs.py (their runs),
+                         assistant.py (the assistant's conversations, /agents)
   auth/                  Who is calling and what they may do
     security.py          authenticate: the optional API key, the bearer token, the audit actor
     tokens.py            Minting and verifying bearer tokens (JWTs)
@@ -98,10 +102,10 @@ src/forge_admin/
                          (roles, permissions, casbin_rule)
 ```
 
-The tests mirror it: `tests/agents`, `tests/api`, `tests/auth`, `tests/cli`,
-`tests/db`, `tests/integrations` (routes with their stores, the worker's queue
-and sessions stood in: on SQLite, or against MySQL) and unit tests at the
-top, with `conftest.py` shared.
+The tests mirror it: `tests/adk_workflows`, `tests/assistant`, `tests/api`,
+`tests/auth`, `tests/cli`, `tests/db`, `tests/integrations` (routes with their
+stores, the worker's queue and sessions stood in: on SQLite, or against MySQL)
+and unit tests at the top, with `conftest.py` shared.
 
 ## Adding a router
 
@@ -320,7 +324,7 @@ agents with their sub-agents, sequential, parallel and loop agents,
 other saved agents, human input, and Forge's own steps: approvals, HTTP
 requests, transforms, delays, If / Switch / Match, loops, merges and ends)
 joined by edges and run from their start. They're kept in the `agents`
-collection (`agent_documents.py`, on `document_store.py`), each found only
+collection (`adk_workflows/documents.py`, on `adk_workflows/document_store.py`), each found only
 through its organization: a save names the revision it was made from (409
 when someone saved it since), a deleted one stays out of every read, and the
 routes answer 503 while MongoDB isn't set up or answering. Their IDs are
@@ -328,12 +332,12 @@ routes answer 503 while MongoDB isn't set up or answering. Their IDs are
 saves and deletes them (`org:admin` and `org:member` by default);
 `organizations:read` reads them.
 
-The document must match `src/forge_admin/agent.schema.json`, generated from
-the web's `src/lib/agents/schema.ts`, and be at most
+The document must match `src/forge_admin/adk_workflows/agent.schema.json`, generated from
+the web's `src/features/adk-workflows/lib/schema.ts`, and be at most
 `FORGE_ADMIN_AGENTS_MAX_BYTES` (1 MiB) of JSON; otherwise 422. Only the
 schema is checked, so a draft that can't run yet is saved.
 
-`agent_build.build_agent(document, model=..., model_callbacks=...,
+`adk_workflows.build.build_agent(document, model=..., model_callbacks=...,
 resolve=...)` builds a document into one ADK `Workflow`, each node the ADK
 node its kind stands for and named by its name as a Python identifier (as the
 builder shows it). Expressions are JSONata over what a node can read
@@ -347,8 +351,8 @@ missing or self-running saved agent, edges it can't follow) with an
 
 An organization's ADK workflows (its agents) run on the async worker, whose
 ADK workflows task
-([packages/python/tasks/adk-workflows](../../packages/python/tasks/adk-workflows/README.md))
-runs them on Google ADK's graph engine (`adk_runs.py`,
+([packages/python/adk-workflows](../../packages/python/adk-workflows/README.md))
+runs them on Google ADK's graph engine (`adk_workflows/runs.py`,
 `api/routes/adk_workflow_runs.py`). A run is kept in this database, beside
 its ADK session, by the run store (`forge_task_adk_workflows.run_store`,
 tables `adk_runs` and `adk_run_events`, which `0005adk_run_store` creates):
@@ -478,7 +482,7 @@ The web console's assistant talks to a [Google ADK](https://google.github.io/adk
 agent served by this API under `/agents`, in the protocol of ADK's own API
 server (`adk api_server`), which its SDK (`@assistant-ui/react-google-adk`,
 direct mode) is written against. The one app is `forge`
-(`agents/forge.py`), on the models of the shared model provider
+(`assistant/forge.py`), on the models of the shared model provider
 configuration, or else Gemini (`gemini-3.5-flash`; see
 [The assistant's models](#the-assistants-models)): a supervisor and its
 specialists (below). ADK's events for tool calls and results, confirmations,
@@ -534,13 +538,13 @@ curl -N localhost:8101/api/v1/agents/run_sse -H "Authorization: Bearer $TOKEN" \
   doesn't offer, on the nearest it does.
 - **Who and where:** each run looks up who the person is from their sign-in
   (name, email, the organizations they hold roles in with those roles, and
-  their site-wide roles; `agents/person.py`) and hands it to the agent as
+  their site-wide roles; `assistant/person.py`) and hands it to the agent as
   `temp:person`, for that run only. The web console sends the page they're
   on as `page_context` (path and route, title and crumbs, the workspace
   scope, the records on screen and the one in focus; `null` when they stop
   sharing it), which is kept with the message's event. It's checked for
   shape and size, and left out rather than refused when malformed
-  (`agents/page_context.py`). The agent's instruction describes both, with
+  (`assistant/page_context.py`). The agent's instruction describes both, with
   every value from the browser quoted as data. The page grants nothing:
   tools still act as the person.
 - **State a run may set:** only `model`, `thinking_level` and `page_context`.
@@ -572,7 +576,7 @@ names the providers, their models and how to reach them, and
 (the image keeps the shared files at that path relative to `/app`). Its
 `${NAME}` references resolve from the process environment, then from
 `.env`; a missing one stops startup. The agent runs on one
-`forge_common.adk.models.ProviderModels` (`agents/language_models.py`), which
+`forge_common.adk.models.ProviderModels` (`assistant/language_models.py`), which
 sends each turn to the model the conversation chose: Gemini through ADK's own
 client, OpenAI (Responses or Chat Completions) and Anthropic through LiteLLM.
 `FORGE_ADMIN_AGENT_MODEL` picks the default among its models (its own
@@ -605,7 +609,7 @@ provider's sign-in failure arrives as an error event with `errorCode`
 
 The assistant's tools, part of its instructions, its default model and the
 prompts suggested under a new conversation's composer depend on the screen
-the person is on, as `agents/screens.yaml` configures it (or the file
+the person is on, as `assistant/screens.yaml` configures it (or the file
 `FORGE_ADMIN_AGENT_SCREENS` names). Each screen's `when` matches the page
 context the web console sends with every message: the router's `route`, its
 `search` parameters (e.g. `view: config`) and the kinds of record on screen
@@ -615,7 +619,7 @@ and `prompts` (at most six are suggested); `everywhere` applies on every
 screen.
 
 - **Built once.** The supervisor and a specialist per toolset that's set up
-  are built at startup. On every model call, `agents/screens.py`'s `Screens`
+  are built at startup. On every model call, `assistant/screens.py`'s `Screens`
   says which toolsets the conversation's page gives: the supervisor is
   offered only those specialists (`offer_specialists` withdraws the others'
   declarations), and each specialist's `ScreenToolset` gives it that
@@ -639,15 +643,15 @@ screen.
 
 ### The assistant's toolsets
 
-Each toolset is registered in `agents/forge.py` (`toolsets()`), held by its
+Each toolset is registered in `assistant/forge.py` (`toolsets()`), held by its
 own specialist, and given to the assistant by `screens.yaml`. Every tool
-calls this API's own routes as the person (`agents/person_api.py`): in the
+calls this API's own routes as the person (`assistant/person_api.py`): in the
 process, over an ASGI transport, with a token minted for the conversation's
 user (10 minutes, reused for 5, signed with `FORGE_ADMIN_JWT_SECRET`;
-`agents/user_tokens.py`) and sent to the address they reached the API at, so
+`assistant/user_tokens.py`) and sent to the address they reached the API at, so
 every call is authorized, scoped and audited as theirs, exactly as in the
 web console, and any URL a route writes is the one they know.
-`agents/route_tools.py`'s `RouteToolset` is their base: IDs are checked
+`assistant/route_tools.py`'s `RouteToolset` is their base: IDs are checked
 before they go into a path, tools that change something ask the person to
 confirm first (ADK's tool confirmation, which the console renders), and, as
 `ForgeBaseToolset`s (`packages/python/common`), no tool raises: a refusal
@@ -823,7 +827,7 @@ of it reaches the settings unless `.env` references it. `make env` creates
 | `FORGE_ADMIN_GOOGLE_API_KEY` | unset | Without a model provider configuration: the assistant's Gemini API key (`GOOGLE_API_KEY` or `GEMINI_API_KEY` also work), `${FORGE_GOOGLE_API_KEY}` from `.env.common`; unset, it says it isn't set up |
 | `FORGE_ADMIN_AGENT_MODEL` | the configuration's default, or `gemini-3.5-flash` | The model the assistant runs on until a conversation chooses: `provider/model`, or an id only one provider has |
 | `FORGE_ADMIN_AGENT_MODELS` | `[]` | JSON array: with a model provider configuration, which of its models a conversation may choose (all when empty); without, other Gemini models |
-| `FORGE_ADMIN_AGENT_SCREENS` | unset | A screen configuration shaped like `agents/screens.yaml`, which is used when this is unset |
+| `FORGE_ADMIN_AGENT_SCREENS` | unset | A screen configuration shaped like `assistant/screens.yaml`, which is used when this is unset |
 | `FORGE_ADMIN_HOST` / `_PORT` | `127.0.0.1` / `8101` | Listener; the image sets `0.0.0.0` |
 | `FORGE_ADMIN_RELOAD` | `false` | Restart on source changes (`make admin` sets it) |
 | `FORGE_ADMIN_LOGGING__LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL` (any case), for every logger |

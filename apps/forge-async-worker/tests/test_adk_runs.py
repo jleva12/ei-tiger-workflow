@@ -2,7 +2,7 @@
 ADK workflow runs end to end on the worker: the real ADK workflows task
 (Google ADK's graph engine, its sessions in SQLite), run by run_adk on a
 SQLite run store, through an approval, its timeout, a question and a failed
-step. The task's own tests (packages/python/tasks/adk-workflows) cover the
+step. The task's own tests (packages/python/adk-workflows) cover the
 graph; these, that the worker's control carries a run through it.
 """
 

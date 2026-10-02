@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router"
 
-import { ChatAgentBuilderPage } from "@/components/chat-agents/chat-agent-builder"
+import { ChatAgentBuilderPage } from "@/features/agents/components/chat-agent-builder"
 
 /**
  * One of an organization's chat agents, in its builder. Not nested in the

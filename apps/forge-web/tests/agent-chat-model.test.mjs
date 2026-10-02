@@ -14,13 +14,13 @@ const server = await createServer({
   resolve: { alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) } },
 })
 const load = (path) => server.ssrLoadModule(path)
-const { toDocument, toGraph, parseChatAgent, usesOf } = await load("/src/lib/chat-agents/document.ts")
-const { exampleChatAgent } = await load("/src/lib/chat-agents/example.ts")
-const model = await load("/src/lib/chat-agents/model.ts")
-const { validateChatAgent } = await load("/src/lib/chat-agents/validate.ts")
-const { CHAT_AGENT_ADAPTER } = await load("/src/lib/chat-agents/adapter.ts")
-const { CHAT_AGENT_JSON_SCHEMA } = await load("/src/lib/chat-agents/schema.ts")
-const { createBuilderStore, documentOf } = await load("/src/components/builder/store.ts")
+const { toDocument, toGraph, parseChatAgent, usesOf } = await load("/src/features/agents/lib/document.ts")
+const { exampleChatAgent } = await load("/src/features/agents/lib/example.ts")
+const model = await load("/src/features/agents/lib/model.ts")
+const { validateChatAgent } = await load("/src/features/agents/lib/validate.ts")
+const { CHAT_AGENT_ADAPTER } = await load("/src/features/agents/lib/adapter.ts")
+const { CHAT_AGENT_JSON_SCHEMA } = await load("/src/features/agents/lib/schema.ts")
+const { createBuilderStore, documentOf } = await load("/src/features/builder/components/store.ts")
 await server.close()
 
 const ORG = "org-1"

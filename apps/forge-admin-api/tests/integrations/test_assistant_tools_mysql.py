@@ -17,9 +17,9 @@ from fastapi.testclient import TestClient
 from google.adk.events.event_actions import EventActions
 from pydantic import SecretStr
 
-from forge_admin.agents import access_tools, admin_tools
 from forge_admin.api.app import ROUTERS
 from forge_admin.api.server import ApiServer
+from forge_admin.assistant import access_tools, admin_tools
 from forge_admin.config import Settings
 
 pytestmark = pytest.mark.mysql

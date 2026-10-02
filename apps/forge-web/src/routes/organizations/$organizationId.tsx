@@ -1,28 +1,28 @@
 import * as React from "react"
 import { createFileRoute } from "@tanstack/react-router"
 
-import { LEVELS } from "@/components/admin/levels"
-import { AdkRunPage } from "@/components/agents/adk-run-page"
-import { OrganizationAgents } from "@/components/agents/organization-agents"
-import { OrganizationChatAgents } from "@/components/chat-agents/organization-chat-agents"
-import { OrganizationMembers } from "@/components/admin/organization-members"
+import { LEVELS } from "@/features/admin/components/levels"
+import { AdkRunPage } from "@/features/runs/components/adk-run-page"
+import { OrganizationAgents } from "@/features/adk-workflows/components/organization-agents"
+import { OrganizationChatAgents } from "@/features/agents/components/organization-chat-agents"
+import { OrganizationMembers } from "@/features/admin/components/organization-members"
 import { PrimaryAction } from "@/components/forge/app-shell"
 import { PageEmpty } from "@/components/forge/empty-state"
 import { ErrorCallout } from "@/components/forge/feedback"
 import { ShellHeaderActions, useShellPage } from "@/components/forge/shell"
-import { OrganizationWorkspaceNav } from "@/components/organization/organization-workspace-nav"
+import { OrganizationWorkspaceNav } from "@/features/organizations/components/organization-workspace-nav"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useMyOrganizations } from "@/lib/access"
-import { isAdkRunTab } from "@/lib/agents/runs"
+import { isAdkRunTab } from "@/features/runs/lib/runs"
 import { useScopeAccess } from "@/lib/hierarchy"
-import { usePageContext } from "@/lib/page-context"
+import { usePageContext } from "@/features/assistant/lib/page-context"
 import {
   DEFAULT_VIEW,
   isWorkspaceView,
   WORKSPACE_VIEWS,
   type WorkspaceSearch,
-} from "@/lib/organization-workspace"
+} from "@/features/organizations/lib/organization-workspace"
 
 /**
  * An organization's workspace, where its members work: what the switcher

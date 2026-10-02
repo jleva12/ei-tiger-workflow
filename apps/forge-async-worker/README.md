@@ -4,11 +4,11 @@ The async worker for this monorepo: app `apps/forge-async-worker`, package
 `forge-async-worker`, module `forge_async_worker`, on Python 3.13 with uv. It
 runs organizations' **ADK workflow runs** off the `adk_workflows` SAQ queue on
 Redis. Each run lives in the **run store**
-([`run_store.py`](../../packages/python/tasks/adk-workflows/src/forge_task_adk_workflows/run_store.py):
+([`run_store.py`](../../packages/python/adk-workflows/src/forge_task_adk_workflows/run_store.py):
 the `adk_runs` and `adk_run_events` tables in the admin MySQL, beside the
 runs' ADK sessions), where the admin API starts, lists and acts on it, and
 the worker takes it, runs it, and records how it went. The ADK logic lives in
-the [ADK workflows task](../../packages/python/tasks/adk-workflows/README.md);
+the [ADK workflows task](../../packages/python/adk-workflows/README.md);
 the worker holds none.
 
 ```

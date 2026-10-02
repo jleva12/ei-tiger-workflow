@@ -1,4 +1,4 @@
-// Writes the agent format's JSON Schema (src/lib/agents/schema.ts) to the
+// Writes the agent format's JSON Schema (src/features/adk-workflows/lib/schema.ts) to the
 // admin API, which checks every agent it saves against it. `--check` only
 // compares, and fails when the admin API's copy is out of date.
 //
@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url"
 import { createServer } from "vite"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-const target = path.resolve(root, "../forge-admin-api/src/forge_admin/agent.schema.json")
+const target = path.resolve(root, "../forge-admin-api/src/forge_admin/adk_workflows/agent.schema.json")
 
 // Load the TypeScript module as the app sees it, without the app's plugins,
 // in a cache of its own (a running dev server's is never touched).
@@ -25,7 +25,7 @@ const server = await createServer({
 })
 let schema
 try {
-  schema = (await server.ssrLoadModule("/src/lib/agents/schema.ts")).AGENT_JSON_SCHEMA
+  schema = (await server.ssrLoadModule("/src/features/adk-workflows/lib/schema.ts")).AGENT_JSON_SCHEMA
 } finally {
   await server.close()
 }

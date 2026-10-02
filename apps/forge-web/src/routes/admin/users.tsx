@@ -1,14 +1,14 @@
 import * as React from "react"
 import { createFileRoute } from "@tanstack/react-router"
 
-import { DeleteUserDialog, UserDialog } from "@/components/admin/user-dialogs"
+import { DeleteUserDialog, UserDialog } from "@/features/admin/components/user-dialogs"
 import {
   ADMIN_TABLE_FEATURES,
   DATE_TIME,
   PIN_ACTIONS,
-} from "@/components/admin/table-config"
-import { EmptyRows, RowMenu } from "@/components/admin/table-parts"
-import { UserAvatar } from "@/components/admin/user-picker"
+} from "@/features/admin/components/table-config"
+import { EmptyRows, RowMenu } from "@/features/admin/components/table-parts"
+import { UserAvatar } from "@/features/admin/components/user-picker"
 import { PrimaryAction } from "@/components/forge/app-shell"
 import {
   createColumnHelper,

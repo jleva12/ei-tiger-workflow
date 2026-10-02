@@ -2,14 +2,14 @@ import * as React from "react"
 import { Key01Icon } from "@hugeicons/core-free-icons"
 import { createFileRoute } from "@tanstack/react-router"
 
-import { DeleteDialog } from "@/components/admin/delete-dialog"
-import { PermissionDialog } from "@/components/admin/permission-dialog"
+import { DeleteDialog } from "@/features/admin/components/delete-dialog"
+import { PermissionDialog } from "@/features/admin/components/permission-dialog"
 import {
   ADMIN_TABLE_FEATURES,
   DATE_TIME,
   PIN_ACTIONS,
-} from "@/components/admin/table-config"
-import { EmptyRows, RowMenu } from "@/components/admin/table-parts"
+} from "@/features/admin/components/table-config"
+import { EmptyRows, RowMenu } from "@/features/admin/components/table-parts"
 import { PrimaryAction } from "@/components/forge/app-shell"
 import {
   createColumnHelper,

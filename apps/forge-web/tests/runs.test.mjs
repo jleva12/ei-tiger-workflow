@@ -15,9 +15,9 @@ const server = await createServer({
   resolve: { alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) } },
 })
 const load = (path) => server.ssrLoadModule(path)
-const runs = await load("/src/lib/runs.ts")
+const runs = await load("/src/features/runs/lib/display.ts")
 const { buildValue, flattenValue, readJsonText, schemaProperties } = await load(
-  "/src/components/runs/schema-value.ts"
+  "/src/features/runs/lib/schema-value.ts"
 )
 await server.close()
 

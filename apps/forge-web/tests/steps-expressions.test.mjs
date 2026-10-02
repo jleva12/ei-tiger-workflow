@@ -13,13 +13,13 @@ const server = await createServer({
   optimizeDeps: { noDiscovery: true, include: [] },
   resolve: { alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) } },
 })
-const { checkField, completeField, resolveExpression, typeAt } = await server.ssrLoadModule("/src/lib/steps/expressions.ts")
-const { normalizeReferences } = await server.ssrLoadModule("/src/lib/steps/references.ts")
-const { t, valuesOf } = await server.ssrLoadModule("/src/lib/steps/types.ts")
-const { fieldOfCode, switchIssues } = await server.ssrLoadModule("/src/lib/steps/validate.ts")
+const { checkField, completeField, resolveExpression, typeAt } = await server.ssrLoadModule("/src/features/steps/lib/expressions.ts")
+const { normalizeReferences } = await server.ssrLoadModule("/src/features/steps/lib/references.ts")
+const { t, valuesOf } = await server.ssrLoadModule("/src/features/steps/lib/types.ts")
+const { fieldOfCode, switchIssues } = await server.ssrLoadModule("/src/features/steps/lib/validate.ts")
 await server.close()
 
-const fixtures = JSON.parse(await readFile(new URL("../../../packages/python/tasks/adk-workflows/tests/fixtures/expression-references.json", import.meta.url)))
+const fixtures = JSON.parse(await readFile(new URL("../../../packages/python/adk-workflows/tests/fixtures/expression-references.json", import.meta.url)))
 const output = t.object({ count: t.number(), priority: t.string(undefined, { enum: ["high", "low"] }) })
 const steps = t.object({ measure: t.object({ output }) })
 const scope = {

@@ -12,15 +12,16 @@ WORKDIR /src/apps/forge-async-worker
 # Third-party dependencies first, so source changes reuse this layer. uv checks
 # the lockfile against every local package's pyproject, so those come too.
 COPY apps/forge-async-worker/pyproject.toml apps/forge-async-worker/uv.lock ./
-COPY packages/python/tasks/task-sdk/pyproject.toml /src/packages/python/tasks/task-sdk/
-COPY packages/python/tasks/adk-workflows/pyproject.toml /src/packages/python/tasks/adk-workflows/
+COPY packages/python/task-sdk/pyproject.toml /src/packages/python/task-sdk/
+COPY packages/python/adk-workflows/pyproject.toml /src/packages/python/adk-workflows/
 COPY packages/python/jsonata/pyproject.toml /src/packages/python/jsonata/
 COPY packages/python/common/pyproject.toml /src/packages/python/common/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project --no-install-local
 COPY packages/python/jsonata/ /src/packages/python/jsonata/
 COPY packages/python/common/ /src/packages/python/common/
-COPY packages/python/tasks/ /src/packages/python/tasks/
+COPY packages/python/task-sdk/ /src/packages/python/task-sdk/
+COPY packages/python/adk-workflows/ /src/packages/python/adk-workflows/
 COPY apps/forge-async-worker/ ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable

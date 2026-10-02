@@ -5,7 +5,7 @@ store (the admin MySQL), off the ``adk_workflows`` SAQ queue on Redis.
     rt = build_runtime(WorkerSettings())
     await rt.submit(JobSpec(task_type="adk_workflows", kind="run", payload={...}))  # inline
 
-The ADK workflows task lives in its own package (``packages/python/tasks``) and
+The ADK workflows task lives in its own package (``packages/python/adk-workflows``) and
 registers under the ``forge_async_worker.tasks`` entry point group; the contract
 between it and the worker is ``forge_tasks``.
 """

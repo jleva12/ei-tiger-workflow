@@ -16,9 +16,9 @@ const server = await createServer({
   resolve: { alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) } },
 })
 const load = (path) => server.ssrLoadModule(path)
-const runs = await load("/src/lib/agents/runs.ts")
-const { exampleAgent } = await load("/src/lib/agents/example.ts")
-const { OPEN_POLL_MS, IDLE_POLL_MS } = await load("/src/lib/runs.ts")
+const runs = await load("/src/features/runs/lib/runs.ts")
+const { exampleAgent } = await load("/src/features/adk-workflows/lib/example.ts")
+const { OPEN_POLL_MS, IDLE_POLL_MS } = await load("/src/features/runs/lib/display.ts")
 await server.close()
 
 const doc = exampleAgent("org-1")

@@ -63,7 +63,7 @@ Forge runs governed Google ADK workflows, not a single assistant or a script run
 
 ## Evidence on Hand
 
-- **The ADK workflow format:** `apps/forge-admin-api/src/forge_admin/agent.schema.json`, generated from the web console's `src/lib/agents/schema.ts`.
+- **The ADK workflow format:** `apps/forge-admin-api/src/forge_admin/adk_workflows/agent.schema.json`, generated from the web console's `src/features/adk-workflows/lib/schema.ts`.
 - **Default roles and permissions:** seeded by the migrations in `apps/forge-admin-api/src/forge_admin/db/migrations/versions/`.
 - **The shared Casbin model:** `apps/forge-admin-api/src/forge_admin/auth/casbin_model.conf`.
 - **Missing assets:** the favicon is still Vite's default (`apps/forge-web/public/vite.svg`). No Forge logo file exists outside the design system's marks.

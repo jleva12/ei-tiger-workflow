@@ -9,11 +9,11 @@ from forge_common.logging import configure_logging
 
 from forge_admin.api.routes import (
     adk_workflow_runs,
-    agents,
+    adk_workflows,
+    assistant,
     authz,
     me,
     members,
-    organization_agents,
     organizations,
     permissions,
     roles,
@@ -25,13 +25,13 @@ from forge_admin.config import get_settings
 # Every router the admin API serves, below the API prefix.
 ROUTERS = [
     organizations.router,
-    organization_agents.router,
+    adk_workflows.router,
     adk_workflow_runs.router,
     members.router,
     roles.router,
     permissions.router,
     users.router,
-    agents.router,
+    assistant.router,
     me.router,
     authz.router,
 ]

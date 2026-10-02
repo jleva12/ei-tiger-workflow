@@ -1,0 +1,38 @@
+[project]
+name = "forge-tasks"
+version = "0.1.0"
+description = "The contract between the Forge async worker and its task packages: jobs, schedules, context, settings, and an inline runtime for tests and the CLI"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "pymongo>=4.10",   # the shared AsyncMongoClient tasks get from their context
+]
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"
+
+# Tests run in the worker app's environment, which installs every task package:
+# make async-worker-check, or from here: uv run --project ../../../apps/forge-async-worker pytest
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["forge_tasks", "forge_async_worker"]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = true

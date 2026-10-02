@@ -28,7 +28,7 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from forge_admin.agent_build import build_agent
+from forge_admin.adk_workflows.build import build_agent
 from forge_admin.api.app import ROUTERS
 from forge_admin.api.server import ApiServer
 from forge_admin.auth.authorization import get_enforcer, new_enforcer

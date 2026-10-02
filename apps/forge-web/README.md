@@ -30,7 +30,7 @@ What it has:
 - **The assistant**: the admin API's Forge agent, in a panel or its own
   window, aware of the page you're on.
 
-The ADK workflow format (`src/lib/agents/`) is the source of truth for the
+The ADK workflow format (`src/features/adk-workflows/lib/`) is the source of truth for the
 admin API's copy: `npm run generate:agent-schema` writes its JSON Schema into
 `apps/forge-admin-api`, and `npm run check:agent-schema` fails when it's out
 of date.
@@ -76,22 +76,47 @@ npx shadcn@latest add ../../packages/forge-ui/public/r/<item>.json
 
 ## Structure
 
-- `src/routes/` holds file-based routes. The router plugin regenerates
-  `src/routeTree.gen.ts` while `vite` runs; commit it and never edit it by hand.
-- `src/components/builder/` and `src/lib/builder/` are the builder kit both
-  builders share (canvas, library, step dialog, layout, routing);
-  `src/components/agents/` and `src/lib/agents/` the ADK workflow builder and
-  format; `src/components/chat-agents/` and `src/lib/chat-agents/` the chat
-  agent builder and format.
-- `src/lib/steps/` holds Forge's steps as ADK workflows take them: their
-  kinds, settings, JSONata expressions, scopes and checks.
-  `src/components/runs/` lists and starts runs; `src/components/json/` views
-  and builds JSON and JSON Schema.
-- `src/components/forge/` holds Forge composites (shell, sidebar, toolbar,
-  data table, sheets, the assistant); `src/components/ui/` the tuned shadcn
-  primitives.
-- `src/lib/api/` is the API client, TanStack Query client and resource hooks;
-  `src/lib/context-store.tsx` the per-Provider Zustand stores.
+Everything a feature owns sits in `src/features/<feature>/`, split into
+`components/` (React) and `lib/` (types, data hooks and logic). Folders are
+named as the UI names them.
+
+```
+src/
+  routes/            file-based routes (URLs); thin pages that compose features
+  app/               the app's shell: layout, sub nav, scope switcher, footer,
+                     route states, and settings/ (the settings dialog)
+  features/
+    adk-workflows/   ADK workflows: the list, the builder's nodes and fields,
+                     and the workflow format (lib/schema.ts, model, validate)
+    agents/          Agents (chat agents): the list, the builder and the format
+    runs/            ADK workflow runs: the run page, lists, the run dialog,
+                     approvals and input (pause panels); lib/runs.ts holds the
+                     API types and hooks, lib/display.ts how a run reads
+    builder/         the builder kit both builders share: canvas, library, step
+                     dialog, fields, layout and routing
+    steps/           Forge's steps as ADK workflows take them: kinds, settings,
+                     JSONata expressions, scopes and checks
+    json/            viewing and building JSON and JSON Schema
+    assistant/       the Forge assistant: its panel and window, launcher,
+                     models and what it knows about the page (page context)
+    organizations/   an organization's workspace views and sub nav
+    admin/           site administration: organizations, users, roles
+  components/        the Forge UI design system (from @forge-ui; don't edit
+                     here): ui/ primitives, forge/ composites, assistant-ui/
+  lib/               app-wide helpers: access, hierarchy, users, format and
+                     api-instance (the API's base URL); from the registry:
+                     api/ (client, query client, resource hooks),
+                     context-store, timestamps, user-* providers, utils
+  hooks/             registry hooks
+```
+
+- The router plugin regenerates `src/routeTree.gen.ts` while `vite` runs;
+  commit it and never edit it by hand.
+- Import across features with the `@/` alias
+  (`@/features/runs/lib/runs`); within a feature, `./` is fine.
+- `components/`, `hooks/` and the registry's files in `lib/` come from the
+  `@forge-ui` registry (`packages/forge-ui`); change them there.
+- Tests are in `tests/` (`node --test`, loading `src` through Vite).
 - The root `.claude/skills/` documents these conventions for AI coding assistants:
   `forge-ui` (screens and components), `forge-data` (server data) and
   `forge-state` (shared client state); their `src/` paths are relative to this

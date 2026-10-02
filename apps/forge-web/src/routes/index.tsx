@@ -8,7 +8,7 @@ import {
   SITE_ADMIN,
   organizationOf,
   useWorkspaceScope,
-} from "@/lib/workspace-scope"
+} from "@/app/workspace-scope"
 
 export const Route = createFileRoute("/")({
   component: HomePage,

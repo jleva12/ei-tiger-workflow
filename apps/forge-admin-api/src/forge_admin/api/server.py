@@ -12,14 +12,14 @@ from google.adk.sessions import DatabaseSessionService
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 
-from forge_admin.agent_documents import AgentStore
-from forge_admin.agents.runtime import AgentRuntime
+from forge_admin.adk_workflows.documents import AgentStore
+from forge_admin.adk_workflows.queue import Embedding
 from forge_admin.api.routes import health, info
+from forge_admin.assistant.runtime import AgentRuntime
 from forge_admin.auth.authorization import create_enforcer
 from forge_admin.auth.security import authenticate
 from forge_admin.config import Settings
 from forge_admin.db.session import create_engine, create_sessionmaker
-from forge_admin.embedding import Embedding
 
 logger = logging.getLogger(__name__)
 

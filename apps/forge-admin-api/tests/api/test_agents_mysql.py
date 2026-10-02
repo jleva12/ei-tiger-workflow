@@ -29,7 +29,7 @@ API = "/api/v1"
 # The example ADK workflow, kept with the package that runs it.
 EXAMPLE = (
     Path(__file__).parents[4]
-    / "packages/python/tasks/adk-workflows/tests/fixtures/example.agent.json"
+    / "packages/python/adk-workflows/tests/fixtures/example.agent.json"
 )
 
 

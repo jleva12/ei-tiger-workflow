@@ -24,8 +24,8 @@ dependencies = [
 forge-async-worker = "forge_async_worker.cli:main"
 
 [tool.uv.sources]
-forge-tasks = { path = "../../packages/python/tasks/task-sdk", editable = true }
-forge-task-adk-workflows = { path = "../../packages/python/tasks/adk-workflows", editable = true }
+forge-tasks = { path = "../../packages/python/task-sdk", editable = true }
+forge-task-adk-workflows = { path = "../../packages/python/adk-workflows", editable = true }
 forge-jsonata = { path = "../../packages/python/jsonata", editable = true }
 forge-common = { path = "../../packages/python/common", editable = true }
 

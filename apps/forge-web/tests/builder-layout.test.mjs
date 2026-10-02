@@ -12,12 +12,12 @@ const server = await createServer({
   resolve: { alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) } },
 })
 // The builder kit's layout and routing, as the ADK workflow builder drives them.
-const { AGENT_ADAPTER } = await server.ssrLoadModule("/src/lib/agents/adapter.ts")
-const { routeEdges } = await server.ssrLoadModule("/src/lib/builder/routing.ts")
-const { edgeId } = await server.ssrLoadModule("/src/lib/builder/types.ts")
-const { toGraph } = await server.ssrLoadModule("/src/lib/agents/document.ts")
-const { exampleAgent } = await server.ssrLoadModule("/src/lib/agents/example.ts")
-const { newNode, outputsOf } = await server.ssrLoadModule("/src/lib/agents/model.ts")
+const { AGENT_ADAPTER } = await server.ssrLoadModule("/src/features/adk-workflows/lib/adapter.ts")
+const { routeEdges } = await server.ssrLoadModule("/src/features/builder/lib/routing.ts")
+const { edgeId } = await server.ssrLoadModule("/src/features/builder/lib/types.ts")
+const { toGraph } = await server.ssrLoadModule("/src/features/adk-workflows/lib/document.ts")
+const { exampleAgent } = await server.ssrLoadModule("/src/features/adk-workflows/lib/example.ts")
+const { newNode, outputsOf } = await server.ssrLoadModule("/src/features/adk-workflows/lib/model.ts")
 const tidy = (graph, measure) => AGENT_ADAPTER.tidy(graph, measure)
 const meaningsOf = (graph, id) => AGENT_ADAPTER.meaningsOf(graph, id)
 const loopBodies = (graph) => AGENT_ADAPTER.loopBodies(graph)

@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     site_admin_last_name: str | None = None
     site_admin_msid: str | None = None
 
-    # The assistant: Google ADK agents (forge_admin.agents). The models it may
+    # The assistant: Google ADK agents (forge_admin.assistant). The models it may
     # run on: a model_provider.yaml, the file ADK workflows' LLM nodes read too, e.g.
     # ../../packages/python/common/src/forge_common/model_provider/model_provider.openai.yaml
     # (the image keeps the shared files at that path relative to /app). Its
@@ -116,7 +116,7 @@ class Settings(BaseSettings):
     # other Gemini models.
     agent_models: list[str] = []
     # What the assistant has on each screen: a YAML file in the shape of
-    # agents/screens.yaml, which is used when this is unset.
+    # assistant/screens.yaml, which is used when this is unset.
     agent_screens: Path | None = None
 
     # HTTP listener. The container listens on 0.0.0.0:8091.

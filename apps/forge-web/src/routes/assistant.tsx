@@ -1,7 +1,7 @@
 import * as React from "react"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 
-import { AssistantWindowPage } from "@/components/assistant-window-page"
+import { AssistantWindowPage } from "@/features/assistant/components/assistant-window-page"
 
 /**
  * The assistant in its own window, which the panel's pop-out button and

@@ -1,7 +1,7 @@
 """A fake of the async worker's queues, standing in for
-``forge_admin.embedding.Embedding``."""
+``forge_admin.adk_workflows.queue.Embedding``."""
 
-from forge_admin.embedding import EmbeddingError
+from forge_admin.adk_workflows.queue import EmbeddingError
 
 
 class FakeEmbedding:

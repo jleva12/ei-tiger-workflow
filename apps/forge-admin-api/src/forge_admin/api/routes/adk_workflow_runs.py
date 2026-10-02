@@ -1,10 +1,10 @@
 """
 Runs of an organization's ADK workflows (``forge.agent/v1``, the agents of
-``organization_agents.py``): started, listed, read, decided, answered,
+``adk_workflows.py``): started, listed, read, decided, answered,
 retried, resubmitted and abandoned here, straight from the run store
 (``forge_task_adk_workflows.run_store``, in this API's database), with a job
 queued on the async worker's ``adk_workflows`` queue whenever a run is to be
-taken (``forge_admin.adk_runs``); their steps are read from their ADK
+taken (``forge_admin.adk_workflows.runs``); their steps are read from their ADK
 sessions.
 
 - Running one needs ``agents:run`` in the organization (its admins and members
@@ -48,7 +48,9 @@ from pymongo.errors import PyMongoError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from forge_admin.adk_runs import (
+from forge_admin.adk_workflows.documents import ID_PATTERN
+from forge_admin.adk_workflows.queue import Embedding
+from forge_admin.adk_workflows.runs import (
     APP_NAME,
     AdkRunError,
     checked_answer,
@@ -56,16 +58,14 @@ from forge_admin.adk_runs import (
     queue_run,
     start_adk_run,
 )
-from forge_admin.agent_documents import ID_PATTERN
-from forge_admin.api.routes.common import NodeId, Session, name_of
-from forge_admin.api.routes.organization_agents import (
+from forge_admin.api.routes.adk_workflows import (
     NOT_FOUND,
     UNAVAILABLE,
     AgentId,
     agent_store,
 )
+from forge_admin.api.routes.common import NodeId, Session, name_of
 from forge_admin.auth.access import CurrentUser, Enforcer, Level, Scope, authorize
-from forge_admin.embedding import Embedding
 
 logger = logging.getLogger(__name__)
 

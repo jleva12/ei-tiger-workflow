@@ -11,7 +11,7 @@ WEB_DIR := apps/forge-web
 ADMIN_DIR := apps/forge-admin-api
 ASYNC_WORKER_DIR := apps/forge-async-worker
 # The task packages the async worker bundles: checked, and tested, in its environment.
-TASK_PACKAGES := $(addprefix packages/python/tasks/,task-sdk adk-workflows)
+TASK_PACKAGES := $(addprefix packages/python/,task-sdk adk-workflows)
 # Python packages the apps share, each with its own environment.
 COMMON_DIR := packages/python/common
 JSONATA_DIR := packages/python/jsonata

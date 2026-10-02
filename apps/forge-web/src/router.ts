@@ -1,6 +1,6 @@
 import { createRouter } from "@tanstack/react-router"
 
-import { RouteError, RouteNotFound } from "@/components/route-states"
+import { RouteError, RouteNotFound } from "@/app/route-states"
 import { queryClient } from "@/lib/api-instance"
 
 import { routeTree } from "./routeTree.gen"

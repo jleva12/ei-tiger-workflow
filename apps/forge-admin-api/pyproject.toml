@@ -17,7 +17,7 @@ dependencies = [
     "forge-common[adk,adk-models,logging]",
     # ADK workflows are built as the async worker runs them, to check them
     # before a run; runs are kept by its run store, and a run's steps are
-    # read from its ADK session (packages/python/tasks/adk-workflows).
+    # read from its ADK session (packages/python/adk-workflows).
     "forge-task-adk-workflows",
     "google-adk>=2.9.2",
     "httpx2>=2.13.1",
@@ -25,7 +25,7 @@ dependencies = [
     "pycasbin>=2.8.0",
     "pydantic-settings>=2.15.0",
     "pyjwt>=2.10",
-    # The assistant's screen configuration (agents/screens.yaml).
+    # The assistant's screen configuration (assistant/screens.yaml).
     "pyyaml>=6.0",
     "pymongo>=4.13",
     "saq[redis]>=0.26.4,<0.27",
@@ -44,8 +44,8 @@ build-backend = "uv_build"
 
 [tool.uv.sources]
 forge-common = { path = "../../packages/python/common", editable = true }
-forge-task-adk-workflows = { path = "../../packages/python/tasks/adk-workflows", editable = true }
-forge-tasks = { path = "../../packages/python/tasks/task-sdk", editable = true }
+forge-task-adk-workflows = { path = "../../packages/python/adk-workflows", editable = true }
+forge-tasks = { path = "../../packages/python/task-sdk", editable = true }
 
 [dependency-groups]
 dev = [

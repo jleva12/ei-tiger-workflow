@@ -17,6 +17,35 @@ Deployable applications live under `apps/`, shared libraries under
 `node_modules`, or `pyproject.toml`, `uv.lock` and `.venv`); the root only
 orchestrates them with one Compose stack and one Makefile.
 
+## Where things are
+
+Folders are named as the console names things: **ADK workflows** (the
+graph workflows, `agents` in URLs and the API from before they were called
+that), **Agents** (Google ADK chat agents), **runs** (of ADK workflows) and
+the **assistant** (the AI helper on every page).
+
+| To change… | Look in |
+|---|---|
+| A page or its URL | `apps/forge-web/src/routes/`: `organizations/$organizationId.tsx` is an organization's workspace, `$organizationId_.agents.$agentId.tsx` the ADK workflow builder, `$organizationId_.chat-agents.$chatAgentId.tsx` the agent builder, `admin/` site administration |
+| The app's frame: layout, sub nav, scope switcher, settings | `apps/forge-web/src/app/` |
+| The ADK workflow builder's nodes and fields, and the ADK workflow format | `apps/forge-web/src/features/adk-workflows/` |
+| The agent (chat agent) builder and its format | `apps/forge-web/src/features/agents/` |
+| A run's page, lists of runs, starting a run, approvals and answers | `apps/forge-web/src/features/runs/` |
+| The canvas, library, step dialog, layout and lines both builders share | `apps/forge-web/src/features/builder/` |
+| Forge's steps (Approval, HTTP request, Transform, If / else…) and JSONata expressions | `apps/forge-web/src/features/steps/` |
+| The assistant's panel and window | `apps/forge-web/src/features/assistant/` |
+| Site administration screens | `apps/forge-web/src/features/admin/` |
+| Buttons, dialogs, the shell and other design-system pieces | `packages/forge-ui/` (installed into `apps/forge-web/src/components/`; change them there) |
+| An API endpoint | `apps/forge-admin-api/src/forge_admin/api/routes/`: `adk_workflows.py`, `adk_workflow_runs.py`, `assistant.py`, `organizations.py`, `members.py`, `users.py`, `roles.py`, `permissions.py` |
+| Saving and checking ADK workflows, building a run's document, queuing a run | `apps/forge-admin-api/src/forge_admin/adk_workflows/` |
+| The assistant's agent and its tools | `apps/forge-admin-api/src/forge_admin/assistant/` |
+| Roles, permissions and tokens | `apps/forge-admin-api/src/forge_admin/auth/` |
+| MySQL tables and migrations | `apps/forge-admin-api/src/forge_admin/models/`, `db/migrations/` |
+| What the worker does with a run (start, pause, resume, retry) | `apps/forge-async-worker/src/forge_async_worker/` (`jobs.py`, `control.py`) |
+| How an ADK workflow becomes a Google ADK graph, and each step's code | `packages/python/adk-workflows/src/forge_task_adk_workflows/` (`graph/`, `steps.py`, `support/`) |
+| The run store (runs, their status and activity) | `packages/python/adk-workflows/src/forge_task_adk_workflows/run_store.py` |
+| Settings, ports and the Compose stack | `.env.common`, each app's `.env`, `compose.yaml`, `Makefile` |
+
 ## What it does
 
 - **Organizations.** The hierarchy is site → organizations. ADK workflows,
@@ -158,7 +187,9 @@ build time, so change it there and run `make restart` to rebuild the image.
 ```text
 apps/
   forge-web/              React web console (Vite, TanStack Router and Query, Forge UI)
-    src/                  Routes, the ADK workflow and agent builders, Forge composites, shadcn primitives, API and state layers
+    src/                  routes/ (pages and URLs), app/ (the frame: layout, sub nav, settings), features/ (adk-workflows,
+                          agents, runs, builder, steps, json, assistant, organizations, admin), components/ and lib/
+                          (the Forge UI design system and app-wide helpers)
     tests/                Builder steps, ADK workflow and agent tests, timestamp helpers (node --test)
     scripts/              Generates the builder's copy of the agent JSON Schema, and checks it
     Dockerfile            Static build served by unprivileged nginx, built from the repository root
@@ -168,8 +199,9 @@ apps/
     package.json          The app's scripts and dependencies
     package-lock.json     The app's lockfile; node_modules is installed beside it
   forge-admin-api/        FastAPI admin API over MySQL and MongoDB
-    src/forge_admin/      api/ (app, routes), auth/ (Casbin, tokens), agents/ (the assistant), cli/, db/ (sessions, migrations),
-                          models/, agent_documents.py and agent.schema.json (the ADK workflow format), adk_runs.py
+    src/forge_admin/      api/ (app, routes), auth/ (Casbin, tokens), assistant/ (the in-app assistant), cli/, db/ (sessions,
+                          migrations), models/, adk_workflows/ (ADK workflow documents and agent.schema.json, building, runs,
+                          the worker's queue)
     tests/                Unit and MySQL integration tests
     Dockerfile            uv-built image running as a non-root user, built from the repository root
     compose.yaml          The admin service, its admin-mysql database and the admin-seed tool
@@ -191,8 +223,8 @@ packages/                 Shared Python libraries and the Forge UI design system
                           shadcn registry apps install them from (registry.json, public/r)
   python/common/          forge-common: ADK toolset helpers and the shared model-provider YAML and loader
   python/jsonata/         forge-jsonata: the JSONata engine ADK workflows' expressions run on
-  python/tasks/task-sdk/  forge-tasks: the contract between the async worker and a task package
-  python/tasks/adk-workflows/  forge-task-adk-workflows: the ADK workflows task, which builds and runs ADK workflows,
+  python/task-sdk/        forge-tasks: the contract between the async worker and a task package
+  python/adk-workflows/   forge-task-adk-workflows: the ADK workflows task, which builds and runs ADK workflows,
                           and the run store their runs are kept in
 tests/infrastructure/     Validates the rendered Compose stack (make infrastructure-check)
 .claude/                  Agent skills for the Forge UI, data and state conventions; dev-server launch config

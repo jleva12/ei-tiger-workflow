@@ -1,0 +1,180 @@
+# What the Forge assistant has on each screen of the web console
+# (assistant/screens.py reads it; FORGE_ADMIN_AGENT_SCREENS names another file).
+#
+# A screen's `when` matches the page context the web console sends with each
+# message: `route` is the router's route ID, `search` its search parameters
+# (a list matches any; "" matches a page without the parameter), `entity` a
+# kind of record on the screen (organization, ...). Every screen that matches
+# adds its toolsets, instructions and prompts, in this order, then
+# `everywhere`'s; the first screen with a model sets the default. Put more
+# specific screens first: their prompts come first, and at most six are
+# suggested.
+#
+# Toolsets (assistant/forge.py registers them): access and administration. Each
+# is held by a specialist agent of the same name, which the supervisor is
+# offered on the screens that name its toolset. `- name` with `tools` gives the specialist only
+# those tools, by the names the model sees. Instructions go to the supervisor
+# and to every specialist. A conversation keeps every toolset it has had, so
+# a specialist it used, or a change waiting to be confirmed, stays when the
+# person moves on.
+#
+# The page comes from the browser: it decides what's offered, never what the
+# person may do. Every tool acts as them.
+
+everywhere:
+  toolsets:
+    - name: access
+      tools: [get_my_access, list_my_memberships, list_available_roles]
+  prompts:
+    - title: Why was that refused?
+      label: and who can give me access
+      prompt: Something I tried was refused. Explain which permission I'm missing, which role grants it, and who can give it to me.
+    - title: What can I do
+      label: here?
+      prompt: What roles do I hold and what do they let me do here?
+
+screens:
+  # -- Organization members ----------------------------------------------------
+
+  - name: organization-config
+    title: Organization members
+    when:
+      route: /organizations/$organizationId
+      search: {view: config}
+    toolsets: [access]
+    instructions: |
+      The person is managing their organization's members. Its scope is
+      org:<the organization's ID from the page>. Look people up with
+      find_people and roles with list_available_roles(level="org") before
+      giving or removing one.
+    prompts:
+      - title: Who's in this organization
+        label: and what can each do?
+        prompt: List this organization's members with their roles, including site roles that apply here.
+      - title: Add someone
+        label: to this organization
+        prompt: Help me give someone a role in this organization. Ask me who and which role.
+      - title: Who can manage
+        label: this organization's members?
+        prompt: Who can give or remove roles in this organization?
+
+  # -- The rest of the organization's workspace ---------------------------------
+
+  - name: organization
+    title: Organization workspace
+    when:
+      route: /organizations/$organizationId
+    instructions: |
+      The person is in their organization's workspace: its ADK workflows (the
+      page without a view; an agentRun search parameter is one run's page, by
+      the run's ID, with its steps, its activity and what it waits for; the
+      page names it as an adk_run), its agents (view chat-agents) and its
+      members (view config). No specialist reads or changes ADK workflows,
+      their runs or agents yet: say so, and point the person to the page that
+      has them.
+
+  # -- Administration ----------------------------------------------------------
+
+  - name: admin-organization
+    title: Organization administration
+    when:
+      route: /admin/organizations/$organizationId/
+    toolsets:
+      - name: administration
+        tools:
+          - get_organization
+          - update_organization
+          - list_users
+      - access
+    instructions: |
+      The person administers this organization. Its members' scope is
+      org:<the organization's ID from the page>.
+    prompts:
+      - title: Who's in this organization
+        label: and what can each do?
+        prompt: List this organization's members with their roles, including site roles that apply here.
+      - title: Add someone
+        label: to this organization
+        prompt: Help me give someone a role in this organization. Ask me who and which role.
+      - title: Update this organization
+        label: name or description
+        prompt: Help me update this organization's name or description.
+
+  - name: admin-organizations
+    title: Organizations
+    when:
+      route: /admin/organizations/
+    toolsets:
+      - name: administration
+        tools:
+          - list_organizations
+          - get_organization
+          - create_organization
+          - update_organization
+    prompts:
+      - title: Our organizations
+        label: at a glance
+        prompt: List our organizations and what each is for.
+      - title: Create an organization
+        label: with me
+        prompt: Help me create a new organization. Ask me its name and description.
+
+  - name: admin-users
+    title: Users
+    when:
+      route: /admin/users
+    toolsets:
+      - name: administration
+        tools: [list_users, get_user, create_user, update_user]
+    prompts:
+      - title: Find someone
+        label: by name or email
+        prompt: Help me find a user. Ask me who I'm looking for.
+      - title: Add a person
+        label: to Forge
+        prompt: Help me add a new user. Ask me for their names, email and MS ID.
+      - title: Update someone's details
+        prompt: Help me change a user's name, email or MS ID.
+
+  - name: admin-roles
+    title: Roles
+    when:
+      route: /admin/roles
+    toolsets:
+      - name: administration
+        tools:
+          - list_role_definitions
+          - get_role_definition
+          - create_role_definition
+          - update_role_definition
+          - list_permission_definitions
+    prompts:
+      - title: Compare the roles
+        label: and what each grants
+        prompt: Compare our roles by level and the permissions each grants.
+      - title: Which roles grant
+        label: a permission?
+        prompt: Which roles grant a given permission? Ask me which one.
+      - title: Create a role
+        label: with me
+        prompt: Help me create a role. Ask me its level, name and which permissions it should grant.
+
+  - name: admin-permissions
+    title: Permissions
+    when:
+      route: /admin/permissions
+    toolsets:
+      - name: administration
+        tools:
+          - list_permission_definitions
+          - get_permission_definition
+          - create_permission_definition
+          - update_permission_definition
+          - list_role_definitions
+    prompts:
+      - title: Explain our permissions
+        label: by resource
+        prompt: Group our permissions by resource and explain what each allows.
+      - title: Which roles hold
+        label: a permission?
+        prompt: Which roles grant a given permission? Ask me which one.

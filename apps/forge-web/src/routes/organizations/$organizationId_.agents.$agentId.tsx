@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router"
 
-import { AgentBuilderPage } from "@/components/agents/agent-builder"
+import { AgentBuilderPage } from "@/features/adk-workflows/components/agent-builder"
 
 /**
  * One of an organization's agents, in its builder. Not nested in the workspace's
