@@ -57,9 +57,12 @@ export const CHAT_AGENT_ADAPTER: BuilderAdapter<
   // Nothing goes in between: what's attached leads nowhere.
   insertable: () => false,
   named: () => true,
+  // The chat agent is its agent: one name for both.
+  namesDocument: (step) => step.kind === "agent",
   metaOf: (doc) => ({
     id: doc.id,
-    name: doc.name,
+    // The agent's, where the two came apart (kept before they were one).
+    name: doc.nodes.find((n) => n.kind === "agent")?.name ?? doc.name,
     description: doc.description,
     organization_id: doc.organization_id,
     created_at: doc.created_at,

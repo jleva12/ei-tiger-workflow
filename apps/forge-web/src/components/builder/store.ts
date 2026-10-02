@@ -512,15 +512,43 @@ export function createBuilderStore<S extends BaseStep, Doc, Context, Scope>({
 
       updateStep: (id, change, key) => {
         get().checkpoint(key ? `${id}:${key}` : undefined)
-        const nodes = get().nodes.map((n) =>
-          n.id === id ? { ...n, data: change(n.data) } : n
-        )
-        commit({ nodes, edges: reconcileEdges(nodes, get().edges) })
+        // Renaming the step that is the document renames the document.
+        let renamed: string | undefined
+        const nodes = get().nodes.map((n) => {
+          if (n.id !== id) return n
+          const data = change(n.data)
+          if (data.name !== n.data.name && adapter.namesDocument?.(data))
+            renamed = data.name
+          return { ...n, data }
+        })
+        commit({
+          nodes,
+          edges: reconcileEdges(nodes, get().edges),
+          ...(renamed !== undefined
+            ? { meta: { ...get().meta, name: renamed } }
+            : {}),
+        })
       },
 
       updateMeta: (patch, key) => {
         get().checkpoint(key ? `meta:${key}` : undefined)
-        set({ meta: { ...get().meta, ...patch } })
+        const meta = { ...get().meta, ...patch }
+        // Renaming the document renames the step that is it, in the same step of undo.
+        const { name } = patch
+        const self =
+          name === undefined
+            ? undefined
+            : get().nodes.find((n) => adapter.namesDocument?.(n.data))
+        if (name === undefined || !self || self.data.name === name) {
+          set({ meta })
+          return
+        }
+        commit({
+          meta,
+          nodes: get().nodes.map((n) =>
+            n === self ? { ...n, data: { ...n.data, name } } : n
+          ),
+        })
       },
 
       replaceDocument: (next) => {

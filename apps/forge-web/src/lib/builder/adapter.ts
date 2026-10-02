@@ -70,6 +70,11 @@ export type BuilderAdapter<
   insertable(kind: S["kind"]): boolean
   /** Whether a step has a name of its own to edit (the start doesn't). */
   named(kind: S["kind"]): boolean
+  /**
+   * Whether a step is the document itself (a chat agent is its agent):
+   * its name is the document's, and renaming either renames both.
+   */
+  namesDocument?(step: S): boolean
   metaOf(doc: Doc): BaseMeta
   toGraph(doc: Doc): BuilderGraph<S>
   toDocument(meta: BaseMeta, graph: BuilderGraph<S>): Doc

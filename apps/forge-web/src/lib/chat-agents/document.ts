@@ -162,10 +162,13 @@ export function copyChatAgent(
   name: string
 ): ChatAgentDocument {
   const now = new Date().toISOString()
+  const copy = structuredClone(doc)
   return {
-    ...structuredClone(doc),
+    ...copy,
     id: newChatAgentId(),
     name,
+    // The chat agent is its agent: the name goes to both.
+    nodes: copy.nodes.map((n) => (n.kind === "agent" ? { ...n, name } : n)),
     created_at: now,
     updated_at: now,
   }
