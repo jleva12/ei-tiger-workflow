@@ -148,7 +148,8 @@ export function StepDialog() {
       }}
     >
       <DialogPortal>
-        <DialogOverlay className="bg-black/20 supports-backdrop-filter:backdrop-blur-none dark:bg-black/45" />
+        {/* It fades with the cards: shorter, it would be done (and gone) before them. */}
+        <DialogOverlay className="bg-black/20 duration-150 supports-backdrop-filter:backdrop-blur-none dark:bg-black/45" />
         {/* The cards sit side by side, centred as a pair; around them is the backdrop. */}
         <DialogPrimitive.Popup
           ref={popup}
@@ -156,7 +157,8 @@ export function StepDialog() {
           data-slot="dialog-content"
           className={cn(
             "pointer-events-none fixed inset-3 z-50 flex justify-center gap-3 outline-none",
-            "duration-150 ease-out data-open:animate-in data-open:fade-in-0 data-open:slide-in-from-bottom-2 data-closed:animate-out data-closed:fade-out-0 data-closed:slide-out-to-bottom-1"
+            // Closing, they hold their faded end until removed rather than snap back.
+            "duration-150 ease-out data-open:animate-in data-open:fade-in-0 data-open:slide-in-from-bottom-2 data-closed:animate-out data-closed:fade-out-0 data-closed:slide-out-to-bottom-1 data-closed:fill-mode-forwards"
           )}
         >
           <CompanionContext.Provider value={context}>
