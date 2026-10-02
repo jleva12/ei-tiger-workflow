@@ -1,8 +1,7 @@
 # syntax=docker/dockerfile:1
 # Built from the repository root: docker build -f apps/forge-async-worker/Dockerfile .
-# The SAQ worker, with the task packages it bundles (the adk-workflows extra):
-# every enabled task type's queue and schedules by default
-# (forge-async-worker worker --help); a deployment picks its queues with --queues.
+# The SAQ worker with the ADK workflows task: ADK workflow runs off the
+# adk_workflows queue (forge-async-worker worker --help).
 FROM python:3.13-slim-bookworm AS build
 COPY --from=ghcr.io/astral-sh/uv:0.11.17 /uv /bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never \
@@ -13,21 +12,18 @@ WORKDIR /src/apps/forge-async-worker
 # Third-party dependencies first, so source changes reuse this layer. uv checks
 # the lockfile against every local package's pyproject, so those come too.
 COPY apps/forge-async-worker/pyproject.toml apps/forge-async-worker/uv.lock ./
-COPY packages/python/enhanced-task-framework/pyproject.toml /src/packages/python/enhanced-task-framework/
 COPY packages/python/tasks/task-sdk/pyproject.toml /src/packages/python/tasks/task-sdk/
 COPY packages/python/tasks/adk-workflows/pyproject.toml /src/packages/python/tasks/adk-workflows/
 COPY packages/python/jsonata/pyproject.toml /src/packages/python/jsonata/
 COPY packages/python/common/pyproject.toml /src/packages/python/common/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-install-project --no-install-local \
-      --extra adk-workflows
-COPY packages/python/enhanced-task-framework/ /src/packages/python/enhanced-task-framework/
+    uv sync --locked --no-dev --no-install-project --no-install-local
 COPY packages/python/jsonata/ /src/packages/python/jsonata/
 COPY packages/python/common/ /src/packages/python/common/
 COPY packages/python/tasks/ /src/packages/python/tasks/
 COPY apps/forge-async-worker/ ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable --extra adk-workflows
+    uv sync --locked --no-dev --no-editable
 # What the bundled tasks would otherwise download at runtime: each task
 # package's prepare().
 RUN /app/.venv/bin/forge-async-worker prepare

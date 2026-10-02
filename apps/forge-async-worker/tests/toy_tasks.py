@@ -1,83 +1,92 @@
-"""Two toy task types for the worker's tests, so they exercise the worker, not
-any real task package: ``notes`` (a lock per note, a fan-out, schedules) and
-``alerts`` (its own queue, no schedules)."""
+"""A stand-in for the ADK workflows task, so the worker's tests exercise the
+worker, not ADK: an ``adk_workflows`` task whose ``run`` job takes a run's
+payload (RunPayload) and goes through the steps its input lists, carrying on
+from what it kept, with the control calls an ADK workflow run makes.
+
+Steps: ``step`` (nothing), ``approve`` and ``ask`` (an approval or a question,
+gate ``gate-<index>``), ``wait`` (until ``until``), ``fail`` (a failed result)
+and ``hook`` (the test's own ``task.hook``). Each finished step is kept,
+checkpointed and noted.
+"""
 
 from __future__ import annotations
 
+import json
+from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel
-
-from forge_tasks.errors import TaskError, TransientError
+from forge_task_adk_workflows.runs import RunPayload
+from forge_tasks.control import JobControl, current_control
 from forge_tasks.runner import ok
-from forge_tasks.tasks import JobResult, JobSpec, Schedule, TaskContext, TaskRegistry
+from forge_tasks.tasks import JobResult, Schedule, TaskContext, TaskRegistry
+
+Hook = Callable[[JobControl, int], Awaitable[None]]
 
 
-class NotePayload(BaseModel):
-    tenant_id: str
-    note_id: str
-    text: str = ""
-    fail: str | None = None  # "transient", "permanent" or "bug"
+async def nothing(control: JobControl, index: int) -> None:
+    return None
 
 
-class StoreNote:
-    name = "store"
-    payload_model = NotePayload
+class ScriptedRun:
+    name = "run"
+    payload_model = RunPayload
 
-    def __init__(self, task: NotesTask) -> None:
+    def __init__(self, task: ScriptedTask) -> None:
         self.task = task
 
-    def lock_key(self, p: NotePayload) -> str:
-        return f"{p.tenant_id}:{p.note_id}"
-
-    def describe(self, p: NotePayload) -> str:
-        return f"note {p.note_id}"
-
-    async def run(self, p: NotePayload) -> JobResult:
-        if p.fail == "transient":
-            raise TransientError("try later")
-        if p.fail == "permanent":
-            raise TaskError("bad note")
-        if p.fail == "bug":
-            raise RuntimeError("oops")
-        self.task.notes.append(p.text)
-        return ok(stored=len(self.task.notes))
-
-
-class SplitPayload(BaseModel):
-    tenant_id: str
-    text: str
-
-
-class SplitNotes:
-    """Fans out: one ``store`` per ``|``-separated part."""
-
-    name = "split"
-    payload_model = SplitPayload
-
-    def __init__(self, task: NotesTask) -> None:
-        self.task = task
-
-    def lock_key(self, p: SplitPayload) -> None:
+    def lock_key(self, payload: RunPayload) -> None:
         return None
 
-    async def run(self, p: SplitPayload) -> JobResult:
-        parts = p.text.split("|")
-        return JobResult(
-            detail={"parts": len(parts)},
-            followups=[
-                JobSpec(task_type="notes", kind="store", payload={"tenant_id": p.tenant_id, "note_id": t, "text": t})
-                for t in parts
-            ],
-        )
+    async def run(self, payload: RunPayload) -> JobResult:
+        control = current_control()
+        assert control is not None
+        self.task.attempts.append(control.run_id)
+        steps: list[dict[str, Any]] = list((payload.input or {}).get("steps", []))
+        said: list[Any] = control.load("said", [])
+        for index in range(control.load("done", 0), len(steps)):
+            step = steps[index]
+            match step["do"]:
+                case "approve":
+                    decision = await control.approval(
+                        key=f"gate-{index}",
+                        reason=step.get("reason", "Ship it?"),
+                        details={"kind": "approval", "approvers": "org:admin", "step": f"step-{index}"},
+                        timeout_seconds=step.get("timeout"),
+                    )
+                    said.append({"approved": decision.approved, "by": decision.actor_name, "comment": decision.comment})
+                case "ask":
+                    decision = await control.approval(
+                        key=f"gate-{index}",
+                        reason="How many?",
+                        details={"kind": "human_input", "response_schema": {"type": "object"}},
+                    )
+                    said.append(json.loads(decision.comment))
+                case "wait":
+                    if not control.load(f"waited-{index}"):
+                        control.keep(f"waited-{index}", True)
+                        await control.wait_until(datetime.fromisoformat(step["until"]), reason="Delay waits")
+                case "fail":
+                    return JobResult.failed(
+                        "Refund failed", outcome="failed", result={"why": "no"}, step=f"step-{index}"
+                    )
+                case "hook":
+                    await self.task.hook(control, index)
+            control.keep("done", index + 1)
+            control.keep("said", said)
+            await control.checkpoint(f"step {index}")
+            await control.note(f"step {index} finished", step=index)
+        return ok(outcome="succeeded", result={"said": said}, steps=len(steps), session_id=payload.session_id)
 
 
-class NotesTask:
-    name = queue = "notes"
+class ScriptedTask:
+    name = queue = "adk_workflows"
 
     def __init__(self, ctx: TaskContext) -> None:
-        self.notes: list[str] = []
-        self.jobs: dict[str, Any] = {"store": StoreNote(self), "split": SplitNotes(self)}
+        self.settings = ctx.options  # the ADK workflows task's (an AdkWorkflowsSettings), when given
+        self.attempts: list[str] = []
+        self.hook: Hook = nothing
+        self.jobs: dict[str, Any] = {"run": ScriptedRun(self)}
 
     async def ensure_schema(self) -> None:
         return None
@@ -86,45 +95,13 @@ class NotesTask:
         return None
 
 
-class NotesFactory:
-    name = queue = "notes"
-    schedules = [
-        Schedule(
-            name="notes.nightly",
-            job=JobSpec(task_type="notes", kind="split", payload={"tenant_id": "t", "text": "a|b"}),
-            cron="17 3 * * *",
-        ),
-        Schedule(
-            name="notes.sweep",
-            job=JobSpec(task_type="notes", kind="split", payload={"tenant_id": "t", "text": "c"}),
-            every_seconds=900,
-        ),
-    ]
-
-    def build(self, ctx: TaskContext) -> NotesTask:
-        return NotesTask(ctx)
-
-
-class AlertsTask:
-    name = queue = "alerts"
-
-    def __init__(self, ctx: TaskContext) -> None:
-        self.jobs: dict[str, Any] = {}
-
-    async def ensure_schema(self) -> None:
-        return None
-
-    async def close(self) -> None:
-        return None
-
-
-class AlertsFactory:
-    name = queue = "alerts"
+class ScriptedFactory:
+    name = queue = "adk_workflows"
     schedules: list[Schedule] = []
 
-    def build(self, ctx: TaskContext) -> AlertsTask:
-        return AlertsTask(ctx)
+    def build(self, ctx: TaskContext) -> ScriptedTask:
+        return ScriptedTask(ctx)
 
 
 def toy_registry() -> TaskRegistry:
-    return TaskRegistry([NotesFactory(), AlertsFactory()])
+    return TaskRegistry([ScriptedFactory()])

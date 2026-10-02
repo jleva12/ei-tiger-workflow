@@ -8,9 +8,9 @@ import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { ApiError } from "@/lib/api"
-import { shortId, statusDisplay, type BackgroundTaskPage } from "@/lib/background-tasks"
+import { shortId, type AdkRunPage } from "@/lib/agents/runs"
 import type { WorkspaceSearch } from "@/lib/organization-workspace"
-import { isOpenRun, runLine } from "@/lib/runs"
+import { isOpenRun, runLine, runStatusDisplay } from "@/lib/runs"
 
 /**
  * Its latest runs (`runs`), from a builder's header: how each stands, the
@@ -25,13 +25,13 @@ export function RunsMenu({
   runSearch,
 }: {
   organizationId: string
-  runs: UseQueryResult<BackgroundTaskPage, ApiError>
+  runs: UseQueryResult<AdkRunPage, ApiError>
   all: { label: string; search: WorkspaceSearch }
-  runSearch: (taskId: string) => WorkspaceSearch
+  runSearch: (runId: string) => WorkspaceSearch
 }) {
   const items = runs.data?.items ?? []
   const open = items.filter(isOpenRun).length
-  const deciding = items.filter((run) => run.status === "AWAITING_VALIDATION").length
+  const deciding = items.filter((run) => run.status === "paused").length
 
   return (
     <Popover>
@@ -42,7 +42,7 @@ export function RunsMenu({
             size="sm"
             aria-label={
               deciding
-                ? `Runs: ${deciding} waiting for a decision`
+                ? `Runs: ${deciding} waiting for a person`
                 : open
                   ? `Runs: ${open} going`
                   : "Runs"
@@ -80,17 +80,17 @@ export function RunsMenu({
         ) : runs.error ? (
           <p className="p-3 text-xs/[1.6] text-destructive">
             {runs.error.status === 503
-              ? "Runs are unavailable: the async worker isn't answering."
+              ? "Runs are unavailable: their database isn't answering."
               : `Couldn't load the runs: ${runs.error.message}`}
           </p>
         ) : items.length === 0 ? (
           <p className="p-3 text-xs/[1.6] text-muted-foreground">
-            No runs yet. A run shows here seconds after it starts.
+            No runs yet. A run shows here as soon as it starts.
           </p>
         ) : (
           <ul className="flex max-h-80 flex-col overflow-y-auto py-1">
             {items.map((run) => {
-              const shown = statusDisplay(run.status, run.outcome, run.waiting_until)
+              const shown = runStatusDisplay(run)
               return (
                 <li key={run.id}>
                   <Link

@@ -1,10 +1,10 @@
 """Composition root: the task types come from the installed task packages
 (``forge_async_worker.tasks`` entry points); the worker only supplies the shared
-infrastructure. Jobs run inline here (the CLI, tests); under ``worker`` each one
-runs through the enhanced task framework instead (etf_jobs.py).
+infrastructure. Jobs run inline here (the CLI, tests); under ``worker`` an ADK
+workflow run's job runs off the queue, on its run in the run store (jobs.py).
 
     rt = build_runtime()
-    await rt.submit(JobSpec(task_type="commits", kind="backfill", payload={"repo_id": ...}))
+    await rt.submit(JobSpec(task_type="adk_workflows", kind="run", payload={...}))
 """
 
 from __future__ import annotations

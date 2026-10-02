@@ -32,17 +32,16 @@ def utcnow() -> datetime:
 class JobSpec(BaseModel):
     """Serializable envelope for one unit of work. This is all a queue carries.
 
-    ``tenant_id`` is who the work is for (a Forge organization), among whose
-    background tasks it shows. Without it, a payload's own ``tenant_id``
+    ``tenant_id`` is who the work is for (a Forge organization). Without it,
+    a payload's own ``tenant_id``
     counts; follow-ups without one inherit their parent's (the runner sees to
     it). Work for no one in particular (a schedule's sweep) has none.
 
-    ``labels`` are extra names the tracked run carries, to find it by (the
-    ADK workflow a run is of, its ADK session). The worker's own labels
-    (task type, kind, tenant) win over them.
+    ``labels`` are extra names for the work, to find it by (the ADK workflow
+    a run is of, its ADK session).
 
-    ``requested_by`` is the person who asked for it (``{"id", "display_name"}``),
-    which its tracked run records; without it, the worker itself.
+    ``requested_by`` is the person who asked for it (``{"id", "display_name"}``);
+    without it, the worker itself.
     """
 
     task_type: str

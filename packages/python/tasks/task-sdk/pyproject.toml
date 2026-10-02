@@ -29,7 +29,7 @@ select = ["E", "F", "I", "B", "UP"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["forge_tasks", "forge_async_worker", "etf"]
+known-first-party = ["forge_tasks", "forge_async_worker"]
 
 [tool.mypy]
 python_version = "3.13"

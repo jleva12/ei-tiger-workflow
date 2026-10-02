@@ -3,8 +3,8 @@ import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { createServer } from "vite"
 
-// Running workflows without a browser: how a run reads in the runs menu and
-// lists, how often lists of runs refresh, and how the run dialog's fields
+// Running ADK workflows without a browser: how a run reads in the runs menu
+// and lists, how often lists of runs refresh, and how the run dialog's fields
 // (shared with an ADK workflow's human input) make a value and back.
 
 const server = await createServer({
@@ -23,58 +23,76 @@ await server.close()
 
 const HOUR = 3_600_000
 
-/** A background task as the list has it, with `fields` over a finished run. */
-function task(fields = {}) {
+/** An ADK workflow run as the list has it, with `fields` over a succeeded run. */
+function run(fields = {}) {
   return {
-    id: "task-1",
-    job_name: "workflows.run",
-    task_type: "workflows",
-    kind: "run",
-    description: "Order review",
-    status: "COMPLETED",
-    outcome: "ok",
-    attempts: 1,
+    id: "run-1",
+    organization_id: "org-1",
+    agent_id: "ag-1",
+    agent_name: "Order review",
+    revision: 2,
+    session_id: "session-1",
+    status: "succeeded",
+    attempt: 1,
+    requested_by: { id: "user-1", name: "Ada" },
+    resubmit_of: null,
     created_at: new Date(Date.now() - 2 * HOUR).toISOString(),
     updated_at: new Date(Date.now() - HOUR).toISOString(),
     started_at: new Date(Date.now() - 2 * HOUR).toISOString(),
-    ended_at: new Date(Date.now() - HOUR).toISOString(),
+    finished_at: new Date(Date.now() - HOUR).toISOString(),
     duration_ms: HOUR,
-    failure: null,
     waiting_until: null,
     waiting_reason: null,
-    awaiting_approval: false,
+    pause: null,
+    error: null,
     ...fields,
   }
 }
 
-test("a run is open while queued, running, waiting for a person or for a time", () => {
-  for (const status of ["PENDING", "RUNNING", "STOPPING", "PAUSING", "AWAITING_VALIDATION"])
-    assert.equal(runs.isOpenRun(task({ status })), true, status)
-  const later = new Date(Date.now() + HOUR).toISOString()
-  assert.equal(runs.isOpenRun(task({ status: "STOPPED", waiting_until: later })), true)
-  for (const status of ["COMPLETED", "FAILED", "ABANDONED", "STOPPED", "PAUSED"])
-    assert.equal(runs.isOpenRun(task({ status })), false, status)
+const pause = (kind) => ({ id: "req-1", kind, reason: "Ship it?", details: {}, requested_at: null, deadline: null })
+
+test("a run is open while queued, running, or waiting for a person or a time", () => {
+  for (const status of ["queued", "running", "paused", "waiting"])
+    assert.equal(runs.isOpenRun(run({ status })), true, status)
+  for (const status of ["succeeded", "failed", "abandoned"])
+    assert.equal(runs.isOpenRun(run({ status })), false, status)
+  assert.equal(runs.isLiveRun(run({ status: "queued" })), true)
+  assert.equal(runs.isLiveRun(run({ status: "paused" })), false)
+  assert.equal(runs.isLiveRun(undefined), false)
+})
+
+test("a run's badge says what it waits for", () => {
+  assert.deepEqual(runs.runStatusDisplay(run()), { status: "completed", label: "Succeeded" })
+  assert.deepEqual(runs.runStatusDisplay(run({ status: "paused", pause: pause("approval") })), {
+    status: "review",
+    label: "Awaiting approval",
+  })
+  assert.equal(runs.runStatusDisplay(run({ status: "paused", pause: pause("human_input") })).label, "Awaiting an answer")
+  assert.equal(runs.runStatusDisplay(run({ status: "waiting" })).status, "pending")
+  assert.equal(runs.runStatusDisplay(run({ status: "abandoned" })).status, "cancelled")
 })
 
 test("a run's line says what it waits for, why it failed, or when it started", () => {
-  assert.equal(runs.runNote(task()), undefined)
-  assert.match(runs.runLine(task()), /^Started /)
-  assert.equal(runs.runLine(task({ status: "AWAITING_VALIDATION" })), "Waiting for a decision")
+  assert.equal(runs.runNote(run()), undefined)
+  assert.match(runs.runLine(run()), /^Started /)
+  assert.equal(runs.runLine(run({ status: "paused", pause: pause("approval") })), "Waiting for a decision")
+  assert.equal(runs.runLine(run({ status: "paused", pause: pause("human_input") })), "Waiting for an answer")
   const later = new Date(Date.now() + 3 * HOUR).toISOString()
-  assert.match(runs.runLine(task({ status: "STOPPED", waiting_until: later })), /^Carries on /)
-  const failure = { type: "E", message: "The HTTP step got a 500", category: "permanent", occurred_at: "" }
-  assert.equal(runs.runLine(task({ status: "FAILED", failure })), "The HTTP step got a 500")
-  // A run that recovered says nothing of its failure.
-  assert.match(runs.runLine(task({ failure })), /^Started /)
+  assert.match(runs.runLine(run({ status: "waiting", waiting_until: later })), /^Carries on /)
+  const error = { message: "The HTTP step got a 500", category: "failed", step: null, occurred_at: "" }
+  assert.equal(runs.runLine(run({ status: "failed", error })), "The HTTP step got a 500")
+  assert.equal(runs.runLine(run({ status: "queued", error })), "Retrying: The HTTP step got a 500")
+  // A run that recovered and finished says nothing of its hiccup.
+  assert.match(runs.runLine(run({ error })), /^Started /)
 })
 
 test("a list of runs refreshes quickly while one is open, slowly otherwise, not after it failed", () => {
   const page = (...items) => ({ status: "success", data: { items, total: items.length } })
-  assert.equal(runs.runsPollMs(page(task(), task({ status: "RUNNING" }))), runs.OPEN_POLL_MS)
-  assert.equal(runs.runsPollMs(page(task({ status: "AWAITING_VALIDATION" }))), runs.OPEN_POLL_MS)
-  assert.equal(runs.runsPollMs(page(task(), task({ status: "FAILED" }))), runs.IDLE_POLL_MS)
+  assert.equal(runs.runsPollMs(page(run(), run({ status: "running" }))), runs.OPEN_POLL_MS)
+  assert.equal(runs.runsPollMs(page(run({ status: "paused" }))), runs.OPEN_POLL_MS)
+  assert.equal(runs.runsPollMs(page(run(), run({ status: "failed" }))), runs.IDLE_POLL_MS)
   assert.equal(runs.runsPollMs({ status: "pending" }), runs.IDLE_POLL_MS)
-  assert.equal(runs.runsPollMs({ ...page(task({ status: "RUNNING" })), status: "error" }), false)
+  assert.equal(runs.runsPollMs({ ...page(run({ status: "running" })), status: "error" }), false)
 })
 
 const SCHEMA = {

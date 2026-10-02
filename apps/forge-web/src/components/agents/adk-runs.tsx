@@ -3,13 +3,13 @@ import { RunsMenu } from "@/components/runs/runs-menu"
 import {
   useAdkWorkflowRuns,
   useRunAdkWorkflow,
-  type AdkRunStarted,
+  type AdkRun,
 } from "@/lib/agents/runs"
 
 /*
- * Running an ADK workflow from its builder: the workflows' run dialog and
- * runs menu, on the ADK workflow's own runs (lib/agents/runs). Each run
- * opens its page under the ADK workflows page's Runs.
+ * Running an ADK workflow from its builder: the run dialog and runs menu,
+ * on the ADK workflow's own runs (lib/agents/runs). Each run opens its page
+ * under the ADK workflows page's Runs.
  */
 
 /** The ADK workflow's latest runs, each opening its page. */
@@ -29,7 +29,7 @@ export function AdkRunsMenu({
         label: "All ADK workflow runs",
         search: { view: "agents", agentsTab: "runs" },
       }}
-      runSearch={(taskId) => ({ view: "agents", agentRun: taskId })}
+      runSearch={(runId) => ({ view: "agents", agentRun: runId })}
     />
   )
 }
@@ -51,7 +51,7 @@ export function AdkRunDialog({
   name: string
   /** The start's input schema; `{}` declares none. */
   inputSchema: Record<string, unknown>
-  onStarted: (run: AdkRunStarted) => void
+  onStarted: (run: AdkRun) => void
 }) {
   // Here rather than in the builder: its state changes redraw only the dialog.
   const run = useRunAdkWorkflow(organizationId, agentId)
@@ -64,7 +64,7 @@ export function AdkRunDialog({
         description: (
           <>
             {name || "The ADK workflow"} runs as it&apos;s saved now, as you.
-            Follow it under Runs, or on the ADK workflows page&apos;s Runs.
+            Follow it under Runs, or on its own page.
           </>
         ),
         refused: "The run can't start",

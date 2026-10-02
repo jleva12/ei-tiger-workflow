@@ -24,11 +24,6 @@ and its Dockerfile copies the package directory before `uv sync`.
   every ADK workflow expression runs on, with no runtime dependencies and the
   pinned upstream compatibility suite (`make jsonata-check`). The ADK
   workflows task evaluates expressions with it.
-- [`python/enhanced-task-framework/`](python/enhanced-task-framework) (`etf`)
-  tracks, audits, pauses and recovers async job runs: every job the async
-  worker runs, including each ADK workflow run, is one of its runs, which the
-  worker's background tasks API reads back for the admin API
-  (`make etf-check`).
 - `python/tasks/<name>/`: the task packages `apps/forge-async-worker` runs.
   [`task-sdk`](python/tasks/task-sdk/README.md) (`forge-tasks`,
   `forge_tasks`) is the contract between the worker and a task: a task
@@ -38,10 +33,12 @@ and its Dockerfile copies the package directory before `uv sync`.
   (`forge-task-adk-workflows`, `forge_task_adk_workflows`) is the ADK
   workflows task: it builds an organization's ADK workflows
   (`forge.agent/v1`) into Google ADK graphs and runs them on ADK's graph
-  engine, through approvals, human input, waits and restarts, their state in
-  ADK sessions. The admin API depends on it too, to build a document before
-  a run and to read a run's steps from its session. Their tests run in the
-  worker's environment (`make async-worker-check`).
+  engine, through approvals, human input, waits and retries, their state in
+  ADK sessions. Each run is kept in its run store (`run_store`: two tables
+  in the admin MySQL), which the admin API starts, lists and acts on and the
+  worker runs. The admin API depends on it too, for the run store, to build
+  a document before a run and to read a run's steps from its session. Their
+  tests run in the worker's environment (`make async-worker-check`).
 
 [`forge-ui/`](forge-ui/README.md) is the Forge UI design system: shadcn
 primitives on Base UI, Forge composites, the theme and the data and state

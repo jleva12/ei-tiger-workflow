@@ -2,7 +2,7 @@
 
 A *task type* (adk_workflows, ...) is a self-contained domain with its own
 sources, storage and logic. The worker only needs it to expose named *jobs*; the
-queue, locking, retries, schedules and run tracking are the worker's. A task type
+queue, retries and keeping a run's state are the worker's. A task type
 is a package with a :class:`TaskFactory` registered under the
 ``forge_async_worker.tasks`` entry point group.
 """
@@ -17,7 +17,7 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     from forge_tasks.tasks import JobOutcome, JobResult, JobSpec, Schedule, TaskContext
 
-# --------------------------------------------------------------------------- task framework
+# --------------------------------------------------------------------------- jobs and tasks
 
 
 @runtime_checkable
@@ -42,9 +42,8 @@ class Job(Protocol):
     async def run(self, payload: Any) -> JobResult: ...
 
     # Optional: ``describe(payload) -> str | None`` (or async), a few words on
-    # what a run of the job works on (an ADK workflow's name), shown with the
-    # organization's background tasks. Not part of the protocol, so jobs
-    # without it still conform.
+    # what a run of the job works on (an ADK workflow's name). Not part of the
+    # protocol, so jobs without it still conform.
 
 
 @runtime_checkable
@@ -74,8 +73,8 @@ class JobObserver(Protocol):
 
 @runtime_checkable
 class TaskFactory(Protocol):
-    """The unit you register. Static metadata is readable without building the
-    task (the worker reads the schedules before any connection exists).
+    """The unit you register. Static metadata (its name, queue and schedules)
+    is readable without building the task. The worker runs no schedules.
 
     Optional attributes the worker also reads:
 

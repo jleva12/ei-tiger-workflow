@@ -1,7 +1,7 @@
 """An in-process runtime: the enabled tasks, built, with a runner that runs
 their jobs inline (breadth-first, follow-ups included). For tests, the CLI and
-local development; the worker builds the same tasks but runs each job through
-the task framework, off its queues.
+local development; the worker builds the same tasks, and runs an ADK workflow
+run's job off its queue, on the run in the run store.
 
     rt = build_runtime(CoreSettings(enabled_tasks=["adk_workflows"]))
     await rt.submit(JobSpec(task_type="adk_workflows", kind="run", payload={"agent_id": ...}))

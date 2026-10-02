@@ -1,14 +1,13 @@
 """The ADK workflows task type: one job, ``run``, which runs one run of an
 organization's ADK workflow, start to end, through pauses and restarts.
 
-The admin API submits a run (``POST /organizations/{id}/agents/{id}/runs``) as
-a job on the ``adk_workflows`` queue, with the ADK workflow's document as it
+The admin API starts a run (``POST /organizations/{id}/agents/{id}/runs``) in
+the run store (``run_store``), its payload the ADK workflow's document as it
 was when the run started (a run is pinned to that revision), the saved ADK
 workflows it runs, the input, the member it acts as and the ID of its ADK
-session. The worker runs the job as a tracked run of the task framework,
-labelled with the organization, so it's among the organization's background
-tasks, where people decide its approvals and answer its questions
-(``runs.AdkRun``).
+session, and queues it on the ``adk_workflows`` queue. The worker runs the
+job on the run, under a control backed by it; people decide its approvals
+and answer its questions on the run's page (``runs.AdkRun``).
 """
 
 from __future__ import annotations
@@ -60,7 +59,7 @@ class RunAdkWorkflowJob:
         self.task = task
 
     def lock_key(self, payload: RunPayload) -> str | None:
-        return None  # a run is its own: the task framework's lease keeps one worker on it
+        return None  # a run is its own: the run store's lease keeps one worker on it
 
     def describe(self, payload: RunPayload) -> str:
         return payload.name or payload.agent_id

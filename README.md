@@ -33,14 +33,14 @@ orchestrates them with one Compose stack and one Makefile.
   with revision checks so concurrent edits never silently overwrite each
   other.
 - **Runs.** The admin API checks a run's input and builds the document, then
-  submits the run to the async worker's `adk_workflows` queue on Redis. The
-  worker's ADK workflows task runs it on Google ADK's graph engine, its state
-  an ADK session in the admin MySQL, from which the run page reads its steps.
-  Each run is also a tracked run of the
-  [enhanced task framework](packages/python/enhanced-task-framework), which
-  keeps its attempts, failures and audit trail, restarts a run cut off by a
-  crash, and lets a run that waits (an approval, a person's answer, a long
-  delay) give up its worker until it's answered.
+  starts the run in the run store (two tables in the admin MySQL) and queues
+  it on the async worker's `adk_workflows` queue on Redis. The worker's ADK
+  workflows task runs it on Google ADK's graph engine, its state an ADK
+  session in the admin MySQL, from which the run page reads its steps. The
+  run store keeps each run's status, attempts, failures and activity; the
+  worker retries a hiccup with backoff, carries on a run cut off by a crash,
+  and lets a run that waits (an approval, a person's answer, a long delay)
+  give up its worker until it's answered.
 - **Agents.** A builder for one Google ADK chat agent (`forge.chat_agent/v1`):
   its instructions and model, its tools and the agents it hands off to. The
   console keeps them in the browser for now; the API and a runtime come later.
@@ -56,24 +56,21 @@ orchestrates them with one Compose stack and one Makefile.
 | Service | Module | Port | Role |
 |---|---|---|---|
 | `web` | `apps/forge-web` | 5190 (dev), 18190 (Compose) | React web console on the Forge UI design system: the ADK workflow builder and its runs, the agent builder, administration of organizations, users, roles and permissions, and the assistant panel |
-| `admin` | `apps/forge-admin-api` | 8101 (native), 18201 (Compose) | FastAPI API (`/api/v1`, docs at `/docs`): organizations, users, Casbin roles and permissions, ADK workflows (MongoDB), run submission to the async worker, runs' steps from their ADK sessions, and the assistant |
-| `admin-mysql` | `apps/forge-admin-api` | 13326 | MySQL 8.4 for the admin API (Alembic migrations) and ADK workflow runs' sessions, with a persistent volume |
-| `async-worker-adk-workflows` | `apps/forge-async-worker` | none (SAQ worker) | Async worker (`forge-async-worker`) serving the `adk_workflows` queue: runs organizations' ADK workflows on Google ADK, their sessions in the admin MySQL, pausing for approvals, questions and waits |
-| `async-worker-api` | `apps/forge-async-worker` | 8104 (native), 18204 (Compose) | Background tasks API: what the task framework recorded of each run (attempts, steps, audit trail), and resubmitting, restarting, abandoning or deciding one. The admin API relays it to the web console, checking who may see and act |
-| `mongo` | `compose.infrastructure.yaml` | 27037 | Shared MongoDB (Atlas Local 8.3.9, a single-node replica set): ADK workflows (`forge_admin`) and the task framework's runs (`forge_tasks`); persistent volumes |
-| `redis` | `compose.infrastructure.yaml` | 16389 | Shared Redis: the async worker's SAQ queues and locks in database 0; persistent AOF, no eviction |
+| `admin` | `apps/forge-admin-api` | 8101 (native), 18201 (Compose) | FastAPI API (`/api/v1`, docs at `/docs`): organizations, users, Casbin roles and permissions, ADK workflows (MongoDB), ADK workflow runs (starting, listing, deciding, retrying, from the run store), runs' steps from their ADK sessions, and the assistant |
+| `admin-mysql` | `apps/forge-admin-api` | 13326 | MySQL 8.4 for the admin API (Alembic migrations), ADK workflow runs (the run store) and their sessions, with a persistent volume |
+| `async-worker-adk-workflows` | `apps/forge-async-worker` | none (SAQ worker) | Async worker (`forge-async-worker`) serving the `adk_workflows` queue: runs organizations' ADK workflows on Google ADK, the runs and their sessions in the admin MySQL, pausing for approvals, questions and waits |
+| `mongo` | `compose.infrastructure.yaml` | 27037 | Shared MongoDB (Atlas Local 8.3.9, a single-node replica set): ADK workflows (`forge_admin`); persistent volumes |
+| `redis` | `compose.infrastructure.yaml` | 16389 | Shared Redis: the async worker's SAQ queue in database 0; persistent AOF, no eviction |
 
 ```text
  web console
       ▼
-  admin API ──────► MySQL             organizations, users, roles, permissions; ADK sessions
-    │  │  └───────► MongoDB           ADK workflows (forge_admin)
-    │  └──────────► async-worker-api  runs as background tasks (FORGE_ASYNC_WORKER_TOKEN)
-    ▼ start a run
+  admin API ──────► MySQL    organizations, users, roles, permissions; ADK workflow runs and sessions
+    │     └───────► MongoDB  ADK workflows (forge_admin)
+    ▼ queue a run (run_adk)
   Redis (SAQ, db 0)
     ▼
-  async-worker-adk-workflows ──► MySQL    each run's ADK session, read back for its steps
-                             └─► MongoDB  runs, attempts and audit trail (forge_tasks)
+  async-worker-adk-workflows ──► MySQL  each run (the run store) and its ADK session
 ```
 
 MongoDB and Redis are defined once in [compose.infrastructure.yaml](compose.infrastructure.yaml),
@@ -82,8 +79,8 @@ and every application's `compose.yaml` is a fragment of the root deployment
 `.env.common` (`FORGE_MONGO_*`, `FORGE_REDIS_PORT`, `FORGE_REDIS_URL`); app
 `.env` files reference them. Redis database 15 is reserved for the SAQ
 integration tests. `make infrastructure-check` validates the rendered stack:
-its services, shared connections, queues, service tokens, persistent storage
-and loopback-only ports.
+its services, shared connections, queues, persistent storage and
+loopback-only ports.
 
 ## Run locally
 
@@ -111,8 +108,7 @@ make install           # npm ci in apps/forge-web, uv sync in apps/forge-admin-a
 make web               # Vite dev server on http://localhost:5190
 make admin-deps        # admin-mysql, and the shared mongo and redis
 make admin             # admin API on http://localhost:8101; docs at /docs
-make async-worker      # mongo and redis, then the async worker on the adk_workflows queue, with its schedules
-make async-worker-api  # the background tasks API on http://localhost:8104, which the admin API shows runs with
+make async-worker      # redis and admin-mysql, then the async worker on the adk_workflows queue
 ```
 
 Or run them all at once in one terminal, each output line prefixed with its
@@ -128,17 +124,16 @@ make up-all-local
 ### Settings
 
 Values several apps share live once in `.env.common` at the root: the
-admin's MySQL connection, the shared MongoDB and Redis, the tokens the
-services call each other with (`FORGE_ASYNC_WORKER_TOKEN`) and the model API keys (`FORGE_GOOGLE_API_KEY`,
-`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). Everything else lives with its app:
+admin's MySQL connection, the shared MongoDB and Redis, and the model API
+keys (`FORGE_GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). Everything else lives with its app:
 `apps/forge-admin-api/.env` and `apps/forge-async-worker/.env`, plus
 `apps/forge-web/.env.local` (see `apps/forge-web/.env.example`). `make env`
 creates each from its `.env.example` (`.env.common` from
 `.env.common.example`, `.env.compose` from `.env.compose.example`) and
-generates the token and the admin API's JWT secret, once.
+generates the admin API's JWT secret, once.
 
 An app's `.env` names each shared value it uses with a `${NAME}` reference,
-for example `HYBRID_API__TOKEN=${FORGE_ASYNC_WORKER_TOKEN}`;
+for example `HYBRID_REDIS_URL=${FORGE_REDIS_URL}`;
 `.env.common` never reaches an app by itself, so an app only gets the shared
 values it references. A reference resolves to an earlier line of the same
 file, otherwise to `.env.common`, and a name defined in neither stops the app
@@ -182,23 +177,23 @@ apps/
     .env.example          Service settings template
     pyproject.toml        The app's dependencies and tool settings
     uv.lock               The app's lockfile; .venv is installed beside it
-  forge-async-worker/     forge-async-worker: generic async task worker (SAQ on Redis), every job tracked by the enhanced task framework
-    src/forge_async_worker/  saq_worker.py (run_job, schedules, upkeep), job_control.py, etf_jobs.py, api.py (background tasks API),
-                          queue.py, cli.py; no task-specific code
-    tests/                The SAQ job, retries and re-drives with toy tasks on in-memory stores; the worker on a real Redis
-    Dockerfile            uv-built worker image with the bundled task packages, built from the repository root
-    compose.yaml          async-worker-adk-workflows and async-worker-api
+  forge-async-worker/     forge-async-worker: runs ADK workflow runs off the adk_workflows SAQ queue on Redis, kept in the run store
+    src/forge_async_worker/  saq_worker.py (run_adk, expire_pause, the maintain cron, graceful stop, health check), jobs.py
+                          (what each job does to a run), control.py (a run's JobControl on the run store), queue.py, cli.py
+    tests/                The jobs on a SQLite run store, with a stand-in task and the real ADK one; the worker on a real Redis
+    Dockerfile            uv-built worker image with the ADK workflows task, built from the repository root
+    compose.yaml          async-worker-adk-workflows
     .env.example          Worker and task settings template
-    pyproject.toml        The app's dependencies (the bundled task package is the adk-workflows extra) and tool settings
+    pyproject.toml        The app's dependencies (the ADK workflows task among them) and tool settings
     uv.lock               The app's lockfile; .venv is installed beside it
 packages/                 Shared Python libraries and the Forge UI design system (see packages/README.md)
   forge-ui/               Forge UI: shadcn primitives, Forge composites, theme and libraries, a demo app, and the
                           shadcn registry apps install them from (registry.json, public/r)
   python/common/          forge-common: ADK toolset helpers and the shared model-provider YAML and loader
   python/jsonata/         forge-jsonata: the JSONata engine ADK workflows' expressions run on
-  python/enhanced-task-framework/  etf: tracks, audits, pauses and recovers async job runs (each ADK workflow run)
   python/tasks/task-sdk/  forge-tasks: the contract between the async worker and a task package
-  python/tasks/adk-workflows/  forge-task-adk-workflows: the ADK workflows task, which builds and runs ADK workflows
+  python/tasks/adk-workflows/  forge-task-adk-workflows: the ADK workflows task, which builds and runs ADK workflows,
+                          and the run store their runs are kept in
 tests/infrastructure/     Validates the rendered Compose stack (make infrastructure-check)
 .claude/                  Agent skills for the Forge UI, data and state conventions; dev-server launch config
 .github/workflows/        forge-ui-registry.yml: Forge UI's typecheck, tests and committed-registry check
@@ -230,9 +225,9 @@ belongs to, for example `cd apps/forge-web && npm install <pkg>` or
 
 ```sh
 make check             # Compose stack; web typecheck, lint, tests and build; admin lint, format and unit tests;
-                       # async worker and task packages lint, format, types and unit tests; forge-common, JSONata and etf checks;
+                       # async worker and task packages lint, format, types and unit tests; forge-common and JSONata checks;
                        # Forge UI typecheck, tests and committed registry
 make admin-test-mysql  # admin migrations and readiness against real MySQL
-make async-worker-test-redis  # the async worker's SAQ queues against redis
+make async-worker-test-redis  # the async worker's SAQ queue against redis
 make docker-build      # build every service image
 ```

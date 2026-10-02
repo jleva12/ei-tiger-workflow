@@ -7,6 +7,7 @@ from importlib.metadata import version
 
 from fastapi import APIRouter, Depends, FastAPI
 from forge_common.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
+from forge_task_adk_workflows.run_store import RunStore
 from google.adk.sessions import DatabaseSessionService
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
@@ -16,7 +17,6 @@ from forge_admin.agents.runtime import AgentRuntime
 from forge_admin.api.routes import health, info
 from forge_admin.auth.authorization import create_enforcer
 from forge_admin.auth.security import authenticate
-from forge_admin.background_tasks import BackgroundTasks
 from forge_admin.config import Settings
 from forge_admin.db.session import create_engine, create_sessionmaker
 from forge_admin.embedding import Embedding
@@ -83,10 +83,11 @@ class ApiServer:
         app.state.engine = engine
         app.state.sessionmaker = create_sessionmaker(engine)
         app.state.enforcer = create_enforcer(engine)
-        # The async worker's background tasks API, when set up; None
-        # otherwise. Tests set their own (a fake).
-        if getattr(app.state, "background_tasks", None) is None:
-            app.state.background_tasks = BackgroundTasks.from_settings(self.settings)
+        # ADK workflow runs, kept in this database (adk_runs and
+        # adk_run_events, which 0005adk_run_store creates). Tests set their
+        # own (SQLite).
+        if getattr(app.state, "adk_runs", None) is None:
+            app.state.adk_runs = RunStore(engine)
         # The async worker's job queues, when set up; None otherwise. It
         # doesn't connect until used. Tests set a fake.
         if getattr(app.state, "embedding", None) is None:
@@ -116,8 +117,6 @@ class ApiServer:
             yield
         finally:
             await app.state.agents.close()
-            if app.state.background_tasks is not None:
-                await app.state.background_tasks.aclose()
             if app.state.embedding is not None:
                 await app.state.embedding.aclose()
             if app.state.organization_agents is not None:

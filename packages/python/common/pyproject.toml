@@ -3,7 +3,7 @@ name = "forge-common"
 version = "0.1.0"
 description = "Code the Forge Python apps and packages share, such as a Google ADK toolset whose tools never raise and the model provider configuration"
 readme = "README.md"
-# As old as the oldest codebase that shares it (the enhanced task framework).
+# Kept low, so an older codebase can share it too.
 requires-python = ">=3.11"
 dependencies = []
 

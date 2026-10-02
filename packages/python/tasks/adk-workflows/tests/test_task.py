@@ -1,9 +1,9 @@
 """
 The adk_workflows task's run job, as the worker runs it: re-entrant, carried
 on from its ADK session (ADK's DatabaseSessionService, on SQLite here) each
-time the task framework runs it again, with the task framework's control
-kept in memory (LocalJobControl), a fake HTTP transport, a clock the tests
-move and scripted models.
+time the worker runs it again, with its control kept in memory
+(LocalJobControl), a fake HTTP transport, a clock the tests move and scripted
+models. The worker's own tests run it on the run store.
 """
 
 import json
@@ -339,9 +339,9 @@ async def test_an_approval_nobody_decided_in_time_is_rejected_by_forge(sessions:
     with pytest.raises(AwaitingDecision):
         await w.run(run)
 
-    # The task framework's timeout: a rejection by no one, at the deadline.
+    # The worker's timeout: a rejection by no one, at the deadline.
     w.clock.advance(hours=24, seconds=1)
-    w.control.decide(REVIEW, Decision(approved=False, comment="Nobody decided within 24 hour(s)", actor_id="etf"))
+    w.control.decide(REVIEW, Decision(approved=False, comment="Nobody decided by its deadline"))
     result = await w.run(run)
 
     assert result.detail["result"] == {

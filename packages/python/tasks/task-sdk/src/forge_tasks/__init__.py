@@ -2,8 +2,8 @@
 
 A task package registers a :class:`~forge_tasks.protocols.TaskFactory` under the
 ``forge_async_worker.tasks`` entry point group. Its task exposes named jobs
-(a :class:`JobSpec` in, a :class:`JobResult` out) on a queue, plus schedules;
-the worker runs every job through the enhanced task framework.
+(a :class:`JobSpec` in, a :class:`JobResult` out) on a queue; the worker runs
+the ADK workflows task's ``run`` job, each run kept in the run store.
 """
 
 from forge_tasks.control import (

@@ -1,6 +1,7 @@
-"""Starting ADK workflow runs (``adk_runs``), without MySQL, MongoDB or Redis:
-the input and build checks, the saved ADK workflows a run carries, what's
-submitted, and answers to a run's questions."""
+"""Starting ADK workflow runs (``adk_runs``), without MySQL, MongoDB or Redis
+(the run store on SQLite): the input and build checks, the saved ADK
+workflows a run carries, what's kept and queued, and answers to a run's
+questions."""
 
 import asyncio
 import json
@@ -8,6 +9,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from forge_task_adk_workflows.run_store import RunStore, metadata
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import StaticPool
 
 from forge_admin.adk_runs import (
     MAX_ANSWER,
@@ -18,6 +22,7 @@ from forge_admin.adk_runs import (
     saved_documents,
     start_adk_run,
 )
+from forge_admin.embedding import EmbeddingError
 
 EXAMPLE = (
     Path(__file__).parents[3]
@@ -88,11 +93,14 @@ def finder(*documents: dict[str, Any]) -> Any:
 
 
 class FakeQueue:
-    def __init__(self) -> None:
-        self.adk_runs: list[dict[str, Any]] = []
+    def __init__(self, refuse: bool = False) -> None:
+        self.queued: list[str] = []
+        self.refuse = refuse
 
-    async def run_adk_workflow(self, **submission: Any) -> None:
-        self.adk_runs.append(submission)
+    async def run_adk(self, run_id: str) -> None:
+        if self.refuse:
+            raise EmbeddingError("Connection refused")
+        self.queued.append(run_id)
 
 
 def test_the_input_must_fit_the_starts_schema() -> None:
@@ -150,39 +158,50 @@ def test_a_document_that_doesnt_build_is_refused_with_the_reason() -> None:
         asyncio.run(prepare_run(record(example()), {}, finder()))
 
 
-def test_a_run_is_submitted_with_its_documents_session_and_member() -> None:
+async def started(queue: FakeQueue, *runs: dict[str, Any]) -> list[dict[str, Any]]:
+    """Start a run of each record given, on a run store of its own; return
+    each run as the store keeps it."""
+    engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
+    async with engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+    store = RunStore(engine)
+    kept = []
+    try:
+        for run in runs:
+            made = await start_adk_run(
+                store,
+                queue,  # type: ignore[arg-type]
+                run["record"],
+                saved=run["saved"],
+                input=run["input"],
+                run_as="member-1",
+                run_as_name="Ada Lovelace",
+                trigger={"type": "manual", "by": "member-1"},
+            )
+            kept.append(await store.get(made["id"]))
+    finally:
+        await engine.dispose()
+    return kept
+
+
+def test_a_run_is_kept_with_its_documents_session_and_member_and_queued() -> None:
     leaf = agent(
         "ag_leaf000001", node("done", "end", {"outcome": "succeeded", "result": ""})
     )
     top = agent("ag_top0000001", saved("leaf", "ag_leaf000001"))
     carried = asyncio.run(prepare_run(record(top), {"n": 1}, finder(leaf, top)))
     queue = FakeQueue()
-    started = asyncio.run(
-        start_adk_run(
-            queue,  # type: ignore[arg-type]
-            record(top),
-            saved=carried,
-            input={"n": 1},
-            run_as="member-1",
-            run_as_name="Ada Lovelace",
-            trigger={"type": "manual", "by": "member-1"},
-        )
+    one = {"record": record(top), "saved": carried, "input": {"n": 1}}
+    run, again = asyncio.run(started(queue, one, {**one, "input": None}))
+    session_id = run["session_id"]
+    assert (run["status"], run["attempt"]) == ("queued", 1)
+    assert (run["organization_id"], run["agent_id"]) == (ORG, "ag_top0000001")
+    assert (run["agent_name"], run["revision"]) == ("Agent ag_top0000001", 3)
+    assert (run["requested_by"], run["requested_by_name"]) == (
+        "member-1",
+        "Ada Lovelace",
     )
-    [submitted] = queue.adk_runs
-    session_id = started["session_id"]
-    assert started["queue"] == "adk_workflows"
-    assert started["key"].startswith("adk_workflows.run:ag_top0000001:")
-    assert submitted["key"] == started["key"]
-    assert submitted["tenant_id"] == ORG
-    assert submitted["labels"] == {
-        "adk_workflow": "ag_top0000001",
-        "adk_session": session_id,
-    }
-    assert submitted["requested_by"] == {
-        "id": "member-1",
-        "display_name": "Ada Lovelace",
-    }
-    assert submitted["payload"] == {
+    assert run["payload"] == {
         "tenant_id": ORG,
         "agent_id": "ag_top0000001",
         "revision": 3,
@@ -195,19 +214,21 @@ def test_a_run_is_submitted_with_its_documents_session_and_member() -> None:
         "run_as_name": "Ada Lovelace",
         "trigger": {"type": "manual", "by": "member-1"},
     }
-    # Every run has a session of its own.
-    again = asyncio.run(
-        start_adk_run(
-            queue,  # type: ignore[arg-type]
-            record(top),
-            saved=carried,
-            input=None,
-            run_as="member-1",
-            run_as_name="Ada Lovelace",
-            trigger={"type": "manual", "by": "member-1"},
-        )
+    # A job takes each; every run has a session of its own.
+    assert queue.queued == [run["id"], again["id"]]
+    assert again["session_id"] != session_id
+
+
+def test_a_run_whose_job_cant_be_queued_is_kept_queued() -> None:
+    made = agent(
+        "ag_top0000001", node("done", "end", {"outcome": "succeeded", "result": ""})
     )
-    assert again["session_id"] != session_id and again["key"] != started["key"]
+    queue = FakeQueue(refuse=True)
+    [run] = asyncio.run(
+        started(queue, {"record": record(made), "saved": {}, "input": None})
+    )
+    assert run["status"] == "queued"
+    assert queue.queued == []
 
 
 QUESTION = {

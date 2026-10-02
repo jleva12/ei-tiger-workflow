@@ -1,13 +1,13 @@
-"""Generic async task worker: every installed task package's jobs, off SAQ
-queues on Redis, each one a run tracked by the enhanced task framework.
+"""The async worker: runs organizations' ADK workflow runs, kept in the run
+store (the admin MySQL), off the ``adk_workflows`` SAQ queue on Redis.
 
     from forge_async_worker import WorkerSettings, build_runtime, JobSpec
     rt = build_runtime(WorkerSettings())
-    await rt.submit(JobSpec(task_type="adk_workflows", kind="run", payload={...}))
+    await rt.submit(JobSpec(task_type="adk_workflows", kind="run", payload={...}))  # inline
 
-Task types live in their own packages (``packages/python/tasks``) and register
-under the ``forge_async_worker.tasks`` entry point group; the contract between
-them and the worker is ``forge_tasks``.
+The ADK workflows task lives in its own package (``packages/python/tasks``) and
+registers under the ``forge_async_worker.tasks`` entry point group; the contract
+between it and the worker is ``forge_tasks``.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ _LAZY = {
     "build_runtime": "forge_async_worker.runtime",
     "default_registry": "forge_async_worker.runtime",
     "Runtime": "forge_async_worker.runtime",
-    "SaqJobQueue": "forge_async_worker.queue",
+    "RunQueue": "forge_async_worker.queue",
     "JobSpec": "forge_tasks.tasks",
     "JobResult": "forge_tasks.tasks",
     "JobStatus": "forge_tasks.tasks",

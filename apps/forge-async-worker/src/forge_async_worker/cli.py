@@ -1,17 +1,14 @@
 """Dev/ops CLI. Jobs run inline (no worker needed), except under ``worker``.
 
-    forge-async-worker worker --ensure-schema                 # the SAQ worker, every enabled queue
-    forge-async-worker worker --queues commits --concurrency 4
-    forge-async-worker worker --check                         # health: this host serves each queue
-    forge-async-worker api                                    # the background tasks API (HYBRID_API__*)
-    forge-async-worker tasks                                  # installed task types and their jobs
+    forge-async-worker worker --ensure-schema                 # the SAQ worker on the adk_workflows queue
+    forge-async-worker worker --concurrency 8
+    forge-async-worker worker --check                         # health: this host serves the queue
+    forge-async-worker tasks                                  # installed task types and their queues
     forge-async-worker ensure-schema
     forge-async-worker prepare                                # image build: what the tasks fetch at runtime
-    forge-async-worker run commits sync_all                   # any job, any task type
-    forge-async-worker run commits backfill '{"repo_id": "r1"}'
+    forge-async-worker run adk_workflows run '{...}'          # a job inline, its state in memory
 
-Each task package adds its own commands under its name (``forge-async-worker
-docs ...``, ``forge-async-worker commits ...``); ``--help`` lists them.
+A task package may add its own commands under its name (``--help`` lists them).
 """
 
 from __future__ import annotations
@@ -35,24 +32,21 @@ def _print(obj: Any) -> None:
 def _parser(task_commands: dict[str, Any]) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="forge-async-worker")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("tasks", help="installed task types, their queues, jobs and schedules")
-    sub.add_parser("ensure-schema", help="create the enabled tasks' collections and search indexes")
+    sub.add_parser("tasks", help="installed task types and their queues")
+    sub.add_parser("ensure-schema", help="set up the enabled tasks' storage (the ADK session tables)")
     sub.add_parser("prepare", help="download what every installed task fetches at runtime (for image builds)")
-    wk = sub.add_parser("worker", help="run the SAQ worker")
-    wk.add_argument("--queues", default="", help="comma-separated queue names (default: every enabled task type's)")
-    wk.add_argument("--concurrency", type=int, default=4, help="jobs each queue runs at once (default 4)")
+    wk = sub.add_parser("worker", help="run the SAQ worker on the adk_workflows queue")
+    wk.add_argument("--queues", default="", help="the queue to serve: adk_workflows, the only one (the default)")
+    wk.add_argument("--concurrency", type=int, default=4, help="runs it runs at once (default 4)")
     wk.add_argument(
-        "--grace-period", type=int, default=30, help="seconds running jobs get at shutdown before they are re-queued"
+        "--grace-period", type=int, default=30, help="seconds running runs get at shutdown before they are re-queued"
     )
     wk.add_argument(
         "--ensure-schema",
         action="store_true",
-        help="create the served task types' collections and search indexes first",
+        help="set up the tasks' storage first (the ADK session tables), and check the run store's",
     )
-    wk.add_argument("--check", action="store_true", help="health check: exit 1 unless this host serves each queue")
-    api = sub.add_parser("api", help="serve the background tasks API (for the admin API)")
-    api.add_argument("--host", help="interface to listen on (default HYBRID_API__HOST, 127.0.0.1)")
-    api.add_argument("--port", type=int, help="port to listen on (default HYBRID_API__PORT, 8104)")
+    wk.add_argument("--check", action="store_true", help="health check: exit 1 unless this host serves the queue")
     run = sub.add_parser("run", help="run one job inline")
     run.add_argument("task_type")
     run.add_argument("kind")
@@ -87,22 +81,8 @@ def main(argv: list[str] | None = None) -> None:
                 concurrency=args.concurrency,
                 grace_period=args.grace_period,
                 ensure_schema=args.ensure_schema,
+                registry=registry,
             )
-        )
-        return
-    if args.cmd == "api":
-        import uvicorn
-
-        from forge_async_worker.api import create_app
-
-        configure_logging(settings.logging)
-        uvicorn.run(
-            create_app(settings, registry=registry),
-            host=args.host or settings.api.host,
-            port=args.port or settings.api.port,
-            # Logging is owned by configure_logging(); access lines come from RequestContextMiddleware.
-            log_config=None,
-            access_log=False,
         )
         return
     if args.cmd == "prepare":
@@ -118,8 +98,7 @@ def main(argv: list[str] | None = None) -> None:
         for name in registry.names():
             factory = registry.factory(name)
             state = "enabled" if name in enabled else "disabled"
-            schedules = [s.name for s in factory.schedules]
-            print(f"{name} ({state}) queue={factory.queue} schedules={schedules}")
+            print(f"{name} ({state}) queue={factory.queue}")
         return
 
     async def go() -> None:

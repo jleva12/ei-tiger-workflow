@@ -16,21 +16,17 @@ SERVICES = {
     "admin-mysql",
     "admin-seed",
     "async-worker-adk-workflows",
-    "async-worker-api",
     "mongo",
     "redis",
 }
-# The services that connect to the shared MongoDB, and the setting each
-# connects with.
+# The services that connect to the shared MongoDB (the admin API's ADK
+# workflow documents), and the setting each connects with.
 MONGO_CONNECTIONS = {
     "admin": "FORGE_ADMIN_MONGO_URI",
-    "async-worker-adk-workflows": "HYBRID_MONGO__URI",
-    "async-worker-api": "HYBRID_MONGO__URI",
 }
-# The services that use the async worker's SAQ queues.
+# The services that use the async worker's SAQ queue.
 QUEUE_CONNECTIONS = {
     "async-worker-adk-workflows": "HYBRID_REDIS_URL",
-    "async-worker-api": "HYBRID_REDIS_URL",
 }
 
 
@@ -114,13 +110,10 @@ class SharedInfrastructureTest(unittest.TestCase):
                 uri = urlsplit(self.services[service]["environment"][key])
                 self.assertEqual((uri.hostname, uri.port, uri.path), ("redis", 6379, "/0"))
 
-    def test_admin_and_worker_share_service_tokens(self):
-        admin = self.services["admin"]["environment"]
-        api = self.services["async-worker-api"]["environment"]
-        self.assertEqual(admin["FORGE_ADMIN_ASYNC_WORKER_URL"], "http://async-worker-api:8094")
-        self.assertEqual(admin["FORGE_ADMIN_ASYNC_WORKER_TOKEN"], api["HYBRID_API__TOKEN"])
+    def test_the_worker_needs_no_mongodb(self):
+        self.assertNotIn("mongo", self.services["async-worker-adk-workflows"]["depends_on"])
 
-    def test_adk_workflow_runs_keep_their_sessions_in_the_admin_mysql(self):
+    def test_adk_workflow_runs_and_their_sessions_are_in_the_admin_mysql(self):
         worker = self.services["async-worker-adk-workflows"]
         admin = self.services["admin"]["environment"]
         database = urlsplit(worker["environment"]["HYBRID_ADK_WORKFLOWS__SESSION_DATABASE_URL"])
@@ -144,7 +137,7 @@ class SharedInfrastructureTest(unittest.TestCase):
         self.assertEqual(redis["volumes"][0]["target"], "/data")
 
     def test_dependencies(self):
-        for service in ("admin", *QUEUE_CONNECTIONS):
+        for service in MONGO_CONNECTIONS:
             with self.subTest(service=service):
                 self.assertEqual(
                     self.services[service]["depends_on"]["mongo"]["condition"],

@@ -67,10 +67,11 @@ screens:
     instructions: |
       The person is in their organization's workspace: its ADK workflows (the
       page without a view; an agentRun search parameter is one run's page, by
-      its background task's ID, with its steps and what it waits for), its
-      agents (view chat-agents) and its members (view config). No specialist
-      reads or changes ADK workflows, their runs or agents yet: say so, and
-      point the person to the page that has them.
+      the run's ID, with its steps, its activity and what it waits for; the
+      page names it as an adk_run), its agents (view chat-agents) and its
+      members (view config). No specialist reads or changes ADK workflows,
+      their runs or agents yet: say so, and point the person to the page that
+      has them.
 
   # -- Administration ----------------------------------------------------------
 

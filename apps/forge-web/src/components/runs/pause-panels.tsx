@@ -9,18 +9,18 @@ import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
-import { useSchemaValue } from "@/components/runs/schema-value"
-import { SchemaValueEditor } from "@/components/runs/schema-value-editor"
 import type { ApiError } from "@/lib/api"
 import {
   APPROVERS,
+  type AdkRunPause,
   type ApprovalDecision,
-  type BackgroundTaskApproval,
-} from "@/lib/background-tasks"
+} from "@/lib/agents/runs"
 import { formatRelative } from "@/lib/format"
 import { useScopeAccess, type PermissionKey } from "@/lib/hierarchy"
+import { useSchemaValue } from "./schema-value"
+import { SchemaValueEditor } from "./schema-value-editor"
 
-/** Deciding an approval: the task's own decisions, or an ADK workflow run's. */
+/** Deciding the approval an ADK workflow run waits at. */
 export type DecideMutation = UseMutationResult<
   unknown,
   ApiError,
@@ -77,16 +77,16 @@ function PauseFrame({
 }
 
 /** Where a question was asked: its step, its workflow, when. */
-function askedLine(approval: BackgroundTaskApproval, deadline = false) {
-  const step = approval.details.step_name || approval.details.step
-  const workflow = approval.details.workflow_name
+function askedLine(pause: AdkRunPause, deadline = false) {
+  const step = pause.details.step_name || pause.details.step
+  const workflow = pause.details.workflow_name
   return [
     step && `${step} step`,
     workflow,
-    approval.requested_at && `asked ${formatRelative(approval.requested_at)}`,
+    pause.requested_at && `asked ${formatRelative(pause.requested_at)}`,
     deadline &&
-      approval.deadline &&
-      `expires ${formatRelative(approval.deadline)}`,
+      pause.deadline &&
+      `expires ${formatRelative(pause.deadline)}`,
   ]
     .filter(Boolean)
     .join(" · ")
@@ -100,14 +100,14 @@ function askedLine(approval: BackgroundTaskApproval, deadline = false) {
  */
 export function ApprovalPanel({
   organizationId,
-  approval,
+  pause,
   decide,
   permission,
   docs = "ADK workflows",
   showDeadline = false,
 }: {
   organizationId: string
-  approval: BackgroundTaskApproval
+  pause: AdkRunPause
   decide: DecideMutation
   /** What deciding it takes in the organization. */
   permission: PermissionKey
@@ -118,21 +118,21 @@ export function ApprovalPanel({
 }) {
   const id = React.useId()
   const can = useScopeAccess(`org:${organizationId}`)
-  const approvers = approval.details.approvers ?? "org:admin"
+  const approvers = pause.details.approvers ?? "org:admin"
   const allowed = can(permission)
   const [comment, setComment] = React.useState("")
   const [choice, setChoice] = React.useState<boolean>()
 
   const submit = (approved: boolean) => {
     setChoice(approved)
-    decide.mutate({ requestId: approval.id, approved, comment: comment.trim() })
+    decide.mutate({ requestId: pause.id, approved, comment: comment.trim() })
   }
 
   return (
     <PauseFrame
       icon="review"
-      title={approval.reason}
-      meta={askedLine(approval, showDeadline)}
+      title={pause.reason}
+      meta={askedLine(pause, showDeadline)}
       chip={
         <Chip tone="notice">
           {APPROVERS[approvers] ?? APPROVERS["org:admin"]}
@@ -211,14 +211,14 @@ export function ApprovalPanel({
  */
 export function HumanInputPanel({
   organizationId,
-  approval,
+  pause,
   responseSchema,
   answer,
   permission,
   docs = "ADK workflows",
 }: {
   organizationId: string
-  approval: BackgroundTaskApproval
+  pause: AdkRunPause
   /** A JSON Schema of the answer; `{}` takes anything. */
   responseSchema: Record<string, unknown>
   answer: AnswerMutation
@@ -232,23 +232,23 @@ export function HumanInputPanel({
   const value = useSchemaValue(responseSchema, { lenient: true })
   const busy = answer.isPending || answer.isSuccess
   const message =
-    approval.reason ||
-    (typeof approval.details.message === "string" &&
-      approval.details.message) ||
+    pause.reason ||
+    (typeof pause.details.message === "string" &&
+      pause.details.message) ||
     "It asks for an answer"
 
   const submit = (event: React.SubmitEvent<HTMLFormElement>) => {
     event.preventDefault()
     const read = value.read()
     if (!read.ok) return
-    answer.mutate({ requestId: approval.id, answer: read.value })
+    answer.mutate({ requestId: pause.id, answer: read.value })
   }
 
   return (
     <PauseFrame
       icon="message"
       title={message}
-      meta={askedLine(approval)}
+      meta={askedLine(pause)}
       chip={<Chip tone="notice">Waiting for an answer</Chip>}
     >
       {allowed ? (

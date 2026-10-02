@@ -1,7 +1,7 @@
 [project]
 name = "forge-task-adk-workflows"
 version = "0.1.0"
-description = "The ADK workflows task: runs an organization's ADK workflows (forge.agent/v1) on Google ADK's graph engine, as tracked, resumable runs of the async worker"
+description = "The ADK workflows task: runs an organization's ADK workflows (forge.agent/v1) on Google ADK's graph engine, as resumable runs of the async worker, kept in the run store"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -44,7 +44,7 @@ select = ["E", "F", "I", "B", "UP"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["forge_tasks", "forge_task_adk_workflows", "forge_async_worker", "forge_jsonata", "etf"]
+known-first-party = ["forge_tasks", "forge_task_adk_workflows", "forge_async_worker", "forge_jsonata"]
 
 [tool.mypy]
 python_version = "3.13"

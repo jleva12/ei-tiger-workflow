@@ -17,8 +17,13 @@ never on the worker.
   own `HYBRID_<NAME>__*` section; `env_files` resolves `.env`'s `${NAME}`
   references to the repository's `.env.common`.
 - `runtime` / `runner`: an inline runtime that runs jobs in-process,
-  breadth-first with their follow-ups, for tests and the CLI. The worker runs
-  the same jobs through the enhanced task framework instead.
+  breadth-first with their follow-ups, for tests and the CLI. The worker
+  builds the same tasks, and runs an ADK workflow run's job off its queue, on
+  the run in the run store (`forge_task_adk_workflows.run_store`).
+- `control`: what a long-running job asks of its run (`current_control()`):
+  state it keeps between attempts, checkpoints, a person's decision, a wait
+  until later, notes. The worker's control is backed by the run store;
+  `LocalJobControl` keeps it in memory.
 
 ## The task abstraction
 
@@ -43,7 +48,7 @@ class Task(Protocol):  # a built task: its jobs and its resources
 class TaskFactory(Protocol):  # what a package registers
     name: str
     queue: str
-    schedules: Sequence[Schedule]  # the worker runs them as SAQ cron jobs
+    schedules: Sequence[Schedule]  # declared; the worker runs none today
     settings_model: type[BaseModel]  # optional: HYBRID_<NAME>__*, handed to build as ctx.options
 
     def build(self, ctx: TaskContext) -> Task: ...
@@ -117,14 +122,16 @@ class InvoicesTaskFactory:
 ```
 
 Register it from the package's `pyproject.toml`, and add the package to the
-worker (a path source and an extra in `apps/forge-async-worker/pyproject.toml`):
+worker (a path source and a dependency in `apps/forge-async-worker/pyproject.toml`):
 
 ```toml
 [project.entry-points."forge_async_worker.tasks"]
 invoices = "forge_task_invoices.task:InvoicesTaskFactory"
 ```
 
-Then add `"invoices"` to `HYBRID_ENABLED_TASKS` and deploy a worker on queue
-`invoices` (`forge-async-worker worker --queues invoices`). The worker runs
-each of its jobs as a tracked run; nothing in the worker changes. The full example is
+Then `forge-async-worker tasks` lists it, and `forge-async-worker run
+invoices record '{...}'` runs its jobs inline. The worker itself serves only
+the `adk_workflows` queue, running each ADK workflow run on its run in the run
+store: serving another task type's queue means giving the worker a job
+function for it (and somewhere its runs are kept). The full example is
 `NotesTask` in `tests/test_framework.py`.

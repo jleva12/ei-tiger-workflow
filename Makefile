@@ -4,7 +4,7 @@ UV ?= uv
 # .env.common supplies the ${NAME} references in each app's .env; it adds no
 # variables to a container by itself.
 COMPOSE = $(DOCKER) compose --env-file .env.compose --env-file .env.common -f compose.yaml
-SERVICES := web admin async-worker-adk-workflows async-worker-api
+SERVICES := web admin async-worker-adk-workflows
 # Each app owns its dependencies: package.json and node_modules, or
 # pyproject.toml, uv.lock and .venv.
 WEB_DIR := apps/forge-web
@@ -15,19 +15,17 @@ TASK_PACKAGES := $(addprefix packages/python/tasks/,task-sdk adk-workflows)
 # Python packages the apps share, each with its own environment.
 COMMON_DIR := packages/python/common
 JSONATA_DIR := packages/python/jsonata
-ETF_DIR := packages/python/enhanced-task-framework
 # The Forge UI design system: its demo and the shadcn registry apps install from.
 FORGE_UI_DIR := packages/forge-ui
 # The apps make up-all-local runs natively, each with its own make target.
-LOCAL_APPS := web admin async-worker async-worker-api
+LOCAL_APPS := web admin async-worker
 .PHONY: help env install infrastructure start up up-all-local up-all-local-deps down logs logs-web logs-admin logs-async-worker status restart docker-build check
 .PHONY: web web-install web-check web-test web-build web-lint web-token
 .PHONY: admin admin-install admin-deps admin-migrate admin-check admin-test-mysql admin-fmt
-.PHONY: async-worker async-worker-api async-worker-install async-worker-deps async-worker-check async-worker-fmt async-worker-test-redis
+.PHONY: async-worker async-worker-install async-worker-deps async-worker-check async-worker-fmt async-worker-test-redis
 .PHONY: common-check common-fmt
 .PHONY: shared-deps infrastructure-check
 .PHONY: jsonata-check jsonata-fmt jsonata-test-re2
-.PHONY: etf-check etf-fmt
 .PHONY: forge-ui forge-ui-install forge-ui-check forge-ui-registry
 
 # Appends line $(1) to env file $(2) on a line of its own, even when the
@@ -42,8 +40,8 @@ help:
 	@echo "make shared-deps        Start the shared MongoDB and Redis"
 	@echo "make infrastructure-check Validate the Compose stack: shared services, connections and queues"
 	@echo "make web-token          Sign the web console in as you: a bearer token in apps/forge-web/.env.local and .env.compose"
-	@echo "make start / make up    Build and start web, admin, the async worker (adk_workflows queue and background tasks API) and their databases (web on 18190, admin on 18201)"
-	@echo "make up-all-local       Start the databases, then run web, admin, async-worker and async-worker-api natively in this terminal; Ctrl-C stops them"
+	@echo "make start / make up    Build and start web, admin, the async worker (the adk_workflows queue) and their databases (web on 18190, admin on 18201)"
+	@echo "make up-all-local       Start the databases, then run web, admin and async-worker natively in this terminal; Ctrl-C stops them"
 	@echo "make down               Stop the stack (MySQL, MongoDB and Redis data persist in their volumes)"
 	@echo "make logs / logs-web / logs-admin / logs-async-worker  Follow logs"
 	@echo "make status             Show service status"
@@ -58,9 +56,8 @@ help:
 	@echo "make admin-check        Admin lint, format check and unit tests"
 	@echo "make admin-test-mysql   Start admin MySQL and run the admin integration tests"
 	@echo "make admin-fmt          Format and autofix the admin sources"
-	@echo "make async-worker-deps  Start the shared MongoDB and Redis for the async worker"
-	@echo "make async-worker       Run the async worker natively on every enabled queue (adk_workflows), with their schedules"
-	@echo "make async-worker-api   Run the background tasks API natively on http://localhost:8104 (the admin API shows ADK workflow runs with it)"
+	@echo "make async-worker-deps  Start the shared Redis and the admin MySQL for the async worker"
+	@echo "make async-worker       Run the async worker natively on the adk_workflows queue: ADK workflow runs, kept in the admin MySQL"
 	@echo "make async-worker-check Async worker and task packages: lint, format check, types and unit tests"
 	@echo "make async-worker-fmt   Format and autofix the async worker and task package sources"
 	@echo "make async-worker-test-redis  Start the shared Redis and run the SAQ worker integration tests"
@@ -69,8 +66,6 @@ help:
 	@echo "make jsonata-check      Local JSONata engine: lint, format and full upstream compatibility suite"
 	@echo "make jsonata-fmt        Format and autofix the local JSONata engine"
 	@echo "make jsonata-test-re2   Test the optional RE2 regex engine integration"
-	@echo "make etf-check          Enhanced task framework: lint and unit tests"
-	@echo "make etf-fmt            Autofix the enhanced task framework's lint findings"
 	@echo "make forge-ui           Run the Forge UI design system demo on http://localhost:5185"
 	@echo "make forge-ui-registry  Rebuild the Forge UI shadcn registry (registry.json, public/r); commit it with the change"
 	@echo "make forge-ui-check     Forge UI typecheck, tests, and the registry rebuilt and committed (as CI runs it)"
@@ -80,15 +75,6 @@ env:
 	@test -e .env.common || (umask 077; cp .env.common.example .env.common)
 	@for dir in $(ADMIN_DIR) $(ASYNC_WORKER_DIR); do \
 	  test -e $$dir/.env || (umask 077; cp $$dir/.env.example $$dir/.env); \
-	done
-	@# The bearer token between services, once, in .env.common; apps reference
-	@# it: the admin API calls the async worker's background tasks API with
-	@# FORGE_ASYNC_WORKER_TOKEN.
-	@for name in FORGE_ASYNC_WORKER_TOKEN; do \
-	  grep -q "^$$name=" .env.common || $(call append,$$name=,.env.common); \
-	  grep -Eq "^$$name=.{32}" .env.common || { \
-	    perl -i -pe "s/^$$name=.*/$$name=$$(openssl rand -hex 32)/" .env.common; \
-	    echo "Set $$name in .env.common"; }; \
 	done
 	@# The key the admin API signs and checks bearer tokens with, once.
 	@grep -Eq '^FORGE_ADMIN_JWT_SECRET=.{32,}' $(ADMIN_DIR)/.env || { \
@@ -143,7 +129,7 @@ logs-admin: env
 	$(COMPOSE) logs -f --tail=100 admin
 
 logs-async-worker: env
-	$(COMPOSE) logs -f --tail=100 async-worker-adk-workflows async-worker-api
+	$(COMPOSE) logs -f --tail=100 async-worker-adk-workflows
 
 status: env
 	$(COMPOSE) ps -a
@@ -154,7 +140,7 @@ restart: env
 docker-build: env
 	$(COMPOSE) build $(SERVICES)
 
-check: infrastructure-check web-check web-test web-build admin-check async-worker-check common-check jsonata-check etf-check forge-ui-check
+check: infrastructure-check web-check web-test web-build admin-check async-worker-check common-check jsonata-check forge-ui-check
 
 web-install:
 	cd $(WEB_DIR) && $(NPM) ci
@@ -221,19 +207,16 @@ admin-fmt:
 async-worker-install:
 	cd $(ASYNC_WORKER_DIR) && $(UV) sync --locked
 
-# MongoDB for the task framework's runs and Redis for the SAQ queues.
-async-worker-deps: shared-deps
+# Redis for the SAQ queue, and the admin MySQL for the runs (the run store,
+# which make admin-migrate creates) and their ADK sessions.
+async-worker-deps: env
+	$(COMPOSE) up -d --wait redis admin-mysql
 
-# Natively against mongo and redis (settings from
-# apps/forge-async-worker/.env): creates the collections and indexes, then runs
-# the jobs and schedules of every enabled task type's queue in one process.
+# Natively against redis and admin-mysql (settings from
+# apps/forge-async-worker/.env): sets up the ADK session tables and checks the
+# run store's, then runs the adk_workflows queue's runs and upkeep.
 async-worker: async-worker-deps
 	cd $(ASYNC_WORKER_DIR) && $(UV) run forge-async-worker worker --ensure-schema
-
-# The background tasks API natively (settings from apps/forge-async-worker/.env):
-# what the task framework recorded of each organization's runs, for the admin API.
-async-worker-api: shared-deps
-	cd $(ASYNC_WORKER_DIR) && $(UV) run forge-async-worker api
 
 # The worker, then each task package in the worker's environment.
 async-worker-check:
@@ -274,14 +257,6 @@ jsonata-fmt:
 
 jsonata-test-re2:
 	cd $(JSONATA_DIR) && $(UV) run --locked --group re2 pytest tests/upstream/re2_engine_test.py
-
-# Its own environment, with the mongo store's dependencies; the Beanie store's
-# tests run on mongomock, and the opt-in real-MongoDB tests skip.
-etf-check:
-	cd $(ETF_DIR) && $(UV) run --locked --extra dev --extra mongo ruff check . && $(UV) run --locked --extra dev --extra mongo pytest
-
-etf-fmt:
-	cd $(ETF_DIR) && $(UV) run --locked --extra dev --extra mongo ruff check --fix .
 
 forge-ui-install:
 	cd $(FORGE_UI_DIR) && $(NPM) ci

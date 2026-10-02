@@ -1,119 +1,84 @@
-"""The worker's job queue: SAQ queues on Redis, one per task type (task types
-may share one), each job the generic ``run_job`` function with a JobSpec."""
+"""
+The worker's queue: SAQ's ``adk_workflows`` queue on Redis. The admin API
+sends it ``run_adk`` for each run it starts or moves on (a decision, an
+answer, a retry); the worker sends its own: ``run_adk`` when a wait is over or
+a hiccup's backoff is, ``expire_pause`` at a pause's deadline, and the
+maintenance's.
+
+Every job carries ``key`` (a job whose key is queued or running already isn't
+queued again) and the worker's settings for its function (``JOB_OPTIONS``,
+which the worker also applies to the jobs other services send).
+"""
 
 from __future__ import annotations
 
 import logging
-import time
+import math
 import uuid
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
-
-from forge_tasks.tasks import JobSpec
 
 log = logging.getLogger(__name__)
 
+QUEUE = "adk_workflows"
+RUN_ADK = "run_adk"
+EXPIRE_PAUSE = "expire_pause"
+MAINTAIN = "maintain"
+#: Seconds a running ``run_adk`` may go untouched before SAQ's sweeper takes
+#: it for lost (its worker died); the worker touches it as it renews the run's lease.
+HEARTBEAT = 120
+#: Each job's SAQ settings, whoever queued it. ``run_adk`` has no timeout (a
+#: run takes as long as it takes) and no SAQ retries: a run's own attempts are
+#: the run store's (a hiccup queues it again; the maintenance finds what a
+#: dead worker left).
+JOB_OPTIONS: dict[str, dict[str, Any]] = {
+    RUN_ADK: {"timeout": 0, "heartbeat": HEARTBEAT, "retries": 1},
+    EXPIRE_PAUSE: {"timeout": 60, "heartbeat": 0, "retries": 1},
+    MAINTAIN: {"timeout": 300, "heartbeat": 0, "retries": 1},
+}
 
-class SaqJobQueue:
-    """Sends JobSpecs to the generic ``run_job`` SAQ job, on the queue of the
-    spec's task type. ``queues`` maps task type -> ``saq.Queue`` (anything with
-    ``enqueue(function, **kwargs)``); ``job_options`` are the SAQ job settings
-    every job carries (retries, heartbeat, timeout; see saq_worker.py)."""
 
-    FUNCTION = "run_job"
-    REDRIVE = "redrive_run"
-    RESTART = "restart_run"
-    RESUME = "resume_run"
-    DECIDE = "decide_run"
+def run_key(run_id: str, suffix: str | None = None) -> str:
+    """A ``run_adk`` job's key: one of its own (``suffix`` None), or a fixed
+    one, so a job already queued under it isn't queued twice."""
+    return f"adk-run:{run_id}:{suffix or uuid.uuid4().hex[:8]}"
 
-    def __init__(self, queues: Mapping[str, Any], *, job_options: Mapping[str, Any] | None = None) -> None:
-        self.queues = dict(queues)
-        self.job_options = dict(job_options or {})
 
-    def queue_of(self, task_type: str) -> Any:
-        queue = self.queues.get(task_type)
-        if queue is None:
-            raise KeyError(f"no queue for task type {task_type!r}; queues: {sorted(self.queues)}")
-        return queue
+class RunQueue:
+    """
+    Sends the worker's jobs to the ``adk_workflows`` queue.
 
-    async def enqueue(self, spec: JobSpec, *, countdown: float | None = None, key: str | None = None) -> None:
-        queue = self.queue_of(spec.task_type)
-        options = dict(self.job_options)
-        if countdown:
-            options["scheduled"] = int(time.time() + countdown)
-        if key:
-            options["key"] = key
-        await queue.enqueue(self.FUNCTION, spec=spec.wire(), **options)
+    :param queue: The ``saq.Queue`` (anything with ``enqueue(function, **kwargs)``
+        and ``disconnect()``).
+    """
 
-    async def resubmit(self, spec: JobSpec, *, of: str) -> tuple[str, str]:
-        """The job again, as a new task (a delivery of its own); returns its (queue, key)."""
-        key = f"resubmit:{of}:{uuid.uuid4().hex[:12]}"
-        await self.enqueue(spec, key=key)
-        return self.queue_of(spec.task_type).name, key
+    def __init__(self, queue: Any, *, job_options: Mapping[str, Mapping[str, Any]] | None = None) -> None:
+        self.queue = queue
+        self.job_options = {name: dict(options) for name, options in (job_options or JOB_OPTIONS).items()}
 
-    async def enqueue_restart(
-        self, task_type: str, instance_id: str, attempt: int, actor: dict[str, str]
-    ) -> tuple[str, str]:
-        """Restart a task on a worker of its queue, once per attempt however often
-        it's asked; returns the SAQ job's (queue, key)."""
-        queue = self.queue_of(task_type)
-        key = f"restart:{instance_id}:{attempt}"
-        await queue.enqueue(self.RESTART, instance_id=instance_id, actor=dict(actor), key=key, **self.job_options)
-        return queue.name, key
+    @property
+    def name(self) -> str:
+        return str(self.queue.name)
 
-    async def enqueue_resume(self, task_type: str, instance_id: str, *, at: float, key: str) -> None:
-        """Resume a run that waits until ``at`` (a Unix time), on a worker of its queue, then."""
-        queue = self.queue_of(task_type)
-        options = {**self.job_options, "scheduled": int(at), "key": key}
-        await queue.enqueue(self.RESUME, instance_id=instance_id, **options)
+    async def run_adk(self, run_id: str, *, at: datetime | None = None, key: str | None = None) -> None:
+        """Run (or carry on) the run, now or at ``at``."""
+        await self._send(RUN_ADK, {"run_id": run_id}, key=key or run_key(run_id), at=at)
 
-    async def enqueue_decision(
-        self,
-        task_type: str,
-        instance_id: str,
-        *,
-        approved: bool,
-        comment: str,
-        actor: dict[str, str] | None,
-        request_id: str | None = None,
-        gate: str | None = None,
-        at: float | None = None,
-        key: str | None = None,
-    ) -> tuple[str, str]:
-        """Decide a run's open approval on a worker of its queue (now, or at ``at``:
-        a timeout), since the run carries on in the process that decides it.
-        Returns the SAQ job's (queue, key)."""
-        queue = self.queue_of(task_type)
-        key = key or f"decide:{instance_id}:{request_id or gate}"
-        options = {**self.job_options, "key": key}
+    async def expire_pause(self, run_id: str, pause_id: str, *, at: datetime) -> None:
+        """Reject the pause ``pause_id`` at ``at`` (its deadline), unless someone decided it by then."""
+        key = f"adk-expire:{run_id}:{uuid.uuid4().hex[:8]}"
+        await self._send(EXPIRE_PAUSE, {"run_id": run_id, "pause_id": pause_id}, key=key, at=at)
+
+    async def _send(self, function: str, kwargs: dict[str, Any], *, key: str, at: datetime | None) -> None:
+        options = {**self.job_options.get(function, {}), "key": key}
         if at is not None:
-            options["scheduled"] = int(at)
-        await queue.enqueue(
-            self.DECIDE,
-            instance_id=instance_id,
-            request_id=request_id,
-            gate=gate,
-            approved=approved,
-            comment=comment,
-            actor=dict(actor) if actor else None,
-            **options,
-        )
-        return queue.name, key
-
-    async def enqueue_redrive(self, task_type: str, instance_id: str) -> None:
-        """Re-drive a recovered run on its task type's queue; one job per run,
-        however many sweeps find it."""
-        queue = self.queues.get(task_type)
-        if queue is None:
-            log.warning("run %s of task type %r has no queue here; not re-driven", instance_id, task_type)
-            return
-        await queue.enqueue(self.REDRIVE, instance_id=instance_id, key=f"redrive:{instance_id}", **self.job_options)
+            options["scheduled"] = math.ceil(at.timestamp())  # never before it
+        await self.queue.enqueue(function, **kwargs, **options)
 
     async def close(self) -> None:
-        """Disconnects each queue once (task types may share one). Best effort,
-        so one queue that can't reach Redis doesn't keep the others open."""
-        for queue in {id(q): q for q in self.queues.values()}.values():
-            try:
-                await queue.disconnect()
-            except Exception:
-                log.warning("closing queue %s failed", getattr(queue, "name", queue), exc_info=True)
+        """Disconnects from Redis. Best effort."""
+        try:
+            await self.queue.disconnect()
+        except Exception:
+            log.warning("closing queue %s failed", self.name, exc_info=True)

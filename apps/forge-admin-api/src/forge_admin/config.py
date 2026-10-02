@@ -6,7 +6,7 @@ e.g. mysql_host is FORGE_ADMIN_MYSQL_HOST.
 
 Values shared with the other apps live in the repository's .env.common,
 which .env references by name, e.g.
-FORGE_ADMIN_ASYNC_WORKER_TOKEN=${FORGE_ASYNC_WORKER_TOKEN}; see
+FORGE_ADMIN_MYSQL_PASSWORD=${FORGE_MYSQL_PASSWORD}; see
 forge_admin.env_files.
 """
 
@@ -62,21 +62,12 @@ class Settings(BaseSettings):
     local_user_id: str | None = Field(default=None, max_length=255, pattern=r"^\S+$")
     # The web console's address, for links to its pages.
     web_url: str = "http://localhost:5190"
-    # The async worker's background tasks API (apps/forge-async-worker,
-    # forge-async-worker api), which shows each organization the jobs run for
-    # it (its ADK workflow runs) and resubmits, restarts or abandons one:
-    # http://127.0.0.1:8104 for make async-worker-api,
-    # http://async-worker-api:8094 inside Compose. The token is its
-    # HYBRID_API__TOKEN, FORGE_ASYNC_WORKER_TOKEN in .env.common, which make
-    # env generates. Unset, background tasks answer that they aren't set up.
-    async_worker_url: str | None = Field(default=None, pattern=r"^https?://[^/?#]+/?$")
-    async_worker_token: SecretStr | None = None
-    # Seconds a call to it may take.
-    async_worker_timeout: float = Field(default=10.0, gt=0)
     # The async worker (apps/forge-async-worker): the Redis its SAQ job
-    # queues run on, where ADK workflow runs are submitted:
+    # queues run on, where the jobs that take ADK workflow runs are queued
+    # (the runs themselves are kept in MySQL, below):
     # redis://127.0.0.1:16389/0 for make async-worker, redis://redis:6379/0
-    # inside Compose. Unset, starting a run answers that it isn't set up.
+    # inside Compose. Unset, starting or carrying on a run answers that it
+    # isn't set up.
     embedding_redis_url: str | None = Field(default=None, pattern=r"^rediss?://")
     # MongoDB, where organizations' agents (their ADK workflows) are kept as
     # the JSON documents the web builder saves: mongodb://…@127.0.0.1:27037/
@@ -138,8 +129,10 @@ class Settings(BaseSettings):
     # otherwise), __ACCESS_LOG, __ACCESS_LOG_EXCLUDE_PATHS and __LEVELS.
     logging: LoggingSettings = LoggingSettings()
 
-    # MySQL. The password has no default, so a deployment never falls back
-    # to a local credential.
+    # MySQL, which keeps the organizations, people and access, the ADK
+    # workflow runs and their ADK sessions, and the assistant's conversations.
+    # The password has no default, so a deployment never falls back to a
+    # local credential.
     mysql_host: str = "127.0.0.1"
     mysql_port: int = Field(default=3306, ge=1, le=65535)
     mysql_database: str = "forge_admin"
@@ -161,8 +154,6 @@ class Settings(BaseSettings):
         "agent_model",
         "agent_screens",
         "api_key",
-        "async_worker_url",
-        "async_worker_token",
         "embedding_redis_url",
         "google_api_key",
         "jwt_secret",

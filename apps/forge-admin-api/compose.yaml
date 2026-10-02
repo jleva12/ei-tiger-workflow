@@ -60,19 +60,14 @@ services:
       FORGE_ADMIN_HOST: 0.0.0.0
       FORGE_ADMIN_PORT: "8091"
       FORGE_ADMIN_RELOAD: "false"
-      # The async worker's background tasks API, in this stack
-      # (apps/forge-async-worker/compose.yaml), with its token from
-      # .env.common. Called per request, so no depends_on: until it answers,
-      # background tasks report it unavailable.
-      FORGE_ADMIN_ASYNC_WORKER_URL: http://async-worker-api:8094
-      FORGE_ADMIN_ASYNC_WORKER_TOKEN: ${FORGE_ASYNC_WORKER_TOKEN:-}
       # Organizations' ADK workflows, in their own database on the shared mongo.
       FORGE_ADMIN_MONGO_URI: *mongo-uri
       FORGE_ADMIN_MONGO_DATABASE: ${ADMIN_MONGO_DATABASE:-forge_admin}
-      # The async worker's job queues, where ADK workflow runs are submitted, in
-      # this stack (apps/forge-async-worker/compose.yaml). Connected lazily,
-      # so no depends_on: starting a run reports it unavailable until it
-      # answers.
+      # The async worker's job queues, in this stack
+      # (apps/forge-async-worker/compose.yaml), where the jobs that take ADK
+      # workflow runs are queued; the runs themselves are kept in admin-mysql.
+      # Connected lazily, so no depends_on: a job that can't be queued yet is
+      # found later by the worker's maintenance.
       FORGE_ADMIN_EMBEDDING_REDIS_URL: redis://redis:6379/0
     ports:
       - "127.0.0.1:${ADMIN_PORT:-18201}:8091"

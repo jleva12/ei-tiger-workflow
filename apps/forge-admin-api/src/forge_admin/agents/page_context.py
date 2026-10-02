@@ -72,7 +72,8 @@ class PageContext(BaseModel):
     title: Label | None = None
     breadcrumbs: list[Label] = Field(default_factory=list, max_length=BREADCRUMBS)
     scope: Text | None = None
-    # Outermost first: the organization, then a run's task.
+    # Outermost first: the organization, then, on a run's page, the run
+    # (adk_run).
     entities: list[PageEntity] = Field(default_factory=list, max_length=ENTITIES)
     focus: PageEntity | None = None
     view: dict[Key, Scalar] = Field(default_factory=dict, max_length=ENTRIES)

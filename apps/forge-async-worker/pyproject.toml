@@ -1,30 +1,24 @@
 [project]
 name = "forge-async-worker"
 version = "0.3.0"
-description = "Generic async task worker: runs every installed task package's jobs (the ADK workflows task) off SAQ queues on Redis, each one tracked by the enhanced task framework"
+description = "The async worker: runs organizations' ADK workflow runs, kept in the admin MySQL, off a SAQ queue on Redis"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
   "forge-tasks",
-  "enhanced-task-framework[mongo]",   # every job is a tracked run (runs, steps, audit, leases in MongoDB)
+  # The ADK workflows task (it registers itself: entry point group
+  # "forge_async_worker.tasks"), and the run store its runs live in.
+  "forge-task-adk-workflows",
   "pydantic>=2.7",
   "pydantic-settings>=2.3",
-  # SAQ (asyncio job queue) on Redis, and Redis job locks.
+  # SAQ (asyncio job queue) on Redis.
   # SAQ is 0.x and the worker relies on its job and cron internals: pin the minor.
   "saq[redis]>=0.26.4,<0.27",
-  "redis>=5",
-  # the background tasks API (forge-async-worker api), which the admin API calls
-  "fastapi>=0.110",
-  "uvicorn>=0.29",
-  # structured logs for every logger, with request ids in the API (forge_common.logging)
+  # the run store, in the admin MySQL (aiomysql comes with the ADK workflows task)
+  "sqlalchemy[asyncio]>=2.0",
+  # structured logs for every logger (forge_common.logging)
   "forge-common[logging]",
 ]
-
-[project.optional-dependencies]
-# The task packages the image bundles. A task registers itself when installed
-# (entry point group "forge_async_worker.tasks"); HYBRID_ENABLED_TASKS picks the
-# ones a deployment builds, --queues the ones it serves.
-adk-workflows = ["forge-task-adk-workflows"]
 
 [project.scripts]
 forge-async-worker = "forge_async_worker.cli:main"
@@ -34,7 +28,6 @@ forge-tasks = { path = "../../packages/python/tasks/task-sdk", editable = true }
 forge-task-adk-workflows = { path = "../../packages/python/tasks/adk-workflows", editable = true }
 forge-jsonata = { path = "../../packages/python/jsonata", editable = true }
 forge-common = { path = "../../packages/python/common", editable = true }
-enhanced-task-framework = { path = "../../packages/python/enhanced-task-framework", editable = true }
 
 [build-system]
 requires = ["uv_build>=0.11.17,<0.12.0"]
@@ -42,13 +35,12 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-  # Every bundled task package, so this environment runs their tests too.
-  "forge-task-adk-workflows",
   "pytest>=8",
   "pytest-asyncio>=0.23",
   "mypy>=1.10",
   "ruff>=0.5",
   "httpx>=0.27",
+  "aiosqlite>=0.20",   # the run store on SQLite, in tests
 ]
 
 [tool.pytest.ini_options]
@@ -67,7 +59,7 @@ select = ["E", "F", "I", "B", "UP"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["forge_tasks", "forge_task_adk_workflows", "forge_async_worker", "forge_jsonata", "etf"]
+known-first-party = ["forge_tasks", "forge_task_adk_workflows", "forge_async_worker", "forge_jsonata"]
 
 [tool.mypy]
 python_version = "3.13"

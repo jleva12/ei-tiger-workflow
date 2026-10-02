@@ -4,6 +4,7 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
+from forge_task_adk_workflows import run_store
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
@@ -21,15 +22,19 @@ if config.config_file_name is not None:
 
 settings = config.attributes.get("settings") or get_settings()
 target_metadata = Base.metadata
+# Tables autogenerate leaves alone, which it would otherwise drop: those Google
+# ADK creates and migrates itself (the assistant's conversations), and the ADK
+# workflow runs', which the run store describes (0005adk_run_store creates
+# them as it does).
+OTHER_TABLES = ADK_TABLES | set(run_store.metadata.tables)
 
 
 def include_name(name: str | None, type_: str, parent_names: object) -> bool:
     """
     Whether autogenerate compares a database object with the models: not
-    the tables Google ADK creates and migrates itself (the assistant's
-    conversations), which it would otherwise drop.
+    the tables in ``OTHER_TABLES``.
     """
-    return not (type_ == "table" and name in ADK_TABLES)
+    return not (type_ == "table" and name in OTHER_TABLES)
 
 
 def run_migrations_offline() -> None:

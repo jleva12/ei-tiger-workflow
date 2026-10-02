@@ -7,11 +7,12 @@ A job that runs for days (an ADK workflow waiting on an approval, a person's
 answer, a delay) does: it saves where it is, lets the worker go while it waits, and
 carries on from there when it's resumed.
 
-The worker runs every job as a tracked run of the enhanced task framework and
-hands the job a control backed by it (the run's checkpointed step context,
-its human-in-the-loop gates, its audit trail, and a scheduled resume). Outside
-the worker (tests, the CLI) :class:`LocalJobControl` keeps the same state in
-memory. A job reads its control with :func:`current_control`.
+The worker runs an ADK workflow run's job on its run in the run store
+(``forge_task_adk_workflows.run_store``) and hands the job a control backed by
+it (what the run keeps, the decisions people made at its approvals, its
+activity, and the job queued again when a wait is over). Outside the worker
+(tests, the CLI) :class:`LocalJobControl` keeps the same state in memory. A
+job reads its control with :func:`current_control`.
 
 The two waits end the current attempt by raising: :meth:`JobControl.approval`
 the first time it's asked for a decision, :meth:`JobControl.wait_until`
@@ -60,7 +61,7 @@ class RunState:
 class JobControl(Protocol):
     @property
     def run_id(self) -> str | None:
-        """The tracked run's ID (None outside the worker); each attempt has its own."""
+        """The run's ID (None outside the worker)."""
         ...
 
     @property

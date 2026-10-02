@@ -17,7 +17,6 @@ const server = await createServer({
 })
 const load = (path) => server.ssrLoadModule(path)
 const runs = await load("/src/lib/agents/runs.ts")
-const { taskTypeOf } = await load("/src/lib/background-tasks.ts")
 const { exampleAgent } = await load("/src/lib/agents/example.ts")
 const { OPEN_POLL_MS, IDLE_POLL_MS } = await load("/src/lib/runs.ts")
 await server.close()
@@ -35,26 +34,34 @@ const step = (fields = {}) => ({
   ...fields,
 })
 
-test("ADK workflow runs are their own task type, named as such", () => {
-  assert.equal(runs.ADK_WORKFLOW_TASK_TYPE, "adk_workflows")
-  assert.equal(taskTypeOf("adk_workflows").label, "ADK workflow")
-  // A type the console doesn't know by name reads as it is.
-  assert.equal(taskTypeOf("nightly_report").label, "Nightly report")
+test("a run's words: its reference, its failures, its activity", () => {
+  assert.equal(runs.shortId("0123456789abcdef"), "01234567")
+  assert.equal(runs.humanize("timed_out"), "Timed out")
+  assert.equal(runs.failureCategory("transient").label, "Retrying automatically")
+  // A category the console doesn't know reads as an error.
+  assert.equal(runs.failureCategory("odd").label, "Error")
+  assert.equal(runs.eventTitle({ kind: "decided" }), "Decided")
+  assert.equal(runs.eventTitle({ kind: "worker_moved" }), "Worker moved")
+  assert.equal(runs.isFailureEvent({ kind: "failed" }), true)
+  assert.equal(runs.isFailureEvent({ kind: "succeeded" }), false)
+  assert.equal(runs.failureTitle({ status: 503 }, "Couldn't"), "ADK workflow runs are unavailable")
+  assert.equal(runs.failureTitle({ status: 500 }, "Couldn't"), "Couldn't")
 })
 
 test("the page's and a run's tabs", () => {
   assert.equal(runs.isAgentsTab("runs"), true)
   assert.equal(runs.isAgentsTab("overview"), true)
   assert.equal(runs.isAgentsTab("tasks"), false)
-  for (const tab of ["overview", "steps", "attempts", "activity"])
+  for (const tab of ["overview", "steps", "activity"])
     assert.equal(runs.isAdkRunTab(tab), true, tab)
+  assert.equal(runs.isAdkRunTab("attempts"), false)
   assert.equal(runs.isAdkRunTab("runs"), false)
   assert.equal(runs.isAdkRunTab(undefined), false)
 })
 
-test("a run's document is the snapshot its input carries, when it's an ADK workflow", () => {
-  assert.equal(runs.runDocumentOf({ document: doc, input: {} }), doc)
-  assert.equal(runs.runDocumentOf({ document: { format: "forge.workflow/v1", nodes: [] } }), undefined)
+test("a run's document is the ADK workflow it started with, when it's one", () => {
+  assert.equal(runs.runDocumentOf(doc), doc)
+  assert.equal(runs.runDocumentOf({ format: "forge.workflow/v1", nodes: [] }), undefined)
   assert.equal(runs.runDocumentOf({ input: {} }), undefined)
   assert.equal(runs.runDocumentOf(undefined), undefined)
 })
@@ -121,14 +128,15 @@ test("a step's error: why it failed the run, or the error it took its Error way 
 })
 
 test("a paused run waits for a person's answer or, otherwise, a decision", () => {
-  const approval = (details) => ({ id: "req-1", reason: "Ship it?", details, requested_at: null, deadline: null })
+  const pause = (kind, details) => ({ id: "req-1", kind, reason: "Ship it?", details, requested_at: null, deadline: null })
   const schema = { type: "object", properties: { note: { type: "string" } } }
-  const asked = approval({ kind: "human_input", response_schema: schema, message: "Why?" })
+  const asked = pause("human_input", { response_schema: schema, message: "Why?" })
   assert.equal(runs.pauseKindOf(asked), "human_input")
   assert.deepEqual(runs.responseSchemaOf(asked), schema)
-  assert.equal(runs.pauseKindOf(approval({ kind: "approval", approvers: "org:member" })), "approval")
+  assert.equal(runs.pauseKindOf(pause("approval", { approvers: "org:member" })), "approval")
   // A pause the console doesn't know is decided, as an approval is.
-  assert.equal(runs.pauseKindOf(approval({})), "approval")
+  assert.equal(runs.pauseKindOf(pause("odd", {})), "approval")
+  const approval = (details) => pause("approval", details)
   assert.deepEqual(runs.responseSchemaOf(approval({ response_schema: ["no"] })), {})
   assert.deepEqual(runs.responseSchemaOf(approval({})), {})
 })
@@ -140,12 +148,11 @@ test("deciding an ADK approval takes what its approvers need; anything else is t
 })
 
 test("a run's steps refresh quickly while it goes or was just acted on, slowly while it waits", () => {
-  const later = new Date(Date.now() + 3_600_000).toISOString()
-  assert.equal(runs.stepsPollMs({ status: "RUNNING", waiting_until: null }, false), OPEN_POLL_MS)
-  assert.equal(runs.stepsPollMs({ status: "PENDING", waiting_until: null }, false), OPEN_POLL_MS)
-  assert.equal(runs.stepsPollMs({ status: "AWAITING_VALIDATION", waiting_until: null }, true), OPEN_POLL_MS)
-  assert.equal(runs.stepsPollMs({ status: "AWAITING_VALIDATION", waiting_until: null }, false), IDLE_POLL_MS)
-  assert.equal(runs.stepsPollMs({ status: "STOPPED", waiting_until: later }, false), IDLE_POLL_MS)
-  assert.equal(runs.stepsPollMs({ status: "COMPLETED", waiting_until: null }, false), false)
+  assert.equal(runs.stepsPollMs({ status: "running" }, false), OPEN_POLL_MS)
+  assert.equal(runs.stepsPollMs({ status: "queued" }, false), OPEN_POLL_MS)
+  assert.equal(runs.stepsPollMs({ status: "paused" }, true), OPEN_POLL_MS)
+  assert.equal(runs.stepsPollMs({ status: "paused" }, false), IDLE_POLL_MS)
+  assert.equal(runs.stepsPollMs({ status: "waiting" }, false), IDLE_POLL_MS)
+  assert.equal(runs.stepsPollMs({ status: "succeeded" }, false), false)
   assert.equal(runs.stepsPollMs(undefined, false), false)
 })

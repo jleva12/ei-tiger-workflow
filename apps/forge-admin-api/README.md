@@ -5,10 +5,11 @@ build and run Google ADK workflows: FastAPI on Python 3.13, backed by its own
 MySQL 8.4 database through async SQLAlchemy (`aiomysql`), with Alembic
 migrations applied at startup, and MongoDB for organizations' ADK workflows
 (`pymongo`'s async client). It keeps the organizations, the people and their
-access, and each organization's ADK workflows; submits their runs to the
-async worker ([apps/forge-async-worker](../forge-async-worker/README.md)) and
-reads their steps from their ADK sessions; and serves the web console's
-assistant. Package `forge-admin`, module `forge_admin`.
+access, each organization's ADK workflows, and their runs (in MySQL, beside
+their ADK sessions), which the async worker
+([apps/forge-async-worker](../forge-async-worker/README.md)) takes from its
+queue and runs; and it serves the web console's assistant. Package
+`forge-admin`, module `forge_admin`.
 
 ## How it's put together
 
@@ -21,14 +22,14 @@ app = server.create_app()  # built once, the same object afterwards
 
 - **Lifespan**: `ApiServer.lifespan` creates the MySQL engine and
   sessionmaker and the Casbin enforcer at startup, and keeps them on
-  `app.state` with the clients the routes use: the async worker's background
-  tasks API (`background_tasks`), its job queues on Redis (`embedding`), the
-  agents' (ADK workflows') MongoDB store (`organization_agents`), the
-  assistant (`agents`) and the ADK workflow runs' sessions
-  (`adk_run_sessions`, ADK's `DatabaseSessionService` on the engine). Each
-  client is `None` when its settings are unset. Nothing connects until it's
-  used, so the API starts while MySQL, MongoDB or Redis are down, and
-  `/health/ready` reports MySQL.
+  `app.state` with the clients the routes use: the ADK workflow runs
+  (`adk_runs`, the run store on the engine), the async worker's job queues on
+  Redis (`embedding`), the agents' (ADK workflows') MongoDB store
+  (`organization_agents`), the assistant (`agents`) and the ADK workflow
+  runs' sessions (`adk_run_sessions`, ADK's `DatabaseSessionService` on the
+  engine). The queues and the MongoDB store are `None` when their settings
+  are unset. Nothing connects until it's used, so the API starts while MySQL,
+  MongoDB or Redis are down, and `/health/ready` reports MySQL.
 - **Routes**: the health probes mount at the root. `/info` and every router
   in `ROUTERS` mount below `FORGE_ADMIN_API_PREFIX` (`/api/v1`).
 - **Sign-in**: requests identify the user with an `Authorization: Bearer <JWT>`
@@ -56,9 +57,8 @@ src/forge_admin/
   agent_documents.py     Organizations' agents (ADK workflows) in MongoDB: checking documents, the store
   agent.schema.json      The forge.agent/v1 format's JSON Schema (generated from the web console)
   agent_build.py         Building a document into an ADK Workflow (forge_task_adk_workflows.graph)
-  adk_runs.py            ADK workflow runs: checking the input and the build, submitting them, answers
-  embedding.py           The async worker's SAQ job queues on Redis, where runs are submitted
-  background_tasks.py    The async worker's background tasks API: runs, their attempts, approvals
+  adk_runs.py            ADK workflow runs: checking the input and the build, starting them, answers
+  embedding.py           The async worker's SAQ job queues on Redis, where jobs that take runs are queued
   agents/                The assistant: Google ADK agents
     __init__.py          ADK_TABLES: the tables ADK manages itself in the admin database
     forge.py             The supervisor, a specialist per toolset, and the toolsets
@@ -99,8 +99,9 @@ src/forge_admin/
 ```
 
 The tests mirror it: `tests/agents`, `tests/api`, `tests/auth`, `tests/cli`,
-`tests/db`, `tests/integrations` (against MySQL, with fake worker clients) and
-unit tests at the top, with `conftest.py` shared.
+`tests/db`, `tests/integrations` (routes with their stores, the worker's queue
+and sessions stood in: on SQLite, or against MySQL) and unit tests at the
+top, with `conftest.py` shared.
 
 ## Adding a router
 
@@ -170,17 +171,6 @@ answers 404 before the permission is checked. A `{scope}` is `site` or
 | GET | `/authz/model` | The shared Casbin model file, as text | no user (the API key when one is set) |
 | GET | `/authz/subjects/{subject}/access?scope=` | Anyone's roles and policies in a scope | `members:read` there |
 
-### Background tasks (ADK workflow runs)
-
-The jobs the async worker runs for the organization, its ADK workflow runs;
-see [Background tasks](#background-tasks).
-
-| Method | Path | What | Needs |
-|---|---|---|---|
-| GET | `/organizations/{id}/background-tasks` | The organization's background tasks, newest first, `?task_type=&exclude_task_type=&status=&limit=&offset=` (each filter repeatable; `limit` 1–100, 50): `{"items", "total"}` | `organizations:read` |
-| GET | `/organizations/{id}/background-tasks/{task_id}` | One of them: its input, attempts, failures with their stack traces, audit trail, the approval it waits at, and the actions its state allows | `organizations:read` |
-| POST | `/organizations/{id}/background-tasks/{task_id}/resubmit`, `.../restart`, `.../abandon` | Run it again as a new task; retry it as its next attempt; give up on it | `background_tasks:manage` |
-
 ### Agents
 
 The organization's agents (see [Agents](#agents-1)), not the assistant's.
@@ -200,11 +190,13 @@ Runs of the organization's ADK workflows (its agents); see
 
 | Method | Path | What | Needs |
 |---|---|---|---|
-| POST | `/organizations/{id}/agents/{agent_id}/runs` | Run it as you, `{"input"}`: 202 with `{"queue", "key", "agent_id", "revision", "session_id"}` | `agents:run` |
-| GET | `/organizations/{id}/agents/{agent_id}/runs` | Its runs, newest first, `?limit=&offset=` (`limit` 1–100, 20): `{"items", "total"}`, as the background tasks list | `organizations:read` |
-| GET | `/organizations/{id}/adk-runs/{task_id}/steps` | A run's steps, read from its ADK session: `{"steps", "session_id"}` | `organizations:read` |
-| POST | `/organizations/{id}/adk-runs/{task_id}/decisions` | Approve or reject the approval it waits at, `{"request_id", "approved", "comment"?}` | `agents:approve` or `agents:run`, as the approval step names its approvers |
-| POST | `/organizations/{id}/adk-runs/{task_id}/answers` | Answer the question (human input) it waits at, `{"request_id", "answer"}` | `agents:run` |
+| POST | `/organizations/{id}/agents/{agent_id}/runs` | Run it as you, `{"input"}`: 202 with the run, queued | `agents:run` |
+| GET | `/organizations/{id}/adk-runs` | The organization's runs, newest first, `?agent_id=&status=&limit=&offset=` (`status` repeatable; `limit` 1–100, 20): `{"items", "total"}` | `organizations:read` |
+| GET | `/organizations/{id}/adk-runs/{run_id}` | One run: what it runs, its input and result, what it waits for, its activity and the actions its status allows | `organizations:read` |
+| GET | `/organizations/{id}/adk-runs/{run_id}/steps` | A run's steps, read from its ADK session: `{"steps", "session_id"}` | `organizations:read` |
+| POST | `/organizations/{id}/adk-runs/{run_id}/decisions` | Approve or reject the approval it waits at, `{"request_id", "approved", "comment"?}`: 202 with the run | `agents:approve` or `agents:run`, as the approval step names its approvers |
+| POST | `/organizations/{id}/adk-runs/{run_id}/answers` | Answer the question (human input) it waits at, `{"request_id", "answer"}`: 202 with the run | `agents:run` |
+| POST | `/organizations/{id}/adk-runs/{run_id}/retry`, `.../resubmit`, `.../abandon` | Retry a failed run as its next attempt (202); run a finished one again as a new run (202 with the new run); give one up (200) | `agents:manage_runs` |
 
 ### Assistant routes
 
@@ -264,14 +256,16 @@ JavaScript and Go). Every organization response includes its `domain`, ready
 to pass to `enforce`.
 
 **Default roles** come from the migrations (the baseline, `0002agents` for
-`agents:manage`, `0003adk_runs` for `agents:run` and `agents:approve`, and
+`agents:manage`, `0003adk_runs` for `agents:run` and `agents:approve`,
 `0004adk_only`, which takes away the permissions only Forge workflows and
-inbound events used), written once; edit them freely afterwards.
+inbound events used, and `0005adk_run_store`, which renames
+`background_tasks:manage` to `agents:manage_runs`), written once; edit them
+freely afterwards.
 
 | Role | Name | Grants |
 |---|---|---|
 | `site:admin` | Site administrator | `*:*`: everything, in every organization |
-| `org:admin` | Organization administrator | `organizations:read`, `organizations:update`, `members:read`, `members:update`, `background_tasks:manage`, `agents:manage`, `agents:run`, `agents:approve` |
+| `org:admin` | Organization administrator | `organizations:read`, `organizations:update`, `members:read`, `members:update`, `agents:manage`, `agents:run`, `agents:approve`, `agents:manage_runs` |
 | `org:member` | Organization member | `organizations:read`, `members:read`, `agents:manage`, `agents:run` |
 | `org:viewer` | Organization viewer | `organizations:read`, `members:read` |
 
@@ -279,16 +273,16 @@ The default permissions, and what checks them:
 
 | Permission | Checked by |
 |---|---|
-| `organizations:read` | Reading an organization and everything in it: its agents (ADK workflows), their runs and steps, and its background tasks |
+| `organizations:read` | Reading an organization and everything in it: its agents (ADK workflows), their runs and steps |
 | `organizations:create` / `update` / `delete` | Creating one (on the site); renaming or describing one; deleting one |
 | `members:read` / `update` | Listing a scope's assignments and reading anyone's access there; assigning and revoking roles there |
 | `users:create` / `update` / `delete` | Adding, editing and removing people (on the site) |
 | `roles:create` / `update` / `delete` | Creating, editing and deleting roles (on the site) |
 | `permissions:create` / `update` / `delete` | Creating, editing and deleting permissions (on the site) |
-| `background_tasks:manage` | Resubmitting, restarting and abandoning background tasks (ADK workflow runs) |
 | `agents:manage` | Making, saving and deleting agents |
 | `agents:run` | Running ADK workflows (agents); answering their runs' questions and deciding the approvals any member may |
 | `agents:approve` | Deciding the ADK workflow runs' approvals the organization's administrators decide |
+| `agents:manage_runs` | Retrying, resubmitting and abandoning the organization's ADK workflow runs |
 | `*:*` | Everything |
 
 Reading roles, permissions and users needs only a signed-in user.
@@ -309,13 +303,14 @@ curl -X PUT localhost:8101/api/v1/scopes/org:$ORG/members/alice@acme.com/roles/o
 curl localhost:8101/api/v1/authz/subjects/alice@acme.com/access?scope=org:$ORG \
   -H "Authorization: Bearer $TOKEN"
 # {"subject": "alice@acme.com", "scope": "org:...", "domain": "org:...",
-#  "roles": ["org:admin"], "policies": [["org:admin", "background_tasks", "manage"], ...]}
+#  "roles": ["org:admin"], "policies": [["org:admin", "agents", "manage_runs"], ...]}
 ```
 
 Subject IDs are letters, digits and `._@:+-` (a UUID or email works) and must
 not look like a role key, since roles and subjects share Casbin's namespace.
-Deleting an organization revokes the roles assigned in it; its agents are
-removed from MongoDB afterwards, and a failure there is only logged.
+Deleting an organization revokes the roles assigned in it; its ADK workflow
+runs are forgotten and its agents removed from MongoDB afterwards, and a
+failure there is only logged.
 
 ## Agents
 
@@ -350,17 +345,33 @@ missing or self-running saved agent, edges it can't follow) with an
 
 ## ADK workflow runs
 
-An organization's ADK workflows (its agents) run on the async worker's
-`adk_workflows` queue, as its ADK workflows task
+An organization's ADK workflows (its agents) run on the async worker, whose
+ADK workflows task
 ([packages/python/tasks/adk-workflows](../../packages/python/tasks/adk-workflows/README.md))
 runs them on Google ADK's graph engine (`adk_runs.py`,
-`api/routes/adk_workflow_runs.py`). A run is one of the organization's
-[background tasks](#background-tasks), its task type `adk_workflows`, read,
-resubmitted, restarted and abandoned there.
+`api/routes/adk_workflow_runs.py`). A run is kept in this database, beside
+its ADK session, by the run store (`forge_task_adk_workflows.run_store`,
+tables `adk_runs` and `adk_run_events`, which `0005adk_run_store` creates):
+this API starts, lists, reads and acts on runs there, and the worker takes
+each from its `adk_workflows` queue, runs it and records where it is.
+
+| `status` | When |
+|---|---|
+| `queued` | Waiting for a worker: new, decided, answered, retried, or queued again after a hiccup |
+| `running` | A worker has it |
+| `paused` | Waiting for a person: the approval or question in its `pause` |
+| `waiting` | Waiting for a time (a long delay), until `waiting_until` |
+| `succeeded`, `failed`, `abandoned` | Finished |
+
+Whenever a run is to be taken (started, decided, answered, retried,
+resubmitted), a `run_adk` job naming it (`{"run_id"}`, key
+`adk-run:<run_id>:<random>`) is queued with `FORGE_ADMIN_EMBEDDING_REDIS_URL`:
+503 without it. If Redis doesn't answer, the run stays queued, the warning is
+logged, and the worker's maintenance finds it; the caller isn't refused.
 
 **Starting one.** `POST /organizations/{id}/agents/{agent_id}/runs` with
 `{"input"}` needs `agents:run` (`org:admin` and `org:member` by default).
-Before anything is submitted:
+Before anything is kept:
 
 - the input is checked against the start's `input_schema` (JSON Schema
   Draft 2020-12): 422 with what doesn't fit, or when there's no start;
@@ -369,27 +380,47 @@ Before anything is submitted:
   (`build_agent`): 422 with the build's reason, naming the node, e.g. a saved
   one that isn't there, or one that would run itself.
 
-The run is submitted with `FORGE_ADMIN_EMBEDDING_REDIS_URL` (503 without it,
-or while Redis or MongoDB doesn't answer) and answered 202 with `{"queue":
-"adk_workflows", "key", "agent_id", "revision", "session_id"}`:
+The run is answered 202, queued. Its payload, what the worker runs
+(`RunPayload`), is `{"tenant_id", "agent_id", "revision", "name", "document",
+"saved": {<id>: <document>}, "input", "session_id", "run_as", "run_as_name",
+"trigger": {"type": "manual", "by": <user>}}`: the ADK workflow and the saved
+ones **as they're saved now** (later saves never change it), and the member
+it **acts as**. Its state is its **ADK session**, which the worker keeps in
+this database too (ADK's `DatabaseSessionService`, app `adk_workflows`, user
+`run_as`, the `session_id` made here).
 
-- its job's key is `adk_workflows.run:<agent_id>:<uuid>`, its labels
-  `{"adk_workflow": <agent_id>, "adk_session": <session_id>}`;
-- its payload is `{"tenant_id", "agent_id", "revision", "name", "document",
-  "saved": {<id>: <document>}, "input", "session_id", "run_as",
-  "run_as_name", "trigger": {"type": "manual", "by": <user>}}`: the ADK
-  workflow and the saved ones **as they're saved now** (later saves never
-  change it), and the member it **acts as**;
-- its state is its **ADK session**, which the worker keeps in this database
-  (ADK's `DatabaseSessionService`, app `adk_workflows`, user `run_as`, the
-  `session_id` made here).
+**A run** as every route answers it (times ISO 8601 in UTC with their offset,
+`2026-10-01T12:00:00+00:00`, or null):
 
-`GET .../agents/{agent_id}/runs` lists an ADK workflow's runs, newest first,
-as the background tasks list does.
+```json
+{"id": "<32 hex>", "organization_id": "...", "agent_id": "ag_...", "agent_name": "Ship",
+ "revision": 3, "session_id": "...", "status": "paused", "attempt": 1,
+ "requested_by": {"id": "...", "name": "Mia Member"}, "resubmit_of": null,
+ "created_at": "...", "updated_at": "...", "started_at": "...", "finished_at": null,
+ "duration_ms": null, "waiting_until": null, "waiting_reason": null,
+ "pause": {"id": "<request_id>", "kind": "approval", "reason": "Ship it?",
+           "details": {"kind": "approval", "approvers": "org:admin", "step": "review",
+                       "step_name": "Review", ...},
+           "requested_at": "...", "deadline": null},
+ "error": null}
+```
 
-**Its steps.** `GET /organizations/{id}/adk-runs/{task_id}/steps`
-(`organizations:read`) reads the run's task (404 unless it's one of the
-organization's ADK workflow runs), then its ADK session here (503 while the
+`duration_ms` is from its start to its finish; `error` is `{"message",
+"category": "failed" | "error" | "transient" | "interrupted", "step",
+"occurred_at"}`: why it failed, or, on a queued or running run, the last
+hiccup it was queued again after. `GET /organizations/{id}/adk-runs` lists
+them newest first (`?agent_id=` one ADK workflow's, `?status=` repeated for
+some statuses). `GET .../adk-runs/{run_id}` adds what the run's page shows:
+its `input`, its `result` (the graph's, once it ended), the `document` it
+runs, its `trigger`, its activity (`events`, oldest first: `{"id", "at",
+"kind", "message", "actor": {"id", "name"} | null, "attributes"}`, the kinds
+`created`, `started`, `resumed`, `note`, `paused`, `decided`, `answered`,
+`declined`, `timed_out`, `waiting`, `succeeded`, `failed`, `retried`,
+`recovered`, `abandoned`), and the `actions` its status allows (`retry`,
+`resubmit`, `abandon`, `decide`, `answer`; the web checks the permissions).
+
+**Its steps.** `GET /organizations/{id}/adk-runs/{run_id}/steps`
+(`organizations:read`) reads the run's ADK session here (503 while the
 database doesn't answer), and answers `{"steps", "session_id"}`: each node of
 the document it runs, in order (`forge_task_adk_workflows.steps`):
 
@@ -410,57 +441,36 @@ the document it runs, in order (`forge_task_adk_workflows.steps`):
 A step inside a loop's body shows its last item's; a team's sub-agents and a
 saved ADK workflow's own steps count for their node.
 
-**What it waits for.** A paused run waits at its background task's
-`approval`, whose `details` say what: `{"kind": "approval" | "human_input",
-"approvers"?, "expires_at"?, "response_schema"?, "step", "step_name",
-"workflow_name", "message"}`. Both are answered here:
+**What it waits for.** A paused run's `pause` says what: its `kind` is
+`approval` or `human_input`, its `details` `{"kind", "approvers"?,
+"expires_at"?, "response_schema"?, "step", "step_name", "workflow_name",
+"message", ...}`, and its `id` is the `request_id` that answers it:
 
-| Route (below `/organizations/{id}/adk-runs/{task_id}`) | Who | What |
+| Route (below `/organizations/{id}/adk-runs/{run_id}`) | Who | What |
 |---|---|---|
 | `POST /decisions` | `agents:approve` for an approval whose approvers are `org:admin` (and anything else it names); `agents:run` for `org:member` | `{"request_id", "approved", "comment"?}` (the comment up to 4,000 characters): the run carries on down the approved or rejected way. 409 for human input |
-| `POST /answers` | `agents:run` | `{"request_id", "answer"}`: the answer must fit the question's `response_schema` (422 listing what doesn't, or when its JSON is over 4,000 characters); it's sent as an approval whose comment is the answer as JSON. 409 for an approval |
+| `POST /answers` | `agents:run` | `{"request_id", "answer"}`: the answer must fit the question's `response_schema` (422 listing what doesn't, or when its JSON is over 4,000 characters); it's kept as an approval whose comment is the answer as JSON. 409 for an approval |
 
-Both answer 202 with the worker's `{"queue", "key"}`, 409 when the request
-isn't open any more (answered, or the run moved on), and 404 for a task
-that isn't one of the organization's ADK workflow runs.
+Both answer 202 with the run, queued, and 409 when the request isn't open any
+more (answered, or the run moved on). Nobody deciding by the approval's
+deadline is a rejection the worker makes.
 
-## Background tasks
+**Retrying, resubmitting, abandoning** need `agents:manage_runs`
+(`org:admin` by default), and record who did it in the run's activity:
 
-The async worker ([apps/forge-async-worker](../forge-async-worker/README.md#background-tasks-api))
-tracks each ADK workflow run as a background task of the organization it ran
-for: each attempt, its failures (type, message, stack trace, and whether
-it's retried automatically) and an audit trail. The admin relays the
-worker's background tasks API with `FORGE_ADMIN_ASYNC_WORKER_URL` and
-`_TOKEN`, and checks who may see and act: a task belongs to the organization
-its `tenant` label names, and every route about one task reads it first and
-answers 404 for another organization's. Answers are the worker API's own
-JSON.
-
-Anyone who can view the organization (`organizations:read`) can list and read
-its tasks. Acting on one needs `background_tasks:manage` in the
-organization, which `org:admin` has by default:
-
-| Route (below `/organizations/{id}/background-tasks/{task_id}`) | What |
+| Route (below `/organizations/{id}/adk-runs/{run_id}`) | What |
 |---|---|
-| `POST /resubmit` | The same job, with the same input, as a new task; 202 with `{"queue", "key"}` of the job that will run it. Not while it's still running |
-| `POST /restart` | A failed or stopped task's next attempt, run by a worker, skipping what it finished; 202 with `{"queue", "key"}` |
-| `POST /abandon` | Give up on a failed or stopped task: no more attempts, automatic or not; the task, `ABANDONED` |
-
-A run waiting for a person (`AWAITING_VALIDATION`, its `approval` naming
-what it waits for) is answered at its own routes, with the ADK workflows'
-permissions: see [ADK workflow runs](#adk-workflow-runs-1).
-
-The worker records who acted (the caller's ID and name) in the task's audit
-trail.
+| `POST /retry` | A failed run's next attempt: it carries on from what it kept. 202 with the run, queued; 409 unless it failed |
+| `POST /resubmit` | A finished run's payload again, as a new run (`resubmit_of` names the old; another invocation of the same ADK session). 202 with the new run; 409 unless it's finished |
+| `POST /abandon` | Give a queued, paused, waiting or failed run up: it never carries on. 200 with the run; 409 while it's running or once it's finished otherwise |
 
 | Answer | When |
 |---|---|
-| 403 | The caller lacks `organizations:read`, or the permission the action needs, in the organization |
-| 404 | Another organization's task, or none |
-| 409 | The task's status doesn't allow it, `detail` saying so |
-| 422 | A `task_type` or `exclude_task_type` other than lowercase letters, digits, `_` and `-` |
-| 502 | The worker refused Forge's token (`FORGE_ADMIN_ASYNC_WORKER_TOKEN` must equal its `HYBRID_API__TOKEN`), or answered unexpectedly |
-| 503 | Background tasks aren't set up, or the worker is unavailable |
+| 403 | The caller lacks `organizations:read`, or the permission the route needs, in the organization |
+| 404 | Another organization's run, or none |
+| 409 | The run's status doesn't allow it, `detail` saying so |
+| 422 | Input or an answer that doesn't fit, a document that doesn't build, or a malformed query |
+| 503 | The runs' database isn't answering, or the worker's queue isn't set up |
 
 ## The assistant
 
@@ -711,14 +721,13 @@ make start            # or make up: web, admin, the async worker and their datab
 make admin-deps       # or: admin-mysql on 127.0.0.1:13326, and the shared MongoDB and Redis
 make admin            # then the API natively with reload on http://localhost:8101
 make async-worker     # the worker that runs ADK workflow runs (the adk_workflows queue)
-make async-worker-api # its background tasks API on http://localhost:8104: runs and approvals
 make up-all-local     # or all of it natively in one terminal; Ctrl-C stops the apps
 ```
 
 `make admin` runs `forge-admin`, which applies pending migrations and then
 serves. Compose passes the same `.env` to the container and points it at
-`admin-mysql:3306`, the shared `mongo` and `redis`, and the async worker's
-background tasks API. Without the launcher's migrations you can also run
+`admin-mysql:3306` and the shared `mongo` and `redis`. Without the launcher's
+migrations you can also run
 `uv run uvicorn forge_admin.api.app:create_app --factory --reload` from
 `apps/forge-admin-api`.
 
@@ -736,7 +745,11 @@ adds `agents:manage` the same way, granted to `org:admin` and `org:member`;
 tables and the permissions only Forge workflows and events used
 (`events:manage`, `workflows:manage`, `workflows:run`, `workflows:approve`)
 with their grants, and rewords the default descriptions that named them
-where they're unchanged.
+where they're unchanged. `0005adk_run_store` creates the ADK workflow runs'
+tables, `adk_runs` and `adk_run_events`, exactly as the run store
+(`forge_task_adk_workflows.run_store.metadata`) describes them
+(`tests/db/test_run_store_migration.py` holds it to that), and renames
+`background_tasks:manage` to `agents:manage_runs` with every grant of it.
 
 Define models on `forge_admin.db.base.AuditBase` under `models/` and import
 them in `models/__init__.py`, then from `apps/forge-admin-api`:
@@ -746,8 +759,9 @@ uv run alembic revision --autogenerate -m "add projects"
 uv run alembic upgrade head        # or make admin-migrate from the root
 ```
 
-Autogenerate leaves ADK's tables alone, and `alembic.ini` runs ruff over each
-new revision. The launcher applies pending migrations at startup unless
+Autogenerate leaves alone the tables ADK manages and the run store's, and
+`alembic.ini` runs ruff over each new revision. A change to the run store's
+tables needs a revision of its own, written to match. The launcher applies pending migrations at startup unless
 `FORGE_ADMIN_MIGRATE_ON_START=false`; with several replicas, turn that off
 and migrate once per release. Handlers get a session from
 `Depends(get_session)` (`Session` in `api/routes/common.py`) and commit
@@ -778,15 +792,15 @@ Precedence, lowest to highest: defaults, `.env` in the working directory, the
 process environment. See `.env.example` for every setting.
 
 Values the admin shares with other apps (the MySQL connection, MongoDB,
-Redis, the service token, model keys) live once in the repository's
-`.env.common`, and `.env` names each with a `${NAME}` reference, e.g.
-`FORGE_ADMIN_ASYNC_WORKER_TOKEN=${FORGE_ASYNC_WORKER_TOKEN}`
+Redis, model keys) live once in the repository's `.env.common`, and `.env`
+names each with a `${NAME}` reference, e.g.
+`FORGE_ADMIN_MYSQL_PASSWORD=${FORGE_MYSQL_PASSWORD}`
 (`forge_admin.env_files`). A reference resolves to an earlier line of `.env`,
 otherwise to `.env.common`; a name defined in neither stops startup unless
 the process environment sets that variable. `.env.common` is read from
 `../../.env.common`, or `FORGE_ENV_COMMON_FILE` (empty disables it), and none
 of it reaches the settings unless `.env` references it. `make env` creates
-`.env.common` and generates its `FORGE_ASYNC_WORKER_TOKEN`.
+`.env.common`.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -800,10 +814,7 @@ of it reaches the settings unless `.env` references it. `make env` creates
 | `FORGE_ADMIN_LOCAL_USER_ID` | unset | Local development and tests only: the user of requests without a token |
 | `FORGE_ADMIN_SITE_ADMIN_ID` / `_FIRST_NAME` / `_LAST_NAME` / `_EMAIL` / `_MSID` | unset | The user `forge-admin-seed` adds with `site:admin` |
 | `FORGE_ADMIN_WEB_URL` | `http://localhost:5190` | The web console, for links to its pages |
-| `FORGE_ADMIN_ASYNC_WORKER_URL` | unset | The async worker's background tasks API, scheme and host only (`http://127.0.0.1:8104` natively, as in `.env.example`); unset, background tasks and ADK workflow run lists answer 503 |
-| `FORGE_ADMIN_ASYNC_WORKER_TOKEN` | unset | Its bearer token, its `HYBRID_API__TOKEN`: `${FORGE_ASYNC_WORKER_TOKEN}` from `.env.common` |
-| `FORGE_ADMIN_ASYNC_WORKER_TIMEOUT` | `10` | Seconds a call to it may take |
-| `FORGE_ADMIN_EMBEDDING_REDIS_URL` | unset | The Redis the async worker's SAQ queues run on, where ADK workflow runs are submitted (`${FORGE_REDIS_URL}`); unset, starting a run answers 503 |
+| `FORGE_ADMIN_EMBEDDING_REDIS_URL` | unset | The Redis the async worker's SAQ queues run on, where the jobs that take ADK workflow runs are queued (`${FORGE_REDIS_URL}`); unset, starting, deciding, answering, retrying and resubmitting a run answer 503 |
 | `FORGE_ADMIN_MONGO_URI` | unset | MongoDB for organizations' agents (ADK workflows) (`${FORGE_MONGO_URI}`); unset, the agent routes answer 503 |
 | `FORGE_ADMIN_MONGO_DATABASE` | `forge_admin` | Its database |
 | `FORGE_ADMIN_MONGO_TIMEOUT` | `5` | Seconds to find a MongoDB server before a request answers 503 |

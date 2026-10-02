@@ -74,9 +74,8 @@ function OrganizationWorkspacePage() {
     (o) => o.id === organizationId
   )
   const can = useScopeAccess(organization ? `org:${organizationId}` : undefined)
-  // Those who manage its background tasks (its admins) retry, resubmit and
-  // abandon its ADK workflow runs.
-  const canManageBackgroundTasks = can("background_tasks:manage")
+  // Those who manage its runs (its admins) retry, resubmit and abandon them.
+  const canManageRuns = can("agents:manage_runs")
   const canReadMembers = can("members:read")
   const [assigning, setAssigning] = React.useState(false)
 
@@ -185,9 +184,9 @@ function OrganizationWorkspacePage() {
         <AdkRunPage
           key={agentRun}
           organization={organization}
-          taskId={agentRun}
+          runId={agentRun}
           tab={agentRunTab}
-          canManage={canManageBackgroundTasks}
+          canManage={canManageRuns}
           onTabChange={(next) =>
             void navigate({
               search: (prev) => ({
@@ -198,6 +197,7 @@ function OrganizationWorkspacePage() {
             })
           }
           onBack={() => void navigate({ search: { agentsTab: "runs" } })}
+          onOpenRun={(id) => void navigate({ search: { agentRun: id } })}
         />
       ) : (
         // Each ADK workflow opens its builder, a page of its own.

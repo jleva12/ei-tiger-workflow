@@ -42,7 +42,7 @@ export type WorkspaceSearch = {
   view?: WorkspaceView
   /** ADK workflows' tab: Runs; Overview when absent. */
   agentsTab?: "runs"
-  /** On ADK workflows, a run to open (its background task's ID). */
+  /** On ADK workflows, a run to open (its ID). */
   agentRun?: string
   /** The run's page's tab; Overview when absent. */
   agentRunTab?: Exclude<AdkRunTab, "overview">

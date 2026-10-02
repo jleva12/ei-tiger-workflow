@@ -1,19 +1,21 @@
-"""The async worker (apps/forge-async-worker): submitting its jobs through its
-SAQ job queues on Redis. The module keeps its first name, from when the
-worker only embedded documents.
+"""The async worker (apps/forge-async-worker): queueing its jobs on its SAQ
+queues on Redis. The module keeps its first name, from when the worker only
+embedded documents.
 
-The worker has one queue per task type (here ``adk_workflows``) and one job
-function, ``run_job``, which runs a spec:
-``{"task_type", "kind", "payload"}``, and the ``tenant_id`` and ``labels``
-its tracked run carries when given. It applies its own retries, timeout and
-heartbeat to every job, so a submission names only the queue, the spec and a
-key; a key that is already queued or running isn't submitted again. This
-client only relays; the routes decide who may submit what.
+ADK workflow runs are kept in this API's database (``forge_task_adk_workflows.
+run_store``); a job only names the run to take: ``run_adk`` with
+``{"run_id"}``, on the ``adk_workflows`` queue. The worker claims the run
+(a run is one worker's at a time), so a job that finds it taken, paused or
+finished does nothing, and a duplicate is harmless. Each job's key is the
+run's ID and a random suffix. The worker applies its own retries, timeout and
+heartbeat to every job. This client only relays; the routes decide who may
+queue what.
 """
 
 import asyncio
 import contextlib
 from typing import Any, Self
+from uuid import uuid4
 
 from redis import asyncio as aioredis
 from redis.exceptions import RedisError
@@ -23,9 +25,8 @@ from forge_admin.config import Settings
 
 # ADK workflows' runs (the ADK workflows task).
 ADK_WORKFLOWS = "adk_workflows"
-FUNCTION = "run_job"
-# How long the worker keeps a finished job for reading it back, in seconds.
-RESULT_TTL = 7 * 24 * 60 * 60
+# The worker's job that takes a run and runs it, or carries it on.
+RUN_ADK = "run_adk"
 # Seconds a submission may take.
 TIMEOUT = 5.0
 
@@ -36,7 +37,7 @@ class EmbeddingError(Exception):
 
 class Embedding:
     """
-    Submits jobs to the async worker.
+    Queues jobs for the async worker.
 
     :param queues: The worker's queues by name: ``adk_workflows``.
     """
@@ -59,53 +60,16 @@ class Embedding:
         )
         return cls({ADK_WORKFLOWS: RedisQueue(redis, name=ADK_WORKFLOWS)})
 
-    async def run_adk_workflow(
-        self,
-        *,
-        tenant_id: str,
-        key: str,
-        labels: dict[str, str],
-        payload: dict[str, Any],
-        requested_by: dict[str, str] | None = None,
-    ) -> None:
+    async def run_adk(self, run_id: str) -> None:
         """
-        Submit one run of an organization's ADK workflow, on its own queue:
-        the worker's ADK workflows task runs it as a tracked run among the
-        organization's background tasks, found again by its labels.
+        Queue a job that takes an ADK workflow run (a new one, or one decided,
+        answered or retried) and runs it.
 
-        :param tenant_id: The organization.
-        :param key: The job's key; a key already queued or kept isn't
-            submitted again.
-        :param labels: What the run carries to be found by: ``adk_workflow``
-            and ``adk_session``.
-        :param payload: The run: the ADK workflow's document as it is now,
-            the saved ones it runs, the input, its ADK session and the member
-            it acts as (``forge_admin.adk_runs``).
-        :param requested_by: Who started it, ``{"id", "display_name"}``.
+        :param run_id: The run, as the run store keeps it.
         :raises EmbeddingError: The queue could not be reached.
         """
-        await self._run(ADK_WORKFLOWS, tenant_id, key, labels, payload, requested_by)
-
-    async def _run(
-        self,
-        task_type: str,
-        tenant_id: str,
-        key: str,
-        labels: dict[str, str],
-        payload: dict[str, Any],
-        requested_by: dict[str, str] | None,
-    ) -> None:
-        # A run of a task type, on its queue.
-        spec: dict[str, Any] = {
-            "task_type": task_type,
-            "kind": "run",
-            "tenant_id": tenant_id,
-            "labels": labels,
-            "payload": payload,
-        }
-        if requested_by:
-            spec["requested_by"] = requested_by
-        await self._enqueue(task_type, key, spec)
+        key = f"adk-run:{run_id}:{uuid4().hex[:8]}"
+        await self._enqueue(ADK_WORKFLOWS, RUN_ADK, key, run_id=run_id)
 
     async def aclose(self) -> None:
         for queue in self._queues.values():
@@ -113,11 +77,11 @@ class Embedding:
             with contextlib.suppress(RedisError, OSError):
                 await queue.disconnect()
 
-    async def _enqueue(self, queue: str, key: str, spec: dict[str, Any]) -> None:
+    async def _enqueue(
+        self, queue: str, function: str, key: str, **kwargs: Any
+    ) -> None:
         try:
             async with asyncio.timeout(TIMEOUT):
-                await self._queues[queue].enqueue(
-                    FUNCTION, key=key, ttl=RESULT_TTL, spec=spec
-                )
+                await self._queues[queue].enqueue(function, key=key, **kwargs)
         except (RedisError, OSError, TimeoutError) as error:
             raise EmbeddingError(str(error) or type(error).__name__) from None

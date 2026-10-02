@@ -29,13 +29,11 @@ import {
 } from "@/components/ui/table"
 import {
   shortId,
-  statusDisplay,
-  taskTitle,
-  type BackgroundTask,
-  type useBackgroundTasks,
-} from "@/lib/background-tasks"
+  type AdkRun,
+  type useOrganizationAdkRuns,
+} from "@/lib/agents/runs"
 import { formatDuration, formatShortDateTime } from "@/lib/format"
-import { RUN_GROUPS, runNote } from "@/lib/runs"
+import { RUN_GROUPS, runNote, runStatusDisplay } from "@/lib/runs"
 
 /** What the list says about what's run. */
 export type RunListWords = {
@@ -64,12 +62,12 @@ type RunRow = {
   duration: string | undefined
 }
 
-function toRow(run: BackgroundTask): RunRow {
-  const shown = statusDisplay(run.status, run.outcome, run.waiting_until)
+function toRow(run: AdkRun): RunRow {
+  const shown = runStatusDisplay(run)
   return {
     id: run.id,
     reference: shortId(run.id),
-    title: taskTitle(run),
+    title: run.agent_name.trim() || run.agent_id,
     status: shown.status,
     statusLabel: shown.label,
     note: runNote(run),
@@ -165,8 +163,8 @@ function RunTable({
 
 /**
  * Every run of the organization's ADK workflows, in the Forge task list's
- * status bands (queued or waiting, running, awaiting approval, completed,
- * failed, stopped), newest first in each. Each opens its own page, where
+ * status bands (queued or waiting, running, waiting for a person,
+ * succeeded, failed, abandoned), newest first in each. Each opens its own page, where
  * approvals are decided and failed runs retried. It follows runs in
  * progress every few seconds; the page's toolbar refreshes it on demand.
  */
@@ -178,11 +176,11 @@ export function RunList({
   onShowOverview,
 }: {
   organizationName: string
-  /** The organization's runs (`useBackgroundTasks`), shared with the tab's count. */
-  runs: ReturnType<typeof useBackgroundTasks>
+  /** The organization's runs (`useOrganizationAdkRuns`), shared with the tab's count. */
+  runs: ReturnType<typeof useOrganizationAdkRuns>
   /** What's run. */
   words: RunListWords
-  onOpenRun: (taskId: string) => void
+  onOpenRun: (runId: string) => void
   onShowOverview: () => void
 }) {
   const rows = React.useMemo(
@@ -205,7 +203,7 @@ export function RunList({
   )
 
   if (runs.error && !runs.data) {
-    // Not set up, or the worker's API is down: the API says which.
+    // Their database isn't answering: the API says so.
     if (runs.error.status === 503) {
       return (
         <PageEmpty
@@ -231,7 +229,7 @@ export function RunList({
       <EmptyWorkspace
         illustration={<EmptyIllustration name="waiting" />}
         title={`None of ${organizationName}'s ${words.docs} has run yet`}
-        description={`Run ${words.aDoc} from its builder, and it shows here seconds later, by status, from queued to completed. Open a run to follow it, decide what it waits for, or retry it.`}
+        description={`Run ${words.aDoc} from its builder, and it shows here at once, by status, from queued to succeeded. Open a run to follow it, decide what it waits for, or retry it.`}
         actions={
           <Button variant="outline" onClick={onShowOverview}>
             Pick {words.aDoc}

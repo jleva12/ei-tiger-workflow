@@ -1,19 +1,19 @@
 """
 One run of an ADK workflow, carried on from its ADK session each time the
-task framework runs its job: its start, every answer to a pause (a decision,
-a person's answer, the timer), and every retry or restart.
+worker runs its job: its start, every answer to a pause (a decision, a
+person's answer, the timer), and every retry.
 
 - **Start.** The run's session (app ``adk_workflows``, the member it acts as,
   the admin API's session ID) is created if it isn't there, and the graph
   runs on the run's input, as a JSON message, until it ends or pauses. The
-  run is one ADK invocation of that session, whose ID is the task's (the
-  task framework's instance): a resubmitted task (the same payload, the same
-  session) is another invocation of the session, run afresh, and the
-  session's latest invocation is always the latest task's.
+  run is one ADK invocation of that session, whose ID is the run's (the
+  control's ``instance_id``, the run store's run ID): a resubmitted run (the
+  same payload, the same session) is another invocation of the session, run
+  afresh, and the session's latest invocation is always the latest run's.
 - **Pauses.** Its oldest pending pause (``graph.pending_pauses``) is asked of
-  the task framework, then answered in the session, which resumes the same
+  the control, then answered in the session, which resumes the same
   invocation (``Runner.run_async(invocation_id=...)``). One gate at a time:
-  the task framework asks one question per run.
+  a run waits at one question at a time.
 
   - An approval is one of its approval gates (``control.approval``), timed
     out at its deadline. The timeout, or a decision at or after the deadline,
@@ -32,8 +32,8 @@ a person's answer, the timer), and every retry or restart.
 - **End.** The graph's finish (``{outcome, result}``) is the job's result. A
   :class:`RunFailed` (input that doesn't fit, a failed End, a step that failed
   with no way to take) fails it. A model's or the database's hiccup is a
-  :class:`TransientError`: the queue tries again, and the run carries on.
-- **Interrupted** (the worker died, a hiccup, or a failed run restarted:
+  :class:`TransientError`: the worker tries again, and the run carries on.
+- **Interrupted** (the worker died, a hiccup, or a failed run retried:
   its invocation has events, but no pending pause and no finish): the
   invocation carries on where it stopped; a step that was running, or failed,
   runs again. If ADK can't carry it on, the run starts over in a new session
@@ -570,8 +570,8 @@ def _asked_schema(session: Session, pause: Pause) -> dict[str, Any] | None:
 
 
 def _invocation_of(task: str | None) -> str:
-    """:return: The ADK invocation a task's run is: the same for every attempt
-    of the task, another for another task (a resubmitted one)."""
+    """:return: The ADK invocation a run is: the same for every attempt of
+    the run, another for another run (a resubmitted one)."""
     if not task:
         return f"e-{uuid.uuid4()}"
     return f"e-{uuid.uuid5(uuid.NAMESPACE_URL, f'forge:adk_workflows:{task}')}"

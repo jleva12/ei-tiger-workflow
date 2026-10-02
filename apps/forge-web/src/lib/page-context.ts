@@ -25,7 +25,7 @@ export type PageEntityKind =
   | "organization"
   | "user"
   | "role"
-  | "background_task"
+  | "adk_run"
 
 /** A record on screen. */
 export type PageEntity = {

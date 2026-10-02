@@ -41,14 +41,6 @@
         "forge-ui"
       ],
       "port": 5185
-    },
-    {
-      "name": "async-worker-api",
-      "runtimeExecutable": "make",
-      "runtimeArgs": [
-        "async-worker-api"
-      ],
-      "port": 8104
     }
   ]
 }

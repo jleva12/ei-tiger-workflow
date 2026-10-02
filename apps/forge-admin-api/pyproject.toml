@@ -16,8 +16,8 @@ dependencies = [
     # logging with request ids (forge_common.logging).
     "forge-common[adk,adk-models,logging]",
     # ADK workflows are built as the async worker runs them, to check them
-    # before a run, and a run's steps are read from its ADK session
-    # (packages/python/tasks/adk-workflows).
+    # before a run; runs are kept by its run store, and a run's steps are
+    # read from its ADK session (packages/python/tasks/adk-workflows).
     "forge-task-adk-workflows",
     "google-adk>=2.9.2",
     "httpx2>=2.13.1",

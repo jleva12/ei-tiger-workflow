@@ -3,9 +3,8 @@
 # apps/forge-admin-api/compose.yaml.
 services:
   # Agent documents (the admin API's forge_admin database: organizations' ADK
-  # workflows) and the task framework's runs (the async worker's forge_tasks
-  # database). Atlas Local runs as a single-node replica set, so the task
-  # framework's run store gets transactions.
+  # workflows). Atlas Local runs as a single-node replica set. ADK workflow
+  # runs are in the admin MySQL.
   mongo:
     image: mongodb/mongodb-atlas-local:8.3.9
     # Atlas Local derives both the replica-set name and member address from
@@ -28,9 +27,9 @@ services:
       timeout: 10s
       start_period: 60s
       retries: 30
-  # The async worker's SAQ queues and locks, in database 0, where the admin
-  # API submits runs to the adk_workflows queue. No eviction of queued jobs; AOF preserves the
-  # queues across container recreation.
+  # The async worker's SAQ queue (adk_workflows), in database 0, where the
+  # admin API queues runs. No eviction of queued jobs; AOF preserves the queue
+  # across container recreation.
   redis:
     image: redis:8.8-alpine
     restart: unless-stopped

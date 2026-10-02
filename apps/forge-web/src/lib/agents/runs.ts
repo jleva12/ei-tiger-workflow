@@ -1,54 +1,290 @@
 import * as React from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+  type QueryClient,
+} from "@tanstack/react-query"
 
 import type { ChipTone } from "@/components/forge/variants"
 import { toast } from "@/components/ui/toast"
 import { api } from "@/lib/api-instance"
-import {
-  backgroundTasks,
-  humanize,
-  isBackgroundTaskTab,
-  isFollowingBackgroundTask,
-  isLiveStatus,
-  refreshBackgroundTask,
-  useBackgroundTask,
-  useBackgroundTasks,
-  type ApprovalDecision,
-  type Approvers,
-  type BackgroundTask,
-  type BackgroundTaskApproval,
-  type BackgroundTaskDispatch,
-  type BackgroundTaskPage,
-  type BackgroundTaskTab,
-} from "@/lib/background-tasks"
 import { formatDateTime, formatDuration } from "@/lib/format"
 import { isTimestamp, parseTimestamp } from "@/lib/timestamps"
-import {
-  IDLE_POLL_MS,
-  isOpenRun,
-  OPEN_POLL_MS,
-  runsPollMs,
-} from "@/lib/runs"
+import { IDLE_POLL_MS, isLiveRun, isOpenRun, OPEN_POLL_MS, runsPollMs } from "@/lib/runs"
 import { agentPath } from "./api"
 import { AGENT_FORMAT, type AgentDocument } from "./document"
 import { AGENT_KINDS, isAgentKind, type AgentKind } from "./model"
 
 /*
- * Running an organization's ADK workflow. It's kept apart from Forge
- * workflows' runs: its own task type (`adk_workflows`), queue and routes.
- * A run takes the ADK workflow as it's saved when it starts, acts as the
- * member who ran it, and is one of the organization's background tasks in
- * the API all the same, so its page is a background task's page (on the
- * ADK workflows page, as its Runs). Its steps are read from its ADK session
- * (`/adk-runs/{task}/steps`), and what it waits for is answered there: an
- * approval decided, a person's answer given. Running takes `agents:run`;
- * deciding an approval takes what its node asks of the approvers
- * (`agents:approve` for the organization's admins, `agents:run` for any
- * member).
+ * Running an organization's ADK workflows. The admin API keeps each run
+ * (beside its ADK session, in its MySQL) and a worker carries it on: from
+ * queued to running, through what it waits for (a person's decision or
+ * answer, a time), to succeeded or failed. A run takes the ADK workflow as
+ * it's saved when it starts and acts as the member who ran it. Its steps
+ * are read from its ADK session (`/adk-runs/{run}/steps`), and what it
+ * waits for is answered there: an approval decided, a person's answer
+ * given. Running takes `agents:run`; deciding an approval takes what its
+ * node asks of the approvers (`agents:approve` for the organization's
+ * admins, `agents:run` for any member); retrying, resubmitting and
+ * abandoning take `agents:manage_runs` (its admins).
  */
 
-/** An ADK workflow run's background task type. */
-export const ADK_WORKFLOW_TASK_TYPE = "adk_workflows"
+/* -------------------------------------------------------------------------- */
+/* Contract                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Where a run is: queued (for a worker), running (on one), paused (for a
+ * person: an approval or a question), waiting (for a time), or finished
+ * (succeeded, failed or abandoned).
+ */
+export type AdkRunStatus =
+  | "queued"
+  | "running"
+  | "paused"
+  | "waiting"
+  | "succeeded"
+  | "failed"
+  | "abandoned"
+
+/** Who did something to a run; no ID for the timer (an approval nobody decided in time). */
+export type AdkRunActor = { id: string | null; name: string }
+
+/** Who an approval node asks to decide. */
+export type Approvers = "org:admin" | "org:member"
+
+/** What a paused run asks, as its node put it. */
+export type AdkPauseDetails = {
+  /** A decision (approve or reject), or a person's answer. */
+  kind?: "approval" | "human_input"
+  approvers?: Approvers
+  /** When an approval's time is up: it's rejected then. */
+  expires_at?: string
+  /** A JSON Schema of the answer human input asks for. */
+  response_schema?: Record<string, unknown>
+  step?: string
+  step_name?: string
+  workflow_name?: string
+  message?: string
+} & Record<string, unknown>
+
+/** What a paused run waits at: an approval or a question. */
+export type AdkRunPause = {
+  /** Names it in a decision or an answer, so one never lands on a later one. */
+  id: string
+  kind: "approval" | "human_input"
+  /** What to decide or answer, e.g. "Refund 40 EUR?". */
+  reason: string
+  details: AdkPauseDetails
+  requested_at: string | null
+  /** When an approval's time is up; null when it waits for good. */
+  deadline: string | null
+}
+
+/**
+ * Why a run failed (`failed`: a step failed it, its input didn't fit, or a
+ * question was declined; `error`: a bug), or the hiccup it's retried after
+ * (`transient`; `interrupted`: its worker went).
+ */
+export type AdkRunFailureCategory = "failed" | "error" | "transient" | "interrupted"
+
+export type AdkRunFailure = {
+  message: string
+  category: AdkRunFailureCategory
+  /** The step it failed at, when it was one. */
+  step: string | null
+  occurred_at: string
+}
+
+/** A run, as lists show it. */
+export type AdkRun = {
+  id: string
+  organization_id: string
+  /** The ADK workflow it runs, and its name and revision when it started. */
+  agent_id: string
+  agent_name: string
+  revision: number
+  /** Its ADK session, where its steps are read from. */
+  session_id: string
+  status: AdkRunStatus
+  /** 1, and one more for each retry after a failure, a hiccup or an interruption. */
+  attempt: number
+  requested_by: AdkRunActor
+  /** The run this one resubmitted. */
+  resubmit_of: string | null
+  created_at: string
+  updated_at: string
+  started_at: string | null
+  finished_at: string | null
+  duration_ms: number | null
+  /** A waiting run carries on by itself then. */
+  waiting_until: string | null
+  waiting_reason: string | null
+  /** What a paused run waits at. */
+  pause: AdkRunPause | null
+  /** Why it failed, or the last hiccup it was retried after. */
+  error: AdkRunFailure | null
+}
+
+/** One page of runs, newest first. */
+export type AdkRunPage = { items: AdkRun[]; total: number }
+
+/** What happened to a run, as its Activity lists it. */
+export type AdkRunEventKind =
+  | "created"
+  | "started"
+  | "resumed"
+  | "note"
+  | "paused"
+  | "decided"
+  | "answered"
+  | "declined"
+  | "timed_out"
+  | "waiting"
+  | "succeeded"
+  | "failed"
+  | "retried"
+  | "recovered"
+  | "abandoned"
+  | (string & {})
+
+export type AdkRunEvent = {
+  id: number
+  at: string
+  kind: AdkRunEventKind
+  message: string
+  /** Who did it; null for the worker, the timer, the run itself. */
+  actor: AdkRunActor | null
+  attributes: Record<string, unknown> | null
+}
+
+/** What the run's status allows (the page checks who may). */
+export type AdkRunActions = {
+  retry: boolean
+  resubmit: boolean
+  abandon: boolean
+  decide: boolean
+  answer: boolean
+}
+
+/** A run with what only its page shows. */
+export type AdkRunDetail = AdkRun & {
+  input: unknown
+  /** What the run handed on, once it ended with a result. */
+  result: unknown
+  /** The ADK workflow as the run started with it. */
+  document: unknown
+  /** What started it, e.g. `{type: "manual", by}`. */
+  trigger: Record<string, unknown> | null
+  /** Its activity, oldest first. */
+  events: AdkRunEvent[]
+  actions: AdkRunActions
+}
+
+/** A decision on the approval a run waits at. */
+export type ApprovalDecision = {
+  approved: boolean
+  /** Why, for the record; the run's later steps can read it. */
+  comment?: string
+}
+
+/* -------------------------------------------------------------------------- */
+/* Words                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/** "sync_repo" → "Sync repo". */
+export function humanize(value: string) {
+  const words = value
+    .replace(/[_.-]+/g, " ")
+    .trim()
+    .toLowerCase()
+  return words ? words[0].toUpperCase() + words.slice(1) : value
+}
+
+/** The first 8 characters of a run's ID, as its page's reference. */
+export const shortId = (id: string) => id.slice(0, 8)
+
+/** Who may decide an approval, in words. */
+export const APPROVERS: Record<Approvers, string> = {
+  "org:admin": "The organization's admins",
+  "org:member": "Any organization member",
+}
+
+/** Each failure category: its label, what it means, and its chip. */
+export const FAILURE_CATEGORIES: Record<
+  AdkRunFailureCategory,
+  { label: string; description: string; tone: ChipTone }
+> = {
+  failed: {
+    label: "The run failed",
+    description:
+      "A step failed it with no way to take, its input didn't fit, or a question was declined. Retrying carries it on from where it stopped.",
+    tone: "danger",
+  },
+  error: {
+    label: "Error",
+    description:
+      "An unexpected error running it, most likely a bug. It isn't retried automatically.",
+    tone: "danger",
+  },
+  transient: {
+    label: "Retrying automatically",
+    description:
+      "A temporary problem, such as a model overloaded, the network or a database failover. The worker retries it by itself.",
+    tone: "warning",
+  },
+  interrupted: {
+    label: "Interrupted",
+    description:
+      "Its worker stopped or went partway through. It carries on automatically.",
+    tone: "warning",
+  },
+}
+
+export const failureCategory = (category: string) =>
+  FAILURE_CATEGORIES[category as AdkRunFailureCategory] ?? FAILURE_CATEGORIES.error
+
+const EVENT_TITLES: Record<string, string> = {
+  created: "Started",
+  started: "Picked up",
+  resumed: "Carried on",
+  note: "Progress",
+  paused: "Waiting for a person",
+  decided: "Decided",
+  answered: "Answered",
+  declined: "Declined",
+  timed_out: "Timed out",
+  waiting: "Waiting",
+  succeeded: "Succeeded",
+  failed: "Failed",
+  retried: "Retried",
+  recovered: "Recovered",
+  abandoned: "Abandoned",
+}
+
+/** An activity entry's title. */
+export const eventTitle = (event: Pick<AdkRunEvent, "kind">) =>
+  EVENT_TITLES[event.kind] ?? humanize(event.kind)
+
+/** Whether an activity entry is a failure, shown as one. */
+export const isFailureEvent = (event: Pick<AdkRunEvent, "kind">) =>
+  event.kind === "failed" || event.kind === "declined"
+
+/**
+ * An error callout's title: the runs' database being unavailable (the
+ * admin's 503) reads as such, anything else as `fallback`.
+ */
+export const failureTitle = (
+  error: { status?: number } | null | undefined,
+  fallback: string
+) => (error?.status === 503 ? "ADK workflow runs are unavailable" : fallback)
+
+/* -------------------------------------------------------------------------- */
+/* Where the page looks                                                       */
+/* -------------------------------------------------------------------------- */
 
 /** The ADK workflows page's tabs; Overview is the default. */
 export type AgentsTab = "overview" | "runs"
@@ -56,22 +292,11 @@ export type AgentsTab = "overview" | "runs"
 export const isAgentsTab = (value: unknown): value is AgentsTab =>
   value === "overview" || value === "runs"
 
-/** A run's page's tabs: a background task's, and its Steps. */
-export type AdkRunTab = BackgroundTaskTab | "steps"
+/** A run's page's tabs; Overview is the default. */
+export type AdkRunTab = "overview" | "steps" | "activity"
 
 export const isAdkRunTab = (value: unknown): value is AdkRunTab =>
-  value === "steps" || isBackgroundTaskTab(value)
-
-/** The job that will run it (the 202's body). */
-export type AdkRunStarted = {
-  queue: string
-  key: string
-  agent_id: string
-  /** The revision it runs. */
-  revision: number
-  /** The ADK session it runs in. */
-  session_id: string
-}
+  value === "overview" || value === "steps" || value === "activity"
 
 /* -------------------------------------------------------------------------- */
 /* Steps                                                                      */
@@ -197,12 +422,8 @@ export function stepErrorOf(error: unknown): StepError | undefined {
   return found
 }
 
-/**
- * The ADK workflow a run started with: the snapshot in its task's input,
- * when it carries one as `document`.
- */
-export function runDocumentOf(payload: Record<string, unknown> | undefined) {
-  const document = payload?.document
+/** The ADK workflow a run started with, when it's one the builder reads. */
+export function runDocumentOf(document: unknown) {
   if (!document || typeof document !== "object") return undefined
   const doc = document as Partial<AgentDocument>
   return doc.format === AGENT_FORMAT && Array.isArray(doc.nodes)
@@ -239,35 +460,18 @@ export function stepNameOf(
 /* Pauses                                                                     */
 /* -------------------------------------------------------------------------- */
 
-/** What a paused ADK workflow run asks, from its approval's details. */
-export type AdkPauseDetails = {
-  /** A decision (approve or reject), or a person's answer. */
-  kind: "approval" | "human_input"
-  approvers?: Approvers
-  /** When an approval's time is up: it's rejected then. */
-  expires_at?: string
-  /** A JSON Schema of the answer human input asks for. */
-  response_schema?: Record<string, unknown>
-  step?: string
-  step_name?: string
-  workflow_name?: string
-  message?: string
-}
-
 /**
  * What a run waits for: a person's answer (`human_input`), else a decision
  * (`approval`, also what a pause the console doesn't know is taken for).
  */
-export const pauseKindOf = (
-  approval: Pick<BackgroundTaskApproval, "details">
-): AdkPauseDetails["kind"] =>
-  approval.details.kind === "human_input" ? "human_input" : "approval"
+export const pauseKindOf = (pause: Pick<AdkRunPause, "kind">) =>
+  pause.kind === "human_input" ? "human_input" : "approval"
 
 /** The JSON Schema a person's answer is held to; `{}` takes anything. */
 export function responseSchemaOf(
-  approval: Pick<BackgroundTaskApproval, "details">
+  pause: Pick<AdkRunPause, "details">
 ): Record<string, unknown> {
-  const schema = approval.details.response_schema
+  const schema = pause.details.response_schema
   return schema && typeof schema === "object" && !Array.isArray(schema)
     ? (schema as Record<string, unknown>)
     : {}
@@ -281,32 +485,98 @@ export const adkApprovePermission = (approvers: unknown) =>
 /* Queries                                                                    */
 /* -------------------------------------------------------------------------- */
 
-const runPath = (organizationId: string, taskId: string) =>
-  `/organizations/${encodeURIComponent(organizationId)}/adk-runs/${encodeURIComponent(taskId)}`
+/** Runs per page of the Runs tab (the API's most). */
+export const ADK_RUNS_PAGE = 100
 
-// Under the organization's background tasks' keys, so acting on a task
-// (and refreshBackgroundTask) refreshes these too.
-const runsKey = (organizationId: string, agentId: string) => [
-  ...backgroundTasks.scope({ organizationId }).keys.all,
-  "adk-workflow-runs",
-  agentId,
-]
-const stepsKey = (organizationId: string, taskId: string) => [
-  ...backgroundTasks.scope({ organizationId }).keys.all,
-  "adk-run-steps",
-  taskId,
-]
+const runsPath = (organizationId: string) =>
+  `/organizations/${encodeURIComponent(organizationId)}/adk-runs`
+const runPath = (organizationId: string, runId: string) =>
+  `${runsPath(organizationId)}/${encodeURIComponent(runId)}`
+
+/**
+ * Every query about the organization's runs is under its `all` key, so
+ * acting on a run (`refreshAdkRuns`) refreshes them all.
+ */
+export const adkRunKeys = {
+  all: (organizationId: string) => ["adk-runs", organizationId] as const,
+  list: (organizationId: string, filters: { agentId?: string; limit?: number }) =>
+    [...adkRunKeys.all(organizationId), "list", filters] as const,
+  pages: (organizationId: string) => [...adkRunKeys.all(organizationId), "pages"] as const,
+  detail: (organizationId: string, runId: string) =>
+    [...adkRunKeys.all(organizationId), "run", runId] as const,
+  steps: (organizationId: string, runId: string) =>
+    [...adkRunKeys.all(organizationId), "steps", runId] as const,
+}
+
+// A run acted on reaches a worker seconds later, so for a minute after one
+// the run and the lists are read as if something were running.
+const FOLLOW_MS = 60_000
+const following = new Map<string, number>()
+const follow = (key: string) => following.set(key, Date.now() + FOLLOW_MS)
+const isFollowing = (key: string) => (following.get(key) ?? 0) > Date.now()
+
+/** A run acted on in the last minute, which is read as if it were running. */
+export const isFollowingAdkRun = (organizationId: string, runId: string) =>
+  isFollowing(`${organizationId}/${runId}`)
+
+/**
+ * Rereads the organization's runs (every query under their key), and
+ * follows them closely for a while: after starting or acting on one.
+ */
+export function refreshAdkRuns(
+  client: QueryClient,
+  organizationId: string,
+  runId?: string
+) {
+  follow(organizationId)
+  if (runId) follow(`${organizationId}/${runId}`)
+  return client.invalidateQueries({ queryKey: adkRunKeys.all(organizationId) })
+}
+
+// Offset pages can overlap when runs start between them; keep the first.
+function loadedRuns(data: InfiniteData<AdkRunPage, number>): AdkRunPage {
+  const seen = new Set<string>()
+  const items: AdkRun[] = []
+  for (const page of data.pages) {
+    for (const run of page.items) {
+      if (seen.has(run.id)) continue
+      seen.add(run.id)
+      items.push(run)
+    }
+  }
+  return { items, total: data.pages.at(-1)?.total ?? items.length }
+}
 
 /**
  * The organization's ADK workflow runs, newest first, 100 at a time
- * (`fetchNextPage` for more): its background tasks of type `adk_workflows`.
+ * (`fetchNextPage` for more). Refreshes every few seconds while one is
+ * still going, else every 30 s. `data` is the loaded runs and how many there are.
  */
-export const useOrganizationAdkRuns = (organizationId: string) =>
-  useBackgroundTasks(
-    organizationId,
-    { task_type: [ADK_WORKFLOW_TASK_TYPE] },
-    { errorTitle: "Couldn't refresh the ADK workflow runs" }
-  )
+export function useOrganizationAdkRuns(organizationId: string) {
+  return useInfiniteQuery({
+    queryKey: adkRunKeys.pages(organizationId),
+    queryFn: ({ pageParam, signal }) =>
+      api.get<AdkRunPage>(runsPath(organizationId), {
+        params: { limit: ADK_RUNS_PAGE, offset: pageParam },
+        signal,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const loaded = pages.reduce((sum, page) => sum + page.items.length, 0)
+      return last.items.length > 0 && loaded < last.total ? loaded : undefined
+    },
+    select: loadedRuns,
+    enabled: Boolean(organizationId),
+    refetchInterval: (query) =>
+      query.state.status === "error"
+        ? false
+        : isFollowing(organizationId) ||
+            query.state.data?.pages.some((page) => page.items.some(isOpenRun))
+          ? OPEN_POLL_MS
+          : IDLE_POLL_MS,
+    meta: { errorTitle: "Couldn't refresh the ADK workflow runs" },
+  })
+}
 
 /**
  * An ADK workflow's latest runs, newest first. Refreshes every few seconds
@@ -318,84 +588,76 @@ export function useAdkWorkflowRuns(
   { enabled = true, limit = 10 }: { enabled?: boolean; limit?: number } = {}
 ) {
   return useQuery({
-    queryKey: [...runsKey(organizationId, agentId), limit],
+    queryKey: adkRunKeys.list(organizationId, { agentId, limit }),
     queryFn: ({ signal }) =>
-      api.get<BackgroundTaskPage>(
-        `${agentPath(organizationId, agentId)}/runs`,
-        {
-          params: { limit },
-          signal,
-        }
-      ),
+      api.get<AdkRunPage>(runsPath(organizationId), {
+        params: { agent_id: agentId, limit },
+        signal,
+      }),
     enabled: enabled && Boolean(organizationId && agentId),
-    refetchInterval: (query) => runsPollMs(query.state),
+    refetchInterval: (query) =>
+      isFollowing(organizationId) && query.state.status !== "error"
+        ? OPEN_POLL_MS
+        : runsPollMs(query.state),
     meta: { errorTitle: "Couldn't load the ADK workflow's runs" },
   })
 }
 
 /**
- * Run the ADK workflow as it's saved, with an input that fits its start
- * (the API answers 422 with why when it doesn't, or when the ADK workflow
- * doesn't build). Errors are the caller's to show: the run dialog shows
- * them by the input.
+ * One run, with its input, result, the ADK workflow it ran and its
+ * activity. Refreshes every few seconds while a worker has it (or it was
+ * just acted on), every 30 s while it waits for a person or a time.
  */
-export function useRunAdkWorkflow(organizationId: string, agentId: string) {
-  const client = useQueryClient()
-  return useMutation({
-    mutationFn: (input: unknown) =>
-      api.post<AdkRunStarted>(`${agentPath(organizationId, agentId)}/runs`, {
-        input,
-      }),
-    meta: { silent: true },
-    onSuccess: () => {
-      // Seconds later a worker picks it up; poll until it shows.
-      const queryKey = runsKey(organizationId, agentId)
-      void client.invalidateQueries({ queryKey })
-      window.setTimeout(
-        () => void client.invalidateQueries({ queryKey }),
-        OPEN_POLL_MS
-      )
+export function useAdkRun(organizationId: string, runId: string | undefined) {
+  return useQuery({
+    queryKey: adkRunKeys.detail(organizationId, runId ?? ""),
+    queryFn: ({ signal }) =>
+      api.get<AdkRunDetail>(runPath(organizationId, runId!), { signal }),
+    enabled: Boolean(organizationId && runId),
+    refetchInterval: (query) => {
+      if (query.state.status === "error") return false
+      const run = query.state.data
+      if (isLiveRun(run) || isFollowingAdkRun(organizationId, runId ?? ""))
+        return OPEN_POLL_MS
+      return run && isOpenRun(run) ? IDLE_POLL_MS : false
     },
+    meta: { errorTitle: "Couldn't refresh the ADK workflow run" },
   })
 }
 
 /** How often a run's steps refresh, given the run. */
 export function stepsPollMs(
-  run: Pick<BackgroundTask, "status" | "waiting_until"> | undefined,
+  run: Pick<AdkRun, "status"> | undefined,
   following: boolean
 ) {
-  if (following || isLiveStatus(run?.status)) return OPEN_POLL_MS
+  if (following || isLiveRun(run)) return OPEN_POLL_MS
   // Waiting for a person or a time: nothing moves until then.
-  return run && isOpenRun(run as BackgroundTask) ? IDLE_POLL_MS : false
+  return run && isOpenRun(run) ? IDLE_POLL_MS : false
 }
 
 /**
  * A run's steps, from its ADK session: every node, how far the run got with
  * it, what it handed on or why it failed. Refreshes every few seconds while
- * the run goes, and once more whenever the run itself changes (the task
- * page's own query, shared), so its last step shows when it finishes.
+ * the run goes, and once more whenever the run itself changes (its page's
+ * own query), so its last step shows when it finishes.
  */
 export function useAdkRunSteps(
   organizationId: string,
-  taskId: string | undefined
+  run: Pick<AdkRun, "id" | "status" | "updated_at"> | undefined
 ) {
   const client = useQueryClient()
-  const task = useBackgroundTask(organizationId, taskId)
-  const run = task.data
+  const runId = run?.id ?? ""
   const query = useQuery({
-    queryKey: stepsKey(organizationId, taskId ?? ""),
+    queryKey: adkRunKeys.steps(organizationId, runId),
     queryFn: ({ signal }) =>
-      api.get<AdkRunSteps>(`${runPath(organizationId, taskId!)}/steps`, {
+      api.get<AdkRunSteps>(`${runPath(organizationId, runId)}/steps`, {
         signal,
       }),
-    enabled: Boolean(organizationId && taskId),
+    enabled: Boolean(organizationId && runId),
     refetchInterval: (query) =>
       query.state.status === "error"
         ? false
-        : stepsPollMs(
-            run,
-            isFollowingBackgroundTask(organizationId, taskId ?? "")
-          ),
+        : stepsPollMs(run, isFollowingAdkRun(organizationId, runId)),
     meta: { errorTitle: "Couldn't refresh the run's steps" },
   })
 
@@ -408,29 +670,45 @@ export function useAdkRunSteps(
     seen.current = updated
     if (!first)
       void client.invalidateQueries({
-        queryKey: stepsKey(organizationId, taskId ?? ""),
+        queryKey: adkRunKeys.steps(organizationId, runId),
       })
-  }, [client, organizationId, taskId, updated])
+  }, [client, organizationId, runId, updated])
 
   return query
 }
 
 /* -------------------------------------------------------------------------- */
-/* Answers                                                                    */
+/* Actions                                                                    */
 /* -------------------------------------------------------------------------- */
 
 type MutationMeta = { meta?: { silent?: boolean; errorTitle?: string } }
 
 /**
+ * Run the ADK workflow as it's saved, with an input that fits its start
+ * (the API answers 422 with why when it doesn't, or when the ADK workflow
+ * doesn't build). The run is queued at once; a worker takes it seconds
+ * later. Errors are the caller's to show: the run dialog shows them by the
+ * input.
+ */
+export function useRunAdkWorkflow(organizationId: string, agentId: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: unknown) =>
+      api.post<AdkRun>(`${agentPath(organizationId, agentId)}/runs`, { input }),
+    meta: { silent: true },
+    onSuccess: (run) => void refreshAdkRuns(client, organizationId, run.id),
+  })
+}
+
+/**
  * Approve or reject what an ADK workflow run waits for: it carries on down
  * the node's approved or rejected way, on a worker, within seconds. A
  * decision names the approval, so one someone else decided first, or a
- * question that isn't an approval (409), never lands on a later one. Not
- * the task's own decisions: those refuse ADK workflow runs.
+ * question that isn't an approval (409), never lands on a later one.
  */
 export function useDecideAdkRun(
   organizationId: string,
-  taskId: string,
+  runId: string,
   { meta }: MutationMeta = {}
 ) {
   const client = useQueryClient()
@@ -440,17 +718,14 @@ export function useDecideAdkRun(
       approved,
       comment = "",
     }: ApprovalDecision & { requestId: string }) =>
-      api.post<BackgroundTaskDispatch>(
-        `${runPath(organizationId, taskId)}/decisions`,
-        {
-          request_id: requestId,
-          approved,
-          comment,
-        }
-      ),
+      api.post<AdkRun>(`${runPath(organizationId, runId)}/decisions`, {
+        request_id: requestId,
+        approved,
+        comment,
+      }),
     meta: { errorTitle: "Couldn't record the decision", ...meta },
     onSuccess: async (_, { approved }) => {
-      await refreshBackgroundTask(client, organizationId, taskId)
+      await refreshAdkRuns(client, organizationId, runId)
       toast.add({
         title: approved ? "Approved." : "Rejected.",
         description: approved
@@ -473,27 +748,78 @@ export type AdkAnswer = { requestId: string; answer: unknown }
  */
 export function useAnswerAdkRun(
   organizationId: string,
-  taskId: string,
+  runId: string,
   { meta }: MutationMeta = {}
 ) {
   const client = useQueryClient()
   return useMutation({
     mutationFn: ({ requestId, answer }: AdkAnswer) =>
-      api.post<BackgroundTaskDispatch>(
-        `${runPath(organizationId, taskId)}/answers`,
-        {
-          request_id: requestId,
-          answer,
-        }
-      ),
+      api.post<AdkRun>(`${runPath(organizationId, runId)}/answers`, {
+        request_id: requestId,
+        answer,
+      }),
     meta: { errorTitle: "Couldn't send the answer", ...meta },
     onSuccess: async () => {
-      await refreshBackgroundTask(client, organizationId, taskId)
+      await refreshAdkRuns(client, organizationId, runId)
       toast.add({
         title: "Answer sent.",
         description: "The run carries on with it.",
         type: "success",
       })
+    },
+  })
+}
+
+/** A failed run, retried as its next attempt: it carries on from where it stopped. */
+export function useRetryAdkRun(organizationId: string, runId: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<AdkRun>(`${runPath(organizationId, runId)}/retry`),
+    meta: { errorTitle: "Couldn't retry the run" },
+    onSuccess: async (run) => {
+      await refreshAdkRuns(client, organizationId, runId)
+      toast.add({
+        title: "Retrying.",
+        description: `It carries on as attempt ${run.attempt}, from where it stopped.`,
+        type: "success",
+      })
+    },
+  })
+}
+
+/**
+ * A finished run's payload, run again as a new run (another invocation of
+ * the same ADK session). `onSuccess` gets the new run, e.g. to open it.
+ */
+export function useResubmitAdkRun(organizationId: string, runId: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<AdkRun>(`${runPath(organizationId, runId)}/resubmit`),
+    meta: { errorTitle: "Couldn't resubmit the run" },
+    onSuccess: async (run) => {
+      await refreshAdkRuns(client, organizationId, run.id)
+      toast.add({
+        title: "Resubmitted.",
+        description: `It runs again as run ${shortId(run.id)}.`,
+        type: "success",
+      })
+    },
+  })
+}
+
+/** Give a run up: it never carries on. */
+export function useAbandonAdkRun(
+  organizationId: string,
+  runId: string,
+  { meta }: MutationMeta = {}
+) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.post<AdkRun>(`${runPath(organizationId, runId)}/abandon`),
+    meta: { errorTitle: "Couldn't abandon the run", ...meta },
+    onSuccess: async () => {
+      await refreshAdkRuns(client, organizationId, runId)
+      toast.add({ title: "Abandoned.", type: "success" })
     },
   })
 }

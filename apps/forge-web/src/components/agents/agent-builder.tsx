@@ -76,6 +76,7 @@ import {
   type AgentDocument,
 } from "@/lib/agents/document"
 import { AGENTS_ICON } from "@/lib/agents/model"
+import type { AdkRun } from "@/lib/agents/runs"
 import { AGENT_JSON_SCHEMA } from "@/lib/agents/schema"
 import { toApiError } from "@/lib/api"
 import { useScopeAccess } from "@/lib/hierarchy"
@@ -364,19 +365,19 @@ function Builder({
     const start = doc.nodes.find((node) => node.kind === "start")
     setRunning(start?.kind === "start" ? (start.config.input_schema ?? {}) : {})
   }
-  const started = () =>
+  const started = (run: AdkRun) =>
     toast.add({
       title: "Run started.",
       description:
-        "It shows under Runs, and on the ADK workflows page's Runs, once a worker picks it up.",
+        "It's queued, and a worker takes it within seconds. Follow it under Runs, or on its page.",
       type: "success",
       actionProps: {
-        children: "All runs",
+        children: "Open the run",
         onClick: () =>
           void navigate({
             to: "/organizations/$organizationId",
             params: { organizationId: organization.id },
-            search: { view: "agents", agentsTab: "runs" },
+            search: { view: "agents", agentRun: run.id },
           }),
       },
     })

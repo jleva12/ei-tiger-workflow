@@ -1,16 +1,18 @@
 """
-Running an organization's ADK workflows (``forge.agent/v1``, ``agent_documents.py``)
-on the async worker's ``adk_workflows`` queue: the ADK workflows task
-(packages/python/tasks/adk-workflows) runs each on Google ADK's graph engine.
+Running an organization's ADK workflows (``forge.agent/v1``, ``agent_documents.py``):
+a run is kept in this API's database by the run store
+(``forge_task_adk_workflows.run_store``, tables ``adk_runs`` and
+``adk_run_events``), and the async worker's ``adk_workflows`` queue has a
+``run_adk`` job take it: the ADK workflows task
+(packages/python/tasks/adk-workflows) runs it on Google ADK's graph engine.
 Their routes are ``api/routes/adk_workflow_runs.py``.
 
 A run carries its ADK workflow's document as it is when the run starts, and
 the documents of the saved ADK workflows it runs (its ``saved`` nodes', and
 theirs, and so on), so editing any of them never changes a run in progress.
-It acts as the member who started it. It's one of the organization's
-background tasks, labelled with the ADK workflow and its ADK session.
+It acts as the member who started it.
 
-Before it's submitted, the input is checked against the start's
+Before it's created, the input is checked against the start's
 ``input_schema`` and the document is built (``build_agent``), so a mistake is
 answered at once; the worker checks both again.
 
@@ -19,28 +21,33 @@ database (ADK's ``DatabaseSessionService``, app ``adk_workflows``, user the
 member it acts as, and the session ID made here): its steps are read from it
 (``forge_task_adk_workflows.steps``).
 
-Where it waits for a person is its background task's approval, whose
-``details`` say what kind: an ``approval`` is decided; ``human_input`` is
-answered, the answer held to the question's ``response_schema`` here and
-sent as the decision's comment, as JSON.
+Where it waits for a person is its ``pause``, whose ``kind`` (and its
+``details``' ``kind``) says what: an ``approval`` is decided; ``human_input``
+is answered, the answer held to the question's ``response_schema`` here and
+kept as the decision's comment, as JSON.
+
+Whenever a run is to be taken (created, decided, answered, retried,
+resubmitted), a job is queued for it. If that fails, the run stays queued and
+the worker's maintenance finds it: the caller isn't refused.
 """
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
+from forge_task_adk_workflows.run_store import Actor, RunStore
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
 from forge_admin.agent_build import AgentBuildError, build_agent
-from forge_admin.embedding import ADK_WORKFLOWS, Embedding
+from forge_admin.embedding import Embedding, EmbeddingError
+
+logger = logging.getLogger(__name__)
 
 #: ADK's app name for the runs' sessions.
 APP_NAME = "adk_workflows"
-#: The labels a run carries: the ADK workflow it runs, and its ADK session.
-AGENT_LABEL = "adk_workflow"
-SESSION_LABEL = "adk_session"
 #: The most characters of JSON an answer may be: a decision's comment's.
 MAX_ANSWER = 4000
 #: The most problems a refusal names.
@@ -185,7 +192,8 @@ async def prepare_run(
 
 
 async def start_adk_run(
-    embedding: Embedding,
+    runs: RunStore,
+    queue: Embedding,
     record: dict[str, Any],
     *,
     saved: dict[str, dict[str, Any]],
@@ -193,29 +201,32 @@ async def start_adk_run(
     run_as: str,
     run_as_name: str,
     trigger: dict[str, Any],
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """
-    Submit a run of an ADK workflow, as its record is now.
+    Start a run of an ADK workflow, as its record is now: the run, queued,
+    in a new ADK session, and a job to take it.
 
+    :param runs: The run store.
+    :param queue: The async worker's queues.
     :param record: The ADK workflow's record (``AgentStore``).
     :param saved: The saved ADK workflows' documents it runs (``prepare_run``).
     :param input: What the run starts with; checked already.
     :param run_as: The member it acts as: its ADK session's user.
     :param run_as_name: Their name, for its record.
     :param trigger: What started it: ``{"type": "manual", "by": <user>}``.
-    :return: ``{"queue", "key", "session_id"}`` of its job and its ADK session.
-    :raises EmbeddingError: The queue could not be reached.
+    :return: The run, as the store has it.
+    :raises SQLAlchemyError: The run store's database isn't answering.
     """
-    run = uuid4()
     agent_id = record["_id"]
-    key = f"{ADK_WORKFLOWS}.run:{agent_id}:{run.hex}"
-    session_id = str(run)
+    session_id = str(uuid4())
     document = snapshot(record["document"])
+    name = str(document.get("name") or "")
+    # What the worker runs (forge_task_adk_workflows.runs.RunPayload).
     payload = {
         "tenant_id": record["organization_id"],
         "agent_id": agent_id,
         "revision": record["revision"],
-        "name": str(document.get("name") or ""),
+        "name": name,
         "document": document,
         "saved": saved,
         "input": input,
@@ -224,14 +235,32 @@ async def start_adk_run(
         "run_as_name": run_as_name,
         "trigger": trigger,
     }
-    await embedding.run_adk_workflow(
-        tenant_id=record["organization_id"],
-        key=key,
-        labels={AGENT_LABEL: agent_id, SESSION_LABEL: session_id},
+    run = await runs.create(
+        organization_id=record["organization_id"],
+        agent_id=agent_id,
+        agent_name=name or agent_id,
+        revision=record["revision"],
+        session_id=session_id,
         payload=payload,
-        requested_by={"id": run_as, "display_name": run_as_name},
+        requested_by=Actor(run_as, run_as_name),
     )
-    return {"queue": ADK_WORKFLOWS, "key": key, "session_id": session_id}
+    await queue_run(queue, run["id"])
+    return run
+
+
+async def queue_run(queue: Embedding, run_id: str) -> None:
+    """
+    Queue a job that takes the run. When the queue can't be reached, the run
+    stays queued and the worker's maintenance finds it later: only logged.
+    """
+    try:
+        await queue.run_adk(run_id)
+    except EmbeddingError as error:
+        logger.warning(
+            "Couldn't queue ADK workflow run %s; the worker will find it: %s",
+            run_id,
+            error,
+        )
 
 
 def checked_answer(details: dict[str, Any], answer: Any) -> str:
@@ -239,7 +268,7 @@ def checked_answer(details: dict[str, Any], answer: Any) -> str:
     A person's answer to a run's question (human input), as the decision's
     comment carries it.
 
-    :param details: The question, as the run's approval has it: its
+    :param details: The question, its pause's details: its
         ``response_schema`` (none or ``{}`` takes any answer).
     :param answer: The answer.
     :return: The answer as JSON.

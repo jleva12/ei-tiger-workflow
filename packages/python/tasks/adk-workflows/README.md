@@ -2,8 +2,10 @@
 
 The `adk_workflows` task type of the async worker: it runs an organization's
 ADK workflows (`forge.agent/v1`, built on the web console's ADK workflows page
-and kept by the admin API) on Google ADK's graph engine, as tracked runs of the
-enhanced task framework.
+and kept by the admin API) on Google ADK's graph engine. Each run is kept in
+the run store (`run_store.py`): two tables in the admin MySQL, beside the
+runs' ADK sessions, which the admin API starts, lists and acts on and the
+worker runs.
 
 - `graph`: builds a document into one ADK `Workflow`. It has one higher-order
   function per kind of node (`graph/factories`), and JSON Schemas become
@@ -12,6 +14,11 @@ enhanced task framework.
   (`forge_async_worker.tasks` entry point `adk_workflows`), on the
   `adk_workflows` queue, with one job, `run`.
 - `runs.py`: one run, carried on from its ADK session every time the job runs.
+- `run_store.py`: `RunStore`, the runs (`adk_runs`) and their activity
+  (`adk_run_events`): their status (queued, running, paused, waiting,
+  succeeded, failed, abandoned), payload, what they keep, decisions, pause or
+  wait, result or failure, and the worker's lease. The admin API's migration
+  `0005adk_run_store` creates the tables.
 - `models.py`: the models LLM nodes run on.
 - `steps.py`: a run's steps, as its run page shows them.
 - `support`: what the Forge step kinds are built on: their settings, JSONata
@@ -20,9 +27,9 @@ enhanced task framework.
 
 ## A run
 
-The admin API submits a job `{task_type: "adk_workflows", kind: "run"}`
-labelled `{"adk_workflow": <agent id>, "adk_session": <session id>}`, with the
-payload:
+The admin API creates the run in the run store, queued, with the payload
+below, and queues `run_adk` (`{"run_id": ...}`) on the `adk_workflows` queue;
+the worker runs the task's `run` job on it:
 
 | Field | What |
 | --- | --- |
@@ -35,22 +42,22 @@ payload:
 | `run_as`, `run_as_name` | The member it acts as: the session's user. |
 | `trigger` | How it started (`{"kind": "manual"}`). |
 
-Every attempt of the job (the first, each resume after a decision or a wait,
-each retry and restart) runs `RunAdkWorkflowJob.run`, which carries the run on
-from its session:
+Every attempt of the run (the first, each one after a decision or a wait,
+each retry) runs `RunAdkWorkflowJob.run`, which carries the run on from its
+session:
 
 1. **Start.** The session (app `adk_workflows`, user `run_as`, ID
    `session_id`) is created if it isn't there, and the graph runs on the
    input, sent as a JSON text message, until it ends or pauses. The run is one
-   ADK invocation of that session, whose ID comes from the task framework's
-   task: a resubmitted task (same payload, same session) is another invocation
-   of the session, run afresh; the session's latest invocation is the latest
-   task's, which is what the run page shows.
+   ADK invocation of that session, whose ID comes from the run's: a
+   resubmitted run (same payload, same session) is another invocation of the
+   session, run afresh; the session's latest invocation is the latest run's,
+   which is what the run page shows.
 2. **Pauses.** A node that waits asks for input (ADK's `RequestInput`). The
-   oldest pending pause of the run is asked of the task framework, then
-   answered in the session, which resumes the same invocation; finished steps
-   don't run again. The task framework asks one question per run at a time, so
-   pauses in parallel ways are answered one after another.
+   oldest pending pause of the run is asked of its control, then answered in
+   the session, which resumes the same invocation; finished steps don't run
+   again. A run waits at one question at a time, so pauses in parallel ways
+   are answered one after another.
    - **Approval**: an approval gate, `control.approval(key=<interrupt id>,
      reason=<message>, details={kind: "approval", approvers, expires_at, step,
      step_name, workflow_name, agent_id, message, session_id, interrupt_id},
@@ -64,8 +71,8 @@ from its session:
      Declined, or anything but a JSON object, fails the run.
    - **Delay**: once its time has come (or is within `inline_delay_seconds`,
      slept in place), the timer wakes it; before that the run lets the worker
-     go until then (`control.wait_until`, the task framework's scheduled
-     resume).
+     go until then (`control.wait_until`: the worker queues the run for
+     then).
 
    A gate nobody has decided yet ends the attempt by raising the control's
    signal; its decision runs the job again.
@@ -77,11 +84,11 @@ from its session:
    that doesn't fit the start, a failed End, a step that failed with no way to
    take, a human input declined) fails it with its message and `step`. A
    document that doesn't build fails it at once, without a retry. A model's,
-   the network's or the database's hiccup is a `TransientError`: the queue
-   tries again.
+   the network's or the database's hiccup is a `TransientError`: the worker
+   tries again, with backoff.
 5. **Interrupted.** When the run's invocation has events but neither a pending
    pause nor a finish (the worker died mid-way, a hiccup, a failed run
-   restarted), it carries on where it stopped: ADK resumes the invocation, and
+   retried), it carries on where it stopped: ADK resumes the invocation, and
    a step that was running, or failed, runs again. When ADK can't, the run
    starts over in a new session, `<session_id>-r<n>`, kept with the job and
    noted (with its `session_id`), and the result names it; side effects may
@@ -124,8 +131,9 @@ uv run --project ../../../../apps/forge-async-worker pytest
 ```
 
 `tests/test_task.py` runs the job as the worker does, with ADK's
-`DatabaseSessionService` on SQLite, the task framework's `LocalJobControl`,
-scripted models and a fake HTTP transport. `tests/test_expressions.py` checks
+`DatabaseSessionService` on SQLite, `LocalJobControl`, scripted models and a
+fake HTTP transport; `tests/test_run_store.py` the run store on SQLite. The
+worker's tests run the job on the run store. `tests/test_expressions.py` checks
 the `{{ }}` references the builder writes against
 `tests/fixtures/expression-references.json`, which the web console's tests
 read too.

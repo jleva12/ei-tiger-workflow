@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, Request, status
 from pymongo.errors import PyMongoError
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from forge_admin.api.routes.common import (
     Audited,
@@ -167,12 +168,13 @@ async def delete_organization(
     enforcer: Enforcer,
 ) -> None:
     """
-    Delete an organization and every role assigned in it. Its agents (its ADK
-    workflows) leave MongoDB; an organization that's gone can't have them
-    replaced, so failing to remove them is only logged.
+    Delete an organization and every role assigned in it. Its ADK workflow
+    runs are forgotten, and its agents (its ADK workflows) leave MongoDB; an
+    organization that's gone can't have them read or replaced, so failing to
+    remove them is only logged.
     \f
     :param organization_id: The organization.
-    :param request: The request, for the agent store.
+    :param request: The request, for the run and agent stores.
     :param user: The caller.
     :param session: The request's database session.
     :param enforcer: The Casbin enforcer.
@@ -182,6 +184,14 @@ async def delete_organization(
     await remove_assignments_in(session, assignment_pattern(domain))
     await session.delete(await session.get(Organization, organization_id))
     await session.commit()
+    try:
+        await request.app.state.adk_runs.delete_organization(organization_id)
+    except (SQLAlchemyError, OSError) as error:
+        logger.warning(
+            "Organization %s is deleted, but its ADK workflow runs are still kept: %s",
+            organization_id,
+            error,
+        )
     store = request.app.state.organization_agents
     if store is None:
         return

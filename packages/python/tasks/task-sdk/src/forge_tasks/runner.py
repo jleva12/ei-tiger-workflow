@@ -1,6 +1,7 @@
 """Runs JobSpecs against the registered task types. Queue-agnostic: the
-inline queue here runs follow-ups in-process (tests, the CLI); the worker has
-its own queue and runs every job through the task framework."""
+inline queue here runs follow-ups in-process (tests, the CLI); the worker runs
+an ADK workflow run's job off its queue, on the run store, and queues no
+follow-ups."""
 
 from __future__ import annotations
 

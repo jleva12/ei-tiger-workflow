@@ -288,7 +288,7 @@ export function OrganizationAgents({
   organizationName: string
   tab: AgentsTab
   onTabChange: (tab: AgentsTab) => void
-  /** Open a run's page (its background task's ID). */
+  /** Open a run's page (its ID). */
   onOpenRun: (taskId: string) => void
 }) {
   const navigate = useNavigate()
