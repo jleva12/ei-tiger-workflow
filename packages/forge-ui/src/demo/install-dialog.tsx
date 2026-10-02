@@ -44,12 +44,13 @@ export function InstallDialog() {
             Use the Forge UI design system
           </DialogTitle>
           <DialogDescription className="text-sm/[1.6]">
-            This project is a shadcn registry, served from the private{" "}
+            This project is a shadcn registry, served from{" "}
+            <code>packages/forge-ui</code> in the private{" "}
             <code>{registryRepo}</code> repo on GitHub. Any project can install
             from it with a GitHub token that can read the repo.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-4">
+        <div className="flex min-w-0 flex-col gap-4">
           <div>
             <Caption>1 · Initialise with the same preset</Caption>
             <CodeBlock code="npx shadcn@latest init --preset b27GdBA3 --base base" />

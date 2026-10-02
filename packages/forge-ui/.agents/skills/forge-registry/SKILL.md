@@ -110,17 +110,23 @@ problems in files you didn't touch; only your files need to be clean.
 
 ### Publishing
 
-Apps install from the files committed to the private GitHub repo
-`jleva12/forge-ui` (`raw.githubusercontent.com/jleva12/forge-ui/<ref>/public/r/{name}.json`,
+This package lives at `packages/forge-ui` in the private monorepo
+`jleva12/ei-tiger-agent-workflow-builder`. Apps install from the files
+committed there
+(`raw.githubusercontent.com/jleva12/ei-tiger-agent-workflow-builder/<ref>/packages/forge-ui/public/r/{name}.json`,
 with a token in `FORGE_UI_TOKEN`), so a change is published when it's
 pushed — and only if the rebuilt `registry.json` and `public/r` are
 committed with it. `npm run registry:check` rebuilds and fails on
-uncommitted registry changes; the `Registry` workflow in
-`.github/workflows/registry.yml` runs it and `tsc -b` on every push.
-Releases are git tags (`v0.1.0`) that apps can pin in their registry URL.
+uncommitted registry changes; the monorepo's `Forge UI registry` workflow
+(`.github/workflows/forge-ui-registry.yml` at the repo root) runs it,
+`tsc -b` and the tests on every push that touches `packages/forge-ui`.
+Releases are `forge-ui-`prefixed git tags (`forge-ui-v0.1.0`) that apps
+can pin in their registry URL.
 The `base` item (`registry:base`) starts new apps with
-`npx shadcn@latest init jleva12/forge-ui/base#main --template vite --base base`:
-its `config` writes the registry and token header into the new
+`npx shadcn@latest init jleva12/ei-tiger-agent-workflow-builder/base#main --template vite --base base`:
+that `owner/repo/item` form reads the monorepo's root `registry.json`,
+which only `include`s this package's `registry.json` — keep it that way.
+Its `config` writes the registry and token header into the new
 `components.json` and its `registryDependencies` install everything, so add
 new top-level libraries to it too. `REGISTRY_URL` overrides the URL it writes.
 `base` ships `src/index.css` verbatim through `index-css` and leaves
@@ -160,11 +166,12 @@ new component or variant appears there. Pages are routed by URL hash.
    nothing else is needed. `#workspace` is reserved for the full-screen
    workspace preview.
 
-Check it in the browser (`npm run dev`, or the `components` entry in
-`.claude/launch.json` with the preview tools, port 5180) at `#my-thing`, in
+Check it in the browser (`npm run dev`, or the `forge-ui` entry in the
+monorepo's `.claude/launch.json` with the preview tools, port 5185) at `#my-thing`, in
 light and dark (`d` toggles), and at narrow widths — the demo chrome is
 itself an `AppShell`, so container breakpoints behave as they do in apps.
-The `reference-app` entry (port 5190) runs the original app the library was
+The `reference-app` entry in this package's own `.claude/launch.json`
+(port 5190, which `apps/forge-web` also uses) runs the original app the library was
 extracted from, for comparing a component against what it was extracted from.
 
 ## Principles

@@ -1,8 +1,9 @@
 # Packages
 
 Shared Python libraries used by the applications in `apps/`: the admin API
-(`apps/forge-admin-api`) and the async worker (`apps/forge-async-worker`).
-Each is a uv project with a `src/` layout. An app depends on one with a path
+(`apps/forge-admin-api`) and the async worker (`apps/forge-async-worker`);
+and the Forge UI design system the web console's components come from
+(`forge-ui/`, below them). Each Python library is a uv project with a `src/` layout. An app depends on one with a path
 source in its `pyproject.toml`
 (`[tool.uv.sources] name = { path = "../../packages/python/<name>", editable = true }`)
 and its Dockerfile copies the package directory before `uv sync`.
@@ -41,6 +42,21 @@ and its Dockerfile copies the package directory before `uv sync`.
   ADK sessions. The admin API depends on it too, to build a document before
   a run and to read a run's steps from its session. Their tests run in the
   worker's environment (`make async-worker-check`).
+
+[`forge-ui/`](forge-ui/README.md) is the Forge UI design system: shadcn
+primitives on Base UI, Forge composites, the theme and the data and state
+libraries, with a demo app (`make forge-ui`, port 5185). Apps don't import
+it; they copy its items in with the shadcn CLI
+(`npx shadcn@latest add @forge-ui/<item>`) from the shadcn registry it
+builds into `forge-ui/registry.json` and `forge-ui/public/r`, read from
+this repo on GitHub with a token (`FORGE_UI_TOKEN`), which works for any
+project, inside this repo or not. The root `registry.json` only includes
+`forge-ui/registry.json`, so `npx shadcn@latest init
+jleva12/ei-tiger-agent-workflow-builder/base#main` can start a new app.
+Rebuild the registry with a change and commit both (`make
+forge-ui-registry`); `make forge-ui-check` and the `Forge UI registry`
+workflow fail when they differ. It came from `jleva12/forge-ui` with its
+history.
 
 Packages never import application code. Code used by only one application
 stays in that application.

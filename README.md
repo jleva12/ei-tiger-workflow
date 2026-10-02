@@ -191,7 +191,9 @@ apps/
     .env.example          Worker and task settings template
     pyproject.toml        The app's dependencies (the bundled task package is the adk-workflows extra) and tool settings
     uv.lock               The app's lockfile; .venv is installed beside it
-packages/                 Shared Python libraries (see packages/README.md)
+packages/                 Shared Python libraries and the Forge UI design system (see packages/README.md)
+  forge-ui/               Forge UI: shadcn primitives, Forge composites, theme and libraries, a demo app, and the
+                          shadcn registry apps install them from (registry.json, public/r)
   python/common/          forge-common: ADK toolset helpers and the shared model-provider YAML and loader
   python/jsonata/         forge-jsonata: the JSONata engine ADK workflows' expressions run on
   python/enhanced-task-framework/  etf: tracks, audits, pauses and recovers async job runs (each ADK workflow run)
@@ -199,6 +201,8 @@ packages/                 Shared Python libraries (see packages/README.md)
   python/tasks/adk-workflows/  forge-task-adk-workflows: the ADK workflows task, which builds and runs ADK workflows
 tests/infrastructure/     Validates the rendered Compose stack (make infrastructure-check)
 .claude/                  Agent skills for the Forge UI, data and state conventions; dev-server launch config
+.github/workflows/        forge-ui-registry.yml: Forge UI's typecheck, tests and committed-registry check
+registry.json             Includes packages/forge-ui/registry.json, for shadcn's owner/repo/item addresses
 compose.yaml              Includes compose.infrastructure.yaml and each app's compose.yaml
 compose.infrastructure.yaml  The shared MongoDB and Redis
 .env.compose.example      Root Compose settings template
@@ -226,7 +230,8 @@ belongs to, for example `cd apps/forge-web && npm install <pkg>` or
 
 ```sh
 make check             # Compose stack; web typecheck, lint, tests and build; admin lint, format and unit tests;
-                       # async worker and task packages lint, format, types and unit tests; forge-common, JSONata and etf checks
+                       # async worker and task packages lint, format, types and unit tests; forge-common, JSONata and etf checks;
+                       # Forge UI typecheck, tests and committed registry
 make admin-test-mysql  # admin migrations and readiness against real MySQL
 make async-worker-test-redis  # the async worker's SAQ queues against redis
 make docker-build      # build every service image

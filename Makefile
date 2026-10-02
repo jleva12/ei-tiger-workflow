@@ -16,6 +16,8 @@ TASK_PACKAGES := $(addprefix packages/python/tasks/,task-sdk adk-workflows)
 COMMON_DIR := packages/python/common
 JSONATA_DIR := packages/python/jsonata
 ETF_DIR := packages/python/enhanced-task-framework
+# The Forge UI design system: its demo and the shadcn registry apps install from.
+FORGE_UI_DIR := packages/forge-ui
 # The apps make up-all-local runs natively, each with its own make target.
 LOCAL_APPS := web admin async-worker async-worker-api
 .PHONY: help env install infrastructure start up up-all-local up-all-local-deps down logs logs-web logs-admin logs-async-worker status restart docker-build check
@@ -26,6 +28,7 @@ LOCAL_APPS := web admin async-worker async-worker-api
 .PHONY: shared-deps infrastructure-check
 .PHONY: jsonata-check jsonata-fmt jsonata-test-re2
 .PHONY: etf-check etf-fmt
+.PHONY: forge-ui forge-ui-install forge-ui-check forge-ui-registry
 
 # Appends line $(1) to env file $(2) on a line of its own, even when the
 # file's last line has no newline (echo >> alone would join the two).
@@ -34,7 +37,7 @@ append = { [ -z "$$(tail -c1 $(2))" ] || echo >> $(2); echo "$(1)" >> $(2); }
 .DEFAULT_GOAL := help
 
 help:
-	@echo "make install            Install every app's dependencies from its own lockfile"
+	@echo "make install            Install every app's, and Forge UI's, dependencies from its own lockfile"
 	@echo "make infrastructure     Start admin MySQL, migrate (default roles) and seed you as the site admin user"
 	@echo "make shared-deps        Start the shared MongoDB and Redis"
 	@echo "make infrastructure-check Validate the Compose stack: shared services, connections and queues"
@@ -46,7 +49,7 @@ help:
 	@echo "make status             Show service status"
 	@echo "make restart            Rebuild and recreate the services after editing their settings"
 	@echo "make docker-build       Build the service images without starting them"
-	@echo "make check              Infrastructure, web, admin, async worker and shared package checks, and the web production build"
+	@echo "make check              Infrastructure, web, admin, async worker, shared package and Forge UI checks, and the web production build"
 	@echo "make web                Run the React dev server on http://localhost:5190"
 	@echo "make web-check / web-test / web-build / web-lint  Run one web step"
 	@echo "make admin-deps         Start admin MySQL plus the shared MongoDB and Redis for native runs"
@@ -68,6 +71,9 @@ help:
 	@echo "make jsonata-test-re2   Test the optional RE2 regex engine integration"
 	@echo "make etf-check          Enhanced task framework: lint and unit tests"
 	@echo "make etf-fmt            Autofix the enhanced task framework's lint findings"
+	@echo "make forge-ui           Run the Forge UI design system demo on http://localhost:5185"
+	@echo "make forge-ui-registry  Rebuild the Forge UI shadcn registry (registry.json, public/r); commit it with the change"
+	@echo "make forge-ui-check     Forge UI typecheck, tests, and the registry rebuilt and committed (as CI runs it)"
 
 env:
 	@test -e .env.compose || (umask 077; cp .env.compose.example .env.compose)
@@ -92,7 +98,7 @@ env:
 	  else $(call append,FORGE_ADMIN_JWT_SECRET=$$secret,$(ADMIN_DIR)/.env); fi; \
 	  echo "Generated FORGE_ADMIN_JWT_SECRET in $(ADMIN_DIR)/.env"; }
 
-install: web-install admin-install async-worker-install
+install: web-install admin-install async-worker-install forge-ui-install
 
 # MySQL, the schema and you as the site administrator (the
 # FORGE_ADMIN_SITE_ADMIN_* settings in apps/forge-admin-api/.env), for development and
@@ -148,7 +154,7 @@ restart: env
 docker-build: env
 	$(COMPOSE) build $(SERVICES)
 
-check: infrastructure-check web-check web-test web-build admin-check async-worker-check common-check jsonata-check etf-check
+check: infrastructure-check web-check web-test web-build admin-check async-worker-check common-check jsonata-check etf-check forge-ui-check
 
 web-install:
 	cd $(WEB_DIR) && $(NPM) ci
@@ -276,3 +282,17 @@ etf-check:
 
 etf-fmt:
 	cd $(ETF_DIR) && $(UV) run --locked --extra dev --extra mongo ruff check --fix .
+
+forge-ui-install:
+	cd $(FORGE_UI_DIR) && $(NPM) ci
+
+forge-ui:
+	cd $(FORGE_UI_DIR) && $(NPM) run dev -- --port 5185 --strictPort
+
+forge-ui-registry:
+	cd $(FORGE_UI_DIR) && $(NPM) run registry:build
+
+# registry:check rebuilds the registry and fails when registry.json or
+# public/r differ from what's committed: apps install the committed files.
+forge-ui-check:
+	cd $(FORGE_UI_DIR) && npx tsc -b && $(NPM) test && $(NPM) run registry:check

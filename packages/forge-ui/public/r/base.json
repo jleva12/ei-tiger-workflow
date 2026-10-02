@@ -94,7 +94,7 @@
     "menuAccent": "subtle",
     "registries": {
       "@forge-ui": {
-        "url": "https://raw.githubusercontent.com/jleva12/forge-ui/main/public/r/{name}.json",
+        "url": "https://raw.githubusercontent.com/jleva12/ei-tiger-agent-workflow-builder/main/packages/forge-ui/public/r/{name}.json",
         "headers": {
           "Authorization": "Bearer ${FORGE_UI_TOKEN}"
         }

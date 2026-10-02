@@ -55,13 +55,23 @@ Copy `.env.example` to `.env.local` in this directory:
   `src/lib/api-instance.ts`. Vite inlines it into the bundle, so it must not
   hold credentials.
 - `FORGE_UI_TOKEN` authenticates the private `@forge-ui` shadcn registry
-  declared in `components.json`. Only the shadcn CLI reads it.
+  declared in `components.json`, a GitHub token that can read this repo.
+  Only the shadcn CLI reads it.
 
 Add components from this directory, where `components.json` lives:
 
 ```sh
 npx shadcn@latest add @forge-ui/<item>   # Forge UI registry
 npx shadcn@latest add <component>        # shadcn registry
+```
+
+The `@forge-ui` registry is [`packages/forge-ui`](../../packages/forge-ui/README.md),
+served from its files committed on `main`. To try a change to an item before
+it's pushed, rebuild it there (`npm run registry:build`) and install the item
+from disk; its `@forge-ui/…` dependencies still come from `main`:
+
+```sh
+npx shadcn@latest add ../../packages/forge-ui/public/r/<item>.json
 ```
 
 ## Structure
@@ -85,7 +95,7 @@ npx shadcn@latest add <component>        # shadcn registry
 - The root `.claude/skills/` documents these conventions for AI coding assistants:
   `forge-ui` (screens and components), `forge-data` (server data) and
   `forge-state` (shared client state); their `src/` paths are relative to this
-  app. `skills-lock.json` pins their source.
+  app. `skills-lock.json` pins their source, `packages/forge-ui`.
 
 ## Container
 

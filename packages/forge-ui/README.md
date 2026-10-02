@@ -36,11 +36,13 @@ Press `d` to toggle dark mode, `/` or `⌘K` to find a component.
 
 ## Use it in another project
 
-The library is a shadcn registry served straight from this private GitHub
-repo, [`jleva12/forge-ui`](https://github.com/jleva12/forge-ui): the
-generated `registry.json` and `public/r/*.json` are committed, and apps read
-them from `raw.githubusercontent.com` with a GitHub token. There's no server
-to run.
+The library is a shadcn registry served straight from the private GitHub
+monorepo it lives in,
+[`jleva12/ei-tiger-agent-workflow-builder`](https://github.com/jleva12/ei-tiger-agent-workflow-builder),
+under `packages/forge-ui`: the generated `registry.json` and
+`public/r/*.json` are committed, and apps read them from
+`raw.githubusercontent.com` with a GitHub token. There's no server to run.
+Reading the registry needs read access to the whole monorepo.
 
 ### Start a new app in one command
 
@@ -48,9 +50,12 @@ With the GitHub CLI logged in (`gh auth login`) to an account that can read
 the repo:
 
 ```bash
-FORGE_UI_TOKEN=$(gh auth token) npx shadcn@latest init jleva12/forge-ui/base#main --template vite --base base --name my-app
+FORGE_UI_TOKEN=$(gh auth token) npx shadcn@latest init jleva12/ei-tiger-agent-workflow-builder/base#main --template vite --base base --name my-app
 ```
 
+shadcn reads the `owner/repo/item` form from the repo's root
+`registry.json`; the monorepo's root one includes this package's
+`registry.json`, so its items and files resolve from `packages/forge-ui`.
 This scaffolds a Vite + React app, writes its `components.json` with the
 `@forge-ui` registry and its `${FORGE_UI_TOKEN}` header (the placeholder,
 never the token), and installs everything: every primitive and component,
@@ -71,8 +76,9 @@ To add Forge UI to an existing app instead, follow these steps:
 
 1. **Get a token that can read the repo.** Either:
    - a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)
-     with _Repository access_ → _Only select repositories_ → `forge-ui`
-     and _Permissions_ → _Contents_ → _Read-only_, or
+     with _Repository access_ → _Only select repositories_ →
+     `ei-tiger-agent-workflow-builder` and _Permissions_ → _Contents_ →
+     _Read-only_, or
    - if you use the GitHub CLI, the token it already has:
      `FORGE_UI_TOKEN=$(gh auth token) npx shadcn@latest add …`
 
@@ -104,7 +110,7 @@ To add Forge UI to an existing app instead, follow these steps:
    {
      "registries": {
        "@forge-ui": {
-         "url": "https://raw.githubusercontent.com/jleva12/forge-ui/main/public/r/{name}.json",
+         "url": "https://raw.githubusercontent.com/jleva12/ei-tiger-agent-workflow-builder/main/packages/forge-ui/public/r/{name}.json",
          "headers": { "Authorization": "Bearer ${FORGE_UI_TOKEN}" }
        }
      }
@@ -113,7 +119,7 @@ To add Forge UI to an existing app instead, follow these steps:
 
    Commit `components.json` as is: it holds the `${FORGE_UI_TOKEN}`
    placeholder, never the token. To pin a release, replace `main` with a tag
-   such as `v0.1.0`.
+   such as `forge-ui-v0.1.0`.
 
 3. **Install** the theme and everything, or only what you need:
 
@@ -177,28 +183,36 @@ app.
 Apps read whatever is committed, so a change ships when it's pushed:
 
 1. Change the source, then rebuild the registry and commit it with the
-   change:
+   change (from `packages/forge-ui`):
 
    ```bash
    npm run registry:build
-   git add -A && git commit
+   git add . && git commit
    git push
    ```
 
    `npm run registry:check` rebuilds and fails if `registry.json` or
-   `public/r` has uncommitted changes; the `Registry` GitHub Actions workflow
-   runs it (and the typecheck) on every push, so a forgotten rebuild shows
-   up as a failed check.
+   `public/r` has uncommitted changes; the monorepo's `Forge UI registry`
+   GitHub Actions workflow (`.github/workflows/forge-ui-registry.yml`) runs
+   it, the typecheck and the tests on every push that touches
+   `packages/forge-ui`, so a forgotten rebuild shows up as a failed check.
 
 2. Apps that point at `main` see the change within about five minutes
    (raw.githubusercontent.com caches files that long).
 
-3. To cut a version that apps can pin to, tag it:
+3. To cut a version that apps can pin to, tag it. Tags are shared with the
+   rest of the monorepo, so Forge UI's carry a `forge-ui-` prefix:
 
    ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
+   git tag forge-ui-v0.1.0
+   git push origin forge-ui-v0.1.0
    ```
+
+Apps in the monorepo (`apps/forge-web`) can try a change before it's
+pushed by installing the built item from disk, e.g.
+`npx shadcn@latest add ../../packages/forge-ui/public/r/<item>.json`
+after `npm run registry:build`. Only that item comes from disk: its
+`@forge-ui/…` dependencies still resolve from the registry URL.
 
 The files are plain JSON, so any static host works too: `npm run build`
 copies `public/r` into `dist/r`.
@@ -1447,13 +1461,14 @@ matching skill in the same change so agents don't learn the old one.
 
 ### Skills in an app that uses Forge UI
 
-Install the three app-facing skills straight from this repo with the
+Install the three app-facing skills straight from this package with the
 [`skills`](https://www.npmjs.com/package/skills) CLI. It clones with your
 GitHub credentials, so the GitHub CLI login that reads the registry works
-here too:
+here too. Point it at `packages/forge-ui`: from the monorepo's root it would
+find the copies installed in the root `.claude/skills` instead:
 
 ```bash
-npx skills add jleva12/forge-ui --skill forge-ui forge-data forge-state -a claude-code -y
+npx skills add https://github.com/jleva12/ei-tiger-agent-workflow-builder/tree/main/packages/forge-ui --skill forge-ui forge-data forge-state -a claude-code -y
 ```
 
 They're copied into the app's `.claude/skills/` and recorded in

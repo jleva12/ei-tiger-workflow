@@ -1,0 +1,42 @@
+# Apps install Forge UI straight from the registry files committed under
+# packages/forge-ui (registry.json and public/r, read from
+# raw.githubusercontent.com), so every push must carry a registry that
+# matches the source. The root registry.json only includes the package's,
+# for `shadcn init <owner>/<repo>/base`.
+name: Forge UI registry
+
+on:
+  push:
+    branches: [main]
+    tags: ["forge-ui-v*"]
+    paths:
+      - packages/forge-ui/**
+      - registry.json
+      - .github/workflows/forge-ui-registry.yml
+  pull_request:
+    paths:
+      - packages/forge-ui/**
+      - registry.json
+      - .github/workflows/forge-ui-registry.yml
+
+defaults:
+  run:
+    working-directory: packages/forge-ui
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/forge-ui/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc -b
+      - name: Tests
+        run: npm test
+      - name: Registry is built and committed
+        run: npm run registry:check

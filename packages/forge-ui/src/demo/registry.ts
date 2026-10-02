@@ -1,11 +1,12 @@
 /**
- * Where apps install Forge UI from: the registry files committed to the
- * private jleva12/forge-ui repo, read through raw.githubusercontent.com with
- * a GitHub token. Shown in the install dialog and on the overview page.
+ * Where apps install Forge UI from: the registry files committed under
+ * packages/forge-ui in the private ei-tiger-agent-workflow-builder monorepo,
+ * read through raw.githubusercontent.com with a GitHub token. Shown in the
+ * install dialog and on the overview page.
  */
-export const registryRepo = "jleva12/forge-ui"
+export const registryRepo = "jleva12/ei-tiger-agent-workflow-builder"
 
-export const registryUrl = `https://raw.githubusercontent.com/${registryRepo}/main/public/r/{name}.json`
+export const registryUrl = `https://raw.githubusercontent.com/${registryRepo}/main/packages/forge-ui/public/r/{name}.json`
 
 export const registryConfig = `{
   "registries": {
