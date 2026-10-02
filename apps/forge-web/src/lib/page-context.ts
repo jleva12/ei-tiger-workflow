@@ -19,15 +19,12 @@ import { createContextStore } from "@/lib/context-store"
 
 /**
  * A kind of Forge record. Lowercase words; the agent reads the kind with the
- * ID, e.g. a `workflow`'s ID is what the workflow tools take.
+ * ID, e.g. an `organization`'s ID is what the organization tools take.
  */
 export type PageEntityKind =
   | "organization"
   | "user"
   | "role"
-  | "workflow"
-  | "workflow_step"
-  | "event_type"
   | "background_task"
 
 /** A record on screen. */
@@ -226,7 +223,7 @@ export function mergePageContext(
  *
  * ```tsx
  * usePageContext({
- *   entities: [{ kind: "workflow", id: workflowId, label: name }],
+ *   entities: [{ kind: "organization", id: organizationId, label: name }],
  *   view: { pane },
  * })
  * ```

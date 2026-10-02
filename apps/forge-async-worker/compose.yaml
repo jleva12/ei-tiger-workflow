@@ -40,35 +40,6 @@ x-async-worker: &async-worker
   stop_grace_period: ${ASYNC_WORKER_STOP_GRACE_PERIOD:-1m}
 
 services:
-  # The workflows queue: runs of organizations' workflows, which act as the
-  # member who ran them through the admin API's service routes (in this
-  # stack, with FORGE_WORKFLOWS_TOKEN from .env.common). A run that waits (an
-  # approval, a delay) lets its worker go, so modest concurrency serves many
-  # runs.
-  async-worker-workflows:
-    <<: *async-worker
-    command:
-      - forge-async-worker
-      - worker
-      - --ensure-schema
-      - --queues=workflows
-      - --concurrency=${ASYNC_WORKER_WORKFLOWS_CONCURRENCY:-8}
-    environment:
-      <<: *async-worker-environment
-      # The admin API in this stack (apps/forge-admin-api/compose.yaml).
-      # Called per step, so no depends_on: until it answers, those steps are
-      # retried.
-      HYBRID_WORKFLOWS__ADMIN_URL: http://admin:8091
-      HYBRID_WORKFLOWS__ADMIN_TOKEN: ${FORGE_WORKFLOWS_TOKEN:-}
-      HYBRID_WORKFLOWS__GOOGLE_API_KEY: ${FORGE_GOOGLE_API_KEY:-}
-    healthcheck:
-      test: ["CMD", "forge-async-worker", "worker", "--check", "--queues=workflows"]
-      interval: 10s
-      timeout: 10s
-      start_period: 60s
-      retries: 6
-    deploy:
-      replicas: ${ASYNC_WORKER_WORKFLOWS_REPLICAS:-1}
   # The adk_workflows queue: runs of organizations' ADK workflows, on Google
   # ADK's graph engine. A run's state is its ADK session, in the admin MySQL
   # (admin-mysql, with the admin API's credentials from .env.compose), where

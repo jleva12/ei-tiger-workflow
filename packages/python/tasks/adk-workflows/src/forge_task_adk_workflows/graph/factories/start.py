@@ -17,7 +17,7 @@ from forge_task_adk_workflows.graph.data import INPUT_NODE, as_data
 from forge_task_adk_workflows.graph.errors import RunFailed
 from forge_task_adk_workflows.graph.factories.base import BuildContext, settings_of
 from forge_task_adk_workflows.graph.schemas import held_to, problems, to_model
-from forge_task_workflows.document import EntryConfig
+from forge_task_adk_workflows.support.step_settings import EntryConfig
 
 
 def input_model(node: dict[str, Any]) -> Any:

@@ -77,7 +77,7 @@ import {
 import { CHAT_AGENTS_ICON } from "@/lib/chat-agents/model"
 import { CHAT_AGENT_JSON_SCHEMA } from "@/lib/chat-agents/schema"
 import { usePageContext } from "@/lib/page-context"
-import { useAgentStepModels } from "@/lib/workflows/models"
+import { useAgentStepModels } from "@/lib/steps/models"
 import { ChatAgentDetails } from "./chat-agent-details"
 import { chatAgentFileName } from "./chat-agent-files"
 import {

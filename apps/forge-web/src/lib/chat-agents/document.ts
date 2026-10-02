@@ -1,7 +1,7 @@
 import type { ImportResult } from "@/components/builder/import-dialog"
 import { edgeId, type BuilderGraph, type Point } from "@/lib/builder/types"
-import { readList } from "@/lib/workflows/document"
-import { HTTP_METHODS, THINKING_LEVELS } from "@/lib/workflows/model"
+import { readList } from "@/lib/steps/document"
+import { HTTP_METHODS, THINKING_LEVELS } from "@/lib/steps/model"
 import {
   accepts,
   CHAT_KINDS,

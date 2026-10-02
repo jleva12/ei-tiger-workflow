@@ -1,6 +1,6 @@
 import { extendedThinkingLevels } from "@/components/forge/assistant"
 import type { LlmSettings, SubAgent } from "@/lib/agents/model"
-import { modelIdOf } from "@/lib/workflows/models"
+import { modelIdOf } from "@/lib/steps/models"
 import type { AgentLookups } from "./agent-store"
 
 /* How agents are set up, in a line: under a node's name, and in sub-agent lists. */

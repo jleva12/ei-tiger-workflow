@@ -4,7 +4,7 @@ Serve it with ``forge-admin`` (which applies migrations first) or directly
 with ``uvicorn forge_admin.api.app:create_app --factory``.
 """
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from forge_common.logging import configure_logging
 
 from forge_admin.api.routes import (
@@ -12,8 +12,6 @@ from forge_admin.api.routes import (
     agents,
     authz,
     background_tasks,
-    event_hooks,
-    events,
     me,
     members,
     organization_agents,
@@ -21,8 +19,6 @@ from forge_admin.api.routes import (
     permissions,
     roles,
     users,
-    workflow_service,
-    workflows,
 )
 from forge_admin.api.server import ApiServer
 from forge_admin.config import get_settings
@@ -30,8 +26,6 @@ from forge_admin.config import get_settings
 # Every router the admin API serves, below the API prefix.
 ROUTERS = [
     organizations.router,
-    events.router,
-    workflows.router,
     organization_agents.router,
     adk_workflow_runs.router,
     background_tasks.router,
@@ -45,9 +39,8 @@ ROUTERS = [
 ]
 
 # Routers that check their callers themselves, at the root: never behind the
-# API key or a user's token. The workflow service routes answer only to the
-# async worker's token.
-PUBLIC_ROUTERS = [event_hooks.router, workflow_service.router]
+# API key or a user's token. None at the moment.
+PUBLIC_ROUTERS: list[APIRouter] = []
 
 
 def create_app() -> FastAPI:

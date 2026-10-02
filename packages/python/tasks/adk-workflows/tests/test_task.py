@@ -902,7 +902,7 @@ def test_its_settings_are_read_from_hybrid_adk_workflows(monkeypatch: pytest.Mon
     monkeypatch.setenv("HYBRID_ADK_WORKFLOWS__HTTP_ALLOWED_HOSTS", '["intranet"]')
     monkeypatch.setenv("HYBRID_ADK_WORKFLOWS__INLINE_DELAY_SECONDS", "5")
     monkeypatch.setenv("HYBRID_ADK_WORKFLOWS__GOOGLE_API_KEY", "")
-    monkeypatch.setenv("HYBRID_WORKFLOWS__INLINE_DELAY_SECONDS", "99")  # Forge workflows' own
+    monkeypatch.setenv("HYBRID_OTHER__INLINE_DELAY_SECONDS", "99")  # another section's
 
     settings = load_section("adk_workflows", AdkWorkflowsSettings)
 

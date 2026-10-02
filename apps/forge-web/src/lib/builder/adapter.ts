@@ -11,7 +11,7 @@ import type {
 } from "./types"
 
 /*
- * What a builder (the workflow builder, the agent builder) tells the
+ * What a builder (the ADK workflow builder, the chat agent builder) tells the
  * builder kit about what it builds: its kinds of step, how a step is made,
  * copied and connected, how its document becomes the graph the canvas
  * edits and back, how the graph is checked, and how it's laid out and

@@ -48,7 +48,7 @@ import {
   type SubAgentKind,
   type TeamSettings,
 } from "@/lib/agents/model"
-import type { StepData } from "@/lib/workflows/model"
+import type { StepData } from "@/lib/steps/model"
 import {
   FieldIssuesPrefix,
   IssueMessages,
@@ -57,8 +57,8 @@ import {
   useFieldIssues,
   useIssueLookup,
 } from "@/components/builder/fields/field-issues-context"
-import { ExpressionField } from "@/components/workflows/expression-field"
-import { StepFields } from "@/components/workflows/step-fields"
+import { ExpressionField } from "@/components/builder/fields/expression-field"
+import { StepFields } from "@/components/agents/step-fields"
 import { subAgentLine } from "./agent-lines"
 import { useAgentBuilder } from "./agent-store"
 

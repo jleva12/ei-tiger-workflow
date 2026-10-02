@@ -1,8 +1,8 @@
 """The async worker's background tasks API (apps/forge-async-worker,
-``forge-async-worker api``): the jobs it ran for each organization (its workflow
-runs), with their attempts, failures and audit trail, as its task framework
-recorded them; resubmitting, restarting and abandoning one; and deciding
-the approval a workflow run waits at.
+``forge-async-worker api``): the jobs it ran for each organization (its ADK
+workflow runs), with their attempts, failures and audit trail, as its task
+framework recorded them; resubmitting, restarting and abandoning one; and
+deciding the approval an ADK workflow run waits at.
 
 Each task names its organization in its ``labels`` (``tenant``). This client only
 relays; the routes decide who may see and act on which organization's tasks.
@@ -80,9 +80,9 @@ class BackgroundTasks:
 
         :param tenant: The organization.
         :param exclude_task_types: Every type but these, e.g. the organization's tasks
-            without its workflow runs (``workflows``).
+            without its ADK workflow runs (``adk_workflows``).
         :param labels: Only tasks carrying all of these labels, e.g. the runs
-            of one workflow (``{"workflow": <id>}``).
+            of one ADK workflow (``{"adk_workflow": <id>}``).
         :return: ``{"items": [...], "total"}``.
         """
         params: list[tuple[str, str | int]] = [
@@ -142,8 +142,8 @@ class BackgroundTasks:
         actor: dict[str, str],
     ) -> dict[str, Any]:
         """
-        Decide the approval a workflow run waits at: the run carries on down
-        its approved or rejected way, on a worker.
+        Decide the approval an ADK workflow run waits at: the run carries on
+        down its approved or rejected way, on a worker.
 
         :param request_id: The approval's ID, as the task's ``approval`` has it.
         :return: ``{"queue", "key"}`` of the job that will carry it on.

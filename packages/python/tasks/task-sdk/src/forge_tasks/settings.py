@@ -47,7 +47,7 @@ class CoreSettings(EnvSettings):
     """What every task shares: ``HYBRID_ENABLED_TASKS``, ``HYBRID_REDIS_URL``
     and ``HYBRID_MONGO__*``."""
 
-    enabled_tasks: list[str] = Field(default_factory=lambda: ["workflows"])
+    enabled_tasks: list[str] = Field(default_factory=lambda: ["adk_workflows"])
     redis_url: str = "redis://localhost:6379/0"
     mongo: MongoSettings = MongoSettings()
 

@@ -40,7 +40,7 @@ export const defaultThinkingLevels: ThinkingLevel[] = [
 
 /**
  * Every level a model provider configuration knows (model_provider.yaml, as
- * workflows' agent steps and the Forge assistant read it), from least to most thinking.
+ * ADK workflows' LLM agents and the Forge assistant read it), from least to most thinking.
  * Pass it as `thinkingLevels` with models that say which they offer.
  */
 export const extendedThinkingLevels: ThinkingLevel[] = [

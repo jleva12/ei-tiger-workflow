@@ -18,7 +18,7 @@ import {
 } from "@/lib/agents/document"
 import type { AgentStep } from "@/lib/agents/model"
 import type { AgentValidationContext } from "@/lib/agents/validate"
-import type { Scope } from "@/lib/workflows/scope"
+import type { Scope } from "@/lib/steps/scope"
 
 /*
  * The agent builder's state: the builder kit's store

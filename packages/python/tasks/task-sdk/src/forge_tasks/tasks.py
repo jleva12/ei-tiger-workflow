@@ -38,7 +38,7 @@ class JobSpec(BaseModel):
     it). Work for no one in particular (a schedule's sweep) has none.
 
     ``labels`` are extra names the tracked run carries, to find it by (the
-    workflow a run is of, the run that started it). The worker's own labels
+    ADK workflow a run is of, its ADK session). The worker's own labels
     (task type, kind, tenant) win over them.
 
     ``requested_by`` is the person who asked for it (``{"id", "display_name"}``),

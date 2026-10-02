@@ -5,10 +5,10 @@ import type { KindInfo, StepOutput } from "@/lib/builder/types"
 import {
   loopBodies as stepLoopBodies,
   toneOf as stepToneOf,
-} from "@/lib/workflows/connections"
-import type { WorkflowGraph } from "@/lib/workflows/document"
-import type { StepData } from "@/lib/workflows/model"
-import type { Scope } from "@/lib/workflows/scope"
+} from "@/lib/steps/connections"
+import type { StepGraph } from "@/lib/steps/document"
+import type { StepData } from "@/lib/steps/model"
+import type { Scope } from "@/lib/steps/scope"
 import {
   toDocument,
   toGraph,
@@ -33,7 +33,7 @@ import { validateAgent, type AgentValidationContext } from "./validate"
 // way's tone are found as in a workflow (a Loop agent runs its
 // sub-agents inside itself: no body on the canvas).
 const loopBodies = (graph: AgentGraph) =>
-  stepLoopBodies(graph as unknown as WorkflowGraph)
+  stepLoopBodies(graph as unknown as StepGraph)
 
 const toneOf = (step: AgentStep, output: StepOutput, index: number): EdgeTone =>
   stepToneOf(step as StepData, output, index)

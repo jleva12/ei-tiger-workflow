@@ -1,6 +1,6 @@
 import { adkName, RESERVED_NAMES } from "@/lib/agents/model"
 import type { BuilderIssue, IssueLevel } from "@/lib/builder/types"
-import { stronglyConnected } from "@/lib/workflows/validate"
+import { stronglyConnected } from "@/lib/steps/validate"
 import type { ChatAgentGraph } from "./document"
 import {
   AGENT_LIKE,

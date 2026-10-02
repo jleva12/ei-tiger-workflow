@@ -75,7 +75,7 @@ BRANCHES = {
 # A sub-agent's ID: an LLM sub-agent's answer is kept in the state under it.
 SUB_AGENT_ID = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 # Steps that can pause a run: a loop whose body has one runs its items one at
-# a time, as the worker's does.
+# a time.
 PAUSING = frozenset({"approval", "human_input", "delay", "saved"})
 
 

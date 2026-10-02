@@ -2,8 +2,7 @@
 Running an organization's ADK workflows (``forge.agent/v1``, ``agent_documents.py``)
 on the async worker's ``adk_workflows`` queue: the ADK workflows task
 (packages/python/tasks/adk-workflows) runs each on Google ADK's graph engine.
-They're apart from Forge workflows' runs (``workflow_runs.py``): their own
-queue, task, labels, permissions and routes (``api/routes/adk_workflow_runs.py``).
+Their routes are ``api/routes/adk_workflow_runs.py``.
 
 A run carries its ADK workflow's document as it is when the run starts, and
 the documents of the saved ADK workflows it runs (its ``saved`` nodes', and
@@ -31,9 +30,11 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
+
 from forge_admin.agent_build import AgentBuildError, build_agent
 from forge_admin.embedding import ADK_WORKFLOWS, Embedding
-from forge_admin.workflow_runs import RunInputError, misfits
 
 #: ADK's app name for the runs' sessions.
 APP_NAME = "adk_workflows"
@@ -42,6 +43,8 @@ AGENT_LABEL = "adk_workflow"
 SESSION_LABEL = "adk_session"
 #: The most characters of JSON an answer may be: a decision's comment's.
 MAX_ANSWER = 4000
+#: The most problems a refusal names.
+MAX_PROBLEMS = 5
 
 #: Finds one of the organization's ADK workflows' records by ID; None when
 #: there's no such one.
@@ -73,14 +76,39 @@ def check_input(document: dict[str, Any], value: Any) -> None:
     schema = start_schema(document)
     if schema is None:
         raise AdkRunError("The ADK workflow has no start")
-    try:
-        problems = misfits(
-            schema, value, not_a_schema="The start's input schema isn't a JSON Schema"
-        )
-    except RunInputError as error:
-        raise AdkRunError(str(error)) from None
+    problems = misfits(
+        schema, value, not_a_schema="The start's input schema isn't a JSON Schema"
+    )
     if problems:
         raise AdkRunError("The input doesn't fit the start: " + problems)
+
+
+def misfits(
+    schema: dict[str, Any], value: Any, *, not_a_schema: str, whole: str = "input"
+) -> str:
+    """
+    How a value doesn't fit a JSON Schema (Draft 2020-12), for a refusal.
+
+    :param schema: The schema; ``{}`` takes anything.
+    :param value: The value.
+    :param not_a_schema: What a refusal says when the schema isn't one.
+    :param whole: What a problem with the whole value is said of.
+    :return: The first few problems, each with where (``request/id: ...``);
+        empty when it fits.
+    :raises AdkRunError: The schema isn't a JSON Schema.
+    """
+    if not schema:
+        return ""
+    try:
+        Draft202012Validator.check_schema(schema)
+    except SchemaError as error:
+        raise AdkRunError(f"{not_a_schema}: {error.message}") from None
+    validator = Draft202012Validator(schema)
+    found = sorted(validator.iter_errors(value), key=lambda e: list(e.absolute_path))
+    return "; ".join(
+        f"{'/'.join(map(str, e.absolute_path)) or whole}: {e.message}"
+        for e in found[:MAX_PROBLEMS]
+    )
 
 
 def saved_ids(document: dict[str, Any]) -> list[str]:
@@ -218,15 +246,12 @@ def checked_answer(details: dict[str, Any], answer: Any) -> str:
     :raises AdkRunError: It doesn't fit the schema, or is too long.
     """
     schema = details.get("response_schema")
-    try:
-        problems = misfits(
-            schema if isinstance(schema, dict) else {},
-            answer,
-            not_a_schema="What the question asks for isn't a JSON Schema",
-            whole="answer",
-        )
-    except RunInputError as error:
-        raise AdkRunError(str(error)) from None
+    problems = misfits(
+        schema if isinstance(schema, dict) else {},
+        answer,
+        not_a_schema="What the question asks for isn't a JSON Schema",
+        whole="answer",
+    )
     if problems:
         raise AdkRunError("The answer doesn't fit what the question asks: " + problems)
     text = json.dumps(answer, ensure_ascii=False, separators=(",", ":"))

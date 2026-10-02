@@ -10,7 +10,7 @@ from forge_admin.config import Settings
 from forge_admin.env_files import COMMON_FILE_VARIABLE
 
 UNDEFINED = (
-    "FORGE_ADMIN_WORKFLOWS_TOKEN in .env references ${FORGE_WORKFLOWS_TOKEN}, "
+    "FORGE_ADMIN_ASYNC_WORKER_TOKEN in .env references ${FORGE_ASYNC_WORKER_TOKEN}, "
     "which neither .env.common nor an earlier line defines "
     "(make env creates .env.common)"
 )
@@ -100,7 +100,7 @@ def test_a_reference_defined_nowhere_stops_startup(root: Path) -> None:
     write(
         root / "apps/forge-admin-api/.env",
         "FORGE_ADMIN_MYSQL_PASSWORD=${FORGE_MYSQL_PASSWORD}",
-        "FORGE_ADMIN_WORKFLOWS_TOKEN=${FORGE_WORKFLOWS_TOKEN}",
+        "FORGE_ADMIN_ASYNC_WORKER_TOKEN=${FORGE_ASYNC_WORKER_TOKEN}",
     )
     with pytest.raises(SettingsError) as error:
         load()
@@ -112,11 +112,11 @@ def test_a_reference_defined_nowhere_stops_startup(root: Path) -> None:
 def test_the_process_environment_takes_no_part_in_references(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("FORGE_WORKFLOWS_TOKEN", "t" * 40)
+    monkeypatch.setenv("FORGE_ASYNC_WORKER_TOKEN", "t" * 40)
     write(
         root / "apps/forge-admin-api/.env",
         "FORGE_ADMIN_MYSQL_PASSWORD=x",
-        "FORGE_ADMIN_WORKFLOWS_TOKEN=${FORGE_WORKFLOWS_TOKEN}",
+        "FORGE_ADMIN_ASYNC_WORKER_TOKEN=${FORGE_ASYNC_WORKER_TOKEN}",
     )
     with pytest.raises(SettingsError) as error:
         load()
@@ -127,15 +127,15 @@ def test_a_reference_defined_nowhere_is_ignored_when_the_environment_sets_it(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     key = "t" * 40
-    monkeypatch.setenv("FORGE_ADMIN_WORKFLOWS_TOKEN", key)
+    monkeypatch.setenv("FORGE_ADMIN_ASYNC_WORKER_TOKEN", key)
     write(
         root / "apps/forge-admin-api/.env",
         "FORGE_ADMIN_MYSQL_PASSWORD=x",
-        "FORGE_ADMIN_WORKFLOWS_TOKEN=${FORGE_WORKFLOWS_TOKEN}",
+        "FORGE_ADMIN_ASYNC_WORKER_TOKEN=${FORGE_ASYNC_WORKER_TOKEN}",
     )
     settings = load()
-    assert settings.workflows_token is not None
-    assert settings.workflows_token.get_secret_value() == key
+    assert settings.async_worker_token is not None
+    assert settings.async_worker_token.get_secret_value() == key
 
 
 def test_an_unreferenced_common_value_reaches_nothing(root: Path) -> None:
@@ -161,14 +161,14 @@ def test_an_unreferenced_common_value_reaches_nothing(root: Path) -> None:
 
 
 def test_an_empty_common_value_is_defined(root: Path) -> None:
-    write(root / ".env.common", "FORGE_WORKFLOWS_TOKEN=")
+    write(root / ".env.common", "FORGE_ASYNC_WORKER_TOKEN=")
     write(
         root / "apps/forge-admin-api/.env",
         "FORGE_ADMIN_MYSQL_PASSWORD=x",
-        "FORGE_ADMIN_WORKFLOWS_TOKEN=${FORGE_WORKFLOWS_TOKEN}",
+        "FORGE_ADMIN_ASYNC_WORKER_TOKEN=${FORGE_ASYNC_WORKER_TOKEN}",
     )
     # Blank, as before make env generates the token: unset.
-    assert load().workflows_token is None
+    assert load().async_worker_token is None
 
 
 def test_precedence_is_unchanged(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -232,12 +232,12 @@ def test_the_common_file_variable_names_another_file(
     write(
         root / "apps/forge-admin-api/.env",
         "FORGE_ADMIN_MYSQL_PASSWORD=${FORGE_MYSQL_PASSWORD}",
-        "FORGE_ADMIN_WORKFLOWS_TOKEN=${FORGE_WORKFLOWS_TOKEN}",
+        "FORGE_ADMIN_ASYNC_WORKER_TOKEN=${FORGE_ASYNC_WORKER_TOKEN}",
     )
     with pytest.raises(SettingsError) as error:
         load()
     assert str(error.value) == (
-        "FORGE_ADMIN_WORKFLOWS_TOKEN in .env references ${FORGE_WORKFLOWS_TOKEN}, "
+        "FORGE_ADMIN_ASYNC_WORKER_TOKEN in .env references ${FORGE_ASYNC_WORKER_TOKEN}, "
         f"which neither {shared} nor an earlier line defines"
     )
     write(

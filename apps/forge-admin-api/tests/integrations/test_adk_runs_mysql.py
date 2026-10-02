@@ -605,14 +605,13 @@ def test_an_adk_runs_gates_are_only_its_own_routes(runs: Runs) -> None:
     )
     assert decided.status_code == 409
     assert "waits for an answer" in decided.json()["detail"]
-    # Forge workflows' route never decides them, with their permissions.
+    # No other route decides them.
     runs.waiting("approval", kind="approval", approvers="org:member")
     generic = runs.admin.post(
         f"{API}/organizations/{runs.organization.id}/background-tasks/approval/decisions",
         json={"request_id": "req-approval", "approved": True},
     )
-    assert generic.status_code == 409
-    assert "adk-runs/approval/decisions" in generic.json()["detail"]
+    assert generic.status_code == 404
     answered = runs.member.post(
         f"{runs.adk_runs}/approval/answers",
         json={"request_id": "req-approval", "answer": {"send": True}},

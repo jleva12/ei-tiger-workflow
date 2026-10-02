@@ -1,13 +1,13 @@
 import type { BuilderIssue, IssueLevel } from "@/lib/builder/types"
-import { checkField } from "@/lib/workflows/expressions"
-import type { StepData } from "@/lib/workflows/model"
-import type { Scope } from "@/lib/workflows/scope"
+import { checkField } from "@/lib/steps/expressions"
+import type { StepData } from "@/lib/steps/model"
+import type { Scope } from "@/lib/steps/scope"
 import {
   fieldOfCode as stepFieldOf,
   settingsIssues as stepIssues,
   stronglyConnected,
   switchIssues,
-} from "@/lib/workflows/validate"
+} from "@/lib/steps/validate"
 import type { AgentGraph } from "./document"
 import { agentExpressionSettings } from "./fields"
 import {
@@ -130,7 +130,7 @@ function settingsIssues(
   step: AgentStep,
   context: AgentValidationContext
 ): Found[] {
-  if (isForgeKind(step.kind)) return stepIssues(step as StepData, {})
+  if (isForgeKind(step.kind)) return stepIssues(step as StepData)
   const out: Found[] = []
   switch (step.kind) {
     case "llm":

@@ -18,7 +18,7 @@ The job runs under a control (job_control.py, forge_tasks.control) backed by
 its run: what it keeps between attempts, checkpoints, approvals (the task
 framework's human-in-the-loop gates), waits until a time (the run stops and
 a SAQ job resumes it then), notes on its activity, and other runs by label.
-Most jobs never use it; a workflow run lives on it.
+Most jobs never use it; an ADK workflow run lives on it.
 
 Retries stay SAQ's: the step makes one attempt. A job that raises a
 :class:`~forge_tasks.errors.TransientError` fails its run with a *retryable*

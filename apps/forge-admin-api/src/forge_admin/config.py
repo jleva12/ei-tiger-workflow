@@ -6,7 +6,7 @@ e.g. mysql_host is FORGE_ADMIN_MYSQL_HOST.
 
 Values shared with the other apps live in the repository's .env.common,
 which .env references by name, e.g.
-FORGE_ADMIN_WORKFLOWS_TOKEN=${FORGE_WORKFLOWS_TOKEN}; see
+FORGE_ADMIN_ASYNC_WORKER_TOKEN=${FORGE_ASYNC_WORKER_TOKEN}; see
 forge_admin.env_files.
 """
 
@@ -60,53 +60,35 @@ class Settings(BaseSettings):
     # LOCAL DEVELOPMENT ONLY: treat API requests without a bearer token as
     # this user. The tests use it; never set it in production.
     local_user_id: str | None = Field(default=None, max_length=255, pattern=r"^\S+$")
-    # The web console's address, for links to it: the assistant links to a
-    # workflow's builder.
+    # The web console's address, for links to its pages.
     web_url: str = "http://localhost:5190"
     # The async worker's background tasks API (apps/forge-async-worker,
-    # forge-async-worker api), which shows each organization the jobs run for it and
-    # resubmits, restarts or abandons one: http://127.0.0.1:8104 for make
-    # async-worker-api, http://async-worker-api:8094 inside Compose. The token
-    # is its HYBRID_API__TOKEN, FORGE_ASYNC_WORKER_TOKEN in .env.common, which
-    # make env generates. Unset, background tasks answer that they aren't set up.
+    # forge-async-worker api), which shows each organization the jobs run for
+    # it (its ADK workflow runs) and resubmits, restarts or abandons one:
+    # http://127.0.0.1:8104 for make async-worker-api,
+    # http://async-worker-api:8094 inside Compose. The token is its
+    # HYBRID_API__TOKEN, FORGE_ASYNC_WORKER_TOKEN in .env.common, which make
+    # env generates. Unset, background tasks answer that they aren't set up.
     async_worker_url: str | None = Field(default=None, pattern=r"^https?://[^/?#]+/?$")
     async_worker_token: SecretStr | None = None
     # Seconds a call to it may take.
     async_worker_timeout: float = Field(default=10.0, gt=0)
     # The async worker (apps/forge-async-worker): the Redis its SAQ job
-    # queues run on, where workflow runs are submitted:
+    # queues run on, where ADK workflow runs are submitted:
     # redis://127.0.0.1:16389/0 for make async-worker, redis://redis:6379/0
     # inside Compose. Unset, starting a run answers that it isn't set up.
     embedding_redis_url: str | None = Field(default=None, pattern=r"^rediss?://")
-    # Where other systems reach this API, e.g. https://forge.example.com: the
-    # base of the organization event endpoints the web console shows
-    # (<public_url>/hooks/events/<endpoint>/<event type>). Unset, the address
-    # each request came in on.
-    public_url: str | None = Field(default=None, pattern=r"^https?://[^?#]+$")
-    # The largest event body an organization's endpoint accepts, in bytes; kept as
-    # MEDIUMTEXT, so at most 16 MiB.
-    events_max_bytes: int = Field(default=256 * 1024, gt=0, le=16 * 1024 * 1024)
-    # MongoDB, where organizations' workflows and agents are kept as the JSON
-    # documents the web builders save: mongodb://…@127.0.0.1:27037/ for make
-    # admin-deps, shared mongo inside Compose. Unset, workflows and agents answer
+    # MongoDB, where organizations' agents (their ADK workflows) are kept as
+    # the JSON documents the web builder saves: mongodb://…@127.0.0.1:27037/
+    # for make admin-deps, shared mongo inside Compose. Unset, agents answer
     # that they aren't set up. The URI can carry a password, so it's a secret.
     mongo_uri: SecretStr | None = None
     mongo_database: str = Field(default="forge_admin", pattern=r"^[A-Za-z0-9_-]{1,63}$")
     # Seconds to find a MongoDB server before a request answers 503.
     mongo_timeout: float = Field(default=5.0, gt=0)
-    # The largest workflow document saved, in bytes of JSON; MongoDB's own
+    # The largest agent document saved, in bytes of JSON; MongoDB's own
     # limit is 16 MiB a document.
-    workflows_max_bytes: int = Field(default=1024 * 1024, gt=0, le=15 * 1024 * 1024)
-    # The largest agent document saved, in bytes of JSON.
     agents_max_bytes: int = Field(default=1024 * 1024, gt=0, le=15 * 1024 * 1024)
-    # Workflow runs: the async worker's workflows task calls this API's
-    # service routes (/internal/workflows/...) with this token, to run other
-    # workflows as the member a run acts as. It is FORGE_WORKFLOWS_TOKEN in
-    # .env.common, which make env generates, and the worker's
-    # HYBRID_WORKFLOWS__ADMIN_TOKEN. Unset, those routes answer 401 and such
-    # steps fail saying so. Runs are submitted to the async worker's Redis
-    # (embedding_redis_url).
-    workflows_token: SecretStr | None = Field(default=None, min_length=32)
     # The site administrator forge-admin-seed adds to users and gives
     # site:admin: the first user, who can then add everyone else.
     site_admin_id: str | None = Field(default=None, max_length=255, pattern=r"^\S+$")
@@ -116,7 +98,7 @@ class Settings(BaseSettings):
     site_admin_msid: str | None = None
 
     # The assistant: Google ADK agents (forge_admin.agents). The models it may
-    # run on: a model_provider.yaml, the file workflows' agent steps read too, e.g.
+    # run on: a model_provider.yaml, the file ADK workflows' LLM nodes read too, e.g.
     # ../../packages/python/common/src/forge_common/model_provider/model_provider.openai.yaml
     # (the image keeps the shared files at that path relative to /app). Its
     # ${NAME} references resolve from the process environment, then from
@@ -189,13 +171,11 @@ class Settings(BaseSettings):
         "local_user_id",
         "model_provider_config",
         "mongo_uri",
-        "public_url",
         "site_admin_id",
         "site_admin_email",
         "site_admin_first_name",
         "site_admin_last_name",
         "site_admin_msid",
-        "workflows_token",
         mode="before",
     )
     @classmethod

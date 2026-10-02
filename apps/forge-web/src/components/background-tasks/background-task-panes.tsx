@@ -1,6 +1,6 @@
 import * as React from "react"
 
-import { CopyButton, JsonView } from "@/components/events/json-view"
+import { CopyButton, JsonView } from "@/components/json/json-view"
 import { EventItem, EventList } from "@/components/forge/activity"
 import { PanelEmpty } from "@/components/forge/empty-state"
 import { ErrorCallout } from "@/components/forge/feedback"
@@ -41,7 +41,6 @@ import {
 } from "@/lib/background-tasks"
 import { formatDateTime, formatDuration, formatRelative } from "@/lib/format"
 import { userName, users } from "@/lib/users"
-import { WorkflowApprovalPanel } from "./approval-panel"
 
 // A tab's body, on the same gutters as the header and tabs above it.
 const BODY =
@@ -74,8 +73,8 @@ const sentence = (text: string) => text.trim().replace(/[.\s]+$/, "")
 const statusName = (status: BackgroundTaskStatus) => statusDisplay(status).label
 
 /**
- * What answers the approval a task waits for, given the task: a workflow
- * run's approval panel unless its page says otherwise.
+ * What answers the approval a task waits for, given the task: its page's
+ * own panel (an ADK workflow run's approval or question).
  */
 export type ApprovalPanelOf = (
   task: BackgroundTaskDetail & { approval: BackgroundTaskApproval }
@@ -96,25 +95,14 @@ const FAILED_TITLES: Partial<Record<BackgroundTaskStatus, string>> = {
  * retrying after a failure, or failed and why.
  */
 function StatusNotice({
-  organizationId,
   task,
   approvalPanel,
 }: {
-  organizationId: string
   task: BackgroundTaskDetail
   approvalPanel?: ApprovalPanelOf
 }) {
-  if (task.approval && task.status === "AWAITING_VALIDATION") {
-    if (approvalPanel)
-      return approvalPanel({ ...task, approval: task.approval })
-    return (
-      <WorkflowApprovalPanel
-        organizationId={organizationId}
-        taskId={task.id}
-        approval={task.approval}
-      />
-    )
-  }
+  if (task.approval && task.status === "AWAITING_VALIDATION" && approvalPanel)
+    return approvalPanel({ ...task, approval: task.approval })
   if (task.status === "STOPPED" && task.waiting_until) {
     return (
       <WaitingNotice
@@ -256,13 +244,11 @@ function ResultSection({ result }: { result: BackgroundTaskResult }) {
  * what its category means.
  */
 export function BackgroundTaskOverview({
-  organizationId,
   task,
   approvalPanel,
 }: {
-  organizationId: string
   task: BackgroundTaskDetail
-  /** What answers the approval it waits for; a workflow run's when absent. */
+  /** What answers the approval it waits for. */
   approvalPanel?: ApprovalPanelOf
 }) {
   const person = usePersonName()
@@ -310,7 +296,6 @@ export function BackgroundTaskOverview({
       }
     >
       <StatusNotice
-        organizationId={organizationId}
         task={task}
         approvalPanel={approvalPanel}
       />

@@ -1,10 +1,10 @@
 """model_provider.yaml: the model providers an app may use, their models and how
 to reach them.
 
-The one loader for the shared file: the admin API's assistant and workflows'
-agent steps both read it through here, so every app reads one configuration
-with the same schema and rules (pi's model provider format). Keys are
-camelCase, as in the YAML; the Python attributes are their snake_case names.
+The one loader for the shared file: the admin API's assistant and ADK
+workflows' LLM nodes both read it through here, so every app reads one
+configuration with the same schema and rules (pi's model provider format). Keys
+are camelCase, as in the YAML; the Python attributes are their snake_case names.
 
 ``${NAME}`` in any value is the environment variable NAME, and ``$${NAME}`` a
 literal ``${NAME}``. A missing variable fails, naming the variable and where it

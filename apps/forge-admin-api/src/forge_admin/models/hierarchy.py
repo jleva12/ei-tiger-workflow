@@ -10,7 +10,7 @@ from forge_admin.db.base import AuditBase, ascii_string
 
 def new_id() -> str:
     """
-    Generate the ID of a new organization, event endpoint, event type or event.
+    Generate the ID of a new organization.
 
     :return: A random UUID, e.g. ``3f6c...-...``.
     """

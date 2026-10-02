@@ -3,9 +3,9 @@ their jobs inline (breadth-first, follow-ups included). For tests, the CLI and
 local development; the worker builds the same tasks but runs each job through
 the task framework, off its queues.
 
-    rt = build_runtime(CoreSettings(enabled_tasks=["workflows"]))
-    await rt.submit(JobSpec(task_type="workflows", kind="run", payload={"workflow_id": ...}))
-    rt.workflows  # a task by name
+    rt = build_runtime(CoreSettings(enabled_tasks=["adk_workflows"]))
+    await rt.submit(JobSpec(task_type="adk_workflows", kind="run", payload={"agent_id": ...}))
+    rt.adk_workflows  # a task by name
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ class Runtime:
         return self.tasks[name]
 
     def __getattr__(self, name: str) -> Any:
-        """A built task by name: ``rt.workflows``."""
+        """A built task by name: ``rt.adk_workflows``."""
         tasks = self.__dict__.get("tasks") or {}
         if name in tasks:
             return tasks[name]

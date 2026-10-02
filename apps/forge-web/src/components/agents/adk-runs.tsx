@@ -1,5 +1,5 @@
-import { RunDialog } from "@/components/workflows/run-dialog"
-import { RunsMenu } from "@/components/workflows/runs-menu"
+import { RunDialog } from "@/components/runs/run-dialog"
+import { RunsMenu } from "@/components/runs/runs-menu"
 import {
   useAdkWorkflowRuns,
   useRunAdkWorkflow,

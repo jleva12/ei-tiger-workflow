@@ -7,7 +7,7 @@ is
 
 - ``input``: the run's input (its agent's, in a saved agent), as the start
   kept it: the hidden input node's output. ``steps.<start's ID>.output`` is it
-  too, as the worker has its start step's.
+  too.
 - ``previous``: what the node before handed on (the node's input).
 - ``steps.<id>.output`` / ``.error``: what each step the node can see handed
   on, read from the run's own events. That's the latest output of each node
@@ -30,7 +30,7 @@ from google.adk import Context, Event
 from google.genai import types
 from pydantic import BaseModel
 
-from forge_task_workflows.expressions import plain
+from forge_task_adk_workflows.support.expressions import plain
 
 #: The hidden node after ADK's START that keeps the run's input.
 INPUT_NODE = "__input__"

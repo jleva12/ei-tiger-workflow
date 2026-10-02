@@ -45,8 +45,6 @@ export type BuilderUi = {
   detailOf: (step: BaseStep, lookups: Lookups) => string
   /** A line on the step's card: what it does. */
   summaryOf: (step: BaseStep, lookups: Lookups) => NodeSummary | null
-  /** The glyph a step wears, when it isn't its kind's. */
-  iconOf?: (step: BaseStep) => IconProp
   /** A step's settings, in its dialog. */
   Fields: React.ComponentType<{ id: string; step: BaseStep }>
   /** Its Fields show the step's name themselves, so the dialog doesn't. */

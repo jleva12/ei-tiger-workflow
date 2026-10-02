@@ -50,7 +50,7 @@ Level = Literal["site", "org"]
 SCOPE = re.compile(SCOPE_PATTERN)
 ROLE_KEY = re.compile(ROLE_KEY_PATTERN)
 MEMBER_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@:+-]{0,254}")
-# A permission to check: one resource and one action, e.g. workflows:run.
+# A permission to check: one resource and one action, e.g. agents:run.
 PERMISSION = re.compile(r"[a-z][a-z0-9_]*:[a-z][a-z0-9_]*")
 
 # The tools, by name: those that read, then those that change something.
@@ -86,7 +86,7 @@ the page, the person's organizations or memberships, or earlier results; \
 never invent them.
 - When something was refused, or the person asks whether they can do \
 something, explain it: the refusal names the missing permission (e.g. \
-"Requires workflows:run"). Check it with get_my_access in that scope and \
+"Requires agents:run"). Check it with get_my_access in that scope and \
 permission; find the roles that grant it with list_available_roles (grants); \
 and say who can give one: people holding a role that grants members:update \
 in that scope or above it (list_scope_members with include_above, if the \
@@ -164,14 +164,14 @@ class AccessToolset(RouteToolset):
         permission those roles grant them there, each with the roles that
         grant it. Give a permission to check whether they have it and which
         of their roles grants it: use this to explain a refusal ("Requires
-        workflows:run") or to answer "can I ... here?".
+        agents:run") or to answer "can I ... here?".
 
         Args:
             scope: Where: site or org:<organization ID>. An organization's
                 permissions are checked in its scope, so use org:<ID> for
                 anything done in an organization.
             permission: A permission to check, resource:action, e.g.
-                workflows:run or members:update.
+                agents:run or members:update.
         """
         wanted = _permission(permission) if permission else None
         answer = await self._call(
@@ -213,7 +213,7 @@ class AccessToolset(RouteToolset):
             level: Only roles given at this level: site or org.
                 A scope takes only roles of its own level.
             grants: Only roles that grant this permission, resource:action,
-                e.g. workflows:run (a role granting workflows:* or *:* grants it
+                e.g. agents:run (a role granting agents:* or *:* grants it
                 too).
         """
         wanted = _permission(grants) if grants else None
@@ -312,7 +312,7 @@ class AccessToolset(RouteToolset):
                 list_scope_members.
             scope: Where: site or org:<organization ID>.
             permission: A permission to check, resource:action, e.g.
-                workflows:run.
+                agents:run.
         """
         wanted = _permission(permission) if permission else None
         answer = await self._call(
@@ -433,7 +433,7 @@ def _permission(value: str) -> tuple[str, str]:
     """A permission to check, as its resource and action."""
     if not PERMISSION.fullmatch(value or ""):
         raise ToolFailure(
-            f"A permission is resource:action, e.g. workflows:run, not {value!r}"
+            f"A permission is resource:action, e.g. agents:run, not {value!r}"
         )
     resource, _, action = value.partition(":")
     return resource, action

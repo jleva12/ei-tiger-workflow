@@ -3,7 +3,7 @@ queues on Redis, each one a run tracked by the enhanced task framework.
 
     from forge_async_worker import WorkerSettings, build_runtime, JobSpec
     rt = build_runtime(WorkerSettings())
-    await rt.submit(JobSpec(task_type="workflows", kind="run", payload={...}))
+    await rt.submit(JobSpec(task_type="adk_workflows", kind="run", payload={...}))
 
 Task types live in their own packages (``packages/python/tasks``) and register
 under the ``forge_async_worker.tasks`` entry point group; the contract between

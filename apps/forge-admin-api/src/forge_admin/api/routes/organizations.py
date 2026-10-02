@@ -167,13 +167,12 @@ async def delete_organization(
     enforcer: Enforcer,
 ) -> None:
     """
-    Delete an organization and every role assigned in it. Its inbound events
-    go with it, and its workflows and agents leave MongoDB; an organization
-    that's gone can't have them replaced, so failing to remove them is only
-    logged.
+    Delete an organization and every role assigned in it. Its agents (its ADK
+    workflows) leave MongoDB; an organization that's gone can't have them
+    replaced, so failing to remove them is only logged.
     \f
     :param organization_id: The organization.
-    :param request: The request, for the workflow and agent stores.
+    :param request: The request, for the agent store.
     :param user: The caller.
     :param session: The request's database session.
     :param enforcer: The Casbin enforcer.
@@ -183,18 +182,14 @@ async def delete_organization(
     await remove_assignments_in(session, assignment_pattern(domain))
     await session.delete(await session.get(Organization, organization_id))
     await session.commit()
-    for what, store in (
-        ("workflows", request.app.state.workflows),
-        ("agents", request.app.state.organization_agents),
-    ):
-        if store is None:
-            continue
-        try:
-            await store.delete_organization(organization_id)
-        except PyMongoError as error:
-            logger.warning(
-                "Organization %s is deleted, but its %s are still in MongoDB: %s",
-                organization_id,
-                what,
-                error,
-            )
+    store = request.app.state.organization_agents
+    if store is None:
+        return
+    try:
+        await store.delete_organization(organization_id)
+    except PyMongoError as error:
+        logger.warning(
+            "Organization %s is deleted, but its agents are still in MongoDB: %s",
+            organization_id,
+            error,
+        )

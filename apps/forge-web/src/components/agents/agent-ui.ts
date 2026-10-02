@@ -1,6 +1,4 @@
 import type { BuilderUi, NodeSummary } from "@/components/builder/ui"
-import { stepDetail } from "@/components/workflows/builder-utils"
-import { stepSummary } from "@/components/workflows/workflow-ui"
 import {
   AGENTS_ICON,
   isForgeKind,
@@ -8,12 +6,13 @@ import {
   type AgentStep,
   type SubAgent,
 } from "@/lib/agents/model"
-import type { StepData } from "@/lib/workflows/model"
-import { inputFields } from "@/lib/workflows/scope"
+import type { StepData } from "@/lib/steps/model"
+import { inputFields } from "@/lib/steps/scope"
 import { AgentDataSection } from "./agent-data-section"
 import { AgentFields } from "./agent-fields"
 import { modelLine, plural, subAgentLine } from "./agent-lines"
 import type { AgentLookups } from "./agent-store"
+import { stepDetail, stepSummary } from "./step-lines"
 
 /*
  * What the agent builder shows that the builder kit can't know: its words,
@@ -22,16 +21,10 @@ import type { AgentLookups } from "./agent-store"
  * steps show what they do in a workflow.
  */
 
-// What the workflow builder's lines look up.
-const stepLookups = (lookups: AgentLookups) => ({
-  workflows: {},
-  models: lookups.models,
-})
-
 /** What a node shows under its name: one fact about how it's set up. */
 function detailOf(step: AgentStep, lookups: AgentLookups): string {
   if (isForgeKind(step.kind))
-    return stepDetail(step as StepData, stepLookups(lookups))
+    return stepDetail(step as StepData)
   switch (step.kind) {
     case "start": {
       const { names } = inputFields(step.config.input_schema)
@@ -72,9 +65,9 @@ function detailOf(step: AgentStep, lookups: AgentLookups): string {
 }
 
 /** A node's line on its card: what it does. */
-function summaryOf(step: AgentStep, lookups: AgentLookups): NodeSummary | null {
+function summaryOf(step: AgentStep): NodeSummary | null {
   if (isForgeKind(step.kind))
-    return stepSummary(step as StepData, stepLookups(lookups))
+    return stepSummary(step as StepData)
   switch (step.kind) {
     case "start": {
       const { names, required } = inputFields(step.config.input_schema)
@@ -116,8 +109,7 @@ export const AGENT_UI: BuilderUi = {
   permission: "agents:manage",
   detailOf: (step, lookups) =>
     detailOf(step as AgentStep, lookups as AgentLookups),
-  summaryOf: (step, lookups) =>
-    summaryOf(step as AgentStep, lookups as AgentLookups),
+  summaryOf: (step) => summaryOf(step as AgentStep),
   Fields: AgentFields as BuilderUi["Fields"],
   // A sub-agent's settings open in place of the node's, its own name with them.
   ownsName: true,

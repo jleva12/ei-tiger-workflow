@@ -613,7 +613,7 @@ export function createBuilderStore<S extends BaseStep, Doc, Context, Scope>({
 /*
  * One Provider for every builder: the kit's components read the store
  * through these, whatever it builds. A builder's own components read it
- * through its typed facade (components/workflows/builder-store).
+ * through its typed facade (components/agents/agent-store).
  */
 export const {
   Provider: BuilderProvider,

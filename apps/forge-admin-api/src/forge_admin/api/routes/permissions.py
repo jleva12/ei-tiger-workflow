@@ -22,11 +22,11 @@ from forge_admin.models import Permission
 router = APIRouter(prefix="/permissions", tags=["permissions"])
 
 KEY_TAKEN = "A permission with this key exists"
-# "resource:action", e.g. "workflows:run"; see PERMISSION_KEY_PATTERN.
+# "resource:action", e.g. "agents:run"; see PERMISSION_KEY_PATTERN.
 PermissionKey = Annotated[
     str,
     StringConstraints(pattern=PERMISSION_KEY_PATTERN, max_length=200),
-    Field(examples=["workflows:run"]),
+    Field(examples=["agents:run"]),
 ]
 
 

@@ -1,6 +1,6 @@
 """
-Organizations' documents in MongoDB: what the workflows (``workflows.py``) and
-agents (``agent_documents.py``) the web console's builders save have in common.
+Organizations' documents in MongoDB, as the web console's builders save them:
+the store the agents (``agent_documents.py``) are kept in.
 
 Each is one record per document, found only through its organization. The
 document is stored as the builder sends it (MongoDB keeps its keys in order,

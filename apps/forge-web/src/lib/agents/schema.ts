@@ -1,5 +1,5 @@
-import { THINKING_LEVELS } from "@/lib/workflows/model"
-import { CONFIGS as STEP_CONFIGS } from "@/lib/workflows/schema"
+import { THINKING_LEVELS } from "@/lib/steps/model"
+import { CONFIGS as STEP_CONFIGS } from "@/lib/steps/schema"
 import { AGENT_FORMAT } from "./document"
 import {
   AGENT_KINDS,

@@ -1,9 +1,9 @@
 """
 Runs of an organization's ADK workflows (``forge.agent/v1``, the agents of
-``organization_agents.py``), apart from Forge workflows' runs: submitted to the
-async worker's ``adk_workflows`` queue (``forge_admin.adk_runs``), followed
-as the organization's background tasks, their steps read from their ADK
-sessions, and what they wait for decided or answered here.
+``organization_agents.py``): submitted to the async worker's ``adk_workflows``
+queue (``forge_admin.adk_runs``), followed as the organization's background
+tasks, their steps read from their ADK sessions, and what they wait for
+decided or answered here.
 
 - Running one needs ``agents:run`` in the organization (its admins and members
   by default). The run takes the ADK workflow as it's saved then, and acts as
@@ -52,14 +52,13 @@ from forge_admin.api.routes.background_tasks import (
     refusal,
     task_type_of,
 )
-from forge_admin.api.routes.common import NodeId, Session
+from forge_admin.api.routes.common import NodeId, Session, name_of
 from forge_admin.api.routes.organization_agents import (
     NOT_FOUND,
     UNAVAILABLE,
     AgentId,
     agent_store,
 )
-from forge_admin.api.routes.workflows import name_of
 from forge_admin.auth.access import CurrentUser, Enforcer, Level, Scope, authorize
 from forge_admin.background_tasks import BackgroundTasks, BackgroundTasksError
 from forge_admin.embedding import ADK_WORKFLOWS, Embedding, EmbeddingError

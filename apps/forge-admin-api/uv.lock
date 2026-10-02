@@ -609,7 +609,6 @@ dependencies = [
     { name = "fastapi" },
     { name = "forge-common", extra = ["adk", "adk-models", "logging"] },
     { name = "forge-task-adk-workflows" },
-    { name = "forge-task-workflows" },
     { name = "google-adk" },
     { name = "httpx2" },
     { name = "jsonschema" },
@@ -638,7 +637,6 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.141.1" },
     { name = "forge-common", extras = ["adk", "adk-models", "logging"], editable = "../../packages/python/common" },
     { name = "forge-task-adk-workflows", editable = "../../packages/python/tasks/adk-workflows" },
-    { name = "forge-task-workflows", editable = "../../packages/python/tasks/workflows" },
     { name = "google-adk", specifier = ">=2.9.2" },
     { name = "httpx2", specifier = ">=2.13.1" },
     { name = "jsonschema", specifier = ">=4.26" },
@@ -733,7 +731,7 @@ source = { editable = "../../packages/python/tasks/adk-workflows" }
 dependencies = [
     { name = "aiomysql" },
     { name = "forge-common", extra = ["adk", "adk-models"] },
-    { name = "forge-task-workflows" },
+    { name = "forge-jsonata" },
     { name = "forge-tasks" },
     { name = "google-adk" },
     { name = "httpx" },
@@ -746,38 +744,13 @@ dependencies = [
 requires-dist = [
     { name = "aiomysql", specifier = ">=0.2" },
     { name = "forge-common", extras = ["adk", "adk-models"], editable = "../../packages/python/common" },
-    { name = "forge-task-workflows", editable = "../../packages/python/tasks/workflows" },
+    { name = "forge-jsonata", editable = "../../packages/python/jsonata" },
     { name = "forge-tasks", editable = "../../packages/python/tasks/task-sdk" },
     { name = "google-adk", specifier = ">=2.9.2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jsonschema", specifier = ">=4.23" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
-]
-
-[[package]]
-name = "forge-task-workflows"
-version = "0.1.0"
-source = { editable = "../../packages/python/tasks/workflows" }
-dependencies = [
-    { name = "forge-common", extra = ["adk-models"] },
-    { name = "forge-jsonata" },
-    { name = "forge-tasks" },
-    { name = "google-genai" },
-    { name = "httpx" },
-    { name = "jsonschema" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "forge-common", extras = ["adk-models"], editable = "../../packages/python/common" },
-    { name = "forge-jsonata", editable = "../../packages/python/jsonata" },
-    { name = "forge-tasks", editable = "../../packages/python/tasks/task-sdk" },
-    { name = "google-genai", specifier = ">=1.20" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "jsonschema", specifier = ">=4.23" },
-    { name = "pydantic", specifier = ">=2.7" },
 ]
 
 [[package]]

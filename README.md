@@ -1,14 +1,16 @@
 # ei-tiger-agent-workflow-builder
 
-Forge's standalone **business workflow engine**: a visual workflow builder
-in a web console, the API that keeps organizations' workflows and decides
-who may do what, and an async worker that runs them. People draw a workflow
-as steps on a canvas: LLM agent steps, human approvals, HTTP calls, data
-transforms, delays, branches and loops. They run it, from the console or
-from another workflow, and watch each run step by step. Other systems send
-an organization events through inbound webhooks, and a workflow's Start
-step names the event types meant to start it. An AI assistant on every page
-helps build, run and explain workflows.
+Forge builds and runs **Google ADK workflows** and designs **Google ADK
+agents**: a web console with visual builders for both, the API that keeps
+organizations' ADK workflows and decides who may do what, and an async worker
+that runs them on [Google ADK](https://google.github.io/adk-docs/)'s graph
+engine. People draw an ADK workflow on a canvas: LLM agents and teams of
+them, other saved ADK workflows, human approvals and questions, HTTP calls,
+data transforms, delays, branches and loops. They run it from the console
+and watch each run step by step. An agent is one Google ADK chat agent with
+its tools and the sub-agents it hands off to; for now the console keeps
+agents in the browser, and nothing runs them yet. An AI assistant on every
+page helps with access and administration.
 
 Deployable applications live under `apps/`, shared libraries under
 `packages/`. Each application owns its dependencies (`package.json` and
@@ -17,64 +19,61 @@ orchestrates them with one Compose stack and one Makefile.
 
 ## What it does
 
-- **Organizations.** The hierarchy is site → organizations. A workflow, its
-  runs, its event types and its members belong to one organization. Site
+- **Organizations.** The hierarchy is site → organizations. ADK workflows,
+  their runs, agents and members each belong to one organization. Site
   administrators manage organizations, users, roles and permissions.
 - **Access control.** Casbin roles and permissions (`resource:action`), assigned
   to users in a scope (the site or an organization) and enforced by the API on
   every request. People and other systems call the API with bearer tokens.
-- **Workflow builder.** Steps: Start, Agent (an LLM call, no tools), Approval,
-  HTTP, Transform, Delay, Run workflow, If / Switch / Match, Loop, Merge and End.
-  Every expression is [JSONata](packages/python/jsonata/README.md), evaluated by
-  the worker. Workflows are saved as `forge.workflow/v1` JSON documents in
-  MongoDB, one per workflow, with revision checks so concurrent edits never
-  silently overwrite each other.
-- **Runs.** The admin API submits a run to the async worker's Redis queue. The
-  worker runs it step by step as a tracked run of the
-  [enhanced task framework](packages/python/enhanced-task-framework): status,
-  step outputs, failures and an audit trail are kept, a run cut off by a crash
-  is restarted, and a run that waits (an approval, a long delay, another
-  workflow) lets its worker go.
-- **Event triggers.** Each organization defines event types, each with a JSON
-  Schema, and turns on an inbound endpoint
-  (`/hooks/events/<endpoint>/<event type>`, authenticated with the endpoint's
-  token). Every event is kept and checked against its schema. A workflow's
-  Start step names the event types that trigger it; the link lives in the
-  workflow document, so the event type page and the builder edit the same
-  setting.
+- **ADK workflow builder.** Nodes: Start; LLM agents, sequential, parallel
+  and loop agents, and saved ADK workflows; human input and approvals; HTTP,
+  Transform and Delay; If / Switch / Match, Loop, Merge and End. Every
+  expression is [JSONata](packages/python/jsonata/README.md). ADK workflows are
+  saved as `forge.agent/v1` JSON documents in MongoDB, one per ADK workflow,
+  with revision checks so concurrent edits never silently overwrite each
+  other.
+- **Runs.** The admin API checks a run's input and builds the document, then
+  submits the run to the async worker's `adk_workflows` queue on Redis. The
+  worker's ADK workflows task runs it on Google ADK's graph engine, its state
+  an ADK session in the admin MySQL, from which the run page reads its steps.
+  Each run is also a tracked run of the
+  [enhanced task framework](packages/python/enhanced-task-framework), which
+  keeps its attempts, failures and audit trail, restarts a run cut off by a
+  crash, and lets a run that waits (an approval, a person's answer, a long
+  delay) give up its worker until it's answered.
+- **Agents.** A builder for one Google ADK chat agent (`forge.chat_agent/v1`):
+  its instructions and model, its tools and the agents it hands off to. The
+  console keeps them in the browser for now; the API and a runtime come later.
 - **AI assistant.** A Google ADK agent served by the admin API (`/api/v1/agents`),
   on Gemini by default or the models of the shared model-provider YAML. It
-  acts as the signed-in person, within their permissions: it drafts a workflow
-  from what they describe and checks it as the builder and the runner would,
-  creates or saves it, runs workflows, follows their runs and decides
-  approvals, and answers questions about events and access. It asks the
-  person to confirm every change first.
+  acts as the signed-in person, within their permissions: it explains their
+  access and why something was refused, finds people and gives or removes
+  roles, and reads and edits organizations, roles, permissions and users. It
+  asks the person to confirm every change first.
 
 ## Services
 
 | Service | Module | Port | Role |
 |---|---|---|---|
-| `web` | `apps/forge-web` | 5190 (dev), 18190 (Compose) | React web console on the Forge UI design system: the workflow builder, runs, events, administration of organizations, users, roles and permissions, and the assistant panel |
-| `admin` | `apps/forge-admin-api` | 8101 (native), 18201 (Compose) | FastAPI API (`/api/v1`, docs at `/docs`): organizations, users, Casbin roles and permissions, workflows (MongoDB), event types and inbound events, run submission to the async worker, the service routes the worker calls back (`/internal/workflows`), and the assistant |
-| `admin-mysql` | `apps/forge-admin-api` | 13326 | MySQL 8.4 for the admin API (Alembic migrations), with a persistent volume |
-| `async-worker-workflows` | `apps/forge-async-worker` | none (SAQ worker) | Async worker (`forge-async-worker`) serving the `workflows` queue: runs organizations' workflows from the builder, pausing for approvals and waits |
-| `async-worker-adk-workflows` | `apps/forge-async-worker` | none (SAQ worker) | The same worker serving the `adk_workflows` queue: runs organizations' ADK workflows on Google ADK, their sessions in the admin MySQL |
+| `web` | `apps/forge-web` | 5190 (dev), 18190 (Compose) | React web console on the Forge UI design system: the ADK workflow builder and its runs, the agent builder, administration of organizations, users, roles and permissions, and the assistant panel |
+| `admin` | `apps/forge-admin-api` | 8101 (native), 18201 (Compose) | FastAPI API (`/api/v1`, docs at `/docs`): organizations, users, Casbin roles and permissions, ADK workflows (MongoDB), run submission to the async worker, runs' steps from their ADK sessions, and the assistant |
+| `admin-mysql` | `apps/forge-admin-api` | 13326 | MySQL 8.4 for the admin API (Alembic migrations) and ADK workflow runs' sessions, with a persistent volume |
+| `async-worker-adk-workflows` | `apps/forge-async-worker` | none (SAQ worker) | Async worker (`forge-async-worker`) serving the `adk_workflows` queue: runs organizations' ADK workflows on Google ADK, their sessions in the admin MySQL, pausing for approvals, questions and waits |
 | `async-worker-api` | `apps/forge-async-worker` | 8104 (native), 18204 (Compose) | Background tasks API: what the task framework recorded of each run (attempts, steps, audit trail), and resubmitting, restarting, abandoning or deciding one. The admin API relays it to the web console, checking who may see and act |
-| `mongo` | `compose.infrastructure.yaml` | 27037 | Shared MongoDB (Atlas Local 8.3.9, a single-node replica set): workflows (`forge_admin`) and the task framework's runs (`forge_tasks`); persistent volumes |
+| `mongo` | `compose.infrastructure.yaml` | 27037 | Shared MongoDB (Atlas Local 8.3.9, a single-node replica set): ADK workflows (`forge_admin`) and the task framework's runs (`forge_tasks`); persistent volumes |
 | `redis` | `compose.infrastructure.yaml` | 16389 | Shared Redis: the async worker's SAQ queues and locks in database 0; persistent AOF, no eviction |
 
 ```text
- web console ───────┐
- other systems ─────┤ /hooks/events/…
-                    ▼
-                admin API ──────► MySQL             organizations, users, roles, permissions, events
-                  │  │  └───────► MongoDB           workflows (forge_admin)
-                  │  └──────────► async-worker-api  runs as background tasks (FORGE_ASYNC_WORKER_TOKEN)
-                  ▼ start a run
-                Redis (SAQ, db 0)
-                  ▼
-                async-worker-workflows ──► MongoDB  runs, steps and audit trail (forge_tasks)
-                  └──► admin API /internal/workflows  Run workflow steps (FORGE_WORKFLOWS_TOKEN)
+ web console
+      ▼
+  admin API ──────► MySQL             organizations, users, roles, permissions; ADK sessions
+    │  │  └───────► MongoDB           ADK workflows (forge_admin)
+    │  └──────────► async-worker-api  runs as background tasks (FORGE_ASYNC_WORKER_TOKEN)
+    ▼ start a run
+  Redis (SAQ, db 0)
+    ▼
+  async-worker-adk-workflows ──► MySQL    each run's ADK session, read back for its steps
+                             └─► MongoDB  runs, attempts and audit trail (forge_tasks)
 ```
 
 MongoDB and Redis are defined once in [compose.infrastructure.yaml](compose.infrastructure.yaml),
@@ -94,7 +93,7 @@ Requires Node.js 24+, [uv](https://docs.astral.sh/uv/) (it installs Python
 Put your names, email and MS ID in the `FORGE_ADMIN_SITE_ADMIN_*` settings of
 `apps/forge-admin-api/.env` first (`make env` creates it): the seed makes you
 the site administrator, and the web console signs in as you with a bearer
-token. For the assistant and agent steps, set `FORGE_GOOGLE_API_KEY` in
+token. For the assistant and LLM nodes, set `FORGE_GOOGLE_API_KEY` in
 `.env.common`.
 
 ```sh
@@ -112,7 +111,7 @@ make install           # npm ci in apps/forge-web, uv sync in apps/forge-admin-a
 make web               # Vite dev server on http://localhost:5190
 make admin-deps        # admin-mysql, and the shared mongo and redis
 make admin             # admin API on http://localhost:8101; docs at /docs
-make async-worker      # mongo and redis, then the async worker on the workflows queue, with its schedules
+make async-worker      # mongo and redis, then the async worker on the adk_workflows queue, with its schedules
 make async-worker-api  # the background tasks API on http://localhost:8104, which the admin API shows runs with
 ```
 
@@ -130,17 +129,16 @@ make up-all-local
 
 Values several apps share live once in `.env.common` at the root: the
 admin's MySQL connection, the shared MongoDB and Redis, the tokens the
-services call each other with (`FORGE_ASYNC_WORKER_TOKEN`,
-`FORGE_WORKFLOWS_TOKEN`) and the model API keys (`FORGE_GOOGLE_API_KEY`,
+services call each other with (`FORGE_ASYNC_WORKER_TOKEN`) and the model API keys (`FORGE_GOOGLE_API_KEY`,
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). Everything else lives with its app:
 `apps/forge-admin-api/.env` and `apps/forge-async-worker/.env`, plus
 `apps/forge-web/.env.local` (see `apps/forge-web/.env.example`). `make env`
 creates each from its `.env.example` (`.env.common` from
 `.env.common.example`, `.env.compose` from `.env.compose.example`) and
-generates the tokens and the admin API's JWT secret, once.
+generates the token and the admin API's JWT secret, once.
 
 An app's `.env` names each shared value it uses with a `${NAME}` reference,
-for example `HYBRID_WORKFLOWS__ADMIN_TOKEN=${FORGE_WORKFLOWS_TOKEN}`;
+for example `HYBRID_API__TOKEN=${FORGE_ASYNC_WORKER_TOKEN}`;
 `.env.common` never reaches an app by itself, so an app only gets the shared
 values it references. A reference resolves to an earlier line of the same
 file, otherwise to `.env.common`, and a name defined in neither stops the app
@@ -151,7 +149,7 @@ when empty. Compose resolves the references itself from `.env.common`, which
 the Makefile passes with `--env-file`. The web console's `VITE_*` values are
 build-time only and share nothing.
 
-Agent steps and the assistant run on Gemini with `FORGE_GOOGLE_API_KEY`
+LLM nodes and the assistant run on Gemini with `FORGE_GOOGLE_API_KEY`
 unless an app's `.env` names the shared model-provider YAML
 (`packages/python/common/src/forge_common/model_provider`), which can offer
 OpenAI's and Anthropic's models with the keys it references.
@@ -165,9 +163,9 @@ build time, so change it there and run `make restart` to rebuild the image.
 ```text
 apps/
   forge-web/              React web console (Vite, TanStack Router and Query, Forge UI)
-    src/                  Routes, the workflow builder, Forge composites, shadcn primitives, API and state layers
-    tests/                Workflow expression and layout tests, timestamp helpers (node --test)
-    scripts/              Generates the builder's copy of the workflow JSON Schema, and checks it
+    src/                  Routes, the ADK workflow and agent builders, Forge composites, shadcn primitives, API and state layers
+    tests/                Builder steps, ADK workflow and agent tests, timestamp helpers (node --test)
+    scripts/              Generates the builder's copy of the agent JSON Schema, and checks it
     Dockerfile            Static build served by unprivileged nginx, built from the repository root
     compose.yaml          The web service
     nginx.conf            SPA fallback and cache headers
@@ -176,7 +174,7 @@ apps/
     package-lock.json     The app's lockfile; node_modules is installed beside it
   forge-admin-api/        FastAPI admin API over MySQL and MongoDB
     src/forge_admin/      api/ (app, routes), auth/ (Casbin, tokens), agents/ (the assistant), cli/, db/ (sessions, migrations),
-                          models/, workflows.py and workflow.schema.json (the workflow format), events.py
+                          models/, agent_documents.py and agent.schema.json (the ADK workflow format), adk_runs.py
     tests/                Unit and MySQL integration tests
     Dockerfile            uv-built image running as a non-root user, built from the repository root
     compose.yaml          The admin service, its admin-mysql database and the admin-seed tool
@@ -189,16 +187,16 @@ apps/
                           queue.py, cli.py; no task-specific code
     tests/                The SAQ job, retries and re-drives with toy tasks on in-memory stores; the worker on a real Redis
     Dockerfile            uv-built worker image with the bundled task packages, built from the repository root
-    compose.yaml          async-worker-workflows, async-worker-adk-workflows and async-worker-api
+    compose.yaml          async-worker-adk-workflows and async-worker-api
     .env.example          Worker and task settings template
-    pyproject.toml        The app's dependencies (the bundled task packages are the workflows and adk-workflows extras) and tool settings
+    pyproject.toml        The app's dependencies (the bundled task package is the adk-workflows extra) and tool settings
     uv.lock               The app's lockfile; .venv is installed beside it
 packages/                 Shared Python libraries (see packages/README.md)
   python/common/          forge-common: ADK toolset helpers and the shared model-provider YAML and loader
-  python/jsonata/         forge-jsonata: the JSONata engine workflow expressions run on
-  python/enhanced-task-framework/  etf: tracks, audits, pauses and recovers async job runs
+  python/jsonata/         forge-jsonata: the JSONata engine ADK workflows' expressions run on
+  python/enhanced-task-framework/  etf: tracks, audits, pauses and recovers async job runs (each ADK workflow run)
   python/tasks/task-sdk/  forge-tasks: the contract between the async worker and a task package
-  python/tasks/workflows/ forge-task-workflows: the workflows task, which runs a workflow's steps
+  python/tasks/adk-workflows/  forge-task-adk-workflows: the ADK workflows task, which builds and runs ADK workflows
 tests/infrastructure/     Validates the rendered Compose stack (make infrastructure-check)
 .claude/                  Agent skills for the Forge UI, data and state conventions; dev-server launch config
 compose.yaml              Includes compose.infrastructure.yaml and each app's compose.yaml

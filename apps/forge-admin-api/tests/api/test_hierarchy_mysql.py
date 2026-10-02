@@ -118,7 +118,7 @@ def test_roles_apply_in_their_organization_only(
     )
     access = as_mo.get(f"{API}/me/access", params={"scope": f"org:{site.acme}"}).json()
     assert access["roles"] == ["org:member"]
-    assert ["org:member", "workflows", "run"] in access["policies"]
+    assert ["org:member", "agents", "run"] in access["policies"]
     elsewhere_access = as_mo.get(
         f"{API}/me/access", params={"scope": f"org:{site.globex}"}
     ).json()

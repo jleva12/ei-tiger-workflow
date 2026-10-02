@@ -24,7 +24,7 @@ import {
   type ChatKind,
   type ChatStep,
 } from "@/lib/chat-agents/model"
-import { HTTP_METHODS, uid, type HeaderRow } from "@/lib/workflows/model"
+import { HTTP_METHODS, uid, type HeaderRow } from "@/lib/steps/model"
 import { useChatBuilder } from "./chat-agent-store"
 
 /*

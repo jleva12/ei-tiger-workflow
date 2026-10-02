@@ -285,14 +285,14 @@ function HeaderSkeleton() {
 
 /**
  * One of an organization's background tasks, under Background tasks in the top bar's
- * trail (or `section`'s: a workflow run's is under Workflows): its header
+ * trail (or `section`'s: an ADK workflow run's is under ADK workflows): its header
  * (status, type, attempts) with Copy link and, for those who manage
  * background tasks, Retry, Resubmit and Abandon as its state allows; then
  * three tabs — Overview (its input, result and record), Attempts (each run
  * with its failures and steps) and Activity (its audit trail) — and any
  * `panes` its kind adds after Overview. What it waits for is decided in
- * Overview, by `approvalPanel` (a workflow run's approval panel when
- * absent). It follows a task in progress every few seconds.
+ * Overview, by `approvalPanel`. It follows a task in progress every few
+ * seconds.
  */
 export function BackgroundTaskDetail<Tab extends string = never>({
   organization,
@@ -314,7 +314,7 @@ export function BackgroundTaskDetail<Tab extends string = never>({
   section?: TaskPageSection
   /** Tabs its kind adds, after Overview. */
   panes?: TaskPane<Tab>[]
-  /** What answers the approval it waits for; a workflow run's when absent. */
+  /** What answers the approval it waits for. */
   approvalPanel?: ApprovalPanelOf
   onTabChange: (tab: BackgroundTaskTab | Tab) => void
   onBack: () => void
@@ -471,7 +471,6 @@ export function BackgroundTaskDetail<Tab extends string = never>({
           </TaskTabBar>
           <TabsContent value="overview">
             <BackgroundTaskOverview
-              organizationId={organization.id}
               task={task}
               approvalPanel={approvalPanel}
             />

@@ -1,8 +1,8 @@
 import {
   expressionSettings,
   type ExpressionSetting,
-} from "@/lib/workflows/fields"
-import type { StepData } from "@/lib/workflows/model"
+} from "@/lib/steps/fields"
+import type { StepData } from "@/lib/steps/model"
 import {
   isForgeKind,
   subAgentsOf,

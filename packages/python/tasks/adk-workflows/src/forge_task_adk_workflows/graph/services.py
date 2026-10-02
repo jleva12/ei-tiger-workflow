@@ -24,7 +24,7 @@ from google.adk.models.llm_request import LlmRequest
 from google.genai import types
 
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
-from forge_task_workflows.expressions import Evaluator
+from forge_task_adk_workflows.support.expressions import Evaluator
 
 if TYPE_CHECKING:
     from forge_common.adk.models import ProviderModels
@@ -60,11 +60,11 @@ class RunServices:
     #: back-off).
     clock: Callable[[], datetime] = utcnow
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
-    #: JSONata, as the worker evaluates it.
+    #: JSONata (``support.expressions``).
     evaluator: Evaluator = field(default_factory=Evaluator)
     #: HTTP requests never reach private, loopback or link-local addresses
     #: unless allowed; hosts listed are always allowed
-    #: (``forge_task_workflows.services.http_guard.check_url``).
+    #: (``support.http.check_url``).
     allow_private: bool = _DEFAULTS.http_allow_private
     allowed_hosts: tuple[str, ...] = ()
     #: The most of a response an HTTP request reads.

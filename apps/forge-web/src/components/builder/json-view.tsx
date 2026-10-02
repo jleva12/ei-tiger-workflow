@@ -1,6 +1,6 @@
 import * as React from "react"
 
-import { CopyButton, JsonView } from "@/components/events/json-view"
+import { CopyButton, JsonView } from "@/components/json/json-view"
 import { Icon } from "@/components/forge/icon"
 import { Button } from "@/components/ui/button"
 import { issueSummary } from "@/lib/builder/types"
@@ -22,7 +22,7 @@ export function BuilderJson<Doc extends { name: string; nodes: unknown[]; edges:
   about,
   onImport,
 }: {
-  /** The format's name, e.g. forge.workflow/v1. */
+  /** The format's name, e.g. forge.agent/v1. */
   format: string
   /** Its JSON Schema. */
   schema: unknown

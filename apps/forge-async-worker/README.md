@@ -11,7 +11,6 @@ it. The worker holds no business logic: that lives in the task packages.
 
 | Task package | Task | What it does |
 |---|---|---|
-| [`packages/python/tasks/workflows`](../../packages/python/tasks/workflows/README.md) | `workflows` | Runs organizations' workflows from the web console's builder: agents, approvals, HTTP calls, transforms, delays, other workflows, logic and loops, through waits and restarts |
 | [`packages/python/tasks/adk-workflows`](../../packages/python/tasks/adk-workflows/README.md) | `adk_workflows` | Runs organizations' ADK workflows (the ADK workflows page) on Google ADK's graph engine, their state in ADK sessions in the admin MySQL, through approvals, human input and delays |
 
 It builds on [`forge-tasks`](../../packages/python/tasks/task-sdk/README.md)
@@ -21,7 +20,7 @@ same way ([Adding a task type](#adding-a-task-type)).
 ```
  admin API / CLI /    ┌──────── forge-async-worker (generic) ────────┐
  webhook / cron  ───► │ SAQ queue per task type ─► run_job           │
- enqueue("run_job",   │   ─► ETF run "<task>.<kind>" (tracked,       │ ───► forge_task_workflows
+ enqueue("run_job",   │   ─► ETF run "<task>.<kind>" (tracked,       │ ───► forge_task_adk_workflows
    spec=JobSpec)      │      leased, audited, re-driven) ─► the job  │      <your task package>
                       │                                              │
                       │ retries · locks · heartbeat · schedules ·    │      (entry point
@@ -50,10 +49,10 @@ src/forge_async_worker/
 tests/                    the SAQ job, retries, re-drives and upkeep, with toy tasks on in-memory stores; the
                           worker on a real Redis. The task packages test their own jobs
 Dockerfile                uv-built image with the bundled task packages and what their prepare() downloads
-compose.yaml              async-worker-workflows, async-worker-adk-workflows and async-worker-api
+compose.yaml              async-worker-adk-workflows and async-worker-api
 ../../compose.infrastructure.yaml  Shared Atlas MongoDB and Redis (SAQ database 0)
 .env.example              settings template; make env copies it to .env
-pyproject.toml, uv.lock   dependencies (the bundled task packages are the workflows and adk-workflows extras) and the lockfile
+pyproject.toml, uv.lock   dependencies (the bundled task package is the adk-workflows extra) and the lockfile
 ```
 
 ## How a job runs
@@ -66,7 +65,7 @@ whatever it was enqueued with, so a submitter can't give a backfill SAQ's
 10-second default.
 
 `run_job` takes the job's Redis lock (from its `lock_key`, if any), then launches
-the delivery as an ETF run of the job `<task>.<kind>` (`workflows.run`), whose
+the delivery as an ETF run of the job `<task>.<kind>` (`adk_workflows.run`), whose
 one step runs the task's job. A SAQ delivery is one ETF job instance, identified
 by its queue, key and enqueue time: SAQ's retries of a delivery continue that
 instance's history, while every cron tick and every re-submission is an instance
@@ -86,7 +85,7 @@ without running the job again.
 | a run waits for a person, or is paused or stopped | the delivery is acknowledged (`skipped`, with the run's status); the run moves on through the operator |
 
 A spec may also carry `tenant_id` (the organization it's for), `labels` (names the run
-carries, to find it by: a workflow run's `workflow`) and `requested_by`
+carries, to find it by: an ADK workflow run's `adk_workflow` and `adk_session`) and `requested_by`
 (`{"id", "display_name"}`, the person who asked for it, recorded as the run's
 requester; the worker itself otherwise).
 
@@ -110,8 +109,7 @@ A job can outlast its worker. While it runs, `forge_tasks.control`
   (`STOPPED`, marked as waiting, checkpoint kept) and schedules `resume_run`
   for then; a stopped run that isn't waiting (someone stopped it) isn't
   resumed.
-- **Other runs:** `find_run(labels)` reads another run by its labels, e.g.
-  the child a workflow step started.
+- **Other runs:** `find_run(labels)` reads another run by its labels.
 
 Outside the worker (tests, the CLI) the same calls work in memory
 (`LocalJobControl`), and a wait ends the job.
@@ -153,7 +151,7 @@ restarted job in whichever process restarts it, so that happens on a worker.
 A task belongs to an organization through its `tenant` label: a job's
 `tenant_id` (`JobSpec.tenant_id`, or its payload's `tenant_id`), which its
 follow-ups inherit; a fan-out across organizations names each follow-up's. A job's optional
-`describe(payload)` gives the task its `description` (a workflow's name). Failure categories: `transient`
+`describe(payload)` gives the task its `description` (an ADK workflow's name). Failure categories: `transient`
 (retried with backoff), `interrupted` (its worker died or stopped; restarted
 by its redelivery), `permanent` (the input can't succeed), `error` (a bug; not
 retried).
@@ -165,7 +163,6 @@ concurrency and replicas. Compose runs one service per queue from one image:
 
 | Service | Serves | Knobs (`.env.compose`) |
 |---|---|---|
-| `async-worker-workflows` | `workflows`: organizations' workflow runs, which reach the admin API at `http://admin:8091` | `ASYNC_WORKER_WORKFLOWS_CONCURRENCY`, `ASYNC_WORKER_WORKFLOWS_REPLICAS` |
 | `async-worker-adk-workflows` | `adk_workflows`: organizations' ADK workflow runs, their sessions in `admin-mysql` | `ASYNC_WORKER_ADK_WORKFLOWS_CONCURRENCY`, `ASYNC_WORKER_ADK_WORKFLOWS_REPLICAS` |
 | `async-worker-api` | the background tasks API, published on 18204 | `ASYNC_WORKER_API_PORT` |
 
@@ -175,7 +172,7 @@ own queues (`--queues`, `--ensure-schema`). A cron tick runs once however many
 replicas serve its queue. Elsewhere:
 
 ```sh
-forge-async-worker worker --queues workflows --concurrency 8
+forge-async-worker worker --queues adk_workflows --concurrency 8
 ```
 
 ## Adding a task type
@@ -200,14 +197,14 @@ and `HYBRID_LOGGING__*` (`config.py`). Logs go through structlog
 (`forge_common.logging`): JSON lines, or key=value with
 `HYBRID_LOGGING__FORMAT=console` (the default on a terminal), at
 `HYBRID_LOGGING__LEVEL`; the background tasks API adds an access line per
-request, and every line of a request carries its `request_id`. Each task package reads its own section (the workflows task,
-`HYBRID_WORKFLOWS__*`; the ADK workflows task, `HYBRID_ADK_WORKFLOWS__*`). Quote JSON values in single quotes so every `.env` reader (pydantic-settings,
+request, and every line of a request carries its `request_id`. Each task package reads its own section (the ADK workflows
+task, `HYBRID_ADK_WORKFLOWS__*`). Quote JSON values in single quotes so every `.env` reader (pydantic-settings,
 Compose, uv) keeps them intact.
 
 Values the worker shares with other apps live once in the repository's
-`.env.common`: the MongoDB and Redis connections, the service tokens, and
-the model keys. `.env` names each with a `${NAME}` reference, e.g.
-`HYBRID_WORKFLOWS__ADMIN_TOKEN=${FORGE_WORKFLOWS_TOKEN}` (`forge_tasks.env_files`). A
+`.env.common`: the MongoDB, MySQL and Redis connections, the background tasks
+API's token, and the model keys. `.env` names each with a `${NAME}` reference, e.g.
+`HYBRID_API__TOKEN=${FORGE_ASYNC_WORKER_TOKEN}` (`forge_tasks.env_files`). A
 reference resolves to an earlier line of `.env`, otherwise to `.env.common`; a
 name defined in neither stops startup unless the process environment sets that
 variable. `.env.common` is read from `../../.env.common`, or
@@ -225,13 +222,13 @@ make async-worker-check       # ruff, format check, mypy and pytest: the app, th
 make async-worker-deps        # mongo (127.0.0.1:27037), redis (127.0.0.1:16389)
 make async-worker             # the worker natively, every queue, after ensure-schema
 make async-worker-api         # the background tasks API natively, on http://localhost:8104
-make up                       # the whole stack, async-worker-workflows and async-worker-api included
+make up                       # the whole stack, async-worker-adk-workflows and async-worker-api included
 make logs-async-worker
 make async-worker-test-redis  # the SAQ worker on a real Redis (database 15 of redis, cleared)
 ```
 
 ```sh
-forge-async-worker worker [--queues workflows] [--concurrency 4] [--grace-period 30] [--ensure-schema]
+forge-async-worker worker [--queues adk_workflows] [--concurrency 4] [--grace-period 30] [--ensure-schema]
 forge-async-worker worker --check      # exit 1 unless this host serves each queue (the container healthcheck)
 forge-async-worker prepare             # each installed task's prepare(): what it would download at runtime (image builds)
 ```
@@ -247,9 +244,8 @@ uv run forge-async-worker tasks            # installed task types, their queues 
 uv run forge-async-worker ensure-schema
 ```
 
-The admin API submits `workflows.run` for each run a member starts (the
-builder's Run button or the assistant), and for each run another workflow's
-Run workflow step starts, under the organization as tenant
+The admin API submits `adk_workflows.run` for each run a member starts (the
+ADK workflow builder's Run button), under the organization as tenant
 ([apps/forge-admin-api](../forge-admin-api/README.md)).
 
 The image runs `forge-async-worker prepare` at build, so a bundled task never

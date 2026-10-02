@@ -2,7 +2,7 @@
 
 Needs the ``model-provider`` extra: ``forge-common[model-provider]``. The shared
 files are in this package's directory (:data:`SHARED_CONFIG_DIR`), where the
-admin API's assistant and workflows' agent steps read them;
+admin API's assistant and ADK workflows' LLM nodes read them;
 ``forge_common.adk.models`` runs Google ADK agents on their models.
 """
 

@@ -76,7 +76,7 @@ from forge_task_adk_workflows.graph.data import ERROR_KEY
 from forge_task_adk_workflows.graph.factories.base import config_of, items, label_of, text
 from forge_task_adk_workflows.graph.names import FINISH_NODE, adk_name, body_name
 from forge_task_adk_workflows.graph.pauses import REQUEST_INPUT
-from forge_task_workflows.services.llm import RETRYABLE, UNANSWERED
+from forge_task_adk_workflows.models import RETRYABLE, UNANSWERED
 from forge_tasks.control import ControlSignal, JobControl
 from forge_tasks.errors import TaskError, TransientError
 from forge_tasks.runner import ok

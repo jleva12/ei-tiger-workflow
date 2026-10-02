@@ -4,19 +4,18 @@ UV ?= uv
 # .env.common supplies the ${NAME} references in each app's .env; it adds no
 # variables to a container by itself.
 COMPOSE = $(DOCKER) compose --env-file .env.compose --env-file .env.common -f compose.yaml
-SERVICES := web admin async-worker-workflows async-worker-adk-workflows async-worker-api
+SERVICES := web admin async-worker-adk-workflows async-worker-api
 # Each app owns its dependencies: package.json and node_modules, or
 # pyproject.toml, uv.lock and .venv.
 WEB_DIR := apps/forge-web
 ADMIN_DIR := apps/forge-admin-api
 ASYNC_WORKER_DIR := apps/forge-async-worker
 # The task packages the async worker bundles: checked, and tested, in its environment.
-TASK_PACKAGES := $(addprefix packages/python/tasks/,task-sdk workflows adk-workflows)
+TASK_PACKAGES := $(addprefix packages/python/tasks/,task-sdk adk-workflows)
 # Python packages the apps share, each with its own environment.
 COMMON_DIR := packages/python/common
 JSONATA_DIR := packages/python/jsonata
 ETF_DIR := packages/python/enhanced-task-framework
-EVENT_BUS_DIR := packages/python/event-bus
 # The apps make up-all-local runs natively, each with its own make target.
 LOCAL_APPS := web admin async-worker async-worker-api
 .PHONY: help env install infrastructure start up up-all-local up-all-local-deps down logs logs-web logs-admin logs-async-worker status restart docker-build check
@@ -27,7 +26,6 @@ LOCAL_APPS := web admin async-worker async-worker-api
 .PHONY: shared-deps infrastructure-check
 .PHONY: jsonata-check jsonata-fmt jsonata-test-re2
 .PHONY: etf-check etf-fmt
-.PHONY: event-bus-check event-bus-fmt event-bus-test-redis
 
 # Appends line $(1) to env file $(2) on a line of its own, even when the
 # file's last line has no newline (echo >> alone would join the two).
@@ -41,7 +39,7 @@ help:
 	@echo "make shared-deps        Start the shared MongoDB and Redis"
 	@echo "make infrastructure-check Validate the Compose stack: shared services, connections and queues"
 	@echo "make web-token          Sign the web console in as you: a bearer token in apps/forge-web/.env.local and .env.compose"
-	@echo "make start / make up    Build and start web, admin, the async worker (workflows queue and background tasks API) and their databases (web on 18190, admin on 18201)"
+	@echo "make start / make up    Build and start web, admin, the async worker (adk_workflows queue and background tasks API) and their databases (web on 18190, admin on 18201)"
 	@echo "make up-all-local       Start the databases, then run web, admin, async-worker and async-worker-api natively in this terminal; Ctrl-C stops them"
 	@echo "make down               Stop the stack (MySQL, MongoDB and Redis data persist in their volumes)"
 	@echo "make logs / logs-web / logs-admin / logs-async-worker  Follow logs"
@@ -58,8 +56,8 @@ help:
 	@echo "make admin-test-mysql   Start admin MySQL and run the admin integration tests"
 	@echo "make admin-fmt          Format and autofix the admin sources"
 	@echo "make async-worker-deps  Start the shared MongoDB and Redis for the async worker"
-	@echo "make async-worker       Run the async worker natively on every enabled queue (workflows, adk_workflows), with their schedules"
-	@echo "make async-worker-api   Run the background tasks API natively on http://localhost:8104 (the admin API shows workflow runs with it)"
+	@echo "make async-worker       Run the async worker natively on every enabled queue (adk_workflows), with their schedules"
+	@echo "make async-worker-api   Run the background tasks API natively on http://localhost:8104 (the admin API shows ADK workflow runs with it)"
 	@echo "make async-worker-check Async worker and task packages: lint, format check, types and unit tests"
 	@echo "make async-worker-fmt   Format and autofix the async worker and task package sources"
 	@echo "make async-worker-test-redis  Start the shared Redis and run the SAQ worker integration tests"
@@ -70,9 +68,6 @@ help:
 	@echo "make jsonata-test-re2   Test the optional RE2 regex engine integration"
 	@echo "make etf-check          Enhanced task framework: lint and unit tests"
 	@echo "make etf-fmt            Autofix the enhanced task framework's lint findings"
-	@echo "make event-bus-check    Redis event bus: lint, format check, types and unit tests"
-	@echo "make event-bus-fmt      Format and autofix the Redis event bus"
-	@echo "make event-bus-test-redis  Start the shared Redis and run the event bus delivery tests against it"
 
 env:
 	@test -e .env.compose || (umask 077; cp .env.compose.example .env.compose)
@@ -80,11 +75,10 @@ env:
 	@for dir in $(ADMIN_DIR) $(ASYNC_WORKER_DIR); do \
 	  test -e $$dir/.env || (umask 077; cp $$dir/.env.example $$dir/.env); \
 	done
-	@# Bearer tokens between services, once, in .env.common; apps reference
-	@# them: the admin API calls the async worker's background tasks API with
-	@# FORGE_ASYNC_WORKER_TOKEN, and the workflows task calls the admin API's
-	@# service routes with FORGE_WORKFLOWS_TOKEN.
-	@for name in FORGE_ASYNC_WORKER_TOKEN FORGE_WORKFLOWS_TOKEN; do \
+	@# The bearer token between services, once, in .env.common; apps reference
+	@# it: the admin API calls the async worker's background tasks API with
+	@# FORGE_ASYNC_WORKER_TOKEN.
+	@for name in FORGE_ASYNC_WORKER_TOKEN; do \
 	  grep -q "^$$name=" .env.common || $(call append,$$name=,.env.common); \
 	  grep -Eq "^$$name=.{32}" .env.common || { \
 	    perl -i -pe "s/^$$name=.*/$$name=$$(openssl rand -hex 32)/" .env.common; \
@@ -143,7 +137,7 @@ logs-admin: env
 	$(COMPOSE) logs -f --tail=100 admin
 
 logs-async-worker: env
-	$(COMPOSE) logs -f --tail=100 async-worker-workflows async-worker-adk-workflows async-worker-api
+	$(COMPOSE) logs -f --tail=100 async-worker-adk-workflows async-worker-api
 
 status: env
 	$(COMPOSE) ps -a
@@ -154,7 +148,7 @@ restart: env
 docker-build: env
 	$(COMPOSE) build $(SERVICES)
 
-check: infrastructure-check web-check web-test web-build admin-check async-worker-check common-check jsonata-check etf-check event-bus-check
+check: infrastructure-check web-check web-test web-build admin-check async-worker-check common-check jsonata-check etf-check
 
 web-install:
 	cd $(WEB_DIR) && $(NPM) ci
@@ -180,10 +174,10 @@ web-token: env
 web-check:
 	cd $(WEB_DIR) && $(NPM) run check
 
-# The workflow builder's expression and layout tests and the timestamp
-# helpers (node --test).
+# The web console's tests (node --test): the builders' steps, the ADK
+# workflow and chat agent builders, and the timestamp helpers.
 web-test:
-	cd $(WEB_DIR) && $(NPM) run test:workflows && $(NPM) run test:timestamps
+	cd $(WEB_DIR) && $(NPM) run test:steps && $(NPM) run test:agents && $(NPM) run test:timestamps
 
 web-build:
 	cd $(WEB_DIR) && $(NPM) run build
@@ -282,18 +276,3 @@ etf-check:
 
 etf-fmt:
 	cd $(ETF_DIR) && $(UV) run --locked --extra dev --extra mongo ruff check --fix .
-
-# Its own environment; the unit tests run on the in-memory transport and fakes
-# of the Redis client, so they need no Redis.
-event-bus-check:
-	cd $(EVENT_BUS_DIR) && $(UV) run --locked ruff check . && $(UV) run --locked ruff format --check . && $(UV) run --locked mypy src && $(UV) run --locked pytest
-
-event-bus-fmt:
-	cd $(EVENT_BUS_DIR) && $(UV) run --locked ruff check --fix . && $(UV) run --locked ruff format .
-
-# Database 14, apart from the worker's queues (0) and its tests (15); each
-# test works under a key prefix of its own and deletes it afterwards.
-event-bus-test-redis: env
-	$(COMPOSE) up -d --wait redis
-	@addr=$$($(COMPOSE) port redis 6379) && cd $(EVENT_BUS_DIR) && \
-	  EVENT_BUS_TEST_REDIS_URL=redis://$$addr/14 $(UV) run --locked pytest tests/integration

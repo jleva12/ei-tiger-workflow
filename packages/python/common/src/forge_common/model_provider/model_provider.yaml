@@ -10,8 +10,8 @@ version: 1
 #
 # Every app reads this one file through forge_common.model_provider: the admin
 # API's assistant (FORGE_ADMIN_MODEL_PROVIDER_CONFIG), which offers each model
-# in its model picker as provider/model, and workflows' agent steps in the
-# async worker (HYBRID_WORKFLOWS__MODEL_PROVIDER_CONFIG). Both run the models
+# in its model picker as provider/model, and ADK workflows' LLM nodes in the
+# async worker (HYBRID_ADK_WORKFLOWS__MODEL_PROVIDER_CONFIG). Both run the models
 # with forge_common.adk.models, which speaks openai-responses,
 # openai-completions, anthropic-messages and google-generative-ai, e.g. Gemini:
 #   google:

@@ -232,7 +232,7 @@ class AdministrationToolset(RouteToolset):
     async def list_permission_definitions(self, tool_context: ToolContext) -> list[Any]:
         """
         Every permission, by resource and action: its ID, its key
-        (resource:action, e.g. workflows:run; "*" stands for any) and what
+        (resource:action, e.g. agents:run; "*" stands for any) and what
         it's for. Roles grant permissions by their IDs.
         """
         permissions = await self._call(tool_context, "GET", "/permissions")
@@ -368,7 +368,7 @@ class AdministrationToolset(RouteToolset):
         Change a permission's description or key. Only site administrators
         can. A new key applies in every role that grants it, and Forge checks
         its own permissions by key: renaming one it checks (e.g.
-        workflows:run) takes that ability from everyone until it's renamed
+        agents:run) takes that ability from everyone until it's renamed
         back. Say so to the person before renaming one.
 
         Args:

@@ -1,6 +1,6 @@
 """
-Logic, as the worker runs it (``forge_task_workflows.engine`` and
-``nodes/basic.py``), and the hidden nodes the build adds.
+Logic: ways to take, merges, loops and ends, and the hidden nodes the build
+adds.
 
 - ``if`` / ``switch`` / ``match``: take a way (true / false; the case whose
   value the expression gives, as text, else default; the first rule whose
@@ -8,8 +8,8 @@ Logic, as the worker runs it (``forge_task_workflows.engine`` and
   is the way's output ID: ``steps.<id>.output`` records it as ``{branch}``.
 - ``merge``: "all" is a ``JoinNode`` that waits for every way in and hands on
   what each handed on, by step ID. "any" goes on at the first way in (each
-  way in tags what it hands on with its step ID on the way, so it's the
-  worker's ``{<id>: ...}`` too) and ends the others: it runs once per
+  way in tags what it hands on with its step ID on the way, so it's
+  ``{<id>: ...}`` too) and ends the others: it runs once per
   arrival, and after the first hands on nothing, by no way.
 - ``loop``: goes through its list's items (None: none; one value: a list of
   it), running its body per item as an ADK dynamic node (``ctx.run_node``),
@@ -18,8 +18,8 @@ Logic, as the worker runs it (``forge_task_workflows.engine`` and
   Done way. More items than it allows fail the run.
 - ``end``: finishes its way with ``{outcome, result}``, its result its
   expression's, else what came in. A failed one fails the run
-  (:class:`RunFailed` with the result). Unlike the worker's, a succeeded End
-  can't stop other ways still running.
+  (:class:`RunFailed` with the result). A succeeded End can't stop other
+  ways still running.
 """
 
 import asyncio
@@ -46,7 +46,9 @@ from forge_task_adk_workflows.graph.names import (
     STOP_NODE,
     adk_name,
 )
-from forge_task_workflows.document import (
+from forge_task_adk_workflows.support.errors import StepFailed
+from forge_task_adk_workflows.support.expressions import as_text
+from forge_task_adk_workflows.support.step_settings import (
     EndConfig,
     IfConfig,
     LoopConfig,
@@ -54,8 +56,6 @@ from forge_task_workflows.document import (
     MergeConfig,
     SwitchConfig,
 )
-from forge_task_workflows.errors import StepFailed
-from forge_task_workflows.expressions import as_text
 
 #: The way out of a Merge "any" (and of the others, which don't need it).
 NEXT = "next"
@@ -247,7 +247,7 @@ def finish(*, top: bool) -> FunctionNode:
     """
     The hidden node every ending of an agent's graph leads to: ADK takes one
     ending with an output. It hands on ``{outcome, result}``, the run's; a
-    saved agent hands on its result, as the worker's Run workflow step does.
+    saved agent hands on its result.
     """
 
     def run(node_input: Any) -> Any:

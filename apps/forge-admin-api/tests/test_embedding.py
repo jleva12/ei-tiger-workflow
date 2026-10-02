@@ -7,13 +7,7 @@ import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from forge_admin.config import Settings
-from forge_admin.embedding import (
-    ADK_WORKFLOWS,
-    RESULT_TTL,
-    WORKFLOWS,
-    Embedding,
-    EmbeddingError,
-)
+from forge_admin.embedding import ADK_WORKFLOWS, RESULT_TTL, Embedding, EmbeddingError
 
 
 class FakeQueue:
@@ -33,40 +27,9 @@ class FakeQueue:
             raise self.fail
 
 
-def test_a_workflow_run_goes_to_the_workflows_queue() -> None:
-    workflows = FakeQueue()
-    client = Embedding({WORKFLOWS: workflows})
-    asyncio.run(
-        client.run_workflow(
-            tenant_id="org-1",
-            key="run:wf_abc123:1",
-            labels={"workflow": "wf_abc123"},
-            payload={"document": {}, "input": None, "run_as": "u1"},
-            requested_by={"id": "u1", "display_name": "Ada"},
-        )
-    )
-    assert workflows.sent == [
-        (
-            "run_job",
-            {
-                "key": "run:wf_abc123:1",
-                "ttl": RESULT_TTL,
-                "spec": {
-                    "task_type": "workflows",
-                    "kind": "run",
-                    "tenant_id": "org-1",
-                    "labels": {"workflow": "wf_abc123"},
-                    "payload": {"document": {}, "input": None, "run_as": "u1"},
-                    "requested_by": {"id": "u1", "display_name": "Ada"},
-                },
-            },
-        )
-    ]
-
-
-def test_an_adk_workflow_run_goes_to_its_own_queue() -> None:
-    workflows, adk_workflows = FakeQueue(), FakeQueue()
-    client = Embedding({WORKFLOWS: workflows, ADK_WORKFLOWS: adk_workflows})
+def test_an_adk_workflow_run_goes_to_its_queue() -> None:
+    adk_workflows = FakeQueue()
+    client = Embedding({ADK_WORKFLOWS: adk_workflows})
     asyncio.run(
         client.run_adk_workflow(
             tenant_id="org-1",
@@ -76,7 +39,6 @@ def test_an_adk_workflow_run_goes_to_its_own_queue() -> None:
             requested_by={"id": "u1", "display_name": "Ada"},
         )
     )
-    assert workflows.sent == []
     assert adk_workflows.sent == [
         (
             "run_job",
@@ -97,18 +59,20 @@ def test_an_adk_workflow_run_goes_to_its_own_queue() -> None:
 
 
 def test_a_run_nobody_requested_carries_no_requester() -> None:
-    workflows = FakeQueue()
-    client = Embedding({WORKFLOWS: workflows})
-    asyncio.run(client.run_workflow(tenant_id="t", key="k", labels={}, payload={}))
-    [(_, options)] = workflows.sent
+    adk_workflows = FakeQueue()
+    client = Embedding({ADK_WORKFLOWS: adk_workflows})
+    asyncio.run(client.run_adk_workflow(tenant_id="t", key="k", labels={}, payload={}))
+    [(_, options)] = adk_workflows.sent
     assert "requested_by" not in options["spec"]
 
 
 def test_an_unreachable_redis_is_an_embedding_error() -> None:
     down = FakeQueue(fail=RedisConnectionError("Connection refused"))
-    client = Embedding({WORKFLOWS: down})
+    client = Embedding({ADK_WORKFLOWS: down})
     with pytest.raises(EmbeddingError, match="Connection refused"):
-        asyncio.run(client.run_workflow(tenant_id="t", key="k", labels={}, payload={}))
+        asyncio.run(
+            client.run_adk_workflow(tenant_id="t", key="k", labels={}, payload={})
+        )
     asyncio.run(client.aclose())  # closing still works
     assert down.closed
 
@@ -121,4 +85,4 @@ def test_set_up_only_with_the_settings(settings: Settings) -> None:
     client = Embedding.from_settings(configured)
     assert client is not None
     # A queue per task type.
-    assert set(client._queues) == {WORKFLOWS, ADK_WORKFLOWS}
+    assert set(client._queues) == {ADK_WORKFLOWS}

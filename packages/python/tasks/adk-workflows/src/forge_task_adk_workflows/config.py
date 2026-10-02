@@ -1,8 +1,4 @@
-"""The ADK workflows task's settings, from ``HYBRID_ADK_WORKFLOWS__*`` (and ``.env``).
-
-Its own section, apart from Forge workflows' ``HYBRID_WORKFLOWS__*``: the two
-tasks share nothing but the worker.
-"""
+"""The ADK workflows task's settings, from ``HYBRID_ADK_WORKFLOWS__*`` (and ``.env``)."""
 
 from __future__ import annotations
 
@@ -19,9 +15,9 @@ class AdkWorkflowsSettings(BaseModel):
     session_database_url: SecretStr | None = None
 
     # LLM nodes' models: the shared model provider configuration's
-    # (model_provider.yaml, the file the admin API's assistant and Forge
-    # workflows read too), when this names it; its ${NAME} references resolve
-    # from the process environment, then from .env. Without it, Gemini, with
+    # (model_provider.yaml, the file the admin API's assistant reads too),
+    # when this names it; its ${NAME} references resolve from the process
+    # environment, then from .env. Without it, Gemini, with
     # this API key (FORGE_GOOGLE_API_KEY in .env.common). Neither: LLM nodes
     # fail the run saying so. A node's own model wins over the default:
     # default_model, else the configuration's (Gemini's: gemini-3.5-flash).

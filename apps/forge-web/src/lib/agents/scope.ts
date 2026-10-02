@@ -1,11 +1,11 @@
-import type { StepData } from "@/lib/workflows/model"
+import type { StepData } from "@/lib/steps/model"
 import {
   outputTypeOf,
   scopesFor,
   type Scope,
   type ScopeRules,
-} from "@/lib/workflows/scope"
-import { fromJsonSchema, t, type DataType } from "@/lib/workflows/types"
+} from "@/lib/steps/scope"
+import { fromJsonSchema, t, type DataType } from "@/lib/steps/types"
 import type { AgentGraph } from "./document"
 import {
   AGENT_KINDS,

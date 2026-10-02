@@ -48,9 +48,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import {
-  WorkflowTasks,
+  RunList,
   type RunListWords,
-} from "@/components/workflows/workflow-tasks"
+} from "@/components/runs/run-list"
 import {
   organizationAgents,
   useOrganizationAgents,
@@ -506,7 +506,7 @@ export function OrganizationAgents({
       </TabsContent>
 
       <TabsContent value="runs">
-        <WorkflowTasks
+        <RunList
           organizationName={organizationName}
           runs={runs}
           words={RUN_WORDS}

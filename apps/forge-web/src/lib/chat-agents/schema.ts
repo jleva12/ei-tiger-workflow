@@ -1,4 +1,4 @@
-import { HTTP_METHODS, THINKING_LEVELS } from "@/lib/workflows/model"
+import { HTTP_METHODS, THINKING_LEVELS } from "@/lib/steps/model"
 import { CHAT_AGENT_FORMAT } from "./document"
 import {
   CHAT_KIND_LIST,

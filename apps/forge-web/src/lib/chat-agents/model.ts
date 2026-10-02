@@ -15,7 +15,7 @@ import type {
   HeaderRow,
   HttpMethod,
   ThinkingLevel,
-} from "@/lib/workflows/model"
+} from "@/lib/steps/model"
 
 /*
  * A chat agent, as the Agents page builds it: one Google ADK `LlmAgent`

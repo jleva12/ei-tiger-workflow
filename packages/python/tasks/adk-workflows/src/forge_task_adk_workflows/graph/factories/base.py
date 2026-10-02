@@ -12,7 +12,7 @@ from forge_task_adk_workflows.graph.data import Scope, data_of
 from forge_task_adk_workflows.graph.errors import AgentBuildError, RunFailed
 from forge_task_adk_workflows.graph.schemas import problems
 from forge_task_adk_workflows.graph.services import RunServices
-from forge_task_workflows.errors import StepFailed
+from forge_task_adk_workflows.support.errors import StepFailed
 
 #: Makes a loop's body graph for an item: its bindings (the item under the
 #: loop's item name, and ``index``) in the data its nodes read.
@@ -90,14 +90,13 @@ def where_of(item: dict[str, Any]) -> str:
 
 
 def label_of(node: dict[str, Any]) -> str:
-    """How a run's failure names a step, as the worker does: ``Triage (triage)``."""
+    """How a run's failure names a step: ``Triage (triage)``."""
     return f"{text(node.get('name')) or text(node.get('id'))} ({text(node.get('id'))})"
 
 
 def settings_of[T: BaseModel](node: dict[str, Any], model: type[T]) -> T:
     """
-    A Forge step's settings, typed as the worker reads them
-    (``forge_task_workflows.document``).
+    A Forge step's settings, typed by its kind (``support.step_settings``).
 
     :raises AgentBuildError: When they aren't its kind's.
     """

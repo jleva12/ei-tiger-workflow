@@ -2,8 +2,8 @@ import * as React from "react"
 import { createPortal } from "react-dom"
 import { cn } from "cn"
 
-import type { SchemaSubject } from "@/components/events/builder-context"
-import { JsonSchemaBuilder } from "@/components/events/json-schema-builder"
+import type { SchemaSubject } from "@/components/json/schema-builder-context"
+import { JsonSchemaBuilder } from "@/components/json/json-schema-builder"
 import { Icon } from "@/components/forge/icon"
 import { Button } from "@/components/ui/button"
 import {
@@ -12,7 +12,7 @@ import {
   parseJsonSchema,
   type SchemaDraft,
 } from "@/lib/json-schema"
-import { fromJsonSchema, typeLabel } from "@/lib/workflows/types"
+import { fromJsonSchema, typeLabel } from "@/lib/steps/types"
 import { DIALOG_CARD, useCompanion } from "../utils"
 import { IssueMessages } from "./field-issues"
 import { useFieldIssues } from "./field-issues-context"
@@ -21,9 +21,8 @@ import { useFieldIssues } from "./field-issues-context"
  * A setting that declares the shape of some data (the input every run
  * starts with, the JSON an agent returns) as a JSON Schema. The step's
  * settings list its fields with their types; the fields are built in a
- * card beside the settings, with the same builder as an event type's
- * payload. What it declares is what later steps' fields complete and
- * check against.
+ * card beside the settings (components/json/json-schema-builder). What it
+ * declares is what later steps' fields complete and check against.
  */
 export function SchemaField({
   label,

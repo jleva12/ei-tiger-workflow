@@ -22,7 +22,6 @@ import { Route as AdminOrganizationsIndexRouteImport } from './routes/admin/orga
 import { Route as AdminOrganizationsOrganizationIdIndexRouteImport } from './routes/admin/organizations/$organizationId/index'
 import { Route as OrganizationsOrganizationIdAgentsAgentIdRouteImport } from './routes/organizations/$organizationId_.agents.$agentId'
 import { Route as OrganizationsOrganizationIdChatAgentsChatAgentIdRouteImport } from './routes/organizations/$organizationId_.chat-agents.$chatAgentId'
-import { Route as OrganizationsOrganizationIdWorkflowsWorkflowIdRouteImport } from './routes/organizations/$organizationId_.workflows.$workflowId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -93,12 +92,6 @@ const OrganizationsOrganizationIdChatAgentsChatAgentIdRoute =
     path: '/organizations/$organizationId/chat-agents/$chatAgentId',
     getParentRoute: () => rootRouteImport,
   } as any)
-const OrganizationsOrganizationIdWorkflowsWorkflowIdRoute =
-  OrganizationsOrganizationIdWorkflowsWorkflowIdRouteImport.update({
-    id: '/organizations/$organizationId_/workflows/$workflowId',
-    path: '/organizations/$organizationId/workflows/$workflowId',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -113,7 +106,6 @@ export interface FileRoutesByFullPath {
   '/admin/organizations/': typeof AdminOrganizationsIndexRoute
   '/organizations/$organizationId/agents/$agentId': typeof OrganizationsOrganizationIdAgentsAgentIdRoute
   '/organizations/$organizationId/chat-agents/$chatAgentId': typeof OrganizationsOrganizationIdChatAgentsChatAgentIdRoute
-  '/organizations/$organizationId/workflows/$workflowId': typeof OrganizationsOrganizationIdWorkflowsWorkflowIdRoute
   '/admin/organizations/$organizationId/': typeof AdminOrganizationsOrganizationIdIndexRoute
 }
 export interface FileRoutesByTo {
@@ -128,7 +120,6 @@ export interface FileRoutesByTo {
   '/admin/organizations': typeof AdminOrganizationsIndexRoute
   '/organizations/$organizationId/agents/$agentId': typeof OrganizationsOrganizationIdAgentsAgentIdRoute
   '/organizations/$organizationId/chat-agents/$chatAgentId': typeof OrganizationsOrganizationIdChatAgentsChatAgentIdRoute
-  '/organizations/$organizationId/workflows/$workflowId': typeof OrganizationsOrganizationIdWorkflowsWorkflowIdRoute
   '/admin/organizations/$organizationId': typeof AdminOrganizationsOrganizationIdIndexRoute
 }
 export interface FileRoutesById {
@@ -145,7 +136,6 @@ export interface FileRoutesById {
   '/admin/organizations/': typeof AdminOrganizationsIndexRoute
   '/organizations/$organizationId_/agents/$agentId': typeof OrganizationsOrganizationIdAgentsAgentIdRoute
   '/organizations/$organizationId_/chat-agents/$chatAgentId': typeof OrganizationsOrganizationIdChatAgentsChatAgentIdRoute
-  '/organizations/$organizationId_/workflows/$workflowId': typeof OrganizationsOrganizationIdWorkflowsWorkflowIdRoute
   '/admin/organizations/$organizationId/': typeof AdminOrganizationsOrganizationIdIndexRoute
 }
 export interface FileRouteTypes {
@@ -163,7 +153,6 @@ export interface FileRouteTypes {
     | '/admin/organizations/'
     | '/organizations/$organizationId/agents/$agentId'
     | '/organizations/$organizationId/chat-agents/$chatAgentId'
-    | '/organizations/$organizationId/workflows/$workflowId'
     | '/admin/organizations/$organizationId/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -178,7 +167,6 @@ export interface FileRouteTypes {
     | '/admin/organizations'
     | '/organizations/$organizationId/agents/$agentId'
     | '/organizations/$organizationId/chat-agents/$chatAgentId'
-    | '/organizations/$organizationId/workflows/$workflowId'
     | '/admin/organizations/$organizationId'
   id:
     | '__root__'
@@ -194,7 +182,6 @@ export interface FileRouteTypes {
     | '/admin/organizations/'
     | '/organizations/$organizationId_/agents/$agentId'
     | '/organizations/$organizationId_/chat-agents/$chatAgentId'
-    | '/organizations/$organizationId_/workflows/$workflowId'
     | '/admin/organizations/$organizationId/'
   fileRoutesById: FileRoutesById
 }
@@ -206,7 +193,6 @@ export interface RootRouteChildren {
   OrganizationsOrganizationIdRoute: typeof OrganizationsOrganizationIdRoute
   OrganizationsOrganizationIdAgentsAgentIdRoute: typeof OrganizationsOrganizationIdAgentsAgentIdRoute
   OrganizationsOrganizationIdChatAgentsChatAgentIdRoute: typeof OrganizationsOrganizationIdChatAgentsChatAgentIdRoute
-  OrganizationsOrganizationIdWorkflowsWorkflowIdRoute: typeof OrganizationsOrganizationIdWorkflowsWorkflowIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -302,13 +288,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrganizationsOrganizationIdChatAgentsChatAgentIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/organizations/$organizationId_/workflows/$workflowId': {
-      id: '/organizations/$organizationId_/workflows/$workflowId'
-      path: '/organizations/$organizationId/workflows/$workflowId'
-      fullPath: '/organizations/$organizationId/workflows/$workflowId'
-      preLoaderRoute: typeof OrganizationsOrganizationIdWorkflowsWorkflowIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
@@ -345,8 +324,6 @@ const rootRouteChildren: RootRouteChildren = {
     OrganizationsOrganizationIdAgentsAgentIdRoute,
   OrganizationsOrganizationIdChatAgentsChatAgentIdRoute:
     OrganizationsOrganizationIdChatAgentsChatAgentIdRoute,
-  OrganizationsOrganizationIdWorkflowsWorkflowIdRoute:
-    OrganizationsOrganizationIdWorkflowsWorkflowIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

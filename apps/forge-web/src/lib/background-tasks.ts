@@ -13,19 +13,16 @@ import { toast } from "@/components/ui/toast"
 import { AGENTS_ICON } from "@/lib/agents/model"
 import { createNestedResource } from "@/lib/api/resource"
 import { api } from "@/lib/api-instance"
-import { WORKFLOWS_ICON } from "@/lib/workflows/model"
 
 /*
  * An organization's background tasks: the jobs the async worker runs for it
- * (workflow runs, ADK workflow runs), from the admin API's
+ * (ADK workflow runs), from the admin API's
  * `/organizations/{organizationId}/background-tasks`. Each task is one tracked
  * run history with one or more attempts (runs). Reading takes
  * `organizations:read` in the organization; resubmitting, restarting and
- * abandoning take `background_tasks:manage` (its admins); deciding a workflow
- * run's approval takes what its step asks of the approvers
- * (`workflows:approve` for its admins, `workflows:run` for any member). Times are ISO-8601 UTC strings;
- * IDs are opaque. The Workflows page lists workflow runs as its Workflow
- * tasks; the ADK workflows page lists theirs as its Runs (lib/agents/runs).
+ * abandoning take `background_tasks:manage` (its admins). Times are ISO-8601
+ * UTC strings; IDs are opaque. The ADK workflows page lists them as its Runs
+ * (lib/agents/runs), which decides their approvals.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -266,14 +263,10 @@ export const APPROVERS: Record<Approvers, string> = {
   "org:member": "Any organization member",
 }
 
-/** The permission deciding an approval takes; anything unknown is the admins'. */
-export const approvePermission = (approvers: unknown) =>
-  approvers === "org:member" ? "workflows:run" : "workflows:approve"
-
 /** What the list asks for. Arrays repeat the parameter. */
 export type BackgroundTaskFilters = {
   task_type?: string[]
-  /** Every type but these, e.g. `workflows` for all but workflow runs. */
+  /** Every type but these. */
   exclude_task_type?: string[]
   status?: BackgroundTaskStatus[]
 }
@@ -395,7 +388,6 @@ export function humanize(value: string) {
 }
 
 const TASK_TYPES: Record<string, { label: string; icon: IconProp }> = {
-  workflows: { label: "Workflow", icon: WORKFLOWS_ICON },
   adk_workflows: { label: "ADK workflow", icon: AGENTS_ICON },
 }
 
@@ -512,26 +504,6 @@ export const failureTitle = (
 /* -------------------------------------------------------------------------- */
 /* Where the page looks                                                       */
 /* -------------------------------------------------------------------------- */
-
-/**
- * The list's filters besides everything (the default). Only workflow runs
- * wait for approval, and they're on the Workflows page, so there's no
- * filter for that here.
- */
-export type BackgroundStatusFilter = "active" | "failed"
-
-export const BACKGROUND_STATUS_FILTERS: Record<
-  "all" | BackgroundStatusFilter,
-  { label: string; statuses?: BackgroundTaskStatus[] }
-> = {
-  all: { label: "Any status" },
-  active: { label: "In progress", statuses: [...LIVE] },
-  failed: { label: "Failed", statuses: ["FAILED"] },
-}
-
-export const isBackgroundStatusFilter = (
-  value: unknown
-): value is BackgroundStatusFilter => value === "active" || value === "failed"
 
 /** A background task page's tabs; Overview is the default. */
 export type BackgroundTaskTab = "overview" | "attempts" | "activity"
@@ -820,44 +792,4 @@ export type ApprovalDecision = {
   approved: boolean
   /** Why, for the record; the run's later steps can read it. */
   comment?: string
-}
-
-/**
- * Approve or reject what a workflow run waits for: the run carries on down
- * the step's approved or rejected way, on a worker, within seconds. A
- * decision names the approval, so one someone else decided first (409)
- * never lands on a later one.
- */
-export function useDecideBackgroundTask(
-  organizationId: string,
-  taskId: string,
-  { meta }: MutationMeta = {}
-) {
-  const client = useQueryClient()
-  return useMutation({
-    mutationFn: ({
-      requestId,
-      approved,
-      comment = "",
-    }: ApprovalDecision & { requestId: string }) =>
-      api.post<BackgroundTaskDispatch>(
-        `${taskPath(organizationId, taskId)}/decisions`,
-        {
-          request_id: requestId,
-          approved,
-          comment,
-        }
-      ),
-    meta: { errorTitle: "Couldn't record the decision", ...meta },
-    onSuccess: async (_, { approved }) => {
-      await refreshBackgroundTask(client, organizationId, taskId)
-      toast.add({
-        title: approved ? "Approved." : "Rejected.",
-        description: approved
-          ? "The run carries on down its approved way."
-          : "The run carries on down its rejected way.",
-        type: "success",
-      })
-    },
-  })
 }

@@ -30,8 +30,7 @@ from forge_admin.agent_documents import (
     checked_document,
     new_agent_id,
 )
-from forge_admin.api.routes.common import NodeId, Session
-from forge_admin.api.routes.workflows import name_of
+from forge_admin.api.routes.common import NodeId, Session, name_of
 from forge_admin.auth.access import CurrentUser, Enforcer, Level, Scope, authorize
 from forge_admin.db.audit import UtcDateTime
 from forge_admin.document_store import now

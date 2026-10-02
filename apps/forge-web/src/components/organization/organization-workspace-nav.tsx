@@ -4,14 +4,14 @@ import { AssistantMark } from "@/components/forge/assistant"
 import { ShellSidebarHeader } from "@/components/forge/shell"
 import { NavItem, SidebarSection } from "@/components/forge/workspace-sidebar"
 import {
+  DEFAULT_VIEW,
   WORKSPACE_VIEWS,
   type WorkspaceView,
 } from "@/lib/organization-workspace"
 
 /**
- * An organization workspace's sub nav: Workflows, ADK workflows, Agents
- * (wearing the assistant's mark), Events and, for those who may see its
- * members, Members. Render it anywhere in the page: it goes in
+ * An organization workspace's sub nav: ADK workflows, Agents (wearing the
+ * assistant's mark) and, for those who may see its members, Members. Render it anywhere in the page: it goes in
  * the shell's pinned `ShellSidebarHeader`.
  */
 export function OrganizationWorkspaceNav({
@@ -25,7 +25,7 @@ export function OrganizationWorkspaceNav({
   /** You may see its members (`members:read`): show Members. */
   members: boolean
 }) {
-  // Workflows is the page without a view.
+  // The default page is the one without a view.
   const viewItem = (key: WorkspaceView) => (
     <NavItem
       key={key}
@@ -40,7 +40,7 @@ export function OrganizationWorkspaceNav({
         <Link
           to="/organizations/$organizationId"
           params={{ organizationId }}
-          search={{ view: key === "workflows" ? undefined : key }}
+          search={{ view: key === DEFAULT_VIEW ? undefined : key }}
         />
       }
     >
@@ -51,10 +51,8 @@ export function OrganizationWorkspaceNav({
   return (
     <ShellSidebarHeader>
       <SidebarSection variant="primary">
-        {viewItem("workflows")}
         {viewItem("agents")}
         {viewItem("chat-agents")}
-        {viewItem("events")}
         {members && viewItem("config")}
       </SidebarSection>
     </ShellSidebarHeader>

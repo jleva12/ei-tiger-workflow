@@ -2,8 +2,8 @@
 SAQ job queues on Redis. The module keeps its first name, from when the
 worker only embedded documents.
 
-The worker has one queue per task type (here ``workflows`` and
-``adk_workflows``) and one job function, ``run_job``, which runs a spec:
+The worker has one queue per task type (here ``adk_workflows``) and one job
+function, ``run_job``, which runs a spec:
 ``{"task_type", "kind", "payload"}``, and the ``tenant_id`` and ``labels``
 its tracked run carries when given. It applies its own retries, timeout and
 heartbeat to every job, so a submission names only the queue, the spec and a
@@ -21,8 +21,7 @@ from saq.queue.redis import RedisQueue
 
 from forge_admin.config import Settings
 
-WORKFLOWS = "workflows"
-# ADK workflows' runs, apart from Forge workflows' (the ADK workflows task).
+# ADK workflows' runs (the ADK workflows task).
 ADK_WORKFLOWS = "adk_workflows"
 FUNCTION = "run_job"
 # How long the worker keeps a finished job for reading it back, in seconds.
@@ -39,8 +38,7 @@ class Embedding:
     """
     Submits jobs to the async worker.
 
-    :param queues: The worker's queues by name: ``workflows``,
-        ``adk_workflows``.
+    :param queues: The worker's queues by name: ``adk_workflows``.
     """
 
     def __init__(self, queues: dict[str, Any]) -> None:
@@ -59,36 +57,7 @@ class Embedding:
             socket_connect_timeout=TIMEOUT,
             socket_timeout=TIMEOUT,
         )
-        return cls(
-            {name: RedisQueue(redis, name=name) for name in (WORKFLOWS, ADK_WORKFLOWS)}
-        )
-
-    async def run_workflow(
-        self,
-        *,
-        tenant_id: str,
-        key: str,
-        labels: dict[str, str],
-        payload: dict[str, Any],
-        requested_by: dict[str, str] | None = None,
-    ) -> None:
-        """
-        Submit one run of an organization's workflow: the worker runs it as a tracked
-        run among the organization's background tasks, found again by its labels.
-
-        :param tenant_id: The organization.
-        :param key: The job's key; a key already queued or kept isn't
-            submitted again, which makes a retried start one run.
-        :param labels: What the run carries to be found by: ``workflow``, and
-            ``parent`` for a run another run started.
-        :param payload: The run: the workflow's document as it is now, the
-            input and the member it acts as (the workflows task's
-            ``RunPayload``).
-        :param requested_by: Who started it, ``{"id", "display_name"}``, as
-            the run records it.
-        :raises EmbeddingError: The queue could not be reached.
-        """
-        await self._run(WORKFLOWS, tenant_id, key, labels, payload, requested_by)
+        return cls({ADK_WORKFLOWS: RedisQueue(redis, name=ADK_WORKFLOWS)})
 
     async def run_adk_workflow(
         self,

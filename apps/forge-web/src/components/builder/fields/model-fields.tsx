@@ -22,8 +22,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { ThinkingLevel } from "@/lib/workflows/model"
-import { findModel, modelChoiceOf, modelIdOf, useAgentStepModels } from "@/lib/workflows/models"
+import type { ThinkingLevel } from "@/lib/steps/model"
+import { findModel, modelChoiceOf, modelIdOf, useAgentStepModels } from "@/lib/steps/models"
 import { Row } from "./basic-fields"
 
 

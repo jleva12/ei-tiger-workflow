@@ -17,12 +17,7 @@ from fastapi.testclient import TestClient
 from google.adk.events.event_actions import EventActions
 from pydantic import SecretStr
 
-from forge_admin.agents import (
-    access_tools,
-    admin_tools,
-    event_tools,
-    workflow_tools,
-)
+from forge_admin.agents import access_tools, admin_tools
 from forge_admin.api.app import ROUTERS
 from forge_admin.api.server import ApiServer
 from forge_admin.config import Settings
@@ -30,12 +25,7 @@ from forge_admin.config import Settings
 pytestmark = pytest.mark.mysql
 
 API = "/api/v1"
-MODULES = (
-    access_tools,
-    admin_tools,
-    event_tools,
-    workflow_tools,
-)
+MODULES = (access_tools, admin_tools)
 
 
 @pytest.fixture
@@ -114,43 +104,9 @@ def test_each_toolset_reads_as_the_person_through_the_real_routes(forge) -> None
     )
     assert ok(use(lead, "admin_tools", "list_role_definitions"))
 
-    endpoint = ok(
-        use(lead, "event_tools", "get_event_endpoint", organization_id=organization)
-    )
-    assert endpoint["exists"] is False
-    ok(use(lead, "event_tools", "list_event_types", organization_id=organization))
-    ok(use(lead, "event_tools", "list_events", organization_id=organization))
-
-    ok(use(lead, "workflow_tools", "list_workflows", organization_id=organization))
-    # Whether or not the background tasks' service is set up here, it answers.
-    tasks = use(
-        lead, "workflow_tools", "list_background_tasks", organization_id=organization
-    )
-    assert tasks["status"] == "success" or tasks["suggested_fixes"]
-
 
 def test_changes_go_through_the_real_routes_and_their_checks(forge) -> None:
     use, organization, admin = forge["use"], forge["organization"], forge["admin"]
-
-    created = ok(
-        use(
-            admin,
-            "event_tools",
-            "create_event_type",
-            organization_id=organization,
-            key="purchase.requested",
-            name="Purchase requested",
-            payload_schema={
-                "type": "object",
-                "properties": {"id": {"type": "string"}},
-            },
-        )
-    )
-    assert created["key"] == "purchase.requested"
-    listed = ok(
-        use(admin, "event_tools", "list_event_types", organization_id=organization)
-    )
-    assert "purchase.requested" in str(listed)
 
     renamed = ok(
         use(
@@ -168,8 +124,7 @@ def test_someone_outside_the_organization_reads_and_changes_nothing(forge) -> No
     use, organization = forge["use"], forge["organization"]
     outsider = f"outsider-{uuid4().hex[:8]}"
     for module, name, args in (
-        ("event_tools", "get_event_endpoint", {"organization_id": organization}),
-        ("workflow_tools", "list_workflows", {"organization_id": organization}),
+        ("admin_tools", "get_organization", {"organization_id": organization}),
         (
             "admin_tools",
             "update_organization",

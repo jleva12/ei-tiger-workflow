@@ -9,13 +9,11 @@ import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
-import { useSchemaValue } from "@/components/workflows/schema-value"
-import { SchemaValueEditor } from "@/components/workflows/schema-value-editor"
+import { useSchemaValue } from "@/components/runs/schema-value"
+import { SchemaValueEditor } from "@/components/runs/schema-value-editor"
 import type { ApiError } from "@/lib/api"
 import {
   APPROVERS,
-  approvePermission,
-  useDecideBackgroundTask,
   type ApprovalDecision,
   type BackgroundTaskApproval,
 } from "@/lib/background-tasks"
@@ -105,7 +103,7 @@ export function ApprovalPanel({
   approval,
   decide,
   permission,
-  docs = "workflows",
+  docs = "ADK workflows",
   showDeadline = false,
 }: {
   organizationId: string
@@ -201,30 +199,6 @@ export function ApprovalPanel({
         </p>
       )}
     </PauseFrame>
-  )
-}
-
-/** What a workflow run waits for, decided through the task's own decisions. */
-export function WorkflowApprovalPanel({
-  organizationId,
-  taskId,
-  approval,
-}: {
-  organizationId: string
-  taskId: string
-  approval: BackgroundTaskApproval
-}) {
-  // The panel shows the failure itself.
-  const decide = useDecideBackgroundTask(organizationId, taskId, {
-    meta: { silent: true },
-  })
-  return (
-    <ApprovalPanel
-      organizationId={organizationId}
-      approval={approval}
-      decide={decide}
-      permission={approvePermission(approval.details.approvers ?? "org:admin")}
-    />
   )
 }
 

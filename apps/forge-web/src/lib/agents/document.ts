@@ -1,12 +1,12 @@
 import type { ImportResult } from "@/components/builder/import-dialog"
 import { edgeId, type BuilderGraph, type Point } from "@/lib/builder/types"
-import { readList } from "@/lib/workflows/document"
+import { readList } from "@/lib/steps/document"
 import {
   DELAY_UNITS,
   HTTP_METHODS,
   THINKING_LEVELS,
   uid,
-} from "@/lib/workflows/model"
+} from "@/lib/steps/model"
 import {
   AGENT_KINDS,
   isAgentKind,

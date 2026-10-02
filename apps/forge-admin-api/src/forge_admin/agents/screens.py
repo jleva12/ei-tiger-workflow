@@ -113,10 +113,11 @@ class When(_Strict):
 
     # The router's route ID, e.g. /organizations/$organizationId.
     route: OneOrMore | None = None
-    # Search parameters, e.g. {view: events}; a list matches any, and ""
-    # matches a page without the parameter (an organization's Workflows has no view).
+    # Search parameters, e.g. {view: config}; a list matches any, and ""
+    # matches a page without the parameter (an organization's ADK workflows
+    # page has no view).
     search: dict[str, OneOrMore] = Field(default_factory=dict)
-    # A record of this kind on the screen (e.g. organization, background_task).
+    # A record of this kind on the screen (e.g. organization).
     entity: OneOrMore | None = None
 
     def matches(self, page: PageContext) -> bool:
@@ -147,7 +148,7 @@ class Screen(Everywhere):
     """What the assistant has on the screens a rule matches."""
 
     name: Name
-    # What the person calls it, e.g. "Workflows".
+    # What the person calls it, e.g. "Organization members".
     title: Annotated[str, StringConstraints(min_length=1, max_length=80)]
     when: When
     # The model it defaults to here, when the conversation hasn't chosen one.

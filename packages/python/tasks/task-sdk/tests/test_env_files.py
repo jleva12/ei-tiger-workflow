@@ -12,9 +12,9 @@ from forge_tasks.settings import CoreSettings, load_section
 
 
 class Section(BaseModel):
-    """A task's settings section, like HYBRID_WORKFLOWS__*."""
+    """A task's settings section, like HYBRID_ADK_WORKFLOWS__*."""
 
-    admin_token: SecretStr | None = None
+    session_database_url: SecretStr | None = None
     google_api_key: SecretStr | None = None
 
 
@@ -42,23 +42,23 @@ def test_references_take_shared_values_and_nested_settings_receive_them(root: Pa
         "FORGE_MONGO_PORT=27027",
         "FORGE_REDIS_URL=redis://127.0.0.1:16379/0",
         "FORGE_GOOGLE_API_KEY=shared-google-key",
-        "FORGE_WORKFLOWS_TOKEN=not-for-the-worker-unless-referenced",
+        "FORGE_MYSQL_PASSWORD=not-for-the-worker-unless-referenced",
     )
     write(
         root / "apps/forge-async-worker/.env",
         "HYBRID_REDIS_URL=${FORGE_REDIS_URL}",
-        "HYBRID_WORKFLOWS__GOOGLE_API_KEY=${FORGE_GOOGLE_API_KEY}",
+        "HYBRID_ADK_WORKFLOWS__GOOGLE_API_KEY=${FORGE_GOOGLE_API_KEY}",
         "HYBRID_MONGO__URI=mongodb://${FORGE_MONGO_USER}:${FORGE_MONGO_PASSWORD}@127.0.0.1:${FORGE_MONGO_PORT}/?authSource=admin",
     )
     settings = CoreSettings()
     assert settings.redis_url == "redis://127.0.0.1:16379/0"
     assert settings.mongo.uri.get_secret_value() == "mongodb://forge:shared-secret@127.0.0.1:27027/?authSource=admin"
-    workflows = load_section("workflows", Section)
-    assert workflows.google_api_key is not None
-    assert workflows.google_api_key.get_secret_value() == "shared-google-key"
+    section = load_section("adk_workflows", Section)
+    assert section.google_api_key is not None
+    assert section.google_api_key.get_secret_value() == "shared-google-key"
     # Nothing in .env.common reaches the settings or the environment by itself.
-    assert workflows.admin_token is None
-    assert "FORGE_WORKFLOWS_TOKEN" not in os.environ
+    assert section.session_database_url is None
+    assert "FORGE_MYSQL_PASSWORD" not in os.environ
 
 
 def test_earlier_lines_win_and_single_quotes_are_literal(root: Path) -> None:
@@ -77,15 +77,15 @@ def test_earlier_lines_win_and_single_quotes_are_literal(root: Path) -> None:
 def test_a_reference_defined_nowhere_stops_startup_unless_the_environment_sets_it(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    write(root / "apps/forge-async-worker/.env", "HYBRID_WORKFLOWS__ADMIN_TOKEN=${FORGE_WORKFLOWS_TOKEN}")
+    write(root / "apps/forge-async-worker/.env", "HYBRID_ADK_WORKFLOWS__GOOGLE_API_KEY=${FORGE_GOOGLE_API_KEY}")
     with pytest.raises(SettingsError) as error:
-        load_section("workflows", Section)
+        load_section("adk_workflows", Section)
     assert str(error.value) == (
-        "HYBRID_WORKFLOWS__ADMIN_TOKEN in .env references ${FORGE_WORKFLOWS_TOKEN}, "
+        "HYBRID_ADK_WORKFLOWS__GOOGLE_API_KEY in .env references ${FORGE_GOOGLE_API_KEY}, "
         "which neither .env.common nor an earlier line defines (make env creates .env.common)"
     )
-    monkeypatch.setenv("HYBRID_WORKFLOWS__ADMIN_TOKEN", "from-compose")
-    assert load_section("workflows", Section).admin_token is not None
+    monkeypatch.setenv("HYBRID_ADK_WORKFLOWS__GOOGLE_API_KEY", "from-compose")
+    assert load_section("adk_workflows", Section).google_api_key is not None
 
 
 def test_the_common_file_variable_selects_disables_or_must_exist(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:

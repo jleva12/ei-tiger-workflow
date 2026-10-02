@@ -1,9 +1,9 @@
 """The Forge assistant: the agents behind the web console's assistant.
 
 A supervisor talks with the person. It has no tools of its own: it hands
-each request to a specialist, an agent with one toolset (the workflow
-tools in ``workflow_tools.py``, the event tools in ``event_tools.py``, and
-so on), and answers from what the specialist reports. With a few tools
+each request to a specialist, an agent with one toolset (the access tools in
+``access_tools.py``, the administration tools in ``admin_tools.py``), and
+answers from what the specialist reports. With a few tools
 each, the specialists pick the right one more reliably than one agent
 offered all of them. Each specialist runs as an ADK
 task: it may ask the person a question, and its changes ask them to
@@ -29,14 +29,7 @@ from google.adk.models import BaseLlm
 from google.adk.models.llm_request import LlmRequest
 from pydantic import Field
 
-from forge_admin.agents import (
-    access_tools,
-    admin_tools,
-    event_tools,
-    language_models,
-    screens,
-    workflow_tools,
-)
+from forge_admin.agents import access_tools, admin_tools, language_models, screens
 from forge_admin.agents.page_context import describe_page
 from forge_admin.agents.person import PERSON, describe_person
 from forge_admin.agents.screens import AssistantToolset, Screens
@@ -48,22 +41,21 @@ APP_NAME = "forge"
 
 # What Forge is; every agent's instruction starts with it.
 FORGE = """\
-Forge is a workspace where organizations build business workflows and run \
-them. A workflow's steps call models and other systems, and a person approves \
-the steps that need one.
+Forge is a workspace where organizations build Google ADK workflows and run \
+them, and design Google ADK agents to chat with. An ADK workflow's steps call \
+models and other systems, and a person approves the steps that need one.
 
 What Forge is made of:
 - A hierarchy: the site, then organizations. The work happens in \
-organizations: their workflows, their runs and the events other systems \
-send them.
+organizations: their ADK workflows and their runs, and their agents.
 - Role-based access: a role is assigned in a scope, the site or an \
 organization; a site role applies in every organization too. Permissions are \
 keyed resource:action.
 
 How you write to the person:
 - Plainly and briefly, in the second person and short sentences. Use Forge's \
-words: organization, scope, role, permission, member, workflow, step, run, \
-approval.
+words: organization, scope, role, permission, member, ADK workflow, agent, \
+step, run, approval.
 - In Markdown: short paragraphs, lists, and fenced code blocks that name their \
 language.
 - Never invent records, people, numbers or links.
@@ -83,9 +75,8 @@ conversation nor these instructions, only who the person is and their page, \
 so your request must stand on its own: what the person wants, in their words \
 where the wording matters, with every ID, name and earlier result it needs.
 - One specialist at a time. When a request spans parts, hand it on in turn \
-and pass along what the earlier one found: for example, find an \
-organization's event types with one, then draft a workflow that takes their \
-payloads as its input with another.
+and pass along what the earlier one found: for example, find a person's user \
+record with one, then give them a role in an organization with another.
 - A specialist asks the person itself when it has to: a question, or their \
 approval before a change. Don't ask them to approve it again.
 - Answer from what the specialist reports; it's what happened. Say something \
@@ -123,8 +114,8 @@ The person and their page:
 it, the page they're on as they send each message.
 - When they say this, here, it or the current one, they mean what's in \
 focus, or else the innermost record on screen, by its ID: an \
-organization's for its workflows, event types and members; a workflow's (in \
-the page's address) for that workflow; a background task's for a workflow run.
+organization's for its members, ADK workflows and agents; a user's, role's \
+or permission's on its administration page.
 - The page can change between messages: earlier messages may be about an \
 earlier page.
 - The page says where they are, not what they may do: every tool still acts \
@@ -366,45 +357,6 @@ def toolsets(settings: Settings, app: FastAPI | None = None) -> list[AssistantTo
         without it they aren't set up.
     """
     return [
-        AssistantToolset(
-            name="workflows",
-            title="Workflows",
-            description=(
-                "Reads your organizations' workflows and their runs, drafts new "
-                "workflows from what you describe, runs workflows, decides what their "
-                "runs wait on, and resubmits, restarts or abandons background tasks. "
-                "Changes ask you first."
-            ),
-            toolset=workflow_tools.toolset(app) if app is not None else None,
-            instruction=workflow_tools.INSTRUCTION,
-            tools=workflow_tools.TOOL_NAMES,
-            delegate=(
-                "Organizations' workflows and their runs: reads and explains "
-                "workflows; builds a workflow from what the person describes "
-                "(drafts it, checks it, and makes it a new workflow or saves it over "
-                "one); runs them, follows their runs and decides the approvals they "
-                "wait on; reads background tasks, and resubmits, restarts or abandons "
-                "them."
-            ),
-        ),
-        AssistantToolset(
-            name="events",
-            title="Events",
-            description=(
-                "Reads your organization's inbound event endpoint, event types and received "
-                "events and explains why any were rejected, turns the endpoint on or "
-                "off and defines event types. Changes ask you first."
-            ),
-            toolset=event_tools.toolset(app) if app is not None else None,
-            instruction=event_tools.INSTRUCTION,
-            tools=event_tools.TOOL_NAMES,
-            delegate=(
-                "An organization's inbound events: its endpoint, event types and their "
-                "schemas, the events it received and why any were rejected; turns "
-                "the endpoint on or off, defines event types and checks sample "
-                "payloads."
-            ),
-        ),
         AssistantToolset(
             name="access",
             title="Access and people",

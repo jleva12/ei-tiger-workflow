@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from forge_admin.auth.access import UUID_PATTERN
 from forge_admin.db.audit import UtcDateTime
 from forge_admin.db.session import get_session
-from forge_admin.models import Organization
+from forge_admin.models import Organization, User
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 Name = Annotated[
@@ -81,3 +81,11 @@ async def commit_or_conflict(session: AsyncSession, detail: str) -> None:
     except IntegrityError:
         await session.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, detail) from None
+
+
+async def name_of(session: AsyncSession, user: str) -> str:
+    """:return: A user's name, or their email, or their ID when unknown."""
+    person = await session.get(User, user)
+    if person is None:
+        return user
+    return f"{person.first_name} {person.last_name}".strip() or person.email

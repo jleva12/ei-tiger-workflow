@@ -1,9 +1,7 @@
 """
 Agents built into ADK graphs by their kinds' factories, and run through ADK's
 runner with an in-memory (or SQLite) session, a fake HTTP transport, a clock
-the tests move and a scripted model: the worker's engine's behaviour
-(packages/python/tasks/workflows/tests: test_engine.py, test_steps.py), on
-ADK's.
+the tests move and a scripted model.
 """
 
 import asyncio
@@ -579,7 +577,7 @@ def test_a_straight_run_hands_on_what_each_step_makes() -> None:
         {
             "previous": shaped,
             "shape": shaped,
-            # The start's output is the run's input, as the worker's.
+            # The start's output is the run's input.
             "start": {"issue": {"key": "xmen-12"}},
             "input": {"issue": {"key": "xmen-12"}},
         }

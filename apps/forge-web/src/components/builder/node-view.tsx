@@ -94,7 +94,7 @@ export const FlowNodeView = React.memo(function FlowNodeView({
         {adapter.hasInput(data.kind) && (
           <Handle type="target" position={Position.Left} id={INPUT} />
         )}
-        <KindGlyph info={info} icon={ui.iconOf?.(data)} />
+        <KindGlyph info={info} />
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="truncate text-xs font-medium text-foreground">{data.name}</span>
           <span

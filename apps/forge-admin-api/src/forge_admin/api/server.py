@@ -20,7 +20,6 @@ from forge_admin.background_tasks import BackgroundTasks
 from forge_admin.config import Settings
 from forge_admin.db.session import create_engine, create_sessionmaker
 from forge_admin.embedding import Embedding
-from forge_admin.workflows import WorkflowStore
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +32,7 @@ class ApiServer:
     and every router passed in are mounted below ``settings.api_prefix`` and
     require the API key when one is configured. Public routers are mounted at
     the root, without the API key or a user: they check their callers
-    themselves, like the organization event endpoints under ``/hooks``.
+    themselves.
 
     :param settings: The application settings.
     :param routers: Routers to mount below the API prefix.
@@ -92,12 +91,9 @@ class ApiServer:
         # doesn't connect until used. Tests set a fake.
         if getattr(app.state, "embedding", None) is None:
             app.state.embedding = Embedding.from_settings(self.settings)
-        # Organizations' workflows in MongoDB, when set up; None otherwise. The client
-        # connects on first use. Tests set their own (a test database).
-        if getattr(app.state, "workflows", None) is None:
-            app.state.workflows = WorkflowStore.from_settings(self.settings)
-        # Organizations' agents, beside their workflows, the same way. Tests set
-        # their own (a test database).
+        # Organizations' agents (their ADK workflows) in MongoDB, when set up;
+        # None otherwise. The client connects on first use. Tests set their own
+        # (a test database).
         if getattr(app.state, "organization_agents", None) is None:
             app.state.organization_agents = AgentStore.from_settings(self.settings)
         # The assistant's agents, keeping conversations in the same database.
@@ -124,8 +120,6 @@ class ApiServer:
                 await app.state.background_tasks.aclose()
             if app.state.embedding is not None:
                 await app.state.embedding.aclose()
-            if app.state.workflows is not None:
-                await app.state.workflows.aclose()
             if app.state.organization_agents is not None:
                 await app.state.organization_agents.aclose()
             await engine.dispose()

@@ -6,9 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
   "forge-tasks",
-  # As a library only: JSONata, the HTTP guard and the step settings Forge's
-  # steps share. None of its engine, task or queue.
-  "forge-task-workflows",
+  "forge-jsonata",                    # every expression in a document is JSONata, evaluated here in Python
   "forge-common[adk,adk-models]",     # ADK, and the models of the shared model_provider.yaml
   "google-adk>=2.9.2",
   "pydantic>=2.7",
@@ -24,7 +22,7 @@ adk_workflows = "forge_task_adk_workflows.task:AdkWorkflowsTaskFactory"
 
 [tool.uv.sources]
 forge-tasks = { path = "../task-sdk", editable = true }
-forge-task-workflows = { path = "../workflows", editable = true }
+forge-jsonata = { path = "../../jsonata", editable = true }
 forge-common = { path = "../../common", editable = true }
 
 [build-system]
@@ -46,7 +44,7 @@ select = ["E", "F", "I", "B", "UP"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["forge_tasks", "forge_task_adk_workflows", "forge_task_workflows", "forge_async_worker", "forge_jsonata", "etf"]
+known-first-party = ["forge_tasks", "forge_task_adk_workflows", "forge_async_worker", "forge_jsonata", "etf"]
 
 [tool.mypy]
 python_version = "3.13"

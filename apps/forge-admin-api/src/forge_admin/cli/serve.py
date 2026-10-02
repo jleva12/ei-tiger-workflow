@@ -28,7 +28,7 @@ def main() -> None:
         port=settings.port,
         reload=settings.reload,
         # Watch the forge_admin package only, not .venv or the tests, and its
-        # workflow schema and step catalog (*.json) as well as its code.
+        # agent schema (*.json) as well as its code.
         reload_dirs=[str(Path(__file__).resolve().parents[1])],
         reload_includes=["*.json"] if settings.reload else None,
         # Logging is owned by configure_logging() (create_app runs it again in

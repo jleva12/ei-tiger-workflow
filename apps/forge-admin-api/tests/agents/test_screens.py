@@ -74,59 +74,44 @@ def bundled(settings: Settings) -> Screens:
 def test_the_bundled_screens_name_only_what_exists(settings: Settings) -> None:
     # Loading checks every toolset and tool it names against the real ones.
     screens = bundled(settings)
-    assert set(screens.toolsets) == {"workflows", "events", "access", "administration"}
+    assert set(screens.toolsets) == {"access", "administration"}
     names = [screen.name for screen in screens.config.screens]
-    assert names.index("events-received") < names.index("events")
-    assert names.index("event-type-test") < names.index("events")
     # The catch-all organization screen comes after every other organization screen.
     organization = names.index("organization")
-    assert all(
-        not n.startswith(("organization-", "event", "workflow", "background"))
-        for n in names[organization + 1 :]
-    )
+    assert all(not n.startswith("organization-") for n in names[organization + 1 :])
 
 
-BUILDER = "/organizations/$organizationId_/workflows/$workflowId"
+BUILDER = "/organizations/$organizationId_/agents/$agentId"
 
 
 @pytest.mark.parametrize(
-    ("where", "screens", "workflows"),
+    ("where", "screens", "access"),
     [
-        (None, [], "none"),
-        (page(route="/"), [], "none"),
-        (page(), ["workflows", "organization"], "all"),
-        (page("workflows"), ["workflows", "organization"], "all"),
-        (
-            page("workflows", "background_task"),
-            ["background-task", "workflows", "organization"],
-            "all",
-        ),
-        (page("config"), ["organization-config", "organization"], "some"),
-        (page("events"), ["events", "organization"], "some"),
-        (page(route=BUILDER), ["workflow-builder"], "some"),
+        (None, [], "some"),
+        (page(route="/"), [], "some"),
+        (page(), ["organization"], "some"),
+        (page("chat-agents"), ["organization"], "some"),
+        (page("config"), ["organization-config", "organization"], "all"),
+        (page(route=BUILDER), [], "some"),
     ],
 )
 def test_the_bundled_screens_match_the_organization_workspace(
-    settings: Settings, where: dict | None, screens: list[str], workflows: str
+    settings: Settings, where: dict | None, screens: list[str], access: str
 ) -> None:
     resolved = bundled(settings).resolve(context(where))
 
     assert [screen.name for screen in resolved.screens] == screens
-    grant = resolved.toolsets.get("workflows", "none")
-    assert {"none": "none", None: "all"}.get(grant, "some") == workflows  # type: ignore[arg-type]
-    assert "access" in resolved.toolsets
+    assert ("all" if resolved.toolsets["access"] is None else "some") == access
+    assert set(resolved.toolsets) == {"access"}
     assert len(resolved.prompts) <= 6
 
 
-def test_workflows_are_built_from_the_workflows_page(settings: Settings) -> None:
-    resolved = bundled(settings).resolve(context(page("workflows")))
-    assert resolved.toolsets["workflows"] is None
-    assert "Build a workflow" in [prompt.title for prompt in resolved.prompts]
-
-
-def test_a_task_on_screen_puts_its_prompts_first(settings: Settings) -> None:
-    resolved = bundled(settings).resolve(context(page("workflows", "background_task")))
-    assert resolved.prompts[0].title == "What happened here?"
+def test_the_organization_workspace_says_what_no_specialist_reaches(
+    settings: Settings,
+) -> None:
+    resolved = bundled(settings).resolve(context(page()))
+    [instruction] = resolved.instructions
+    assert "ADK workflows" in instruction and "agentRun" in instruction
 
 
 # -- Configurations that can't load ----------------------------------------

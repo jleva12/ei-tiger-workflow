@@ -70,7 +70,7 @@ class JobRunner:
         return f"{spec.task_type}:{key}" if key else None
 
     async def describe(self, spec: JobSpec) -> str | None:
-        """The job's own words for what it works on (a workflow's name),
+        """The job's own words for what it works on (an ADK workflow's name),
         from its optional ``describe(payload)`` (plain or async); None when it
         has none. Never raises: a description is a nicety."""
         try:

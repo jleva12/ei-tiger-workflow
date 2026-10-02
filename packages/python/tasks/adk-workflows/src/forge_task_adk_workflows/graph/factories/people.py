@@ -35,8 +35,8 @@ from forge_task_adk_workflows.graph.factories.base import (
 )
 from forge_task_adk_workflows.graph.names import adk_name
 from forge_task_adk_workflows.graph.schemas import held_to, problems, to_model
-from forge_task_workflows.document import ApprovalConfig
-from forge_task_workflows.errors import StepFailed
+from forge_task_adk_workflows.support.errors import StepFailed
+from forge_task_adk_workflows.support.step_settings import ApprovalConfig
 
 
 class Decision(BaseModel):

@@ -72,7 +72,7 @@ class Role(AuditBase):
 class Permission(AuditBase):
     """
     An action on a resource that roles can be granted, written as one key,
-    ``resource:action`` (e.g. ``workflows:run``). Either part may be ``*``.
+    ``resource:action`` (e.g. ``agents:run``). Either part may be ``*``.
     """
 
     __tablename__ = "authz_permissions"
@@ -88,6 +88,6 @@ class Permission(AuditBase):
         """
         The permission as one string.
 
-        :return: ``resource:action``, e.g. ``workflows:run``.
+        :return: ``resource:action``, e.g. ``agents:run``.
         """
         return f"{self.resource}:{self.action}"

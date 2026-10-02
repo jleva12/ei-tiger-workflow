@@ -15,7 +15,6 @@ SERVICES = {
     "admin",
     "admin-mysql",
     "admin-seed",
-    "async-worker-workflows",
     "async-worker-adk-workflows",
     "async-worker-api",
     "mongo",
@@ -25,13 +24,11 @@ SERVICES = {
 # connects with.
 MONGO_CONNECTIONS = {
     "admin": "FORGE_ADMIN_MONGO_URI",
-    "async-worker-workflows": "HYBRID_MONGO__URI",
     "async-worker-adk-workflows": "HYBRID_MONGO__URI",
     "async-worker-api": "HYBRID_MONGO__URI",
 }
 # The services that use the async worker's SAQ queues.
 QUEUE_CONNECTIONS = {
-    "async-worker-workflows": "HYBRID_REDIS_URL",
     "async-worker-adk-workflows": "HYBRID_REDIS_URL",
     "async-worker-api": "HYBRID_REDIS_URL",
 }
@@ -68,7 +65,7 @@ class SharedInfrastructureTest(unittest.TestCase):
         cls.configuration = render()
         cls.services = cls.configuration["services"]
 
-    def test_only_the_workflow_engine_services(self):
+    def test_only_the_adk_workflow_services(self):
         self.assertEqual(set(self.services), SERVICES)
 
     def test_single_mongo_and_redis(self):
@@ -119,14 +116,9 @@ class SharedInfrastructureTest(unittest.TestCase):
 
     def test_admin_and_worker_share_service_tokens(self):
         admin = self.services["admin"]["environment"]
-        worker = self.services["async-worker-workflows"]["environment"]
         api = self.services["async-worker-api"]["environment"]
         self.assertEqual(admin["FORGE_ADMIN_ASYNC_WORKER_URL"], "http://async-worker-api:8094")
         self.assertEqual(admin["FORGE_ADMIN_ASYNC_WORKER_TOKEN"], api["HYBRID_API__TOKEN"])
-        self.assertEqual(worker["HYBRID_WORKFLOWS__ADMIN_URL"], "http://admin:8091")
-        self.assertEqual(
-            admin["FORGE_ADMIN_WORKFLOWS_TOKEN"], worker["HYBRID_WORKFLOWS__ADMIN_TOKEN"]
-        )
 
     def test_adk_workflow_runs_keep_their_sessions_in_the_admin_mysql(self):
         worker = self.services["async-worker-adk-workflows"]

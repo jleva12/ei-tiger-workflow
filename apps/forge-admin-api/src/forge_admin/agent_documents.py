@@ -3,7 +3,7 @@ Organizations' agents: the ``forge.agent/v1`` documents the web console's
 agent builder saves as they're edited, kept in MongoDB, one per agent.
 
 An agent is a Google ADK graph: its nodes (ADK agents with their sub-agents,
-other saved agents, and Forge's workflow steps: approvals, human input, HTTP
+other saved agents, and Forge's own steps: approvals, human input, HTTP
 requests, transforms, delays, If / Switch / Match, loops, merges and ends)
 joined by edges and run from its start. ``forge_task_adk_workflows.graph`` builds one into ADK's
 objects.
@@ -54,15 +54,37 @@ ADDED_SETTINGS: dict[str, dict[str, Any]] = {}
 
 
 class AgentError(Exception):
-    """An agent the API won't save; the message says why."""
+    """
+    Represents an exception specific to agent-related errors.
+
+    This class is used to encapsulate errors relevant to agents within the system.
+    It extends the base exception class, allowing for the creation of specialized
+    error handling scenarios for agents.
+
+    :ivar message: The error message providing context about the nature of the
+        exception.
+    :type message: str
+    """
 
 
 class AgentConflict(Exception):
-    """The agent was saved by someone else since the revision given."""
+    """
+    Represents an exception raised when there is a conflict involving agents.
+
+    This exception is intended to signal cases where operations or states
+    involving agents cannot proceed due to conflicting conditions.
+    """
 
 
 class AgentIdTaken(Exception):
-    """A new agent's ID is already used, by this organization or another."""
+    """
+    Exception raised when an attempt is made to assign an already taken agent ID.
+
+    This exception is used to indicate that the agent ID being assigned is not
+    available, as it has already been taken by another instance or entity. It is
+    particularly useful in systems where unique identification of agents or entities
+    is critical for proper functionality.
+    """
 
 
 @lru_cache

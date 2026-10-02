@@ -1,8 +1,8 @@
 """How long a model thinks before it answers: the levels a model offers.
 
 Pi's rules (``getSupportedThinkingLevels`` and ``clampThinkingLevel`` in
-``@earendil-works/pi-ai``), so the admin API's assistant and workflows' agent
-steps offer a model the same levels: a model without ``reasoning`` only has
+``@earendil-works/pi-ai``), so the admin API's assistant and ADK workflows' LLM
+nodes offer a model the same levels: a model without ``reasoning`` only has
 ``off``; a reasoning model has ``off`` through ``high``, and ``xhigh`` when its
 ``thinkingLevelMap`` maps it; a level mapped to null is left out.
 """

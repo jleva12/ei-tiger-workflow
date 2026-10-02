@@ -28,7 +28,7 @@ import {
   isOpenRun,
   OPEN_POLL_MS,
   runsPollMs,
-} from "@/lib/workflows/runs"
+} from "@/lib/runs"
 import { agentPath } from "./api"
 import { AGENT_FORMAT, type AgentDocument } from "./document"
 import { AGENT_KINDS, isAgentKind, type AgentKind } from "./model"

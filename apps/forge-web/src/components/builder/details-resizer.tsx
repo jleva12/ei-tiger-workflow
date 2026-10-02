@@ -44,7 +44,7 @@ export function DetailsResizer({
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize the workflow details"
+      aria-label="Resize the details"
       aria-valuemin={DETAILS_WIDTH.min}
       aria-valuemax={DETAILS_WIDTH.max}
       aria-valuenow={width}

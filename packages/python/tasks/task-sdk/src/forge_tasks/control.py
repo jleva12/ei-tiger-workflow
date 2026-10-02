@@ -3,8 +3,8 @@ keeps between attempts, checkpoints, a person's decision, a wait until later,
 and notes on the run's activity.
 
 Most jobs never need it: a job runs start to end, and a retry runs it again.
-A job that runs for days (a workflow waiting on an approval, a delay, another
-system) does: it saves where it is, lets the worker go while it waits, and
+A job that runs for days (an ADK workflow waiting on an approval, a person's
+answer, a delay) does: it saves where it is, lets the worker go while it waits, and
 carries on from there when it's resumed.
 
 The worker runs every job as a tracked run of the enhanced task framework and

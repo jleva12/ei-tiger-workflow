@@ -1,6 +1,6 @@
 """The contract between the worker and a task type.
 
-A *task type* (workflows, ...) is a self-contained domain with its own
+A *task type* (adk_workflows, ...) is a self-contained domain with its own
 sources, storage and logic. The worker only needs it to expose named *jobs*; the
 queue, locking, retries, schedules and run tracking are the worker's. A task type
 is a package with a :class:`TaskFactory` registered under the
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class Job(Protocol):
-    """One kind of work a task type performs (run a workflow...).
+    """One kind of work a task type performs (run an ADK workflow...).
 
     Jobs must be idempotent: the worker may run a job twice (redelivery,
     retries). Return follow-up JobSpecs instead of enqueueing directly, so the
@@ -42,7 +42,7 @@ class Job(Protocol):
     async def run(self, payload: Any) -> JobResult: ...
 
     # Optional: ``describe(payload) -> str | None`` (or async), a few words on
-    # what a run of the job works on (a workflow's name), shown with the
+    # what a run of the job works on (an ADK workflow's name), shown with the
     # organization's background tasks. Not part of the protocol, so jobs
     # without it still conform.
 

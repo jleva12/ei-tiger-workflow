@@ -126,8 +126,8 @@ The agent needs a tool that reads files to follow `complete_result_location`.
 `model_provider.yaml` names the model providers an app may use, their models
 and how to reach them. There is one set of files, in
 [`src/forge_common/model_provider/`](src/forge_common/model_provider), which
-this loader reads for the admin API's assistant and for workflows' agent
-steps in the async worker. `model_provider.yaml` is the OAuth gateway example;
+this loader reads for the admin API's assistant and for ADK workflows' LLM
+nodes in the async worker. `model_provider.yaml` is the OAuth gateway example;
 `model_provider.openai.yaml` uses OpenAI and Anthropic API keys (GPT-5.6,
 GPT-5.2 and Claude Opus 5).
 
@@ -135,7 +135,7 @@ An app names its file by its repository path relative to the app's
 directory, e.g.
 `../../packages/python/common/src/forge_common/model_provider/model_provider.openai.yaml`
 (`FORGE_ADMIN_MODEL_PROVIDER_CONFIG` in the admin API,
-`HYBRID_WORKFLOWS__MODEL_PROVIDER_CONFIG` in the async worker). Their images
+`HYBRID_ADK_WORKFLOWS__MODEL_PROVIDER_CONFIG` in the async worker). Their images
 copy the files to the same path relative to `/app`, so the same path works
 natively and in a container.
 

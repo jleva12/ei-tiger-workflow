@@ -47,7 +47,7 @@ export const organizations = createResource<Organization, NodeTypes>({
 /** A scope as the API names it. */
 export type Scope = "site" | `org:${string}`
 
-/** A permission key, `resource:action`, e.g. `workflows:run`. */
+/** A permission key, `resource:action`, e.g. `agents:run`. */
 export type PermissionKey = `${string}:${string}`
 
 type CasbinAccess = { roles?: string[]; policies?: string[][] }
@@ -62,7 +62,7 @@ const toAccess = (access: CasbinAccess): UserAccess => fromCasbin(access)
  *
  * @example
  * const can = useScopeAccess(`org:${organizationId}`)
- * can("workflows:manage") // false until access has loaded
+ * can("agents:manage") // false until access has loaded
  */
 export function useScopeAccess(scope: Scope | undefined) {
     const {data} = useQuery({

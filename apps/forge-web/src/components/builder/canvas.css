@@ -10,7 +10,7 @@
   --edge: color-mix(in oklch, var(--muted-foreground) 62%, transparent);
   --edge-strong: var(--foreground);
   /*
-   * Connection tones say what a line means (lib/workflows/connections):
+   * Connection tones say what a line means (lib/steps/connections):
    * went well, went wrong, a loop going round, and a colour per case of a
    * switch or rule of a match, from the validated data-viz set so the
    * cases stay apart for every kind of colour vision. Words always come

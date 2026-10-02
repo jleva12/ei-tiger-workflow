@@ -53,7 +53,7 @@ class PageEntity(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # E.g. organization, background_task.
+    # E.g. organization.
     kind: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z_]{0,31}$")]
     id: Annotated[str, StringConstraints(min_length=1, max_length=TEXT)]
     label: Label | None = None

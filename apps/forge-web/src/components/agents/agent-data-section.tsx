@@ -1,9 +1,9 @@
 import * as React from "react"
 
-import { CopyButton } from "@/components/events/json-view"
+import { CopyButton } from "@/components/json/json-view"
 import { adkName, type AgentStep } from "@/lib/agents/model"
 import { agentTypes } from "@/lib/agents/scope"
-import { typeLabel, type DataType } from "@/lib/workflows/types"
+import { typeLabel, type DataType } from "@/lib/steps/types"
 import { agentGraphOf, useAgentBuilder } from "./agent-store"
 
 /** A labelled row of the Data section: a value in mono, and a way to copy it. */

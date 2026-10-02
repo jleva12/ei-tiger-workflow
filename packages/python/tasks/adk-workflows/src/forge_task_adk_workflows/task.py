@@ -8,9 +8,7 @@ workflows it runs, the input, the member it acts as and the ID of its ADK
 session. The worker runs the job as a tracked run of the task framework,
 labelled with the organization, so it's among the organization's background
 tasks, where people decide its approvals and answer its questions
-(``runs.AdkRun``). None of Forge workflows' task, engine, queue or settings
-is used: their package is a library here (JSONata, the HTTP guard, the step
-settings, the model loader's pieces).
+(``runs.AdkRun``).
 """
 
 from __future__ import annotations

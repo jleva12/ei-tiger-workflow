@@ -15,7 +15,7 @@ x-admin-environment: &admin-environment
   FORGE_ADMIN_MYSQL_USER: ${ADMIN_MYSQL_USER:-forge_admin}
   FORGE_ADMIN_MYSQL_PASSWORD: ${ADMIN_MYSQL_PASSWORD:-local-admin}
 
-# Workflows use their own database on the shared local Atlas instance.
+# ADK workflows use their own database on the shared local Atlas instance.
 x-mongo-uri: &mongo-uri mongodb://${FORGE_MONGO_USER:-forge}:${FORGE_MONGO_PASSWORD:-local-forge}@mongo:27017/?authSource=admin&directConnection=true
 
 x-admin-build: &admin-build
@@ -55,7 +55,7 @@ services:
         required: false
     environment:
       <<: *admin-environment
-      # The assistant links to this stack's web console.
+      # Links go to this stack's web console.
       FORGE_ADMIN_WEB_URL: http://localhost:${WEB_PORT:-18190}
       FORGE_ADMIN_HOST: 0.0.0.0
       FORGE_ADMIN_PORT: "8091"
@@ -66,12 +66,10 @@ services:
       # background tasks report it unavailable.
       FORGE_ADMIN_ASYNC_WORKER_URL: http://async-worker-api:8094
       FORGE_ADMIN_ASYNC_WORKER_TOKEN: ${FORGE_ASYNC_WORKER_TOKEN:-}
-      # What the async worker's workflows task calls the service routes with.
-      FORGE_ADMIN_WORKFLOWS_TOKEN: ${FORGE_WORKFLOWS_TOKEN:-}
-      # Organizations' workflows, in their own database on the shared mongo.
+      # Organizations' ADK workflows, in their own database on the shared mongo.
       FORGE_ADMIN_MONGO_URI: *mongo-uri
       FORGE_ADMIN_MONGO_DATABASE: ${ADMIN_MONGO_DATABASE:-forge_admin}
-      # The async worker's job queues, where workflow runs are submitted, in
+      # The async worker's job queues, where ADK workflow runs are submitted, in
       # this stack (apps/forge-async-worker/compose.yaml). Connected lazily,
       # so no depends_on: starting a run reports it unavailable until it
       # answers.

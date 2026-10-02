@@ -3,10 +3,7 @@
 The `adk_workflows` task type of the async worker: it runs an organization's
 ADK workflows (`forge.agent/v1`, built on the web console's ADK workflows page
 and kept by the admin API) on Google ADK's graph engine, as tracked runs of the
-enhanced task framework. It's apart from Forge's own workflows
-(`forge-task-workflows`): its own task, queue, settings and routes. It uses
-that package only as a library, for what Forge's steps share (JSONata, the
-HTTP guard, the step settings, the Gemini model configuration).
+enhanced task framework.
 
 - `graph`: builds a document into one ADK `Workflow`. It has one higher-order
   function per kind of node (`graph/factories`), and JSON Schemas become
@@ -17,6 +14,9 @@ HTTP guard, the step settings, the Gemini model configuration).
 - `runs.py`: one run, carried on from its ADK session every time the job runs.
 - `models.py`: the models LLM nodes run on.
 - `steps.py`: a run's steps, as its run page shows them.
+- `support`: what the Forge step kinds are built on: their settings, JSONata
+  (on `forge-jsonata`, with typed `{{ }}` references), the HTTP guard that
+  keeps requests off the worker's own network, and step errors.
 
 ## A run
 
@@ -125,4 +125,7 @@ uv run --project ../../../../apps/forge-async-worker pytest
 
 `tests/test_task.py` runs the job as the worker does, with ADK's
 `DatabaseSessionService` on SQLite, the task framework's `LocalJobControl`,
-scripted models and a fake HTTP transport.
+scripted models and a fake HTTP transport. `tests/test_expressions.py` checks
+the `{{ }}` references the builder writes against
+`tests/fixtures/expression-references.json`, which the web console's tests
+read too.

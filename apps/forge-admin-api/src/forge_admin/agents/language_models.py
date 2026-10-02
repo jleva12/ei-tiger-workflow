@@ -1,7 +1,7 @@
 """The models the assistant runs on, and those a conversation may choose.
 
 With ``model_provider_config`` they are the shared model_provider.yaml's
-(``forge_common.model_provider``, the file the workflow worker reads too),
+(``forge_common.model_provider``, the file the ADK workflows task reads too),
 limited to ``agent_models`` when it names some. Without, they are Gemini
 models, as ``google_api_key``, ``agent_model`` and ``agent_models`` set the
 assistant up before there was a shared file: the same configuration, built
@@ -104,13 +104,33 @@ def gemini_config(settings: Settings) -> ModelProviderConfig:
 
 def _display_name(model: str) -> str:
     # gemini-2.5-flash-lite: Gemini 2.5 Flash Lite.
+    """
+    Constructs and returns a display-friendly name by capitalizing the first
+    letter of each word in the given model string, which is expected to be
+    separated by hyphens.
+
+    :param model: A string representing the model name, where words are
+        separated by hyphens.
+    :type model: str
+    :return: A string with each word's first letter capitalized and hyphens
+        replaced by spaces.
+    :rtype: str
+    """
     return " ".join(word[:1].upper() + word[1:] for word in model.split("-"))
 
 
 def accepted_names(models: ProviderModels) -> set[str]:
     """
-    Every name a conversation or a screen may give a model it can run on: its
-    ``provider/model`` reference, and its id when only one provider has it.
+    Extracts and returns a set of accepted names from the provided model registry.
+
+    The function iterates over the available models and collects names that match
+    certain conditions, ensuring that only those which have corresponding entries
+    in the `models` registry are included in the returned set.
+
+    :param models: An instance of ProviderModels that contains a collection of
+        available models and provides methods for model lookup.
+    :return: A set containing unique names derived from the `ref` and `id`
+        attributes of the available models that pass the filtering criteria.
     """
     return {
         name
@@ -122,8 +142,20 @@ def accepted_names(models: ProviderModels) -> set[str]:
 
 def describe(model: ResolvedModel) -> dict[str, Any]:
     """
-    A model, as the web console's model section lists it. Nothing about how
-    it's reached: no URLs, headers or credentials.
+    Extracts and structures detailed information from a given `ResolvedModel` object.
+
+    Returns a dictionary containing various attributes about the model, including its
+    identifier, provider information, display name, API reference, reasoning capabilities,
+    and supported input types. Additionally, it includes information about the model's
+    context window, maximum tokens, and supported thinking levels.
+
+    :param model: A `ResolvedModel` instance representing the model whose details need to
+        be extracted.
+    :type model: ResolvedModel
+    :return: A dictionary containing the model's extracted details such as
+        'id', 'provider', 'provider_name', 'model', 'name', 'api', 'reasoning',
+        'input', 'context_window', 'max_tokens', and 'thinking_levels'.
+    :rtype: dict[str, Any]
     """
     return {
         "id": model.ref,

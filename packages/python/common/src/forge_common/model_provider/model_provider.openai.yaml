@@ -2,7 +2,7 @@
 # token endpoint or gateway credentials. Needs OPENAI_API_KEY and
 # ANTHROPIC_API_KEY (both in .env.common) and OPENAI_MODEL, the default.
 # Shared by the apps: select it with FORGE_ADMIN_MODEL_PROVIDER_CONFIG in the
-# admin API and HYBRID_WORKFLOWS__MODEL_PROVIDER_CONFIG in the async worker,
+# admin API and HYBRID_ADK_WORKFLOWS__MODEL_PROVIDER_CONFIG in the async worker,
 # e.g.
 # ../../packages/python/common/src/forge_common/model_provider/model_provider.openai.yaml
 #

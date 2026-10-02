@@ -24,8 +24,8 @@ MODEL_PATH = Path(__file__).with_name("casbin_model.conf")
 # Role keys are "<level>:<name>", where the level is where the role can be
 # assigned: "site:admin", "org:admin", "org:member".
 ROLE_KEY_PATTERN = r"^(?:site|org):[a-z][a-z0-9_]*$"
-# Permission keys are "resource:action", e.g. "workflows:run"; either part may
-# be "*" ("workflows:*", "*:*"). The parts are the Casbin resource and action.
+# Permission keys are "resource:action", e.g. "agents:run"; either part may
+# be "*" ("agents:*", "*:*"). The parts are the Casbin resource and action.
 PERMISSION_KEY_PATTERN = r"^(?:[a-z][a-z0-9_]*|\*):(?:[a-z][a-z0-9_]*|\*)$"
 # A user or service ID, e.g. a UUID or an email.
 SUBJECT_PATTERN = r"^[A-Za-z0-9._@:+-]{1,255}$"

@@ -22,7 +22,7 @@ from google.genai import types
 from pydantic import BaseModel, SecretStr
 from scripted_llm import ScriptedLlm
 
-from forge_admin.agents import access_tools, admin_tools, event_tools, workflow_tools
+from forge_admin.agents import access_tools, admin_tools
 from forge_admin.agents.admin_tools import AdministrationToolset
 from forge_admin.agents.person_api import PersonApi
 from forge_admin.api.routes.common import NodeCreate, NodeUpdate
@@ -234,9 +234,7 @@ def test_every_tool_is_covered_read_or_change_and_none_is_taken() -> None:
     assert not reads & changes
     # Everything that sends a body changes something; every read only reads.
     assert changes == {case[0] for case in CASES if case[2] != "GET"}
-    assert not admin_tools.TOOL_NAMES & (
-        access_tools.TOOL_NAMES | event_tools.TOOL_NAMES | workflow_tools.TOOL_NAMES
-    )
+    assert not admin_tools.TOOL_NAMES & access_tools.TOOL_NAMES
     assert not any(name.startswith(("delete", "remove")) for name in changes)
 
 

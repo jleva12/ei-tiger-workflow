@@ -19,7 +19,7 @@ const load = (path) => server.ssrLoadModule(path)
 const runs = await load("/src/lib/agents/runs.ts")
 const { taskTypeOf } = await load("/src/lib/background-tasks.ts")
 const { exampleAgent } = await load("/src/lib/agents/example.ts")
-const { OPEN_POLL_MS, IDLE_POLL_MS } = await load("/src/lib/workflows/runs.ts")
+const { OPEN_POLL_MS, IDLE_POLL_MS } = await load("/src/lib/runs.ts")
 await server.close()
 
 const doc = exampleAgent("org-1")
@@ -38,7 +38,8 @@ const step = (fields = {}) => ({
 test("ADK workflow runs are their own task type, named as such", () => {
   assert.equal(runs.ADK_WORKFLOW_TASK_TYPE, "adk_workflows")
   assert.equal(taskTypeOf("adk_workflows").label, "ADK workflow")
-  assert.equal(taskTypeOf("workflows").label, "Workflow")
+  // A type the console doesn't know by name reads as it is.
+  assert.equal(taskTypeOf("nightly_report").label, "Nightly report")
 })
 
 test("the page's and a run's tabs", () => {

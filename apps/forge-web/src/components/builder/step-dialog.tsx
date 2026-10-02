@@ -223,7 +223,7 @@ function StepSettings({ node }: { node: FlowNode }) {
   return (
     <>
       <header className="flex items-start gap-3 border-b px-5 pt-4 pb-3.5">
-        <KindGlyph info={info} icon={ui.iconOf?.(data)} />
+        <KindGlyph info={info} />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <DialogTitle className="truncate text-sm leading-snug font-medium text-foreground">
             {data.name.trim() || info.label}

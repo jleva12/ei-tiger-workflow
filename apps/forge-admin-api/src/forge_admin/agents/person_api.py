@@ -22,8 +22,8 @@ from forge_admin.config import Settings
 BASE_URL = "http://forge-admin.internal"
 # The address the person reached this API at, while an assistant's run serves
 # their request (the ``/agents`` routes set it): in-process calls go to it, so
-# a route that writes an absolute URL, e.g. an organization's event endpoint, writes
-# the one the person knows rather than ``BASE_URL``.
+# a route that writes an absolute URL writes the one the person knows rather
+# than ``BASE_URL``.
 CALLER_BASE_URL: ContextVar[str | None] = ContextVar("caller_base_url", default=None)
 
 
@@ -88,7 +88,7 @@ class PersonApi:
 
         :param user_id: Who: the conversation's user, from their sign-in.
         :param method: E.g. ``GET``.
-        :param path: Below the API prefix, e.g. ``/organizations/<id>/workflows``.
+        :param path: Below the API prefix, e.g. ``/organizations/<id>``.
         :param params: Query parameters; None values are left out.
         :param json: The body.
         :return: The answer's JSON; None for an empty one.

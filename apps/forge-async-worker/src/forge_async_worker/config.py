@@ -3,7 +3,7 @@
 ``HYBRID_REDIS_URL``, ``HYBRID_MONGO__*``), where it tracks runs
 (``HYBRID_ETF__*``), its background tasks API (``HYBRID_API__*``) and its
 logs (``HYBRID_LOGGING__*``). Each
-task package reads its own section (``HYBRID_WORKFLOWS__*``, ...), so none of
+task package reads its own section (``HYBRID_ADK_WORKFLOWS__*``, ...), so none of
 that is configured here.
 """
 

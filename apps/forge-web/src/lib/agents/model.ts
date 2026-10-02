@@ -18,7 +18,7 @@ import {
   type StepConfigs,
   type StepData,
   type ThinkingLevel,
-} from "@/lib/workflows/model"
+} from "@/lib/steps/model"
 
 /*
  * An organization's agent: a Google ADK graph workflow (`google.adk.Workflow`)
@@ -96,8 +96,8 @@ export type SubAgent<K extends SubAgentKind = SubAgentKind> = {
 }[K]
 
 /**
- * Forge's workflow steps an agent takes as they are: the same kind, the same
- * settings and the same ways out as in a workflow (lib/workflows/model.ts).
+ * Forge's steps an ADK workflow takes as they are: their kinds, settings
+ * and ways out come from lib/steps/model.ts.
  */
 export const FORGE_KINDS = [
   "approval",
@@ -180,8 +180,7 @@ const FORGE_GROUPS: Record<ForgeKind, string> = {
 
 /** A Forge step kind as the library shows it: as the workflow builder does. */
 function forgeKind<K extends ForgeKind>(kind: K): AgentKindInfo<K> {
-  const { defaults, group: _group, ...info } = STEP_KINDS[kind]
-  void _group
+  const { defaults, ...info } = STEP_KINDS[kind]
   return {
     ...info,
     group: FORGE_GROUPS[kind],

@@ -184,7 +184,7 @@ def allows(
 
     :param enforcer: The Casbin enforcer, with its policy loaded.
     :param user: The user ID.
-    :param permission: A permission key, e.g. ``workflows:run``.
+    :param permission: A permission key, e.g. ``agents:run``.
     :param domain: The scope's domain.
     :return: Casbin's decision.
     """
@@ -205,7 +205,7 @@ async def authorize(
     :param session: The request's database session.
     :param enforcer: The Casbin enforcer.
     :param user: The caller.
-    :param permission: A permission key, e.g. ``workflows:run``.
+    :param permission: A permission key, e.g. ``agents:run``.
     :param scope: The scope acted on.
     :return: The scope's domain.
     :raises HTTPException: 404 when the scope does not exist, 403 without the

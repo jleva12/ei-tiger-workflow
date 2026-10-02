@@ -16,34 +16,31 @@ and its Dockerfile copies the package directory before `uv sync`.
   shared `model_provider.yaml` files and their loader, and
   `forge_common.adk.models` (`forge-common[adk-models]`) runs an ADK agent on
   their models, a conversation choosing one per turn: the admin API's
-  assistant and workflows' agent steps both run on them
+  assistant and ADK workflows' LLM nodes both run on them
   (`make common-check`).
 - [`python/jsonata/`](python/jsonata/README.md) (`forge-jsonata`,
   `forge_jsonata`) is the locally maintained JSONata transformation engine
-  every workflow expression runs on, with no runtime dependencies and the
-  pinned upstream compatibility suite (`make jsonata-check`). The workflows
-  task evaluates expressions with it.
+  every ADK workflow expression runs on, with no runtime dependencies and the
+  pinned upstream compatibility suite (`make jsonata-check`). The ADK
+  workflows task evaluates expressions with it.
 - [`python/enhanced-task-framework/`](python/enhanced-task-framework) (`etf`)
   tracks, audits, pauses and recovers async job runs: every job the async
-  worker runs, including each workflow run, is one of its runs
+  worker runs, including each ADK workflow run, is one of its runs, which the
+  worker's background tasks API reads back for the admin API
   (`make etf-check`).
 - `python/tasks/<name>/`: the task packages `apps/forge-async-worker` runs.
   [`task-sdk`](python/tasks/task-sdk/README.md) (`forge-tasks`,
   `forge_tasks`) is the contract between the worker and a task: a task
   package registers its factory under the `forge_async_worker.tasks` entry
   point group and keeps its business logic to itself.
-  [`workflows`](python/tasks/workflows/README.md) (`forge-task-workflows`,
-  `forge_task_workflows`) is the workflows task: it runs organizations'
-  workflows step by step (agents, approvals, HTTP, transforms, delays, other
-  workflows, branches and loops), through waits and restarts. The admin API
-  depends on it too, to check the assistant's workflow drafts as the runner
-  reads them. Their tests run in the worker's environment
-  (`make async-worker-check`).
-- [`python/event-bus/`](python/event-bus/README.md) (`event-bus`,
-  `event_bus`) is a framework-agnostic event bus on Redis (streams with
-  consumer groups, pub/sub, retries, a dead-letter queue, circuit breaking,
-  idempotency, and SSE and WebSocket adapters, with a React client in
-  `clients/react`). No application uses it yet (`make event-bus-check`).
+  [`adk-workflows`](python/tasks/adk-workflows/README.md)
+  (`forge-task-adk-workflows`, `forge_task_adk_workflows`) is the ADK
+  workflows task: it builds an organization's ADK workflows
+  (`forge.agent/v1`) into Google ADK graphs and runs them on ADK's graph
+  engine, through approvals, human input, waits and restarts, their state in
+  ADK sessions. The admin API depends on it too, to build a document before
+  a run and to read a run's steps from its session. Their tests run in the
+  worker's environment (`make async-worker-check`).
 
 Packages never import application code. Code used by only one application
 stays in that application.

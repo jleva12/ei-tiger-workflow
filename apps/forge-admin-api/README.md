@@ -1,13 +1,14 @@
 # Forge admin API
 
-`forge-admin` is the administration service of Forge, a business workflow
-engine: FastAPI on Python 3.13, backed by its own MySQL 8.4 database through
-async SQLAlchemy (`aiomysql`), with Alembic migrations applied at startup,
-and MongoDB for organizations' workflows (`pymongo`'s async client). It
-keeps the organizations, the people and their access, each organization's
-inbound events and workflows, submits workflow runs to the async worker
-([apps/forge-async-worker](../forge-async-worker/README.md)), and serves the
-web console's assistant. Package `forge-admin`, module `forge_admin`.
+`forge-admin` is the administration service of Forge, where organizations
+build and run Google ADK workflows: FastAPI on Python 3.13, backed by its own
+MySQL 8.4 database through async SQLAlchemy (`aiomysql`), with Alembic
+migrations applied at startup, and MongoDB for organizations' ADK workflows
+(`pymongo`'s async client). It keeps the organizations, the people and their
+access, and each organization's ADK workflows; submits their runs to the
+async worker ([apps/forge-async-worker](../forge-async-worker/README.md)) and
+reads their steps from their ADK sessions; and serves the web console's
+assistant. Package `forge-admin`, module `forge_admin`.
 
 ## How it's put together
 
@@ -22,8 +23,8 @@ app = server.create_app()  # built once, the same object afterwards
   sessionmaker and the Casbin enforcer at startup, and keeps them on
   `app.state` with the clients the routes use: the async worker's background
   tasks API (`background_tasks`), its job queues on Redis (`embedding`), the
-  workflows' and agents' MongoDB stores (`workflows`, `organization_agents`),
-  the assistant (`agents`) and the ADK workflow runs' sessions
+  agents' (ADK workflows') MongoDB store (`organization_agents`), the
+  assistant (`agents`) and the ADK workflow runs' sessions
   (`adk_run_sessions`, ADK's `DatabaseSessionService` on the engine). Each
   client is `None` when its settings are unset. Nothing connects until it's
   used, so the API starts while MySQL, MongoDB or Redis are down, and
@@ -35,12 +36,8 @@ app = server.create_app()  # built once, the same object afterwards
 - **API key**: when `FORGE_ADMIN_API_KEY` is set, every route below the
   prefix requires it in the `X-API-Key` header. The health probes stay open.
 - **Public routes**: routers in `PUBLIC_ROUTERS` mount at the root with
-  neither the API key nor a user, and check their callers themselves: the
-  inbound event endpoints under `/hooks`, which other systems call with an
-  endpoint token (see [Inbound events](#inbound-events)), and the workflow
-  service routes under `/internal/workflows`, which only the async worker
-  calls, with `FORGE_ADMIN_WORKFLOWS_TOKEN` (see
-  [Workflow service routes](#workflow-service-routes)).
+  neither the API key nor a user, and check their callers themselves. There
+  are none at the moment.
 - **Middleware**: CORS is added when `FORGE_ADMIN_CORS_ORIGINS` is set. Pass
   any other Starlette `Middleware` in `middleware=`.
 
@@ -55,13 +52,11 @@ src/forge_admin/
   __main__.py            python -m forge_admin: runs cli/serve.py
   config.py              FORGE_ADMIN_* settings
   env_files.py           .env's ${NAME} references to the repository's .env.common
-  events.py              Inbound events: endpoint tokens, checking event types' JSON Schemas and payloads
-  workflows.py           Organizations' workflows in MongoDB: checking documents, revisions, the store
-  workflow.schema.json   The forge.workflow/v1 format's JSON Schema (generated from the web console)
-  workflow.catalog.json  Each step kind's settings, defaults, ways out and output (generated likewise)
-  workflow_runs.py       Checking a run's input and submitting the run to the async worker
+  document_store.py      Organizations' documents in MongoDB: one record per document, revisions, the store
+  agent_documents.py     Organizations' agents (ADK workflows) in MongoDB: checking documents, the store
+  agent.schema.json      The forge.agent/v1 format's JSON Schema (generated from the web console)
+  agent_build.py         Building a document into an ADK Workflow (forge_task_adk_workflows.graph)
   adk_runs.py            ADK workflow runs: checking the input and the build, submitting them, answers
-  workflow_drafts.py     Completing and checking the workflows the assistant drafts
   embedding.py           The async worker's SAQ job queues on Redis, where runs are submitted
   background_tasks.py    The async worker's background tasks API: runs, their attempts, approvals
   agents/                The assistant: Google ADK agents
@@ -75,8 +70,6 @@ src/forge_admin/
     person_api.py        This API, called in-process as the person
     user_tokens.py       Short-lived tokens for those calls
     route_tools.py       RouteToolset: the base of the toolsets over this API's routes
-    workflow_tools.py    The workflows toolset
-    event_tools.py       The events toolset
     access_tools.py      The access toolset
     admin_tools.py       The administration toolset
     runtime.py           AgentRuntime: a runner per agent, the session and artifact services
@@ -100,10 +93,9 @@ src/forge_admin/
     session.py           Engine, per-request sessions (get_session), ping
     audit.py             The actor and clock behind the audit columns
     migrate.py           Applying the migrations in-process
-    migrations/          Alembic environment and the baseline revision, with the default roles
+    migrations/          Alembic environment and the revisions, the baseline with the default roles
   models/                hierarchy.py (organizations), users.py (users), authorization.py
-                         (roles, permissions, casbin_rule), events.py (event endpoints,
-                         event types, events)
+                         (roles, permissions, casbin_rule)
 ```
 
 The tests mirror it: `tests/agents`, `tests/api`, `tests/auth`, `tests/cli`,
@@ -147,7 +139,7 @@ answers 404 before the permission is checked. A `{scope}` is `site` or
 | POST | `/organizations` | Create one, `{"name", "description"?}`; 409 when the name is taken | `organizations:create` on the site |
 | GET | `/organizations/{id}` | One organization | `organizations:read` |
 | PATCH | `/organizations/{id}` | Rename or describe it, `{"name"?, "description"?}` | `organizations:update` |
-| DELETE | `/organizations/{id}` | Delete it: the roles assigned in it, its inbound events and its workflows go with it | `organizations:delete` |
+| DELETE | `/organizations/{id}` | Delete it: the roles assigned in it and its agents (ADK workflows) go with it | `organizations:delete` |
 
 ### People and access
 
@@ -178,37 +170,16 @@ answers 404 before the permission is checked. A `{scope}` is `site` or
 | GET | `/authz/model` | The shared Casbin model file, as text | no user (the API key when one is set) |
 | GET | `/authz/subjects/{subject}/access?scope=` | Anyone's roles and policies in a scope | `members:read` there |
 
-### Event endpoint, types and events
+### Background tasks (ADK workflow runs)
+
+The jobs the async worker runs for the organization, its ADK workflow runs;
+see [Background tasks](#background-tasks).
 
 | Method | Path | What | Needs |
 |---|---|---|---|
-| GET | `/organizations/{id}/event-endpoint` | The inbound endpoint (`url`, `enabled`, `token_hint`), or `null` before it's first turned on | `organizations:read` |
-| PUT | `/organizations/{id}/event-endpoint` | Turn it on or off, `{"enabled"}`; the first time makes it, and that answer alone carries its `token` | `events:manage` |
-| POST | `/organizations/{id}/event-endpoint/token` | Replace its token; the old one stops working at once, and the answer carries the new one; 404 before it's made | `events:manage` |
-| GET | `/organizations/{id}/event-types` | The event types by name, each with its `status` (`draft`, `active`, `paused`), `payload_schema`, `schema_version`, `event_count`, `invalid_count` and `last_received_at` | `organizations:read` |
-| POST | `/organizations/{id}/event-types` | Define one, a draft, `{"key", "name", "description"?, "payload_schema"}`; 409 for a key in use, 422 for a schema it can't use | `events:manage` |
-| GET | `/organizations/{id}/event-types/{event_type_id}` | One event type | `organizations:read` |
-| PATCH | `/organizations/{id}/event-types/{event_type_id}` | Change it, or turn it on or pause it, `{"status": "active" \| "paused"}`; a schema that checks differently bumps `schema_version` | `events:manage` |
-| DELETE | `/organizations/{id}/event-types/{event_type_id}` | Delete it and its events | `events:manage` |
-| GET | `/organizations/{id}/events` | The events received, latest first, without payloads, `?event_type_id=&status=valid\|invalid&limit=&offset=` (`limit` 1–100, 50) | `organizations:read` |
-| GET | `/organizations/{id}/events/{event_id}` | One event with its `payload` | `organizations:read` |
-| POST | `/organizations/{id}/event-schemas/validate` | Check a sample `payload` against a `payload_schema`, saved or not, as the endpoint would: `{"valid", "errors"}`; nothing is stored | `organizations:read` |
-
-### Workflows, runs and background tasks
-
-| Method | Path | What | Needs |
-|---|---|---|---|
-| GET | `/organizations/{id}/workflows` | The workflows, most recently changed first, each with its whole `forge.workflow/v1` `document`, `revision` and who saved it when | `organizations:read` |
-| POST | `/organizations/{id}/workflows` | Make one, `{"document"}` | `workflows:manage` |
-| GET | `/organizations/{id}/workflows/{workflow_id}` | One workflow | `organizations:read` |
-| PUT | `/organizations/{id}/workflows/{workflow_id}` | Save its next version, `{"document", "revision"}`; 409 when someone saved it since that revision | `workflows:manage` |
-| DELETE | `/organizations/{id}/workflows/{workflow_id}` | Delete it | `workflows:manage` |
-| POST | `/organizations/{id}/workflows/{workflow_id}/runs` | Run it as you, `{"input"}`; see [Running a workflow](#running-a-workflow) | `workflows:run` |
-| GET | `/organizations/{id}/workflows/{workflow_id}/runs` | Its runs, newest first, `?limit=&offset=` (`limit` 1–100, 20): `{"items", "total"}` | `organizations:read` |
-| GET | `/organizations/{id}/background-tasks` | The organization's background tasks (its workflow runs), newest first, `?task_type=&exclude_task_type=&status=&limit=&offset=` (each filter repeatable; `limit` 1–100, 50): `{"items", "total"}` | `organizations:read` |
+| GET | `/organizations/{id}/background-tasks` | The organization's background tasks, newest first, `?task_type=&exclude_task_type=&status=&limit=&offset=` (each filter repeatable; `limit` 1–100, 50): `{"items", "total"}` | `organizations:read` |
 | GET | `/organizations/{id}/background-tasks/{task_id}` | One of them: its input, attempts, failures with their stack traces, audit trail, the approval it waits at, and the actions its state allows | `organizations:read` |
 | POST | `/organizations/{id}/background-tasks/{task_id}/resubmit`, `.../restart`, `.../abandon` | Run it again as a new task; retry it as its next attempt; give up on it | `background_tasks:manage` |
-| POST | `/organizations/{id}/background-tasks/{task_id}/decisions` | Approve or reject the approval a workflow run waits at, `{"request_id", "approved", "comment"?}`; 409 for an ADK workflow run's, decided at its own route | `workflows:approve` or `workflows:run`, as the approval step names its approvers |
 
 ### Agents
 
@@ -224,8 +195,8 @@ The organization's agents (see [Agents](#agents-1)), not the assistant's.
 
 ### ADK workflow runs
 
-Runs of the organization's ADK workflows (its agents), apart from Forge
-workflows' runs; see [ADK workflow runs](#adk-workflow-runs-1).
+Runs of the organization's ADK workflows (its agents); see
+[ADK workflow runs](#adk-workflow-runs-1).
 
 | Method | Path | What | Needs |
 |---|---|---|---|
@@ -256,8 +227,6 @@ Every assistant route needs a signed-in user, and `{you}` must be them.
 | GET | `/health/live` | The process is up | anyone |
 | GET | `/health/ready` | MySQL answers within `FORGE_ADMIN_READY_TIMEOUT`; 503 otherwise | anyone |
 | GET | `/docs`, `/openapi.json` | The API's documentation, when `FORGE_ADMIN_DOCS_ENABLED` | anyone |
-| POST | `/hooks/events/{endpoint_id}/{event_key}` | Another system sends an organization an event; see [Inbound events](#inbound-events) | the endpoint's token; never a user or the API key |
-| POST | `/internal/workflows/workflows/{workflow_id}/runs` | A run's Run workflow step starts another of the organization's workflows; see [Workflow service routes](#workflow-service-routes) | `FORGE_ADMIN_WORKFLOWS_TOKEN`, then `workflows:run` for the member the run acts as |
 
 `/api/v1/info` (the service's name and version) and `/api/v1/authz/model`
 need no user either; with an API key set, they need the key.
@@ -265,7 +234,7 @@ need no user either; with an API key set, they need the key.
 ## Access control (Casbin)
 
 The hierarchy is the site, then organizations. The work happens in
-organizations: their workflows, their runs and their inbound events. Access
+organizations: their ADK workflows (agents) and their runs. Access
 is role-based, evaluated by [Casbin](https://casbin.org) (`pycasbin` with its
 async SQLAlchemy adapter), and stored as data, so roles, permissions and
 assignments change through the API without a deploy.
@@ -273,7 +242,7 @@ assignments change through the API without a deploy.
 | Table | Holds |
 |---|---|
 | `organizations` | The organizations: `id` (a UUID), a unique `name`, `description` |
-| `authz_permissions` | Permission keys, `resource:action`, e.g. `workflows:run`; either part may be `*` |
+| `authz_permissions` | Permission keys, `resource:action`, e.g. `agents:run`; either part may be `*` |
 | `authz_roles` | Roles, keyed `<level>:<name>`, e.g. `org:admin`; the level (`site` or `org`) is where it is assigned |
 | `casbin_rule` | Casbin policy lines: grants and assignments |
 | `users` | The people roles are assigned to: `id` (their subject ID and token `sub`), `first_name`, `last_name`, and `email` and `msid` (MS ID), each unique and lowercase |
@@ -285,7 +254,7 @@ Casbin adapter. A request is `(subject, domain, resource, action)`, where the
 domain is the scope acted in: `site`, or `org:<id>`.
 
 **Grants** (`p`) give a role a permission in every scope:
-`p, org:member, workflows, run`. **Assignments** (`g`) give a subject a role
+`p, org:member, agents, run`. **Assignments** (`g`) give a subject a role
 in a scope, stored as the scope's domain followed by `*`:
 `g, <user>, org:member, org:<id>*`; the site's pattern is `*`, which covers
 every organization. Casbin's built-in `keyMatch` is registered as `g`'s
@@ -295,31 +264,28 @@ JavaScript and Go). Every organization response includes its `domain`, ready
 to pass to `enforce`.
 
 **Default roles** come from the migrations (the baseline, `0002agents` for
-`agents:manage` and `0003adk_runs` for `agents:run` and `agents:approve`),
-written once; edit them freely afterwards.
+`agents:manage`, `0003adk_runs` for `agents:run` and `agents:approve`, and
+`0004adk_only`, which takes away the permissions only Forge workflows and
+inbound events used), written once; edit them freely afterwards.
 
 | Role | Name | Grants |
 |---|---|---|
 | `site:admin` | Site administrator | `*:*`: everything, in every organization |
-| `org:admin` | Organization administrator | `organizations:read`, `organizations:update`, `members:read`, `members:update`, `events:manage`, `workflows:manage`, `workflows:run`, `workflows:approve`, `background_tasks:manage`, `agents:manage`, `agents:run`, `agents:approve` |
-| `org:member` | Organization member | `organizations:read`, `members:read`, `workflows:manage`, `workflows:run`, `agents:manage`, `agents:run` |
+| `org:admin` | Organization administrator | `organizations:read`, `organizations:update`, `members:read`, `members:update`, `background_tasks:manage`, `agents:manage`, `agents:run`, `agents:approve` |
+| `org:member` | Organization member | `organizations:read`, `members:read`, `agents:manage`, `agents:run` |
 | `org:viewer` | Organization viewer | `organizations:read`, `members:read` |
 
 The default permissions, and what checks them:
 
 | Permission | Checked by |
 |---|---|
-| `organizations:read` | Reading an organization and everything in it: its event endpoint, event types and events, workflows, runs and background tasks, agents; checking a sample payload |
+| `organizations:read` | Reading an organization and everything in it: its agents (ADK workflows), their runs and steps, and its background tasks |
 | `organizations:create` / `update` / `delete` | Creating one (on the site); renaming or describing one; deleting one |
 | `members:read` / `update` | Listing a scope's assignments and reading anyone's access there; assigning and revoking roles there |
 | `users:create` / `update` / `delete` | Adding, editing and removing people (on the site) |
 | `roles:create` / `update` / `delete` | Creating, editing and deleting roles (on the site) |
 | `permissions:create` / `update` / `delete` | Creating, editing and deleting permissions (on the site) |
-| `events:manage` | Turning the inbound endpoint on or off, replacing its token, defining event types |
-| `workflows:manage` | Making, saving and deleting workflows |
-| `workflows:run` | Running workflows (and, in the service routes, a run's Run workflow steps); deciding approvals any member may |
-| `workflows:approve` | Deciding approvals the organization's administrators decide |
-| `background_tasks:manage` | Resubmitting, restarting and abandoning background tasks |
+| `background_tasks:manage` | Resubmitting, restarting and abandoning background tasks (ADK workflow runs) |
 | `agents:manage` | Making, saving and deleting agents |
 | `agents:run` | Running ADK workflows (agents); answering their runs' questions and deciding the approvals any member may |
 | `agents:approve` | Deciding the ADK workflow runs' approvals the organization's administrators decide |
@@ -329,7 +295,7 @@ Reading roles, permissions and users needs only a signed-in user.
 
 A role is assigned at its own level (`org:*` roles in organizations,
 `site:*` roles on the site); a site role applies in every organization too.
-Endpoints check `authorize(session, enforcer, user, "workflows:run",
+Endpoints check `authorize(session, enforcer, user, "agents:run",
 Scope(Level.ORG, organization_id))`, which reloads the policy from MySQL
 first, so every instance answers from the current rules; add a Casbin
 watcher if that becomes a bottleneck.
@@ -348,228 +314,22 @@ curl localhost:8101/api/v1/authz/subjects/alice@acme.com/access?scope=org:$ORG \
 
 Subject IDs are letters, digits and `._@:+-` (a UUID or email works) and must
 not look like a role key, since roles and subjects share Casbin's namespace.
-Deleting an organization revokes the roles assigned in it and deletes its
-inbound endpoint, event types and events; its workflows are removed from
-MongoDB afterwards, and a failure there is only logged.
-
-## Inbound events
-
-Other systems (an incident manager, a ticketing tool, a CI pipeline) send an
-organization events, which Forge keeps and checks against a JSON Schema.
-`events:manage` in the organization configures it (`org:admin` by default,
-`site:admin` through `*:*`); `organizations:read` reads it.
-
-- **The endpoint** (`organization_event_endpoints`, one per organization):
-  turning it on the first time makes it, with a random token (`fevt_…`, 256
-  bits) shown only in that answer. Only its SHA-256 is stored, with its last
-  four characters (`token_hint`) to tell tokens apart. Turning it off refuses
-  every event and keeps the token; replacing the token retires the old one
-  at once.
-- **Event types** (`organization_event_types`): a key unique in the
-  organization, which senders put in the URL (`incident.opened`: lowercase
-  letters, digits and `. _ -`, starting with a letter), a name, a status, and
-  the JSON Schema its payload must match: draft 2020-12 (or the draft its
-  `$schema` names), `"type": "object"` at the root, at most 64 KiB, `$ref`s
-  only within itself (nothing is ever fetched). The schema is checked against
-  its meta-schema when saved, so a bad `pattern` or `type` answers 422. A
-  schema that checks differently bumps `schema_version`; one that only
-  reorders properties is saved without. A new type is a `draft`, which the
-  endpoint refuses, so nothing arrives before the organization has reviewed
-  its schema; turning it on makes it `active`, and it can be `paused` and
-  turned on again, never made a draft again. A new key changes the URL
-  senders use.
-- **Events** (`organization_events`): every event of a known, active type,
-  valid or not: the payload as sent, the schema version it was checked
-  against, `status` (`valid` or `invalid`) and up to 50 `errors`, each a
-  JSONPath (`$.service.name`), a message and the failed keyword, plus its
-  size, content type, user agent and source IP. Formats are checked: `date`,
-  `date-time` and `time` (RFC 3339), `email`, `uri`, `uuid`, `ipv4`, `ipv6`,
-  `regex`. Deleting an event type deletes its events; deleting the
-  organization deletes everything.
-
-Schemas and payloads are stored as JSON text (`JSONText`, MEDIUMTEXT), not
-MySQL's JSON type, which sorts object keys: the order of a schema's
-properties is the order people chose, and a payload's the order it was sent.
-
-Senders post each event's JSON body to
-`<FORGE_ADMIN_PUBLIC_URL>/hooks/events/<endpoint id>/<event type key>` with
-the token as `Authorization: Bearer <token>`, or `X-Forge-Token: <token>`
-for senders that can't set Authorization. `/hooks` sits outside `/api/v1`,
-needs no Forge user and never the API key, so a deployment can expose it
-alone. An `Idempotency-Key` header (up to 255 characters) makes retries safe:
-the same key for the same type answers with the event already kept.
-
-```sh
-curl -X POST "$ENDPOINT/incident.opened" \
-  -H "Authorization: Bearer $FORGE_EVENTS_TOKEN" -H 'Content-Type: application/json' \
-  -H "Idempotency-Key: INC-1042" -d '{"id": "INC-1042", "severity": "sev2"}'
-```
-
-| Answer | When |
-|---|---|
-| 202 | Kept, and it matches the schema: `{"id", "event_type", "status": "valid", "schema_version", "received_at"}` |
-| 200 | Already received with this `Idempotency-Key`: the event kept then, with `"duplicate": true` |
-| 422 | Kept, but it doesn't match: the same receipt with `"status": "invalid"` and its `errors` |
-| 400 | The body is empty or isn't JSON (NaN and Infinity aren't) |
-| 401 | No token, a wrong one, or no such endpoint (the same answer for both) |
-| 403 | The endpoint is turned off |
-| 404 / 409 | The organization has no event type with the key / it's a draft or paused |
-| 413 | The body is over `FORGE_ADMIN_EVENTS_MAX_BYTES` (256 KiB) |
-
-Nothing is kept for the refusals. Validation runs in a worker thread, so a
-large payload doesn't hold up other requests; the patterns in a schema are
-the organization's, and run on every payload of the type. Changes made
-through `/hooks` are audited as `endpoint:<endpoint id>`.
-
-**Events don't start workflows yet.** The endpoint stores and validates each
-event, and that's all: nothing starts a workflow run when an event arrives,
-whatever the workflows' Start steps say (see [Workflows](#workflows)).
-
-## Workflows
-
-An organization's workflows are the `forge.workflow/v1` documents its
-members build in the web console's workflow builder (steps, their
-connections and settings), saved as they're edited and shared by the whole
-organization. They're kept in MongoDB (`FORGE_ADMIN_MONGO_URI`, the
-`workflows` collection of `FORGE_ADMIN_MONGO_DATABASE`), one record per
-workflow; without a URI the routes answer 503, as they do while MongoDB
-doesn't answer within `FORGE_ADMIN_MONGO_TIMEOUT`. `workflows:manage` in the
-organization makes, saves and deletes them (`org:admin` and `org:member` by
-default, `site:admin` through `*:*`); `organizations:read` reads them.
-
-- **Scope:** each record carries its `organization_id`, and is only ever
-  read or changed through its organization: another organization's ID
-  answers 404. Deleting an organization removes its workflows, deleted ones
-  too.
-- **The document** is stored as sent, keys in order (JSON Schemas in it rely
-  on that), after the API sets its `id`, `organization_id`, `created_at` and
-  `updated_at`; a create's body takes only `document`. It must match
-  `src/forge_admin/workflow.schema.json`, the format's JSON Schema, generated
-  from the web's `src/lib/workflows/schema.ts` (`npm run
-  generate:workflow-schema` in `apps/forge-web`; its `npm run check` fails
-  when the copy here is out of date), and be at most
-  `FORGE_ADMIN_WORKFLOWS_MAX_BYTES` (1 MiB) of JSON; otherwise 422, naming
-  what's wrong. The schema requires every setting, so a setting a step kind
-  gains later is listed in `ADDED_SETTINGS` (`workflows.py`; the web's
-  `document.ts` has the same): a document saved before it gets its default
-  when it's saved again, e.g. an Agent step's `thinking_level`. The same
-  command writes `src/forge_admin/workflow.catalog.json`, each step kind's
-  settings, defaults, ways out and output, from the builder's model: the
-  assistant drafts workflows from it (`workflow_drafts.py`).
-- **Steps:** Start (`entry`), Agent, Approval, HTTP request, Transform,
-  Delay, Run workflow (`subworkflow`), If / else, Switch, Match, Loop, Merge
-  and End. Expressions in their settings are JSONata.
-- **Revisions:** a save names the `revision` it was made from and goes up by
-  one; a save from an older one answers 409, so two people's changes never
-  silently overwrite each other (the builder then offers the other version
-  or saving over it). Each record also keeps who saved it last, by name
-  (`updated_by_name`).
-- **IDs** are `wf_` and ten lowercase letters and digits, always made by the
-  API. Deleting marks the record deleted (`deleted_at`, `deleted_by`) and
-  keeps it out of every read; its ID is never used again.
-- **Indexes** are made on first use: an organization's workflows by
-  recency, and by the event types their Start steps name.
-
-**How runs start.** A Start step declares a `trigger`: `manual`, `event`
-(with the `event_types` it starts on) or `schedule` (with a `cron` and a
-`timezone`), and the API saves whichever it names. Only runs you start are
-implemented: nothing currently starts a run when an event arrives (the
-`/hooks` endpoint stores and validates events only) or on a schedule. A run
-starts in one of two ways:
-
-- `POST /organizations/{id}/workflows/{workflow_id}/runs`, by a person (or
-  the assistant, as them), whatever the Start step's trigger;
-- another run's **Run workflow** step, through the
-  [workflow service routes](#workflow-service-routes).
-
-### Running a workflow
-
-`POST /organizations/{id}/workflows/{workflow_id}/runs` with `{"input"}`
-needs `workflows:run` in the organization (`org:admin` and `org:member` by
-default). It checks the input against the Start step's `input_schema` (422
-with what doesn't fit, or when the workflow has no Start step) and submits
-the run to the async worker's `workflows` queue on
-`FORGE_ADMIN_EMBEDDING_REDIS_URL` (503 without it, or while Redis doesn't
-answer), answering 202 with `{"queue", "key", "workflow_id", "revision"}`.
-The run ([packages/python/tasks/workflows](../../packages/python/tasks/workflows/README.md)):
-
-- takes the workflow **as it's saved now**: later saves never change it;
-- **acts as the caller**: it records who started it (`trigger: {"type":
-  "manual", "by": <user>}`), and its Run workflow steps start other
-  workflows as them, checked again each time;
-- is one of the organization's **background tasks**, labelled with the
-  workflow, so `GET .../workflows/{workflow_id}/runs` lists a workflow's
-  runs, newest first, as the background tasks list does.
-
-### Background tasks
-
-The async worker ([apps/forge-async-worker](../forge-async-worker/README.md#background-tasks-api))
-tracks each workflow run as a background task of the organization it ran
-for: each attempt, its failures (type, message, stack trace, and whether
-it's retried automatically) and an audit trail. The admin relays the
-worker's background tasks API with `FORGE_ADMIN_ASYNC_WORKER_URL` and
-`_TOKEN`, and checks who may see and act: a task belongs to the organization
-its `tenant` label names, and every route about one task reads it first and
-answers 404 for another organization's. Answers are the worker API's own
-JSON.
-
-Anyone who can view the organization (`organizations:read`) can list and read
-its tasks. Acting on one needs `background_tasks:manage` in the
-organization, which `org:admin` has by default:
-
-| Route (below `/organizations/{id}/background-tasks/{task_id}`) | What |
-|---|---|
-| `POST /resubmit` | The same job, with the same input, as a new task; 202 with `{"queue", "key"}` of the job that will run it. Not while it's still running |
-| `POST /restart` | A failed or stopped task's next attempt, run by a worker, skipping what it finished; 202 with `{"queue", "key"}` |
-| `POST /abandon` | Give up on a failed or stopped task: no more attempts, automatic or not; the task, `ABANDONED` |
-
-A run waiting at an Approval step (`AWAITING_VALIDATION`, its `approval`
-naming the question and who decides) is decided here too, by whom the step
-names rather than by `background_tasks:manage`:
-
-| Route | Who | What |
-|---|---|---|
-| `POST /decisions` | `workflows:approve` for a step whose approvers are `org:admin` (and for anything else it names); `workflows:run` for one whose approvers are `org:member` | `{"request_id", "approved", "comment"}` (the comment up to 4,000 characters): the run carries on down the step's approved or rejected way, on a worker, with who decided and the comment for its later steps; 202 with `{"queue", "key"}`. 409 when that approval isn't open (someone decided it, or the run moved on) |
-
-The worker records who acted (the caller's ID and name) in the task's audit
-trail.
-
-| Answer | When |
-|---|---|
-| 403 | The caller lacks `organizations:read`, or the permission the action needs, in the organization |
-| 404 | Another organization's task, or none |
-| 409 | The task's status doesn't allow it, `detail` saying so |
-| 422 | A `task_type` or `exclude_task_type` other than lowercase letters, digits, `_` and `-` |
-| 502 | The worker refused Forge's token (`FORGE_ADMIN_ASYNC_WORKER_TOKEN` must equal its `HYBRID_API__TOKEN`), or answered unexpectedly |
-| 503 | Background tasks aren't set up, or the worker is unavailable |
-
-### Workflow service routes
-
-The async worker's workflows task holds no one's tokens: when a run's Run
-workflow step starts another workflow, it asks this API at
-`/internal/workflows/...` (outside the API prefix, never behind a user's
-token), with `FORGE_ADMIN_WORKFLOWS_TOKEN` (`FORGE_WORKFLOWS_TOKEN` in
-`.env.common`) as its bearer token; without the token set here, or with
-another, the routes answer 401. Every call names the organization and the
-member the run acts as, and the route checks the member still holds
-`workflows:run` there, so a member removed from the organization fails the
-run's next such step. Keep `/internal` off any public ingress; the routes
-are left out of `/docs`.
-
-| Route (below `/internal/workflows`) | What |
-|---|---|
-| `POST /workflows/{workflow_id}/runs` | Start another of the organization's workflows as the member: `{"organization_id", "user_id", "input", "parent", "depth"}`, where `parent` is the starting run and step and `depth` 1–20. The input is checked as for a person's run; the same step asking again is the same run. 202 with `{"queue", "key", "workflow_name"}` |
+Deleting an organization revokes the roles assigned in it; its agents are
+removed from MongoDB afterwards, and a failure there is only logged.
 
 ## Agents
 
 An organization's agents are the `forge.agent/v1` documents its members
 build in the web console's agent builder: Google ADK graphs of nodes (LLM
 agents with their sub-agents, sequential, parallel and loop agents,
-functions, routers, joins, human input, other saved agents) joined by edges
-and run from their start. They're kept like workflows, in the `agents`
-collection (`agent_documents.py`, sharing `document_store.py` with
-`workflows.py`), with the same scope, revisions, deletion and 503s; their
-IDs are `ag_` and ten lowercase letters and digits. `agents:manage` makes,
+other saved agents, human input, and Forge's own steps: approvals, HTTP
+requests, transforms, delays, If / Switch / Match, loops, merges and ends)
+joined by edges and run from their start. They're kept in the `agents`
+collection (`agent_documents.py`, on `document_store.py`), each found only
+through its organization: a save names the revision it was made from (409
+when someone saved it since), a deleted one stays out of every read, and the
+routes answer 503 while MongoDB isn't set up or answering. Their IDs are
+`ag_` and ten lowercase letters and digits. `agents:manage` makes,
 saves and deletes them (`org:admin` and `org:member` by default);
 `organizations:read` reads them.
 
@@ -581,9 +341,9 @@ schema is checked, so a draft that can't run yet is saved.
 `agent_build.build_agent(document, model=..., model_callbacks=...,
 resolve=...)` builds a document into one ADK `Workflow`, each node the ADK
 node its kind stands for and named by its name as a Python identifier (as the
-builder shows it). Functions and routers evaluate their JSONata over
-`{"input", "state"}`; a run's start hands on the person's message, its text
-parsed when it's JSON. It refuses what can't run (no start, clashing names, a
+builder shows it). Expressions are JSONata over what a node can read
+(`input`, `previous`, `steps.<id>.output`, `state`); a run's start hands on
+its input, its text parsed when it's JSON. It refuses what can't run (no start, clashing names, a
 missing or self-running saved agent, edges it can't follow) with an
 `AgentBuildError` naming the node. The async worker runs them: see
 [ADK workflow runs](#adk-workflow-runs-1).
@@ -593,11 +353,10 @@ missing or self-running saved agent, edges it can't follow) with an
 An organization's ADK workflows (its agents) run on the async worker's
 `adk_workflows` queue, as its ADK workflows task
 ([packages/python/tasks/adk-workflows](../../packages/python/tasks/adk-workflows/README.md))
-runs them on Google ADK's graph engine. They're kept apart from Forge
-workflows' runs: their own queue, task, labels, permissions and routes
-(`adk_runs.py`, `api/routes/adk_workflow_runs.py`). Only the background tasks
-are shared: a run is one of the organization's background tasks, its task
-type `adk_workflows`, read, resubmitted, restarted and abandoned there.
+runs them on Google ADK's graph engine (`adk_runs.py`,
+`api/routes/adk_workflow_runs.py`). A run is one of the organization's
+[background tasks](#background-tasks), its task type `adk_workflows`, read,
+resubmitted, restarted and abandoned there.
 
 **Starting one.** `POST /organizations/{id}/agents/{agent_id}/runs` with
 `{"input"}` needs `agents:run` (`org:admin` and `org:member` by default).
@@ -654,8 +413,7 @@ saved ADK workflow's own steps count for their node.
 **What it waits for.** A paused run waits at its background task's
 `approval`, whose `details` say what: `{"kind": "approval" | "human_input",
 "approvers"?, "expires_at"?, "response_schema"?, "step", "step_name",
-"workflow_name", "message"}`. Both are answered here, never at the
-background tasks' decisions route (409 there):
+"workflow_name", "message"}`. Both are answered here:
 
 | Route (below `/organizations/{id}/adk-runs/{task_id}`) | Who | What |
 |---|---|---|
@@ -665,6 +423,44 @@ background tasks' decisions route (409 there):
 Both answer 202 with the worker's `{"queue", "key"}`, 409 when the request
 isn't open any more (answered, or the run moved on), and 404 for a task
 that isn't one of the organization's ADK workflow runs.
+
+## Background tasks
+
+The async worker ([apps/forge-async-worker](../forge-async-worker/README.md#background-tasks-api))
+tracks each ADK workflow run as a background task of the organization it ran
+for: each attempt, its failures (type, message, stack trace, and whether
+it's retried automatically) and an audit trail. The admin relays the
+worker's background tasks API with `FORGE_ADMIN_ASYNC_WORKER_URL` and
+`_TOKEN`, and checks who may see and act: a task belongs to the organization
+its `tenant` label names, and every route about one task reads it first and
+answers 404 for another organization's. Answers are the worker API's own
+JSON.
+
+Anyone who can view the organization (`organizations:read`) can list and read
+its tasks. Acting on one needs `background_tasks:manage` in the
+organization, which `org:admin` has by default:
+
+| Route (below `/organizations/{id}/background-tasks/{task_id}`) | What |
+|---|---|
+| `POST /resubmit` | The same job, with the same input, as a new task; 202 with `{"queue", "key"}` of the job that will run it. Not while it's still running |
+| `POST /restart` | A failed or stopped task's next attempt, run by a worker, skipping what it finished; 202 with `{"queue", "key"}` |
+| `POST /abandon` | Give up on a failed or stopped task: no more attempts, automatic or not; the task, `ABANDONED` |
+
+A run waiting for a person (`AWAITING_VALIDATION`, its `approval` naming
+what it waits for) is answered at its own routes, with the ADK workflows'
+permissions: see [ADK workflow runs](#adk-workflow-runs-1).
+
+The worker records who acted (the caller's ID and name) in the task's audit
+trail.
+
+| Answer | When |
+|---|---|
+| 403 | The caller lacks `organizations:read`, or the permission the action needs, in the organization |
+| 404 | Another organization's task, or none |
+| 409 | The task's status doesn't allow it, `detail` saying so |
+| 422 | A `task_type` or `exclude_task_type` other than lowercase letters, digits, `_` and `-` |
+| 502 | The worker refused Forge's token (`FORGE_ADMIN_ASYNC_WORKER_TOKEN` must equal its `HYBRID_API__TOKEN`), or answered unexpectedly |
+| 503 | Background tasks aren't set up, or the worker is unavailable |
 
 ## The assistant
 
@@ -683,7 +479,7 @@ unchanged.
 
 The person talks with `forge`, a supervisor with no tools of its own. Each
 toolset (see [The assistant's toolsets](#the-assistants-toolsets)) is held by
-a specialist agent named after it (`workflows`, `events`, ...), and the
+a specialist agent named after it (`access`, `administration`), and the
 supervisor hands each request to the one whose part it is, then answers from
 its report. With a handful of tools each, the specialists pick the right one
 more reliably than one agent offered every tool.
@@ -709,7 +505,7 @@ more reliably than one agent offered every tool.
 curl -N localhost:8101/api/v1/agents/run_sse -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"appName": "forge", "userId": "<you>",
   "sessionId": "<id>", "streaming": true,
-  "newMessage": {"role": "user", "parts": [{"text": "What do our workflows do?"}]}}'
+  "newMessage": {"role": "user", "parts": [{"text": "What can I do here?"}]}}'
 # :ok
 # data: {"content":{"parts":[{"text":"Your","thought":true}],"role":"model"},"partial":true,...}
 # data: {"content":{"parts":[...the whole reply...]},"author":"forge",...}
@@ -758,8 +554,8 @@ answers every message by saying it isn't set up: set
 
 ### The assistant's models
 
-The assistant reads the same `model_provider.yaml` as workflows' Agent
-steps: one file, in [`packages/python/common`](../../packages/python/common/README.md#model-provider-configuration),
+The assistant reads the same `model_provider.yaml` as ADK workflows' LLM
+nodes: one file, in [`packages/python/common`](../../packages/python/common/README.md#model-provider-configuration),
 names the providers, their models and how to reach them, and
 `FORGE_ADMIN_MODEL_PROVIDER_CONFIG` names the file, e.g.
 `../../packages/python/common/src/forge_common/model_provider/model_provider.openai.yaml`
@@ -802,8 +598,8 @@ prompts suggested under a new conversation's composer depend on the screen
 the person is on, as `agents/screens.yaml` configures it (or the file
 `FORGE_ADMIN_AGENT_SCREENS` names). Each screen's `when` matches the page
 context the web console sends with every message: the router's `route`, its
-`search` parameters (e.g. `view: events`) and the kinds of record on screen
-(`entity: background_task`). Every screen that matches adds its `toolsets` (a
+`search` parameters (e.g. `view: config`) and the kinds of record on screen
+(`entity: organization`). Every screen that matches adds its `toolsets` (a
 toolset by name, or `{name, tools}` for some of its tools), `instructions`
 and `prompts` (at most six are suggested); `everywhere` applies on every
 screen.
@@ -850,15 +646,12 @@ results are cut down.
 
 | Toolset | Module | What the assistant can do |
 |---|---|---|
-| `workflows` | `workflow_tools.py` | Read an organization's workflows and their runs; run a workflow; list and decide the approvals runs wait at; read, resubmit, restart or abandon background tasks; build a workflow from a description: `get_workflow_building_blocks` (the format's rules, the step catalog `workflow.catalog.json`, the models Agent steps may run on and their thinking levels, from `GET /agents/apps/forge/models`, and the organization's event types), `check_workflow_draft` (`workflow_drafts.py`: the JSON Schema, the runner's own parse and expression compile, the builder's graph and settings checks, that Agent steps name models Forge offers and that Run workflow steps name the organization's workflows), then `create_workflow` or `save_workflow` |
-| `events` | `event_tools.py` | An organization's inbound endpoint (turning an existing one on or off), its event types and their schemas (define, change, delete), the events it received and why any were rejected, and checking sample payloads; never its token |
 | `access` | `access_tools.py` | The person's profile, organizations, memberships and access, and why something was refused; the roles there are and what each grants; finding people; a scope's members and someone's access; giving or removing roles (`members:update`) |
 | `administration` | `admin_tools.py` | Read, create and update organizations, role definitions, permission definitions and users; never deletes |
 
-Left out on purpose: deleting workflows (the builder does), the endpoint's
-token and turning the endpoint on for the first time (its token is only
-shown once, on the Events page), and deleting organizations, roles,
-permissions or users.
+No toolset reaches ADK workflows, their runs or agents yet; on those pages
+the assistant says so (`screens.yaml`'s `organization` screen). Left out on
+purpose: deleting organizations, roles, permissions or users.
 
 ## Sign-in and the local site administrator
 
@@ -917,7 +710,7 @@ make start            # or make up: web, admin, the async worker and their datab
                       # containers; admin on http://localhost:18201, web on 18190
 make admin-deps       # or: admin-mysql on 127.0.0.1:13326, and the shared MongoDB and Redis
 make admin            # then the API natively with reload on http://localhost:8101
-make async-worker     # the worker that runs workflow runs (the workflows queue)
+make async-worker     # the worker that runs ADK workflow runs (the adk_workflows queue)
 make async-worker-api # its background tasks API on http://localhost:8104: runs and approvals
 make up-all-local     # or all of it natively in one terminal; Ctrl-C stops the apps
 ```
@@ -939,7 +732,11 @@ tables (`organizations`, `users`, `authz_permissions`, `authz_roles`,
 once, so later edits made through the API are never reverted. `0002agents`
 adds `agents:manage` the same way, granted to `org:admin` and `org:member`;
 `0003adk_runs` adds `agents:run` (`org:admin`, `org:member`) and
-`agents:approve` (`org:admin`).
+`agents:approve` (`org:admin`). `0004adk_only` drops the inbound events'
+tables and the permissions only Forge workflows and events used
+(`events:manage`, `workflows:manage`, `workflows:run`, `workflows:approve`)
+with their grants, and rewords the default descriptions that named them
+where they're unchanged.
 
 Define models on `forge_admin.db.base.AuditBase` under `models/` and import
 them in `models/__init__.py`, then from `apps/forge-admin-api`:
@@ -970,7 +767,7 @@ included. Route code never sets them.
 The actor is set once per request by `authenticate` in `auth/security.py`: the
 signed-in user, else `api-key` when the API key was verified, `anonymous` when
 no key is configured, and `system` outside requests (migrations). The seed
-writes as `seed`, and `/hooks` as `endpoint:<endpoint id>`. Replacing a
+writes as `seed`. Replacing a
 role's permissions only inserts and deletes what changed, so a grant keeps
 the audit record of when it was first given. `tests/db/test_audit.py` fails
 for any new table that skips `AuditBase`.
@@ -981,16 +778,15 @@ Precedence, lowest to highest: defaults, `.env` in the working directory, the
 process environment. See `.env.example` for every setting.
 
 Values the admin shares with other apps (the MySQL connection, MongoDB,
-Redis, the service tokens, model keys) live once in the repository's
+Redis, the service token, model keys) live once in the repository's
 `.env.common`, and `.env` names each with a `${NAME}` reference, e.g.
-`FORGE_ADMIN_WORKFLOWS_TOKEN=${FORGE_WORKFLOWS_TOKEN}`
+`FORGE_ADMIN_ASYNC_WORKER_TOKEN=${FORGE_ASYNC_WORKER_TOKEN}`
 (`forge_admin.env_files`). A reference resolves to an earlier line of `.env`,
 otherwise to `.env.common`; a name defined in neither stops startup unless
 the process environment sets that variable. `.env.common` is read from
 `../../.env.common`, or `FORGE_ENV_COMMON_FILE` (empty disables it), and none
 of it reaches the settings unless `.env` references it. `make env` creates
-`.env.common` and generates its `FORGE_ASYNC_WORKER_TOKEN` and
-`FORGE_WORKFLOWS_TOKEN`.
+`.env.common` and generates its `FORGE_ASYNC_WORKER_TOKEN`.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -1003,19 +799,15 @@ of it reaches the settings unless `.env` references it. `make env` creates
 | `FORGE_ADMIN_JWT_ISSUER` / `_AUDIENCE` | unset | When set, tokens must carry this `iss` / `aud`, and minted ones do (`.env.example`: `forge-local` / `forge-admin`) |
 | `FORGE_ADMIN_LOCAL_USER_ID` | unset | Local development and tests only: the user of requests without a token |
 | `FORGE_ADMIN_SITE_ADMIN_ID` / `_FIRST_NAME` / `_LAST_NAME` / `_EMAIL` / `_MSID` | unset | The user `forge-admin-seed` adds with `site:admin` |
-| `FORGE_ADMIN_WEB_URL` | `http://localhost:5190` | The web console, for the assistant's links to a workflow's builder |
-| `FORGE_ADMIN_ASYNC_WORKER_URL` | unset | The async worker's background tasks API, scheme and host only (`http://127.0.0.1:8104` natively, as in `.env.example`); unset, background tasks and workflow run lists answer 503 |
+| `FORGE_ADMIN_WEB_URL` | `http://localhost:5190` | The web console, for links to its pages |
+| `FORGE_ADMIN_ASYNC_WORKER_URL` | unset | The async worker's background tasks API, scheme and host only (`http://127.0.0.1:8104` natively, as in `.env.example`); unset, background tasks and ADK workflow run lists answer 503 |
 | `FORGE_ADMIN_ASYNC_WORKER_TOKEN` | unset | Its bearer token, its `HYBRID_API__TOKEN`: `${FORGE_ASYNC_WORKER_TOKEN}` from `.env.common` |
 | `FORGE_ADMIN_ASYNC_WORKER_TIMEOUT` | `10` | Seconds a call to it may take |
-| `FORGE_ADMIN_EMBEDDING_REDIS_URL` | unset | The Redis the async worker's SAQ queues run on, where runs are submitted (`${FORGE_REDIS_URL}`); unset, starting a run answers 503 |
-| `FORGE_ADMIN_PUBLIC_URL` | unset | Where other systems reach this API, the base of the event endpoint URLs; unset, the address each request came in on |
-| `FORGE_ADMIN_EVENTS_MAX_BYTES` | `262144` | The largest event body an endpoint accepts (at most 16 MiB) |
-| `FORGE_ADMIN_MONGO_URI` | unset | MongoDB for organizations' workflows and agents (`${FORGE_MONGO_URI}`); unset, the workflow and agent routes answer 503 |
+| `FORGE_ADMIN_EMBEDDING_REDIS_URL` | unset | The Redis the async worker's SAQ queues run on, where ADK workflow runs are submitted (`${FORGE_REDIS_URL}`); unset, starting a run answers 503 |
+| `FORGE_ADMIN_MONGO_URI` | unset | MongoDB for organizations' agents (ADK workflows) (`${FORGE_MONGO_URI}`); unset, the agent routes answer 503 |
 | `FORGE_ADMIN_MONGO_DATABASE` | `forge_admin` | Its database |
 | `FORGE_ADMIN_MONGO_TIMEOUT` | `5` | Seconds to find a MongoDB server before a request answers 503 |
-| `FORGE_ADMIN_WORKFLOWS_MAX_BYTES` | `1048576` | The largest workflow document saved, in bytes of JSON |
 | `FORGE_ADMIN_AGENTS_MAX_BYTES` | `1048576` | The largest agent document saved, in bytes of JSON |
-| `FORGE_ADMIN_WORKFLOWS_TOKEN` | unset | What the async worker's workflows task calls the [workflow service routes](#workflow-service-routes) with (32+ characters), `${FORGE_WORKFLOWS_TOKEN}` from `.env.common`; unset, they answer 401 |
 | `FORGE_ADMIN_MODEL_PROVIDER_CONFIG` | unset | The shared `model_provider.yaml` the assistant's models come from (see [The assistant's models](#the-assistants-models)); unset, Gemini |
 | `FORGE_ADMIN_GOOGLE_API_KEY` | unset | Without a model provider configuration: the assistant's Gemini API key (`GOOGLE_API_KEY` or `GEMINI_API_KEY` also work), `${FORGE_GOOGLE_API_KEY}` from `.env.common`; unset, it says it isn't set up |
 | `FORGE_ADMIN_AGENT_MODEL` | the configuration's default, or `gemini-3.5-flash` | The model the assistant runs on until a conversation chooses: `provider/model`, or an id only one provider has |
@@ -1042,7 +834,7 @@ of it reaches the settings unless `.env` references it. `make env` creates
 ```sh
 make admin-check       # ruff lint, format check and the unit tests
 make admin-test-mysql  # starts admin-mysql (and the shared MongoDB and Redis), then the
-                       # tests marked mysql: migrations, readiness, routes, and workflows
+                       # tests marked mysql: migrations, readiness, routes, and agents
                        # against MongoDB (skipped without FORGE_ADMIN_MONGO_URI)
 make admin-fmt         # format and autofix the sources
 ```

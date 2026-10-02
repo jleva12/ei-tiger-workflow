@@ -114,7 +114,7 @@ function AssistantPanel({
       welcome={{
         title: "How can I help?",
         description: connected
-          ? "Ask about your organizations and their workflows, or have it help you build one."
+          ? "Ask about your organizations, their ADK workflows and agents, or have it help you build one."
           : "No agent is connected yet; send a message to see how to connect one.",
       }}
       composerContext={
