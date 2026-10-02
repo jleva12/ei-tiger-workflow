@@ -57,6 +57,9 @@ export function withViewTransition(change: () => void, after?: () => void) {
   else document.startViewTransition(run)
 }
 
+/** The details panel beside the canvas, for the toggle that shows and hides it. */
+export const DETAILS_PANEL_ID = "builder-details"
+
 /** A card in the step dialog: the step's settings, or the panel beside them. */
 export const DIALOG_CARD =
   "pointer-events-auto flex min-h-0 flex-col overflow-hidden rounded-(--radius-dialog) bg-popover text-popover-foreground shadow-xl ring-1 ring-foreground/5 outline-none dark:ring-foreground/10"

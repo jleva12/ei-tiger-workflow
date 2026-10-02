@@ -19,6 +19,7 @@ import { StepLibrary } from "@/components/builder/library"
 import { StepDialog } from "@/components/builder/step-dialog"
 import { BuilderUiContext } from "@/components/builder/ui"
 import {
+  DETAILS_PANEL_ID,
   downloadJson,
   measureFlow,
   useDetailsWidth,
@@ -325,7 +326,7 @@ function Builder({
   const navigate = useNavigate()
   const view = useAgentBuilder((s) => s.view)
   const name = useAgentBuilder((s) => s.meta.name)
-  // At narrow widths the details float over the canvas, when asked for.
+  // The details sit beside the canvas (over it when narrow), only when asked for.
   const details = useAgentBuilder((s) => s.details)
   const [importing, setImporting] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
@@ -503,9 +504,14 @@ function Builder({
         />
       </ShellToolbar>
 
-      {/* The panel is as wide as its viewer left it, up to half the builder. */}
+      {/* The panel is as wide as its viewer left it, up to half the builder;
+          tucked away (as it opens), the canvas has the whole width. */}
       <div
-        className="absolute inset-0 grid grid-cols-[minmax(0,1fr)_min(var(--details-width),50%)] @max-[900px]/shell:grid-cols-1"
+        className={cn(
+          "absolute inset-0 grid grid-cols-1",
+          details &&
+            "grid-cols-[minmax(0,1fr)_min(var(--details-width),50%)] @max-[900px]/shell:grid-cols-1"
+        )}
         style={
           { "--details-width": `${detailsWidth}rem` } as React.CSSProperties
         }
@@ -520,13 +526,14 @@ function Builder({
           <BuilderCanvas needsLayout={needsLayout} />
         </div>
         <aside
+          id={DETAILS_PANEL_ID}
           aria-label="ADK workflow details"
           inert={view === "json" || undefined}
           className={cn(
             "relative flex min-h-0 flex-col border-l bg-background",
             view === "json" && "invisible",
             "@max-[900px]/shell:absolute @max-[900px]/shell:top-3 @max-[900px]/shell:right-3 @max-[900px]/shell:bottom-3 @max-[900px]/shell:z-10 @max-[900px]/shell:w-[min(var(--details-width),calc(100%-1.5rem))] @max-[900px]/shell:rounded-(--radius-card) @max-[900px]/shell:border @max-[900px]/shell:shadow-(--shadow-float)",
-            !details && "@max-[900px]/shell:hidden"
+            !details && "hidden"
           )}
         >
           <DetailsResizer

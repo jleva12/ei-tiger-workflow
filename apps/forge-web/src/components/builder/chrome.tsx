@@ -1,5 +1,9 @@
 import * as React from "react"
-import { Redo02Icon, Undo02Icon } from "@hugeicons/core-free-icons"
+import {
+  Redo02Icon,
+  SidebarRightIcon,
+  Undo02Icon,
+} from "@hugeicons/core-free-icons"
 import { useReactFlow } from "@xyflow/react"
 import { cn } from "cn"
 
@@ -38,11 +42,12 @@ import {
   type FlowNode,
 } from "./store"
 import { useBuilderUi } from "./ui"
-import { measureFlow, useOpenStep } from "./utils"
+import { DETAILS_PANEL_ID, measureFlow, useOpenStep } from "./utils"
 
 /*
  * A builder's top bar and toolbar: where saving stands, what's left to
- * fix, the Canvas / JSON views, undo and redo, and Tidy up.
+ * fix, the Canvas / JSON views, undo and redo, Tidy up, and the details
+ * panel shown or tucked away.
  */
 
 export function BuilderToolbar({
@@ -105,14 +110,32 @@ export function BuilderToolbar({
           >
             Tidy up
           </ToolbarButton>
-          <ToolbarButton
-            icon="settings"
-            aria-pressed={details}
-            onClick={onDetails}
-            className="hidden @max-[900px]/shell:inline-flex"
-          >
-            Details
-          </ToolbarButton>
+          {/* The details panel, beside the canvas or (narrow) over it. Last,
+              so it sits at the panel's edge; kept where the toolbar would
+              drop its last control on a phone. */}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={details ? "Hide details" : "Show details"}
+                  aria-expanded={details}
+                  aria-controls={DETAILS_PANEL_ID}
+                  onClick={onDetails}
+                  className={cn(
+                    "text-muted-foreground hover:text-foreground @max-[600px]/shell:inline-flex!",
+                    details && "text-foreground"
+                  )}
+                />
+              }
+            >
+              <Icon icon={SidebarRightIcon} size={16} />
+            </TooltipTrigger>
+            <TooltipContent>
+              {details ? "Hide details" : "Show details"}
+            </TooltipContent>
+          </Tooltip>
         </ToolbarFilters>
       )}
     </ViewToolbar>

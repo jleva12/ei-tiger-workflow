@@ -73,6 +73,7 @@ export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
   const fitRequest = useBuilder((s) => s.fitRequest)
   const pending = useBuilder((s) => s.pending)
   const reveal = useBuilder((s) => s.reveal)
+  const details = useBuilder((s) => s.details)
   const flow = useReactFlow<FlowNode, FlowEdge>()
   const initialized = useNodesInitialized()
   const frame = React.useRef<HTMLDivElement>(null)
@@ -298,7 +299,9 @@ export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
             zoomable
             ariaLabel={`Map of the ${ui.nouns.doc}`}
             nodeBorderRadius={4}
-            style={{ width: 168, height: 108, marginBottom: 22 }}
+            // With the details tucked away, the assistant's launcher floats
+            // over this corner of the canvas: the map sits above it.
+            style={{ width: 168, height: 108, marginBottom: details ? 22 : 72 }}
           />
           {nodes.length === 0 && <EmptyCanvas text={ui.emptyCanvas} />}
         </ReactFlow>

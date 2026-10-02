@@ -112,7 +112,7 @@ export function StepLibrary({ organizationId }: { organizationId: string }) {
           >
             All {nouns.docs}
           </NavItem>
-          {/* This one; shows its details (floating over narrow builders). */}
+          {/* This one; opens its details panel. */}
           <NavItem
             icon={ui.docIcon}
             active

@@ -104,7 +104,7 @@ export type BuilderState<
    * clicked): its key, as `BuilderIssue.field`. Cleared once shown.
    */
   focusField: string | null
-  /** Whether the details show where they float over the canvas (narrow builders). */
+  /** Whether the details panel shows, beside the canvas (over it in narrow builders). Tucked away at first. */
   details: boolean
 
   setView: (view: BuilderView) => void
