@@ -13,10 +13,9 @@ requires = ["uv_build>=0.11.17,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-source-include = ["tests/**", "UPSTREAM.md", "upstream-manifest.json", "uv.lock"]
+source-include = ["tests/**", "UPSTREAM.md", "upstream-manifest.json"]
 
 [dependency-groups]
-dev = ["pytest>=9.1.1", "pytest-asyncio>=1.2", "pytest-timeout>=2.3", "ruff>=0.16.9"]
 # Tests the optional regex-engine hook; never a runtime dependency.
 re2 = ["google-re2>=1.1.20251105"]
 

@@ -21,6 +21,7 @@ Needs the ``logging`` extra, ``forge-common[logging]``.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from typing import Any, Literal
 
@@ -42,6 +43,11 @@ class LoggingSettings(BaseModel):
     # None picks by where the output goes: "console" on a terminal, "json"
     # everywhere else (containers, pipes, files).
     format: Literal["json", "console"] | None = None
+    # Colors in the console format. None picks: off when NO_COLOR is set, on
+    # when FORCE_COLOR is set or the output is a terminal. Set it to color
+    # output that is piped to a viewer that shows colors (an IDE's or the
+    # Claude app's run panel, make up-all-local's prefixed lines).
+    colors: bool | None = None
     access_log: bool = True
     # Paths excluded from access logs (health probes are noisy).
     access_log_exclude_paths: list[str] = ["/health", "/health/live", "/health/ready"]
@@ -71,6 +77,14 @@ class LoggingSettings(BaseModel):
         if self.format:
             return self.format
         return "console" if sys.stdout.isatty() else "json"
+
+    @property
+    def resolved_colors(self) -> bool:
+        if self.colors is not None:
+            return self.colors
+        if os.environ.get("NO_COLOR"):
+            return False
+        return bool(os.environ.get("FORCE_COLOR")) or sys.stdout.isatty()
 
 
 def configure_logging(settings: LoggingSettings) -> None:
@@ -115,7 +129,7 @@ def configure_logging(settings: LoggingSettings) -> None:
     if json_logs:
         final += [structlog.processors.dict_tracebacks, structlog.processors.JSONRenderer()]
     else:
-        final.append(structlog.dev.ConsoleRenderer(colors=sys.stdout.isatty()))
+        final.append(structlog.dev.ConsoleRenderer(colors=settings.resolved_colors))
 
     formatter = structlog.stdlib.ProcessorFormatter(
         foreign_pre_chain=foreign_pre_chain, processors=final

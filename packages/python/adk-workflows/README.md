@@ -123,11 +123,11 @@ its `.env.example`), read into `config.AdkWorkflowsSettings`:
 
 ## Tests
 
-They run in the worker's environment (`make async-worker-check` runs them with
-lint, format and type checks):
+They run in the workspace's environment (`make async-worker-check` runs them
+with lint, format and type checks):
 
 ```bash
-uv run --project ../../../apps/forge-async-worker pytest
+uv run pytest
 ```
 
 `tests/test_task.py` runs the job as the worker does, with ADK's

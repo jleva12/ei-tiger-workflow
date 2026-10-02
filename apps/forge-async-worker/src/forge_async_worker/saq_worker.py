@@ -63,27 +63,76 @@ class WorkerState:
 
 
 async def run_adk(ctx: dict[str, Any], *, run_id: str) -> dict[str, Any]:
-    """Run (or carry on) an ADK workflow run."""
+    """
+    Executes an asynchronous ADK (Application Development Kit) job run based on the given
+    context and run identifier. This function interacts with a stateful worker to perform the
+    job execution and returns the job results after completion.
+
+    :param ctx: A dictionary representing the context of the job execution. The context
+        contains various key-value pairs required for job execution. For example, it includes
+        application-specific state information and optionally a "job" key that specifies job
+        configurations or details.
+    :type ctx: dict[str, Any]
+    :param run_id: A string representing the identifier for the specific job run. This is
+        used to uniquely identify the job execution request.
+    :return: A dictionary containing the result of the ADK job execution. The result may
+        include information such as the status, output, performance metrics, and any additional
+        data generated during the job execution.
+    :rtype: dict[str, Any]
+    """
     state: WorkerState = ctx[CONTEXT_KEY]
     return await state.jobs.run_adk(run_id, job=ctx.get("job"))
 
 
 async def expire_pause(ctx: dict[str, Any], *, run_id: str, pause_id: str) -> dict[str, Any]:
-    """A run's pause reached its deadline."""
+    """
+    Expire a pause associated with a specific job run. This function interacts with the
+    worker state and updates the job's pause status, expiring the pause identified by
+    the given pause ID. The context provided must include the necessary state to perform
+    this operation.
+
+    :param ctx: A dictionary representing the context, containing the worker state.
+    :type ctx: dict[str, Any]
+    :param run_id: The unique identifier of the job run associated with the pause.
+    :param pause_id: The unique identifier of the pause to be expired.
+    :return: A dictionary with the result of the pause expiration operation.
+    :rtype: dict[str, Any]
+    """
     state: WorkerState = ctx[CONTEXT_KEY]
     return await state.jobs.expire_pause(run_id, pause_id)
 
 
 async def maintain(ctx: dict[str, Any]) -> dict[str, Any]:
-    """The runs' upkeep, every minute, once however many workers serve the queue."""
+    """
+    Perform maintenance tasks associated with the given context.
+
+    This function retrieves the worker state from the context and executes the
+    maintain operation on the associated jobs. The purpose of this function is
+    to handle periodic maintenance tasks efficiently, utilizing the underlying
+    job state of the worker.
+
+    :param ctx: The context dictionary containing necessary data, including
+                the worker state.
+    :type ctx: dict[str, Any]
+    :return: The result of the maintain operation, representing the outcome of
+             the tasks performed.
+    :rtype: dict[str, Any]
+    """
     state: WorkerState = ctx[CONTEXT_KEY]
     return await state.jobs.maintain()
 
 
 async def _own_policy(ctx: dict[str, Any]) -> None:
-    """Before each job: a job another service enqueued may carry SAQ's
-    defaults (a 10 second timeout, no heartbeat); it runs under the worker's
-    settings for its function instead."""
+    """
+    Determine and apply the specified policy configuration differences for a job within
+    the provided context. The function retrieves the intended options for the job's
+    function and compares them with the current job's attributes. If there are any
+    discrepancies, the job will be updated to match the desired policy.
+
+    :param ctx: The context dictionary containing a "job" key which holds the job object.
+    :type ctx: dict[str, Any]
+    :return: None
+    """
     job = ctx["job"]
     wanted = JOB_OPTIONS.get(job.function, {})
     differs = {name: value for name, value in wanted.items() if getattr(job, name) != value}
@@ -92,8 +141,14 @@ async def _own_policy(ctx: dict[str, Any]) -> None:
 
 
 class _NoFollowUps:
-    """The runtime's queue: an ADK workflow run hands no jobs on, and this
-    worker has no queue for them."""
+    """
+    Handles job queuing as part of a system that processes ADK workflow runs.
+
+    This class is designed to enforce restrictions on job queuing, specifically
+    disallowing follow-up job submissions. It is intended for use in workflows
+    focused on ADK processing and prohibits any kind of dependent task queuing.
+
+    """
 
     async def enqueue(self, spec: JobSpec, *, countdown: float | None = None) -> None:
         raise RuntimeError(f"{spec.label()}: this worker runs ADK workflow runs only; it can't queue follow-ups")

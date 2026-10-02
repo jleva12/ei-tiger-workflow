@@ -49,8 +49,6 @@ export type BuilderUi = {
   Fields: React.ComponentType<{ id: string; step: BaseStep }>
   /** Its Fields show the step's name themselves, so the dialog doesn't. */
   ownsName?: boolean
-  /** Its steps' cards lift off the canvas with a shadow, not only when picked up. */
-  raisedSteps?: boolean
   /**
    * Library groups whose kinds wear a tinted glyph tile, so a step's kind
    * reads at a glance. Agent orbs, the ends and a person's steps keep theirs.

@@ -113,8 +113,6 @@ export const AGENT_UI: BuilderUi = {
   Fields: AgentFields as BuilderUi["Fields"],
   // A sub-agent's settings open in place of the node's, its own name with them.
   ownsName: true,
-  // Its graphs run large: each node stands off the dot grid.
-  raisedSteps: true,
   // The library's groups, readable on the canvas: People and the ends keep their own looks.
   kindTones: { agents: "agent", actions: "action", logic: "logic" },
   kindLabels: true,

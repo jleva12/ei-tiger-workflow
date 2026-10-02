@@ -42,17 +42,6 @@ forge-admin-token = "forge_admin.cli.token:main"
 requires = ["uv_build>=0.11.17,<0.12.0"]
 build-backend = "uv_build"
 
-[tool.uv.sources]
-forge-common = { path = "../../packages/python/common", editable = true }
-forge-task-adk-workflows = { path = "../../packages/python/adk-workflows", editable = true }
-forge-tasks = { path = "../../packages/python/task-sdk", editable = true }
-
-[dependency-groups]
-dev = [
-    "pytest>=9.1.1",
-    "ruff>=0.16.9",
-]
-
 [tool.ruff]
 line-length = 88
 target-version = "py313"

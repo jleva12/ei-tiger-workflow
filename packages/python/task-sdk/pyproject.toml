@@ -14,8 +14,7 @@ dependencies = [
 requires = ["uv_build>=0.11.17,<0.12.0"]
 build-backend = "uv_build"
 
-# Tests run in the worker app's environment, which installs every task package:
-# make async-worker-check, or from here: uv run --project ../../../apps/forge-async-worker pytest
+# Tests run in the workspace environment: make async-worker-check, or uv run pytest here.
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

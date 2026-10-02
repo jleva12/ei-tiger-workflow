@@ -5,21 +5,22 @@ UV ?= uv
 # variables to a container by itself.
 COMPOSE = $(DOCKER) compose --env-file .env.compose --env-file .env.common -f compose.yaml
 SERVICES := web admin async-worker-adk-workflows
-# Each app owns its dependencies: package.json and node_modules, or
-# pyproject.toml, uv.lock and .venv.
+# The web apps each own package.json and node_modules; the Python apps and
+# packages are one uv workspace, with one uv.lock and .venv at the root
+# (pyproject.toml lists its members).
 WEB_DIR := apps/forge-web
 ADMIN_DIR := apps/forge-admin-api
 ASYNC_WORKER_DIR := apps/forge-async-worker
-# The task packages the async worker bundles: checked, and tested, in its environment.
+# The task packages the async worker bundles: checked and tested with it.
 TASK_PACKAGES := $(addprefix packages/python/,task-sdk adk-workflows)
-# Python packages the apps share, each with its own environment.
+# Python packages the apps share.
 COMMON_DIR := packages/python/common
 JSONATA_DIR := packages/python/jsonata
 # The Forge UI design system: its demo and the shadcn registry apps install from.
 FORGE_UI_DIR := packages/forge-ui
 # The apps make up-all-local runs natively, each with its own make target.
 LOCAL_APPS := web admin async-worker
-.PHONY: help env install infrastructure start up up-all-local up-all-local-deps down logs logs-web logs-admin logs-async-worker status restart docker-build check
+.PHONY: help env install python-install infrastructure start up up-all-local up-all-local-deps down logs logs-web logs-admin logs-async-worker status restart docker-build check
 .PHONY: web web-install web-check web-test web-build web-lint web-token
 .PHONY: admin admin-install admin-deps admin-migrate admin-check admin-test-mysql admin-fmt
 .PHONY: async-worker async-worker-install async-worker-deps async-worker-check async-worker-fmt async-worker-test-redis
@@ -35,7 +36,7 @@ append = { [ -z "$$(tail -c1 $(2))" ] || echo >> $(2); echo "$(1)" >> $(2); }
 .DEFAULT_GOAL := help
 
 help:
-	@echo "make install            Install every app's, and Forge UI's, dependencies from its own lockfile"
+	@echo "make install            Install the web apps' and Forge UI's npm dependencies, and the Python workspace into .venv"
 	@echo "make infrastructure     Start admin MySQL, migrate (default roles) and seed you as the site admin user"
 	@echo "make shared-deps        Start the shared MongoDB and Redis"
 	@echo "make infrastructure-check Validate the Compose stack: shared services, connections and queues"
@@ -84,7 +85,12 @@ env:
 	  else $(call append,FORGE_ADMIN_JWT_SECRET=$$secret,$(ADMIN_DIR)/.env); fi; \
 	  echo "Generated FORGE_ADMIN_JWT_SECRET in $(ADMIN_DIR)/.env"; }
 
-install: web-install admin-install async-worker-install forge-ui-install
+install: web-install python-install forge-ui-install
+
+# Every Python app and package, and the tools their checks run, into the
+# workspace's .venv at the root.
+python-install:
+	$(UV) sync --locked --all-packages
 
 # MySQL, the schema and you as the site administrator (the
 # FORGE_ADMIN_SITE_ADMIN_* settings in apps/forge-admin-api/.env), for development and
@@ -177,8 +183,7 @@ web-build:
 web-lint:
 	cd $(WEB_DIR) && $(NPM) run lint
 
-admin-install:
-	cd $(ADMIN_DIR) && $(UV) sync --locked
+admin-install: python-install
 
 shared-deps: env
 	$(COMPOSE) up -d --wait mongo redis
@@ -204,8 +209,7 @@ admin-test-mysql: admin-deps
 admin-fmt:
 	cd $(ADMIN_DIR) && $(UV) run ruff check --fix . && $(UV) run ruff format .
 
-async-worker-install:
-	cd $(ASYNC_WORKER_DIR) && $(UV) sync --locked
+async-worker-install: python-install
 
 # Redis for the SAQ queue, and the admin MySQL for the runs (the run store,
 # which make admin-migrate creates) and their ADK sessions.
@@ -218,22 +222,19 @@ async-worker-deps: env
 async-worker: async-worker-deps
 	cd $(ASYNC_WORKER_DIR) && $(UV) run forge-async-worker worker --ensure-schema
 
-# The worker, then each task package in the worker's environment.
+# The worker, then each task package it bundles.
 async-worker-check:
 	cd $(ASYNC_WORKER_DIR) && $(UV) run ruff check . && $(UV) run ruff format --check . && $(UV) run mypy src && $(UV) run pytest
 	@for dir in $(TASK_PACKAGES); do \
 	  echo "== $$dir"; \
-	  (cd $$dir && $(UV) run --project $(CURDIR)/$(ASYNC_WORKER_DIR) ruff check . \
-	    && $(UV) run --project $(CURDIR)/$(ASYNC_WORKER_DIR) ruff format --check . \
-	    && $(UV) run --project $(CURDIR)/$(ASYNC_WORKER_DIR) mypy src \
-	    && $(UV) run --project $(CURDIR)/$(ASYNC_WORKER_DIR) pytest) || exit 1; \
+	  (cd $$dir && $(UV) run ruff check . && $(UV) run ruff format --check . \
+	    && $(UV) run mypy src && $(UV) run pytest) || exit 1; \
 	done
 
 async-worker-fmt:
 	cd $(ASYNC_WORKER_DIR) && $(UV) run ruff check --fix . && $(UV) run ruff format .
 	@for dir in $(TASK_PACKAGES); do \
-	  (cd $$dir && $(UV) run --project $(CURDIR)/$(ASYNC_WORKER_DIR) ruff check --fix . \
-	    && $(UV) run --project $(CURDIR)/$(ASYNC_WORKER_DIR) ruff format .) || exit 1; \
+	  (cd $$dir && $(UV) run ruff check --fix . && $(UV) run ruff format .) || exit 1; \
 	done
 
 # The SAQ worker on a real Redis, in redis database 15, which the

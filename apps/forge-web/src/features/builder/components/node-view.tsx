@@ -83,11 +83,7 @@ export const FlowNodeView = React.memo(function FlowNodeView({
         "w-[15rem] rounded-(--radius-card) border bg-background text-foreground transition-[border-color,box-shadow] duration-150",
         info.person && "border-notice-border bg-notice-surface",
         selected && "border-foreground/45",
-        dragging
-          ? "shadow-(--shadow-float)"
-          : ui.raisedSteps
-            ? "shadow-(--shadow-node)"
-            : selected && "shadow-(--shadow-raised)"
+        dragging ? "shadow-(--shadow-float)" : "shadow-(--shadow-node)"
       )}
     >
       <div className="relative flex items-center gap-2.5 px-3 py-2.5">

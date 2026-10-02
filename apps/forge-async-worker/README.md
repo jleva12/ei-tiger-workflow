@@ -36,7 +36,7 @@ tests/                    the jobs on a SQLite run store with a stand-in task (t
 Dockerfile                uv-built image with the ADK workflows task and what its prepare() downloads
 compose.yaml              async-worker-adk-workflows
 .env.example              settings template; make env copies it to .env
-pyproject.toml, uv.lock   dependencies and the lockfile
+pyproject.toml            dependencies (a member of the root uv workspace, whose uv.lock and .venv it uses)
 ```
 
 ## The jobs
@@ -125,7 +125,7 @@ session tables and says when the run store's aren't there yet.
 From the repository root:
 
 ```sh
-make async-worker-install     # uv sync --locked: the app, the task packages and the dev tools
+make async-worker-install     # uv sync --locked --all-packages: the whole Python workspace and its dev tools, in the root .venv
 make async-worker-check       # ruff, format check, mypy and pytest: the app, then each task package; no services needed
 make async-worker-deps        # redis (127.0.0.1:16389) and admin-mysql (127.0.0.1:13326)
 make async-worker             # the worker natively, after ensure-schema

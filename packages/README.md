@@ -3,10 +3,11 @@
 Shared Python libraries used by the applications in `apps/`: the admin API
 (`apps/forge-admin-api`) and the async worker (`apps/forge-async-worker`);
 and the Forge UI design system the web console's components come from
-(`forge-ui/`, below them). Each Python library is a uv project with a `src/` layout. An app depends on one with a path
-source in its `pyproject.toml`
-(`[tool.uv.sources] name = { path = "../../packages/python/<name>", editable = true }`)
-and its Dockerfile copies the package directory before `uv sync`.
+(`forge-ui/`, below them). Each Python library is a `src/`-layout member of the
+uv workspace in the root `pyproject.toml`, which also lists it in
+`[tool.uv.sources]` (`name = { workspace = true }`), so an app depends on it by
+name. Every member shares the root's `uv.lock` and `.venv`, and an app's
+Dockerfile copies the package directory before `uv sync --package <app>`.
 
 - [`python/common/`](python/common/README.md) (`forge-common`,
   `forge_common`) holds code any Python codebase may share, each subpackage
@@ -38,7 +39,7 @@ and its Dockerfile copies the package directory before `uv sync`.
   in the admin MySQL), which the admin API starts, lists and acts on and the
   worker runs. The admin API depends on it too, for the run store, to build
   a document before a run and to read a run's steps from its session. Its
-  tests, and task-sdk's, run in the worker's environment
+  tests, and task-sdk's, run with the worker's checks
   (`make async-worker-check`).
 
 [`forge-ui/`](forge-ui/README.md) is the Forge UI design system: shadcn

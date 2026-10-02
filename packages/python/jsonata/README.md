@@ -25,14 +25,12 @@ result = expression.evaluate(
 assert result == "Apple"
 ```
 
-An app in `apps/<name>` can depend on this local package using uv:
+It is a member of the root uv workspace, so an app in `apps/<name>` depends on
+it by name:
 
 ```toml
 [project]
 dependencies = ["forge-jsonata"]
-
-[tool.uv.sources]
-forge-jsonata = { path = "../../packages/python/jsonata", editable = true }
 ```
 
 Copy the package into the Docker build context before running `uv sync`, as for
@@ -80,7 +78,6 @@ make jsonata-test-re2
 Or from this directory:
 
 ```sh
-uv sync --locked
 uv run --locked pytest
 uv run --locked --group re2 pytest tests/upstream/re2_engine_test.py
 uv build

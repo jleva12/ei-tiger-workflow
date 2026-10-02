@@ -51,6 +51,36 @@ def test_format_follows_the_terminal_unless_set(monkeypatch: pytest.MonkeyPatch)
     assert LoggingSettings(format="json").resolved_format == "json"
 
 
+def test_colors_follow_the_terminal_and_color_variables_unless_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    assert LoggingSettings().resolved_colors is False
+    assert LoggingSettings(colors=True).resolved_colors is True
+
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    assert LoggingSettings().resolved_colors is True
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert LoggingSettings().resolved_colors is False
+    assert LoggingSettings(colors=True).resolved_colors is True
+
+
+def test_console_colors_can_be_forced_when_piped(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    configure_logging(LoggingSettings(format="console", colors=True))
+    get_logger("forge.test").info("order.created", order_id=7)
+    assert "\x1b[" in capsys.readouterr().out
+
+    configure_logging(LoggingSettings(format="console", colors=False))
+    get_logger("forge.test").info("order.created", order_id=7)
+    assert "\x1b[" not in capsys.readouterr().out
+
+
 def test_json_lines_for_structlog_and_stdlib_loggers(capsys: pytest.CaptureFixture[str]) -> None:
     configure_logging(LoggingSettings(format="json"))
     structlog.contextvars.bind_contextvars(request_id="r-1")

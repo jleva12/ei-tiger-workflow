@@ -13,9 +13,11 @@ agents in the browser, and nothing runs them yet. An AI assistant on every
 page helps with access and administration.
 
 Deployable applications live under `apps/`, shared libraries under
-`packages/`. Each application owns its dependencies (`package.json` and
-`node_modules`, or `pyproject.toml`, `uv.lock` and `.venv`); the root only
-orchestrates them with one Compose stack and one Makefile.
+`packages/`. The web console owns its `package.json` and `node_modules`. The
+Python apps and packages are one [uv workspace](https://docs.astral.sh/uv/concepts/projects/workspaces/):
+each keeps its own `pyproject.toml`, and they share one `uv.lock` and one
+`.venv` at the root. The root orchestrates them all with one Compose stack and
+one Makefile.
 
 ## Where things are
 
@@ -133,7 +135,7 @@ make down              # MySQL, MongoDB and Redis data persist in volumes
 For native development, install once and run each app with reload:
 
 ```sh
-make install           # npm ci in apps/forge-web, uv sync in apps/forge-admin-api and apps/forge-async-worker
+make install           # npm ci in apps/forge-web and packages/forge-ui; uv sync --all-packages into the root .venv
 make web               # Vite dev server on http://localhost:5190
 make admin-deps        # admin-mysql, and the shared mongo and redis
 make admin             # admin API on http://localhost:8101; docs at /docs
@@ -207,8 +209,7 @@ apps/
     compose.yaml          The admin service, its admin-mysql database and the admin-seed tool
     alembic.ini           Alembic CLI settings for creating and applying revisions
     .env.example          Service settings template
-    pyproject.toml        The app's dependencies and tool settings
-    uv.lock               The app's lockfile; .venv is installed beside it
+    pyproject.toml        The app's dependencies and tool settings (a workspace member)
   forge-async-worker/     forge-async-worker: runs ADK workflow runs off the adk_workflows SAQ queue on Redis, kept in the run store
     src/forge_async_worker/  saq_worker.py (run_adk, expire_pause, the maintain cron, graceful stop, health check), jobs.py
                           (what each job does to a run), control.py (a run's JobControl on the run store), queue.py, cli.py
@@ -216,8 +217,7 @@ apps/
     Dockerfile            uv-built worker image with the ADK workflows task, built from the repository root
     compose.yaml          async-worker-adk-workflows
     .env.example          Worker and task settings template
-    pyproject.toml        The app's dependencies (the ADK workflows task among them) and tool settings
-    uv.lock               The app's lockfile; .venv is installed beside it
+    pyproject.toml        The app's dependencies (the ADK workflows task among them) and tool settings (a workspace member)
 packages/                 Shared Python libraries and the Forge UI design system (see packages/README.md)
   forge-ui/               Forge UI: shadcn primitives, Forge composites, theme and libraries, a demo app, and the
                           shadcn registry apps install them from (registry.json, public/r)
@@ -235,19 +235,24 @@ compose.infrastructure.yaml  The shared MongoDB and Redis
 .env.compose.example      Root Compose settings template
 .env.common.example       Settings several apps share, which each app's .env references
 Makefile                  Checks and local development commands for every app
+pyproject.toml            The uv workspace: its members (every Python app and package) and the tools their checks run
+uv.lock, .python-version  The workspace's one lockfile and Python version; .venv is installed beside them
 PRODUCT.md, DESIGN.md     Product context and the design system, for people and design agents
 ```
 
-Each application is self-contained: its own dependency manifest and
-lockfile, `Dockerfile`, `compose.yaml`, `.env.example` and README. There is no
-root `package.json`, `node_modules` or virtual environment. Dockerfiles use
-the repository root as their build context so they can also copy shared
-packages. Dependencies flow from `apps/` to `packages/`; packages never import
+Each application is self-contained: its own dependency manifest,
+`Dockerfile`, `compose.yaml`, `.env.example` and README. The web console has
+its own lockfile; the Python apps share the workspace's `uv.lock`, and each
+image installs only its own app's dependencies from it (`uv sync --package`).
+There is no root `package.json` or `node_modules`. Dockerfiles use the
+repository root as their build context so they can also copy the workspace
+and the shared packages. Dependencies flow from `apps/` to `packages/`; packages never import
 application code, and no application imports another.
 
 To add an application, create `apps/<name>/` with the same files, include its
 `compose.yaml` in the root `compose.yaml`, and add it to `SERVICES` and the
-install and check targets in the `Makefile`.
+install and check targets in the `Makefile`; a Python app also joins the
+workspace's `members` in the root `pyproject.toml`.
 
 Run `make` from the repository root. Run `npm` or `uv` inside the app it
 belongs to, for example `cd apps/forge-web && npm install <pkg>` or

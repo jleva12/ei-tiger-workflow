@@ -27,20 +27,9 @@ logging = ["pydantic>=2.11", "starlette>=0.46", "structlog>=26.1.0"]
 requires = ["uv_build>=0.11.17,<0.12.0"]
 build-backend = "uv_build"
 
+# Every extra's libraries, for the tests (the tools are the workspace root's).
 [dependency-groups]
-dev = [
-    "google-adk>=2.9.2",
-    "httpx>=0.28",
-    "litellm>=1.83",
-    "mypy>=1.18",
-    "pytest>=9.1.1",
-    "pytest-asyncio>=1.2",
-    "pyyaml>=6.0",
-    "ruff>=0.16.9",
-    "starlette>=0.46",
-    "structlog>=26.1.0",
-    "types-pyyaml>=6.0",
-]
+dev = ["forge-common[adk,adk-models,logging]"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

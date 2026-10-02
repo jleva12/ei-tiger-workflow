@@ -240,6 +240,6 @@ carrying the request id.
 ## Checks
 
 ```sh
-make common-check    # ruff, format check, mypy and pytest, in this package's own .venv
+make common-check    # ruff, format check, mypy and pytest, in the workspace's .venv
 make common-fmt
 ```

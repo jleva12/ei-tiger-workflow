@@ -1,0 +1,37 @@
+# One uv workspace for every Python app and package: one lockfile (uv.lock)
+# and one environment (.venv), both here at the root. Each member keeps its own
+# pyproject.toml, dependencies and tool settings; an app's Docker image installs
+# only its own dependencies (uv sync --package <name>).
+#
+#   uv sync --all-packages          # or make install
+#   cd apps/forge-admin-api && uv run forge-admin
+[tool.uv.workspace]
+members = [
+    "apps/forge-admin-api",
+    "apps/forge-async-worker",
+    "packages/python/adk-workflows",
+    "packages/python/common",
+    "packages/python/jsonata",
+    "packages/python/task-sdk",
+]
+
+# Members depend on each other by name; these resolve them to the members.
+[tool.uv.sources]
+forge-common = { workspace = true }
+forge-jsonata = { workspace = true }
+forge-task-adk-workflows = { workspace = true }
+forge-tasks = { workspace = true }
+
+# The tools every member's checks run (make admin-check, async-worker-check,
+# common-check, jsonata-check), installed once for all of them.
+[dependency-groups]
+dev = [
+    "aiosqlite>=0.20",
+    "httpx>=0.28",
+    "mypy>=1.18",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.2",
+    "pytest-timeout>=2.3",
+    "ruff>=0.16.9",
+    "types-pyyaml>=6.0",
+]
