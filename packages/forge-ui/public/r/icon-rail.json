@@ -1,0 +1,27 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "icon-rail",
+  "title": "Icon rail",
+  "description": "The 56px icon rail with tooltip shortcuts.",
+  "dependencies": [
+    "@base-ui/react@^1.8.0",
+    "class-variance-authority@^0.7.1",
+    "cn@^0.4.0",
+    "@hugeicons/react@^1.1.10",
+    "@hugeicons/core-free-icons@^4.3.5"
+  ],
+  "registryDependencies": [
+    "@forge-ui/button",
+    "@forge-ui/tooltip",
+    "@forge-ui/icon"
+  ],
+  "files": [
+    {
+      "path": "src/components/forge/icon-rail.tsx",
+      "content": "import * as React from \"react\"\nimport { cn } from \"cn\"\n\nimport { Button } from \"@/components/ui/button\"\nimport {\n  Tooltip,\n  TooltipContent,\n  TooltipTrigger,\n} from \"@/components/ui/tooltip\"\nimport { Icon } from \"./icon\"\nimport type { IconProp } from \"./icons\"\n\n/** The narrow far-left column of icon shortcuts. Hidden below 600px. */\nfunction IconRail({\n  className,\n  \"aria-label\": ariaLabel = \"Quick navigation\",\n  ...props\n}: React.ComponentProps<\"aside\">) {\n  return (\n    <aside\n      data-slot=\"icon-rail\"\n      aria-label={ariaLabel}\n      className={cn(\n        \"z-20 flex w-14 shrink-0 flex-col items-center border-r bg-background px-2.5 pb-[18px] @max-[1270px]/shell:w-[50px] @max-[600px]/shell:hidden @min-[1700px]/shell:w-[58px]\",\n        className\n      )}\n      {...props}\n    />\n  )\n}\n\n/** The product mark at the top of the rail. */\nfunction AppMark({\n  icon = \"layers\",\n  className,\n  children,\n  ...props\n}: React.ComponentProps<\"button\"> & { icon?: IconProp }) {\n  return (\n    <button\n      type=\"button\"\n      data-slot=\"app-mark\"\n      className={cn(\n        \"mb-3.5 flex h-[58px] items-center justify-center text-foreground @min-[1700px]/shell:h-[61px]\",\n        className\n      )}\n      {...props}\n    >\n      {children ?? <Icon icon={icon} size={26} />}\n    </button>\n  )\n}\n\nfunction RailNav({ className, ...props }: React.ComponentProps<\"nav\">) {\n  return (\n    <nav\n      data-slot=\"rail-nav\"\n      className={cn(\n        \"flex flex-col items-center gap-2.5 text-rail-foreground\",\n        className\n      )}\n      {...props}\n    />\n  )\n}\n\n/** Bottom-aligned group for theme, settings and profile. */\nfunction RailFooter({ className, ...props }: React.ComponentProps<\"div\">) {\n  return (\n    <div\n      data-slot=\"rail-footer\"\n      className={cn(\n        \"mt-auto flex flex-col items-center gap-[13px] text-rail-foreground\",\n        className\n      )}\n      {...props}\n    />\n  )\n}\n\n/** A 32px ghost icon button with a right-side tooltip label. */\nfunction RailButton({\n  icon,\n  label,\n  active = false,\n  className,\n  ...props\n}: React.ComponentProps<typeof Button> & {\n  icon: IconProp\n  label: string\n  active?: boolean\n}) {\n  return (\n    <Tooltip>\n      <TooltipTrigger\n        render={\n          <Button\n            variant=\"ghost\"\n            size=\"icon\"\n            aria-label={label}\n            aria-current={active ? \"page\" : undefined}\n            data-active={active || undefined}\n            className={cn(active && \"bg-muted text-foreground\", className)}\n            {...props}\n          />\n        }\n      >\n        <Icon icon={icon} size={19} />\n      </TooltipTrigger>\n      <TooltipContent side=\"right\">{label}</TooltipContent>\n    </Tooltip>\n  )\n}\n\nexport { IconRail, AppMark, RailNav, RailFooter, RailButton }\n",
+      "type": "registry:component",
+      "target": "@components/forge/icon-rail.tsx"
+    }
+  ],
+  "type": "registry:component"
+}

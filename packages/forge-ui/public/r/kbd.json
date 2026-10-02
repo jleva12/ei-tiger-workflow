@@ -1,0 +1,21 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "kbd",
+  "title": "Kbd",
+  "description": "Keyboard key with default, ghost and outline variants.",
+  "dependencies": [
+    "@base-ui/react@^1.8.0",
+    "class-variance-authority@^0.7.1",
+    "cn@^0.4.0"
+  ],
+  "registryDependencies": [],
+  "files": [
+    {
+      "path": "src/components/ui/kbd.tsx",
+      "content": "import { cva, type VariantProps } from \"class-variance-authority\"\nimport { cn } from \"cn\"\n\nconst kbdVariants = cva(\n  \"pointer-events-none inline-flex w-fit items-center justify-center gap-1 font-sans select-none [&_svg:not([class*='size-'])]:size-3\",\n  {\n    variants: {\n      variant: {\n        default:\n          \"h-5 min-w-5 rounded-lg bg-muted px-1 text-xs font-medium text-muted-foreground in-data-[slot=input-group]:bg-input in-data-[slot=tooltip-content]:bg-background/20 in-data-[slot=tooltip-content]:text-background dark:in-data-[slot=tooltip-content]:bg-background/10\",\n        ghost: \"text-3xs text-subtle\",\n        outline:\n          \"rounded-[3px] border border-border px-[3px] text-4xs leading-normal\",\n      },\n    },\n    defaultVariants: {\n      variant: \"default\",\n    },\n  }\n)\n\nfunction Kbd({\n  className,\n  variant = \"default\",\n  ...props\n}: React.ComponentProps<\"kbd\"> & VariantProps<typeof kbdVariants>) {\n  return (\n    <kbd\n      data-slot=\"kbd\"\n      data-variant={variant}\n      className={cn(kbdVariants({ variant }), className)}\n      {...props}\n    />\n  )\n}\n\nfunction KbdGroup({ className, ...props }: React.ComponentProps<\"div\">) {\n  return (\n    <kbd\n      data-slot=\"kbd-group\"\n      className={cn(\"inline-flex items-center gap-1\", className)}\n      {...props}\n    />\n  )\n}\n\nexport { Kbd, KbdGroup }\n",
+      "type": "registry:ui",
+      "target": "@ui/kbd.tsx"
+    }
+  ],
+  "type": "registry:ui"
+}

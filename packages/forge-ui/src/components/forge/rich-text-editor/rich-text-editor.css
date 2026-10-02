@@ -1,0 +1,683 @@
+/*
+ * Rich text in Forge's terms: document typography at the 14px UI size,
+ * every block Tiptap can hold, and the editor's own chrome (resize handles,
+ * table selection, find results, drop cursor) painted from theme tokens so
+ * it follows light and dark, contrast and the text-size preference.
+ */
+@import "katex/dist/katex.min.css";
+
+/*
+ * Text and highlight colours are stored in documents as these variables,
+ * not hex values, so coloured text stays legible when the theme flips.
+ */
+:root {
+  --rte-text-gray: oklch(0.55 0.012 260);
+  --rte-text-red: oklch(0.55 0.19 25);
+  --rte-text-orange: oklch(0.6 0.16 50);
+  --rte-text-yellow: oklch(0.58 0.12 80);
+  --rte-text-green: oklch(0.55 0.13 155);
+  --rte-text-blue: oklch(0.52 0.16 256);
+  --rte-text-purple: oklch(0.52 0.18 300);
+  --rte-text-pink: oklch(0.56 0.18 347);
+  --rte-highlight-gray: oklch(0.93 0.005 260);
+  --rte-highlight-red: oklch(0.92 0.05 25);
+  --rte-highlight-orange: oklch(0.93 0.06 60);
+  --rte-highlight-yellow: oklch(0.95 0.09 95);
+  --rte-highlight-green: oklch(0.93 0.06 155);
+  --rte-highlight-blue: oklch(0.92 0.045 250);
+  --rte-highlight-purple: oklch(0.92 0.05 300);
+  --rte-highlight-pink: oklch(0.93 0.05 347);
+  --rte-find: oklch(0.93 0.11 95);
+  --rte-find-current: oklch(0.83 0.14 70);
+}
+
+.dark {
+  --rte-text-gray: oklch(0.72 0.01 260);
+  --rte-text-red: oklch(0.74 0.14 25);
+  --rte-text-orange: oklch(0.78 0.13 55);
+  --rte-text-yellow: oklch(0.84 0.13 90);
+  --rte-text-green: oklch(0.78 0.12 155);
+  --rte-text-blue: oklch(0.76 0.11 256);
+  --rte-text-purple: oklch(0.76 0.12 300);
+  --rte-text-pink: oklch(0.77 0.13 347);
+  --rte-highlight-gray: oklch(0.32 0.008 260);
+  --rte-highlight-red: oklch(0.34 0.07 25);
+  --rte-highlight-orange: oklch(0.36 0.07 55);
+  --rte-highlight-yellow: oklch(0.4 0.08 95);
+  --rte-highlight-green: oklch(0.34 0.06 155);
+  --rte-highlight-blue: oklch(0.34 0.06 256);
+  --rte-highlight-purple: oklch(0.34 0.07 300);
+  --rte-highlight-pink: oklch(0.35 0.07 347);
+  --rte-find: oklch(0.45 0.09 95);
+  --rte-find-current: oklch(0.58 0.13 70);
+}
+
+/* ---------------------------------------------------------------- base */
+
+.rich-text .ProseMirror {
+  min-height: inherit;
+  padding: 0.75rem 1rem 1rem;
+  outline: none;
+  color: var(--foreground);
+  font-size: var(--text-ui);
+  line-height: 1.65;
+  overflow-wrap: break-word;
+  word-break: normal;
+  caret-color: var(--foreground);
+}
+
+.rich-text[data-drag-handle] .ProseMirror {
+  padding-left: 3.25rem;
+}
+
+/* The block handle follows the pointer; touch screens get the space back. */
+@media (hover: none) {
+  .rich-text[data-drag-handle] .ProseMirror {
+    padding-left: 1rem;
+  }
+
+  .rich-text .drag-handle {
+    display: none;
+  }
+}
+
+.rich-text .ProseMirror > * + * {
+  margin-top: 0.7em;
+}
+
+.rich-text .ProseMirror ::selection {
+  background: color-mix(in oklch, var(--focus) 26%, transparent);
+}
+
+/* The selection stays visible while a dialog or menu has focus. */
+.rich-text .ProseMirror .selection {
+  background: color-mix(in oklch, var(--focus) 26%, transparent);
+}
+
+.rich-text .ProseMirror p.is-empty::before,
+.rich-text .ProseMirror h1.is-empty::before,
+.rich-text .ProseMirror h2.is-empty::before,
+.rich-text .ProseMirror h3.is-empty::before,
+.rich-text .ProseMirror h4.is-empty::before,
+.rich-text .ProseMirror h5.is-empty::before,
+.rich-text .ProseMirror h6.is-empty::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--subtle);
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------- text */
+
+.rich-text .ProseMirror :is(h1, h2, h3, h4, h5, h6) {
+  margin-top: 1.4em;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  scroll-margin-top: 4rem;
+}
+
+.rich-text .ProseMirror > :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
+}
+
+.rich-text .ProseMirror :is(h1, h2, h3, h4, h5, h6) + * {
+  margin-top: 0.45em;
+}
+
+.rich-text .ProseMirror h1 {
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+}
+
+.rich-text .ProseMirror h2 {
+  font-size: 1.25rem;
+}
+
+.rich-text .ProseMirror h3 {
+  font-size: 1.0625rem;
+}
+
+.rich-text .ProseMirror h4 {
+  font-size: 0.9375rem;
+}
+
+.rich-text .ProseMirror h5 {
+  font-size: var(--text-ui);
+}
+
+.rich-text .ProseMirror h6 {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.rich-text .ProseMirror a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
+  text-underline-offset: 2px;
+  cursor: text;
+}
+
+.rich-text .ProseMirror a:hover {
+  text-decoration-color: var(--primary);
+}
+
+.rich-text:not([data-editable]) .ProseMirror a {
+  cursor: pointer;
+}
+
+.rich-text .ProseMirror code {
+  padding: 0.1em 0.3em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+.rich-text .ProseMirror mark {
+  padding: 0.05em 0.15em;
+  border-radius: 2px;
+  background: var(--rte-highlight-yellow);
+  color: inherit;
+  box-decoration-break: clone;
+}
+
+.rich-text .ProseMirror :is(sub, sup) {
+  font-size: 0.75em;
+}
+
+.rich-text .ProseMirror blockquote {
+  padding-left: 1em;
+  border-left: 2px solid
+    color-mix(in oklch, var(--muted-foreground) 30%, transparent);
+  color: var(--muted-foreground);
+}
+
+.rich-text .ProseMirror hr {
+  margin: 1.4em 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.rich-text .ProseMirror hr.ProseMirror-selectednode {
+  border-top-color: var(--focus);
+}
+
+/* ---------------------------------------------------------------- lists */
+
+.rich-text .ProseMirror :is(ul, ol) {
+  padding-left: 1.45em;
+}
+
+.rich-text .ProseMirror ul {
+  list-style: disc;
+}
+
+.rich-text .ProseMirror ul ul {
+  list-style: circle;
+}
+
+.rich-text .ProseMirror ul ul ul {
+  list-style: square;
+}
+
+.rich-text .ProseMirror ol {
+  list-style: decimal;
+}
+
+.rich-text .ProseMirror ol ol {
+  list-style: lower-alpha;
+}
+
+.rich-text .ProseMirror ol ol ol {
+  list-style: lower-roman;
+}
+
+.rich-text .ProseMirror li + li,
+.rich-text .ProseMirror li > :is(ul, ol) {
+  margin-top: 0.2em;
+}
+
+.rich-text .ProseMirror li::marker {
+  color: var(--muted-foreground);
+}
+
+.rich-text .ProseMirror ul[data-type="taskList"] {
+  padding-left: 0.1em;
+  list-style: none;
+}
+
+.rich-text .ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55em;
+}
+
+.rich-text .ProseMirror ul[data-type="taskList"] li > label {
+  flex: none;
+  margin-top: 0.3em;
+  user-select: none;
+}
+
+.rich-text .ProseMirror ul[data-type="taskList"] li > label input {
+  width: 0.95em;
+  height: 0.95em;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.rich-text .ProseMirror ul[data-type="taskList"] li > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rich-text .ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
+  text-decoration-color: var(--subtle);
+}
+
+/* ---------------------------------------------------------------- code */
+
+.rich-text .ProseMirror .code-block {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: color-mix(in oklch, var(--muted) 60%, var(--background));
+}
+
+.rich-text .ProseMirror .code-block-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0.25rem 0 0.25rem;
+  user-select: none;
+}
+
+.rich-text .ProseMirror pre {
+  margin: 0;
+  padding: 0.35rem 1rem 0.85rem;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.rich-text .ProseMirror pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+  color: var(--foreground);
+}
+
+/* Syntax colours from the validated data-viz set. */
+.rich-text .hljs-comment,
+.rich-text .hljs-quote {
+  color: var(--subtle);
+  font-style: italic;
+}
+
+.rich-text .hljs-keyword,
+.rich-text .hljs-selector-tag,
+.rich-text .hljs-meta .hljs-keyword,
+.rich-text .hljs-doctag {
+  color: var(--viz-5);
+}
+
+.rich-text .hljs-string,
+.rich-text .hljs-regexp,
+.rich-text .hljs-addition,
+.rich-text .hljs-meta .hljs-string {
+  color: var(--diff-added);
+}
+
+.rich-text .hljs-number,
+.rich-text .hljs-literal,
+.rich-text .hljs-symbol,
+.rich-text .hljs-bullet,
+.rich-text .hljs-variable.language_ {
+  color: var(--viz-3);
+}
+
+.rich-text .hljs-title,
+.rich-text .hljs-title.function_,
+.rich-text .hljs-section,
+.rich-text .hljs-selector-id {
+  color: var(--viz-1);
+}
+
+.rich-text .hljs-type,
+.rich-text .hljs-built_in,
+.rich-text .hljs-title.class_,
+.rich-text .hljs-selector-class {
+  color: var(--viz-2);
+}
+
+.rich-text .hljs-attr,
+.rich-text .hljs-attribute,
+.rich-text .hljs-name,
+.rich-text .hljs-tag,
+.rich-text .hljs-property {
+  color: var(--viz-4);
+}
+
+.rich-text .hljs-deletion {
+  color: var(--diff-removed);
+}
+
+.rich-text .hljs-meta,
+.rich-text .hljs-template-variable {
+  color: var(--muted-foreground);
+}
+
+.rich-text .hljs-emphasis {
+  font-style: italic;
+}
+
+.rich-text .hljs-strong {
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------- tables */
+
+.rich-text .ProseMirror .tableWrapper {
+  margin: 1em 0;
+  overflow-x: auto;
+}
+
+.rich-text .ProseMirror table {
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.rich-text .ProseMirror :is(td, th) {
+  position: relative;
+  min-width: 4em;
+  padding: 0.4em 0.6em;
+  border: 1px solid var(--border);
+  vertical-align: top;
+  text-align: left;
+}
+
+.rich-text .ProseMirror :is(td, th) > * + * {
+  margin-top: 0.4em;
+}
+
+.rich-text .ProseMirror th {
+  background: var(--muted);
+  font-weight: 500;
+}
+
+.rich-text .ProseMirror .selectedCell::after {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: color-mix(in oklch, var(--focus) 16%, transparent);
+  content: "";
+  pointer-events: none;
+}
+
+.rich-text .ProseMirror .column-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  bottom: -2px;
+  width: 4px;
+  background: var(--focus);
+  pointer-events: none;
+}
+
+.rich-text .ProseMirror.resize-cursor {
+  cursor: col-resize;
+}
+
+/* ---------------------------------------------------------------- media */
+
+.rich-text .ProseMirror img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-card);
+}
+
+.rich-text .ProseMirror [data-resize-container] {
+  max-width: 100%;
+}
+
+.rich-text .ProseMirror [data-resize-wrapper] {
+  max-width: 100%;
+}
+
+.rich-text
+  .ProseMirror
+  :is(img, [data-resize-container]).ProseMirror-selectednode
+  img,
+.rich-text .ProseMirror img.ProseMirror-selectednode {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.rich-text .ProseMirror [data-resize-handle] {
+  z-index: 3;
+  width: 0.625rem;
+  height: 0.625rem;
+  border: 1.5px solid var(--background);
+  border-radius: 999px;
+  background: var(--focus);
+  opacity: 0;
+  transition: opacity 120ms;
+}
+
+.rich-text .ProseMirror [data-resize-handle="top-left"] {
+  margin: -0.3rem 0 0 -0.3rem;
+  cursor: nwse-resize;
+}
+
+.rich-text .ProseMirror [data-resize-handle="top-right"] {
+  margin: -0.3rem -0.3rem 0 0;
+  cursor: nesw-resize;
+}
+
+.rich-text .ProseMirror [data-resize-handle="bottom-left"] {
+  margin: 0 0 -0.3rem -0.3rem;
+  cursor: nesw-resize;
+}
+
+.rich-text .ProseMirror [data-resize-handle="bottom-right"] {
+  margin: 0 -0.3rem -0.3rem 0;
+  cursor: nwse-resize;
+}
+
+.rich-text[data-editable]
+  .ProseMirror
+  [data-resize-container]:is(:hover, .ProseMirror-selectednode)
+  [data-resize-handle] {
+  opacity: 1;
+}
+
+.rich-text .ProseMirror :is(div[data-youtube-video], div[data-twitch-video]) {
+  cursor: move;
+}
+
+.rich-text .ProseMirror iframe {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  border-radius: var(--radius-card);
+  background: var(--muted);
+}
+
+.rich-text[data-editable] .ProseMirror iframe {
+  pointer-events: none;
+}
+
+.rich-text .ProseMirror .ProseMirror-selectednode :is(iframe, audio),
+.rich-text .ProseMirror :is(iframe, audio).ProseMirror-selectednode {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.rich-text .ProseMirror audio {
+  display: block;
+  width: 100%;
+  max-width: 32rem;
+}
+
+/* ---------------------------------------------------------------- math */
+
+.rich-text .ProseMirror .tiptap-mathematics-render {
+  border-radius: var(--radius-item);
+}
+
+.rich-text .ProseMirror .tiptap-mathematics-render--editable {
+  cursor: pointer;
+  transition: background-color 120ms;
+}
+
+.rich-text .ProseMirror .tiptap-mathematics-render--editable:hover {
+  background: var(--muted);
+}
+
+.rich-text .ProseMirror [data-type="inline-math"] {
+  display: inline-block;
+  padding: 0 0.15em;
+}
+
+.rich-text .ProseMirror [data-type="block-math"] {
+  display: block;
+  padding: 0.6em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.rich-text .ProseMirror :is(.inline-math-error, .block-math-error) {
+  color: var(--destructive);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+.rich-text .ProseMirror .ProseMirror-selectednode.tiptap-mathematics-render {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ---------------------------------------------------------------- details */
+
+.rich-text .ProseMirror .details {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+
+.rich-text .ProseMirror .details > button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  margin-top: 0.12rem;
+  padding: 0;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 0.55rem;
+}
+
+.rich-text .ProseMirror .details > button:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.rich-text .ProseMirror .details > button::before {
+  content: "\25B6";
+  transition: transform 120ms;
+}
+
+.rich-text .ProseMirror .details.is-open > button::before {
+  transform: rotate(90deg);
+}
+
+.rich-text .ProseMirror .details > div {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.rich-text .ProseMirror .details summary {
+  font-weight: 500;
+  list-style: none;
+}
+
+.rich-text .ProseMirror .details summary::-webkit-details-marker {
+  display: none;
+}
+
+.rich-text .ProseMirror .details [data-type="detailsContent"] {
+  margin-top: 0.35em;
+}
+
+.rich-text .ProseMirror .details [data-type="detailsContent"] > * + * {
+  margin-top: 0.7em;
+}
+
+/* ---------------------------------------------------------------- inline nodes */
+
+.rich-text .ProseMirror .mention {
+  padding: 0.05em 0.3em;
+  border-radius: var(--radius-chip);
+  background: var(--status-queued);
+  color: var(--status-queued-foreground);
+  font-weight: 500;
+  box-decoration-break: clone;
+}
+
+.rich-text .ProseMirror [data-type="emoji"] img {
+  display: inline-block;
+  width: 1.1em;
+  height: 1.1em;
+  vertical-align: -0.2em;
+}
+
+/* ---------------------------------------------------------------- editing aids */
+
+.rich-text .ProseMirror .find-and-replace-result {
+  border-radius: 2px;
+  background: var(--rte-find);
+}
+
+.rich-text .ProseMirror .find-and-replace-result-current {
+  background: var(--rte-find-current);
+}
+
+.rich-text .ProseMirror .tiptap-invisible-character::before {
+  color: var(--subtle);
+}
+
+/* Focus mode: everything but the block being written fades back. */
+.rich-text[data-focus-mode] .ProseMirror > *:not(.has-focus) {
+  opacity: 0.35;
+  transition: opacity 150ms;
+}
+
+.rich-text .ProseMirror-gapcursor::after {
+  border-top-color: var(--foreground);
+}

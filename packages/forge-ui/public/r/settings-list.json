@@ -1,0 +1,23 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "settings-list",
+  "title": "Settings list",
+  "description": "Divided settings rows: title and description beside a current value and one action.",
+  "dependencies": [
+    "@base-ui/react@^1.8.0",
+    "class-variance-authority@^0.7.1",
+    "cn@^0.4.0",
+    "@hugeicons/react@^1.1.10",
+    "@hugeicons/core-free-icons@^4.3.5"
+  ],
+  "registryDependencies": [],
+  "files": [
+    {
+      "path": "src/components/forge/settings-list.tsx",
+      "content": "import * as React from \"react\"\nimport { cn } from \"cn\"\n\n/**\n * A settings page list: full-width rows divided by hairlines. It's its own\n * container (`@container/settings`), so rows stack their controls under the\n * text when the list is narrow — on a phone, in a sheet or in a dialog.\n */\nfunction SettingsList({ className, ...props }: React.ComponentProps<\"div\">) {\n  return (\n    <div\n      data-slot=\"settings-list\"\n      className={cn(\n        \"@container/settings flex flex-col divide-y border-b\",\n        className\n      )}\n      {...props}\n    />\n  )\n}\n\n/**\n * One setting: optional media (an icon or logo tile), a title and a short\n * description on the left; a status or current value and an action on the\n * right.\n */\nfunction SettingsRow({\n  media,\n  title,\n  badge,\n  description,\n  meta,\n  action,\n  className,\n  ...props\n}: Omit<React.ComponentProps<\"div\">, \"title\"> & {\n  /** Leading icon or logo tile, e.g. `IntegrationLogo`. */\n  media?: React.ReactNode\n  title: React.ReactNode\n  /** Shown after the title, e.g. a `Chip`. */\n  badge?: React.ReactNode\n  description?: React.ReactNode\n  /** Status or current value, right-aligned before the action. */\n  meta?: React.ReactNode\n  /** Usually one `Button variant=\"outline\" size=\"sm\"` or a menu trigger. */\n  action?: React.ReactNode\n}) {\n  return (\n    <div\n      data-slot=\"settings-row\"\n      className={cn(\n        \"flex items-center gap-x-6 gap-y-3 py-[18px] @max-[560px]/settings:flex-wrap\",\n        className\n      )}\n      {...props}\n    >\n      <div className=\"flex min-w-0 flex-1 items-center gap-3.5 @max-[560px]/settings:basis-full\">\n        {media}\n        <div className=\"min-w-0 flex-1\">\n          <div className=\"flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-foreground\">\n            {title}\n            {badge}\n          </div>\n          {description && (\n            <p className=\"mt-1 text-xs/[1.6] text-muted-foreground\">\n              {description}\n            </p>\n          )}\n        </div>\n      </div>\n      {(meta || action) && (\n        <div\n          data-slot=\"settings-row-end\"\n          className=\"flex shrink-0 items-center gap-4 @max-[560px]/settings:basis-full @max-[560px]/settings:justify-between\"\n        >\n          {meta && (\n            <div className=\"flex min-w-0 flex-col items-end gap-0.5 text-right text-xs text-muted-foreground @max-[560px]/settings:items-start @max-[560px]/settings:text-left\">\n              {meta}\n            </div>\n          )}\n          {action}\n        </div>\n      )}\n    </div>\n  )\n}\n\nexport { SettingsList, SettingsRow }\n",
+      "type": "registry:component",
+      "target": "@components/forge/settings-list.tsx"
+    }
+  ],
+  "type": "registry:component"
+}

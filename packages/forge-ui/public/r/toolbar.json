@@ -1,0 +1,30 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "toolbar",
+  "title": "Toolbar",
+  "description": "View tabs, layout switch, search field and toolbar buttons.",
+  "dependencies": [
+    "@base-ui/react@^1.8.0",
+    "class-variance-authority@^0.7.1",
+    "cn@^0.4.0",
+    "@hugeicons/react@^1.1.10",
+    "@hugeicons/core-free-icons@^4.3.5"
+  ],
+  "registryDependencies": [
+    "@forge-ui/button",
+    "@forge-ui/input-group",
+    "@forge-ui/kbd",
+    "@forge-ui/tabs",
+    "@forge-ui/toggle-group",
+    "@forge-ui/icon"
+  ],
+  "files": [
+    {
+      "path": "src/components/forge/toolbar.tsx",
+      "content": "import * as React from \"react\"\nimport { cn } from \"cn\"\n\nimport { Button } from \"@/components/ui/button\"\nimport {\n  InputGroup,\n  InputGroupAddon,\n  InputGroupInput,\n} from \"@/components/ui/input-group\"\nimport { Kbd } from \"@/components/ui/kbd\"\nimport { TabsList, TabsTrigger } from \"@/components/ui/tabs\"\nimport { ToggleGroup, ToggleGroupItem } from \"@/components/ui/toggle-group\"\nimport { Icon } from \"./icon\"\nimport type { IconProp } from \"./icons\"\n\n/** Borderless tab strip for switching views (List, Kanban, Activity…). */\nfunction ViewTabsList({\n  className,\n  ...props\n}: React.ComponentProps<typeof TabsList>) {\n  return (\n    <TabsList\n      className={cn(\n        \"h-8! gap-[5px] bg-transparent p-0 @max-[600px]/shell:gap-0.5\",\n        className\n      )}\n      {...props}\n    />\n  )\n}\n\n/** A view tab: the active tab gets a hairline ring and a faint fill. */\nfunction ViewTabsTrigger({\n  icon,\n  className,\n  children,\n  ...props\n}: React.ComponentProps<typeof TabsTrigger> & { icon?: IconProp }) {\n  return (\n    <TabsTrigger\n      className={cn(\n        \"h-8 flex-none gap-[7px] rounded-(--radius-control) px-[11px] py-0 text-[0.8125rem] font-normal text-muted-foreground @max-[1270px]/shell:px-2 @max-[1270px]/shell:text-xs @max-[800px]/shell:px-3 @max-[600px]/shell:gap-[5px] @max-[600px]/shell:px-[9px] dark:text-muted-foreground data-active:bg-[color-mix(in_oklch,var(--muted)_50%,var(--background))] data-active:text-foreground data-active:shadow-(--shadow-tab) dark:data-active:border-transparent dark:data-active:bg-[color-mix(in_oklch,var(--muted)_50%,var(--background))]\",\n        className\n      )}\n      {...props}\n    >\n      {icon && <Icon icon={icon} />}\n      {children}\n    </TabsTrigger>\n  )\n}\n\ntype LayoutOption = { value: string; label: string; icon: IconProp }\n\n/** Compact segmented icon switch (e.g. Kanban / List). */\nfunction LayoutSwitch({\n  value,\n  onValueChange,\n  options,\n  className,\n}: {\n  value: string\n  onValueChange: (value: string) => void\n  options: LayoutOption[]\n  className?: string\n}) {\n  return (\n    <ToggleGroup\n      aria-label=\"Layout\"\n      value={[value]}\n      onValueChange={(next) => {\n        if (next[0]) onValueChange(String(next[0]))\n      }}\n      className={cn(\n        \"gap-0 rounded-(--radius-control) bg-muted p-[3px] @max-[800px]/shell:hidden\",\n        className\n      )}\n    >\n      {options.map((option) => (\n        <ToggleGroupItem\n          key={option.value}\n          value={option.value}\n          aria-label={option.label}\n          className=\"size-6 min-w-6 px-0 hover:bg-muted aria-pressed:bg-background aria-pressed:shadow-(--shadow-raised)\"\n        >\n          <Icon icon={option.icon} size={16} />\n        </ToggleGroupItem>\n      ))}\n    </ToggleGroup>\n  )\n}\n\n/** Header search with a leading glyph and a trailing shortcut hint. */\nfunction SearchField({\n  shortcut = \"/\",\n  className,\n  \"aria-label\": ariaLabel = \"Search\",\n  placeholder = \"Search\",\n  ...props\n}: React.ComponentProps<\"input\"> & { shortcut?: string }) {\n  return (\n    <InputGroup\n      className={cn(\n        \"h-8 w-[174px] text-muted-foreground @max-[1270px]/shell:w-[150px] @max-[800px]/shell:w-[145px] @max-[600px]/shell:w-[118px]\",\n        className\n      )}\n    >\n      <InputGroupAddon>\n        <Icon icon=\"search\" />\n      </InputGroupAddon>\n      <InputGroupInput\n        aria-label={ariaLabel}\n        placeholder={placeholder}\n        className=\"text-xs md:text-xs\"\n        {...props}\n      />\n      {shortcut && (\n        <InputGroupAddon align=\"inline-end\">\n          <Kbd variant=\"ghost\" className=\"text-2xs\">\n            {shortcut}\n          </Kbd>\n        </InputGroupAddon>\n      )}\n    </InputGroup>\n  )\n}\n\n/**\n * Outline toolbar control. `value` renders an emphasised current setting\n * (\"Group by **Status**\"); `active` marks an applied filter with a dot.\n * Use as `render` of a DropdownMenuTrigger to open a menu.\n */\nfunction ToolbarButton({\n  icon,\n  value,\n  active = false,\n  className,\n  children,\n  ...props\n}: React.ComponentProps<typeof Button> & {\n  icon?: IconProp\n  value?: React.ReactNode\n  active?: boolean\n}) {\n  return (\n    <Button\n      variant=\"outline\"\n      data-active={active || undefined}\n      className={cn(\n        \"text-[0.8125rem] font-normal whitespace-nowrap data-active:border-subtle/60\",\n        value !== undefined &&\n          \"bg-[color-mix(in_oklch,var(--muted)_35%,var(--background))] @max-[600px]/shell:text-2xs dark:bg-[color-mix(in_oklch,var(--muted)_35%,var(--background))]\",\n        className\n      )}\n      {...props}\n    >\n      {icon && <Icon icon={icon} size={14} />}\n      {children}\n      {value !== undefined && <strong className=\"font-medium\">{value}</strong>}\n      {active && (\n        <span\n          aria-hidden=\"true\"\n          className=\"size-[5px] rounded-full bg-foreground\"\n        />\n      )}\n    </Button>\n  )\n}\n\nexport {\n  ViewTabsList,\n  ViewTabsTrigger,\n  LayoutSwitch,\n  SearchField,\n  ToolbarButton,\n}\n",
+      "type": "registry:component",
+      "target": "@components/forge/toolbar.tsx"
+    }
+  ],
+  "type": "registry:component"
+}

@@ -1,0 +1,131 @@
+/*
+ * The canvas: highlighted code (highlight.js tokens, in the same colours as
+ * the rich text editor's) and a Markdown preview.
+ */
+.canvas-code .hljs-comment,
+.canvas-code .hljs-quote {
+  color: var(--subtle);
+  font-style: italic;
+}
+.canvas-code .hljs-keyword,
+.canvas-code .hljs-selector-tag,
+.canvas-code .hljs-meta .hljs-keyword,
+.canvas-code .hljs-doctag {
+  color: var(--viz-5);
+}
+.canvas-code .hljs-string,
+.canvas-code .hljs-regexp,
+.canvas-code .hljs-addition,
+.canvas-code .hljs-meta .hljs-string {
+  color: var(--diff-added);
+}
+.canvas-code .hljs-number,
+.canvas-code .hljs-literal,
+.canvas-code .hljs-symbol,
+.canvas-code .hljs-bullet,
+.canvas-code .hljs-variable.language_ {
+  color: var(--viz-3);
+}
+.canvas-code .hljs-title,
+.canvas-code .hljs-title.function_,
+.canvas-code .hljs-section,
+.canvas-code .hljs-selector-id {
+  color: var(--viz-1);
+}
+.canvas-code .hljs-type,
+.canvas-code .hljs-built_in,
+.canvas-code .hljs-title.class_,
+.canvas-code .hljs-selector-class {
+  color: var(--viz-2);
+}
+.canvas-code .hljs-attr,
+.canvas-code .hljs-attribute,
+.canvas-code .hljs-name,
+.canvas-code .hljs-tag,
+.canvas-code .hljs-property {
+  color: var(--viz-4);
+}
+.canvas-code .hljs-deletion {
+  color: var(--diff-removed);
+}
+.canvas-code .hljs-meta,
+.canvas-code .hljs-template-variable {
+  color: var(--muted-foreground);
+}
+
+.canvas-prose {
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: var(--foreground);
+}
+.canvas-prose > * + * {
+  margin-top: 0.85em;
+}
+.canvas-prose h1 {
+  font-size: 1.4rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.canvas-prose h2 {
+  margin-top: 1.4em;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+.canvas-prose h3 {
+  margin-top: 1.2em;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.canvas-prose ul,
+.canvas-prose ol {
+  padding-inline-start: 1.4em;
+}
+.canvas-prose ul {
+  list-style: disc;
+}
+.canvas-prose ol {
+  list-style: decimal;
+}
+.canvas-prose li + li {
+  margin-top: 0.25em;
+}
+.canvas-prose a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.canvas-prose blockquote {
+  border-inline-start: 2px solid var(--border);
+  padding-inline-start: 0.9em;
+  color: var(--muted-foreground);
+}
+.canvas-prose :not(pre) > code {
+  border-radius: 4px;
+  background: var(--muted);
+  padding: 0.1em 0.35em;
+  font-size: 0.85em;
+}
+.canvas-prose pre {
+  overflow-x: auto;
+  border-radius: var(--radius-soft);
+  background: var(--muted);
+  padding: 0.8em 1em;
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+.canvas-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.canvas-prose th,
+.canvas-prose td {
+  border-bottom: 1px solid var(--border);
+  padding: 0.4em 0.6em;
+  text-align: start;
+}
+.canvas-prose th {
+  font-weight: 600;
+}
+.canvas-prose hr {
+  border-color: var(--border);
+}

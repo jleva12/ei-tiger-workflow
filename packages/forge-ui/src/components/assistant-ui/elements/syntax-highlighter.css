@@ -1,0 +1,7 @@
+/* Shiki's two themes as CSS variables on each token: light, or dark under .dark. */
+.aui-shiki code span {
+  color: var(--shiki-light);
+}
+.dark .aui-shiki code span {
+  color: var(--shiki-dark);
+}

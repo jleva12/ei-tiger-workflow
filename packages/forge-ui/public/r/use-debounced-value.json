@@ -1,0 +1,15 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "use-debounced-value",
+  "title": "use-debounced-value",
+  "description": "A value that settles a moment after it stops changing.",
+  "files": [
+    {
+      "path": "src/hooks/use-debounced-value.ts",
+      "content": "import * as React from \"react\"\n\n/** `value`, once it has stopped changing for `ms` (for search as you type). */\nexport function useDebouncedValue<T>(value: T, ms = 250) {\n  const [debounced, setDebounced] = React.useState(value)\n  React.useEffect(() => {\n    const timer = setTimeout(() => setDebounced(value), ms)\n    return () => clearTimeout(timer)\n  }, [value, ms])\n  return debounced\n}\n",
+      "type": "registry:hook",
+      "target": "@hooks/use-debounced-value.ts"
+    }
+  ],
+  "type": "registry:hook"
+}
