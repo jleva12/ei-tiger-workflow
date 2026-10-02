@@ -16,12 +16,22 @@ export {
   AdkMessageAuthor,
   AdkModelSection,
   AdkToolFallback,
+  composerChip,
 } from "./adk"
 export { adkToolkit } from "./adk-toolkit"
+export { citedRefs, remarkSourceRefs } from "./source-refs"
+export {
+  MessageSources,
+  SourcedMarkdownText,
+  type AssistantSource,
+  type AssistantSourceDocument,
+  type AssistantSourcesConfig,
+} from "./sources"
 export { AssistantCommandMenu, type AssistantCommand } from "./commands"
 export {
   AssistantSettingsContext,
   useAssistantSettings,
+  type ApprovalView,
   type AssistantSettings,
   type AssistantWelcome,
   type AuthRequestHandler,
@@ -29,6 +39,8 @@ export {
 export {
   defaultModelStateDelta,
   defaultThinkingLevels,
+  extendedThinkingLevels,
+  nearestThinkingLevel,
   type AssistantModel,
   type ModelSelection,
   type ModelSettings,

@@ -211,7 +211,11 @@ function NavItem({
         ),
         onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
           onClick?.(event)
-          shell?.setMobileNavOpen(false)
+          // An item that opens a menu (a menu trigger's `render`) keeps the
+          // mobile nav open, or the menu would close with it; its choices
+          // close the nav instead.
+          if (!event.currentTarget.hasAttribute("aria-haspopup"))
+            shell?.setMobileNavOpen(false)
         },
         children: (
           <>

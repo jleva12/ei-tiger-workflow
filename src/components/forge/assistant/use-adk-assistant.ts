@@ -10,6 +10,7 @@ import {
   createAdkSessionAdapter,
   createAdkStream,
   useAdkRuntime,
+  type AdkEvent,
   type AdkStreamCallback,
   type UseAdkRuntimeOptions,
 } from "@assistant-ui/react-google-adk"
@@ -17,6 +18,7 @@ import {
 import {
   defaultModelStateDelta,
   defaultThinkingLevels,
+  nearestThinkingLevel,
   type AssistantModel,
   type ModelSelection,
   type ModelSettings,
@@ -46,6 +48,12 @@ export type UseAdkAssistantOptions = Omit<
   adk?: { url: string; appName: string; userId: string }
   /** Sent with every request; a function is read per request. */
   headers?: Headers
+  /**
+   * ADK session state sent with every run, read as it's sent: e.g. what the
+   * person is looking at, `() => ({ page_context: currentPage() })`. The
+   * model section's keys win over the same keys here.
+   */
+  runState?: () => Record<string, unknown> | undefined
   /** A custom transport instead of `api` / `adk` (tests, mocks). */
   stream?: AdkStreamCallback
   /**
@@ -61,13 +69,23 @@ export type UseAdkAssistantOptions = Omit<
    * hidden.
    */
   onFeedback?: (feedback: AssistantFeedback) => void | Promise<void>
-  /** Models to choose from in the composer's model section (`showModels`). */
+  /**
+   * Models to choose from in the composer's model section (`showModels`).
+   * They may arrive after the first render, e.g. from the agent server.
+   */
   models?: AssistantModel[]
   /** Default: the first model. */
   defaultModel?: string
-  /** Thinking levels for the model section. Default: off, low, medium, high. */
+  /**
+   * Thinking levels for the model section, from least to most thinking; a
+   * model's own `thinkingLevels` narrows them. Default: off, low, medium,
+   * high.
+   */
   thinkingLevels?: ThinkingLevel[]
-  /** Default: "medium" when it's a level, otherwise the first. */
+  /**
+   * Default: "medium" when it's a level, otherwise the first. A model that
+   * doesn't offer it gets the nearest level it does.
+   */
   defaultThinkingLevel?: string
   /**
    * Turns the model section's selection into the ADK `stateDelta` sent with
@@ -85,6 +103,7 @@ export function useAdkAssistant({
   api,
   adk,
   headers,
+  runState,
   stream,
   dictation = true,
   onFeedback,
@@ -141,25 +160,42 @@ export function useAdkAssistant({
     defaultThinkingLevel,
   })
 
-  // Runs carry the model section's selection as ADK state while it's shown.
+  // Runs carry `runState` and, while it's shown, the model section's
+  // selection as ADK state.
   const selectionRef = useRef<ModelSelection | undefined>(undefined)
   const toStateDeltaRef = useRef(modelStateDelta)
+  const runStateRef = useRef(runState)
   useEffect(() => {
     const { model, thinkingLevel } = modelSettings
     selectionRef.current = modelsShown ? { model, thinkingLevel } : undefined
     toStateDeltaRef.current = modelStateDelta
+    runStateRef.current = runState
   })
   const send = useCallback<AdkStreamCallback>(
-    (messages, config) => {
+    async function* (messages, config) {
       const selection = selectionRef.current
-      if (!selection) return connection.stream(messages, config)
-      return connection.stream(messages, {
-        ...config,
-        stateDelta: {
-          ...config.stateDelta,
-          ...toStateDeltaRef.current(selection),
-        },
-      })
+      try {
+        const state = runStateRef.current?.()
+        yield* await connection.stream(
+          messages,
+          selection || state
+            ? {
+                ...config,
+                stateDelta: {
+                  ...config.stateDelta,
+                  ...state,
+                  ...(selection && toStateDeltaRef.current(selection)),
+                },
+              }
+            : config
+        )
+      } catch (error) {
+        // Stop aborts the run; that isn't a failure to show.
+        if (config.abortSignal.aborted) throw error
+        // The SDK would drop the error and leave the thread silent; as an ADK
+        // error event it shows as a failed reply, like the agent's own errors.
+        yield requestFailed(error)
+      }
     },
     [connection]
   )
@@ -237,6 +273,15 @@ export type AssistantFeedback = {
   comment?: string
 }
 
+/** A failed request to the agent server (unreachable, refused, not found) as an ADK error event. */
+const requestFailed = (error: unknown): AdkEvent => ({
+  id: crypto.randomUUID(),
+  errorCode: "REQUEST_FAILED",
+  errorMessage: `The assistant couldn't reach the agent: ${
+    error instanceof Error ? error.message : String(error)
+  }`,
+})
+
 const messageText = (message: ThreadMessage) =>
   message.content
     .flatMap((part) => (part.type === "text" ? [part.text] : []))
@@ -255,14 +300,37 @@ function useModelSettings({
   thinkingLevels: ThinkingLevel[]
   defaultThinkingLevel: string | undefined
 }) {
-  const [model, setModel] = useState(defaultModel ?? models[0]?.id)
-  const [thinkingLevel, setThinkingLevel] = useState(
-    () =>
-      defaultThinkingLevel ??
-      (thinkingLevels.some((level) => level.id === "medium")
-        ? "medium"
-        : (thinkingLevels[0]?.id ?? ""))
-  )
+  // What the person chose; what's selected follows the models as they load
+  // or change: the choice while it's one of them, else the default, else
+  // the first.
+  const [chosenModel, setModel] = useState<string>()
+  const [chosenLevel, setThinkingLevel] = useState<string>()
+  const listed = (id: string | undefined) =>
+    id !== undefined && models.some((option) => option.id === id)
+  const model = listed(chosenModel)
+    ? chosenModel
+    : listed(defaultModel)
+      ? defaultModel
+      : (models[0]?.id ?? defaultModel)
+
+  // As a string, so a new array with the same levels keeps the same list.
+  const offered = models
+    .find((option) => option.id === model)
+    ?.thinkingLevels?.join(" ")
+  const modelLevels = useMemo(() => {
+    if (offered === undefined) return thinkingLevels
+    const ids = offered.split(" ")
+    return thinkingLevels.filter((level) => ids.includes(level.id))
+  }, [thinkingLevels, offered])
+  const preferred =
+    chosenLevel ??
+    defaultThinkingLevel ??
+    (thinkingLevels.some((level) => level.id === "medium")
+      ? "medium"
+      : (thinkingLevels[0]?.id ?? ""))
+  const thinkingLevel =
+    nearestThinkingLevel(modelLevels, thinkingLevels, preferred) ?? preferred
+
   const [shownBy, setShownBy] = useState(0)
   const show = useCallback(() => {
     setShownBy((count) => count + 1)
@@ -272,14 +340,14 @@ function useModelSettings({
   const settings = useMemo<ModelSettings>(
     () => ({
       models,
-      thinkingLevels,
+      thinkingLevels: modelLevels,
       model,
       thinkingLevel,
       setModel,
       setThinkingLevel,
       show,
     }),
-    [models, thinkingLevels, model, thinkingLevel, show]
+    [models, modelLevels, model, thinkingLevel, show]
   )
   return { settings, shown: shownBy > 0 }
 }

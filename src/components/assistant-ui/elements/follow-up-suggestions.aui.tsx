@@ -3,8 +3,21 @@
 import { AuiIf, useAuiState, ThreadPrimitive } from "@assistant-ui/react"
 import { useCallback, useEffect, useRef, useState, type FC } from "react"
 
-const FollowupSuggestionsRow: FC = () => {
-  const suggestions = useAuiState((s) => s.thread.suggestions)
+type FollowupSuggestion = {
+  prompt: string
+  title?: string | undefined
+  label?: string | undefined
+}
+
+/**
+ * A scrolling row of suggestion chips that send their prompt: the runtime's
+ * suggestions, or `suggestions` when given (e.g. ones a server wrote).
+ */
+export const FollowupSuggestionsRow: FC<{
+  suggestions?: readonly FollowupSuggestion[] | undefined
+}> = ({ suggestions: given }) => {
+  const runtime = useAuiState((s) => s.thread.suggestions)
+  const suggestions: readonly FollowupSuggestion[] = given ?? runtime
   const scrollRef = useRef<HTMLDivElement>(null)
   const rtlRef = useRef<boolean | null>(null)
   const [fades, setFades] = useState({ left: false, right: false })

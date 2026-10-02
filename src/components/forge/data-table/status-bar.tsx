@@ -155,9 +155,16 @@ function Pagination() {
 
 /**
  * Row counts, selection, selected-cell statistics and pagination under the
- * grid. `notice` briefly confirms actions such as copying.
+ * grid. `notice` briefly confirms actions such as copying; `actions` are the
+ * table's own controls at its end.
  */
-function DataTableStatusBar({ notice }: { notice: string | null }) {
+function DataTableStatusBar({
+  notice,
+  actions,
+}: {
+  notice: string | null
+  actions?: React.ReactNode
+}) {
   const { table, features, labels, treeData } = useDataTable()
   const paged = features.pagination && !features.virtualization
   const manual = Boolean(table.options.manualFiltering)
@@ -168,8 +175,10 @@ function DataTableStatusBar({ notice }: { notice: string | null }) {
     (treeData ? filtered.flatRows.length : filtered.rows.length)
   const core = table.getCoreRowModel()
   const unfiltered = treeData ? core.flatRows.length : core.rows.length
+  // Every selected row, sub-rows too: a tree's `rows` holds only those
+  // whose parents are selected.
   const selectedRows = features.rowSelection
-    ? table.getFilteredSelectedRowModel().rows.length
+    ? table.getFilteredSelectedRowModel().flatRows.length
     : 0
   const { pageIndex, pageSize } = table.atoms.pagination.get()
   const pageTotal = table.getRowCount()
@@ -222,6 +231,9 @@ function DataTableStatusBar({ notice }: { notice: string | null }) {
           ) : null}
         </span>
       </div>
+      {actions ? (
+        <div className="flex flex-wrap items-center gap-2">{actions}</div>
+      ) : null}
       {paged ? <Pagination /> : null}
     </div>
   )

@@ -201,7 +201,9 @@ function ViewMenu({ filterRowAvailable }: { filterRowAvailable: boolean }) {
 
 function ExportMenu() {
   const { table, features, labels, exportCsv, copyRows } = useDataTable()
-  const selected = features.rowSelection ? table.getSelectedRowModel().rows : []
+  const selected = features.rowSelection
+    ? table.getSelectedRowModel().flatRows
+    : []
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<ToolbarButton icon="download" />}>
@@ -242,7 +244,7 @@ function renderSelectedRowsActions(
   table: Table<RowData>
 ) {
   if (!actions) return null
-  const selectedRows = table.getFilteredSelectedRowModel().rows
+  const selectedRows = table.getFilteredSelectedRowModel().flatRows
   if (!selectedRows.length) return null
   const content =
     typeof actions === "function" ? actions({ selectedRows, table }) : actions

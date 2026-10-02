@@ -1,0 +1,15 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "timestamps",
+  "title": "Timestamps",
+  "description": "parseTimestamp and localDay: API times read as UTC and bare dates as local days, for tables and forms.",
+  "files": [
+    {
+      "path": "src/lib/timestamps.ts",
+      "content": "/**\n * Times from the APIs. They store and send UTC, as ISO 8601 with its zone\n * (\"2026-09-27T16:09:02Z\"); the pages show them in the browser's own zone.\n *\n * `new Date` reads a date and time without a zone as the browser's local\n * time, which for a UTC value is hours off, and a bare date as UTC midnight,\n * which west of UTC is the day before. Parse API values here instead.\n */\n\nconst DAY = /^(\\d{4})-(\\d{2})-(\\d{2})$/\nconst WITHOUT_ZONE = /^\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?$/\n\n/**\n * When an API time happened: one without a zone is UTC, and a bare date\n * (\"2026-09-27\") is that calendar day here, from local midnight. Numbers are\n * epoch milliseconds. An unreadable value gives an invalid Date.\n */\nexport function parseTimestamp(value: string | number | Date): Date {\n  if (value instanceof Date) return value\n  if (typeof value === \"number\") return new Date(value)\n  const text = value.trim()\n  const day = DAY.exec(text)\n  if (day) return new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3]))\n  if (WITHOUT_ZONE.test(text)) return new Date(`${text.replace(\" \", \"T\")}Z`)\n  return new Date(text)\n}\n\n/** Whether `value` reads as a time, per `parseTimestamp`. */\nexport const isTimestamp = (value: string | number | Date) =>\n  !Number.isNaN(parseTimestamp(value).getTime())\n\n/** The local calendar day of `date`, \"2026-09-27\", as date inputs take it. */\nexport function localDay(date: Date) {\n  const pad = (part: number) => String(part).padStart(2, \"0\")\n  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`\n}\n",
+      "type": "registry:lib",
+      "target": "@lib/timestamps.ts"
+    }
+  ],
+  "type": "registry:lib"
+}

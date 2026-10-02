@@ -1,0 +1,15 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "use-now",
+  "title": "use-now",
+  "description": "A one-second clock shared by every component showing elapsed time.",
+  "files": [
+    {
+      "path": "src/hooks/use-now.ts",
+      "content": "import * as React from \"react\"\n\n// One clock for every component that shows elapsed time, ticking only while\n// one of them listens.\nlet now = Date.now()\nconst listeners = new Set<() => void>()\nlet timer: ReturnType<typeof setInterval> | undefined\n\nfunction subscribe(listener: () => void) {\n  listeners.add(listener)\n  if (!timer) {\n    now = Date.now()\n    timer = setInterval(() => {\n      now = Date.now()\n      for (const notify of listeners) notify()\n    }, 1000)\n  }\n  return () => {\n    listeners.delete(listener)\n    if (!listeners.size && timer) {\n      clearInterval(timer)\n      timer = undefined\n    }\n  }\n}\n\nconst idle = () => () => {}\nconst snapshot = () => now\n\n/**\n * The current time in ms, updated every second while `ticking` (e.g. while\n * a run is active, for its elapsed time). Stays put otherwise.\n */\nexport function useNow(ticking = true) {\n  return React.useSyncExternalStore(ticking ? subscribe : idle, snapshot)\n}\n",
+      "type": "registry:hook",
+      "target": "@hooks/use-now.ts"
+    }
+  ],
+  "type": "registry:hook"
+}

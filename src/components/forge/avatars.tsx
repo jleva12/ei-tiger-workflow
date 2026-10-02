@@ -3,6 +3,7 @@ import { mergeProps } from "@base-ui/react/merge-props"
 import { useRender } from "@base-ui/react/use-render"
 import { cn } from "cn"
 
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import {
   Tooltip,
   TooltipContent,
@@ -146,4 +147,71 @@ function AgentAvatars({
   )
 }
 
-export { WorkspaceOrb, AgentOrb, AgentAvatars, type Agent }
+/** "Ada Lovelace" → "AL"; a single word (or an ID) → its first letter. */
+function initialsOf(name: string) {
+  const words = name.trim().split(/\s+/).filter(Boolean)
+  const letters =
+    words.length > 1 ? words[0][0] + words[words.length - 1][0] : words[0]?.[0]
+  return (letters ?? "?").toUpperCase()
+}
+
+/**
+ * A person's initials in a small round avatar (18px, or 22px `lg` to match
+ * `AgentOrb`), for assignees and owners. Decorative: show the name beside it.
+ */
+function PersonAvatar({
+  name,
+  size = "default",
+  className,
+}: {
+  name: string
+  size?: "default" | "lg"
+  className?: string
+}) {
+  return (
+    <Avatar
+      data-slot="person-avatar"
+      aria-hidden="true"
+      className={cn(size === "lg" ? "size-[22px]" : "size-[18px]", className)}
+    >
+      <AvatarFallback
+        className={cn(
+          "font-medium tracking-tight",
+          size === "lg" ? "text-3xs" : "text-4xs"
+        )}
+      >
+        {initialsOf(name)}
+      </AvatarFallback>
+    </Avatar>
+  )
+}
+
+/** The empty seat beside "Unassigned": a dashed ring the avatar's size. */
+function EmptyPersonAvatar({
+  size = "default",
+  className,
+}: {
+  size?: "default" | "lg"
+  className?: string
+}) {
+  return (
+    <span
+      data-slot="person-avatar"
+      aria-hidden="true"
+      className={cn(
+        "inline-block shrink-0 rounded-full border border-dashed border-subtle",
+        size === "lg" ? "size-[22px]" : "size-[18px]",
+        className
+      )}
+    />
+  )
+}
+
+export {
+  WorkspaceOrb,
+  AgentOrb,
+  AgentAvatars,
+  PersonAvatar,
+  EmptyPersonAvatar,
+  type Agent,
+}

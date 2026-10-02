@@ -122,6 +122,11 @@ type DataTableProps<TData extends RowData> = {
   /** File name (without extension) for CSV exports. */
   exportFileName?: string
   features?: Partial<DataTableFeatureConfig>
+  /**
+   * Fill the height the parent gives it (as a flex item with `min-h-0`, say):
+   * the toolbar and status bar stay put and the rows scroll between them.
+   */
+  fill?: boolean
   getRowId?: TableOptions<TData>["getRowId"]
   /** Children of a row, for tree data. */
   getSubRows?: TableOptions<TData>["getSubRows"]
@@ -142,6 +147,8 @@ type DataTableProps<TData extends RowData> = {
   selectedRowsActions?: DataTableSelectedRowsActions<TData>
   selectionColumn?: boolean
   skeletonRows?: number
+  /** Controls at the end of the status bar, e.g. loading more rows. */
+  statusBarActions?: React.ReactNode
   /** Persists column layout, sorting and density in localStorage under this key. */
   stateKey?: string
   tableOptions?: DataTableOptions<TData>
@@ -282,6 +289,7 @@ function DataTable<TData extends RowData>({
   emptyState,
   exportFileName = "export",
   features: featureOverrides,
+  fill = false,
   getRowId,
   getSubRows,
   initialState,
@@ -299,6 +307,7 @@ function DataTable<TData extends RowData>({
   selectedRowsActions,
   selectionColumn,
   skeletonRows = 5,
+  statusBarActions,
   stateKey,
   tableOptions,
   tableHeight,
@@ -1073,6 +1082,7 @@ function DataTable<TData extends RowData>({
     tabIndex: features.cellSelection && !focusedCell ? 0 : undefined,
     className: cn(
       "relative w-full overflow-auto",
+      fill && "min-h-0 flex-1",
       tableHeight ??
         tablehight ??
         (features.virtualization ? "max-h-[600px]" : undefined)
@@ -1103,6 +1113,7 @@ function DataTable<TData extends RowData>({
         aria-label={title ?? caption}
         className={cn(
           "group/data-table @container/data-table relative min-w-0 overflow-hidden rounded-(--radius-band) border bg-background text-foreground",
+          fill && "flex min-h-0 flex-col",
           className
         )}
       >
@@ -1122,7 +1133,7 @@ function DataTable<TData extends RowData>({
           columnFiltersPosition={columnFiltersPosition}
         />
         <GroupingBar />
-        <div className="relative">
+        <div className={cn("relative", fill && "flex min-h-0 flex-1 flex-col")}>
           {features.contextMenu ? (
             <DataTableContextMenu
               items={
@@ -1148,7 +1159,7 @@ function DataTable<TData extends RowData>({
           ) : null}
         </div>
         {features.statusBar || paginated ? (
-          <DataTableStatusBar notice={notice} />
+          <DataTableStatusBar notice={notice} actions={statusBarActions} />
         ) : (
           <span className="sr-only" role="status" aria-live="polite">
             {notice}

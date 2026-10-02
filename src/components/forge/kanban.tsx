@@ -3,7 +3,7 @@ import { cn } from "cn"
 
 import { AgentAvatars } from "./avatars"
 import { StatusBadge } from "./status"
-import { RepoLabel, TaskGroup, type TaskItem } from "./task-list"
+import { AssigneeLabel, RepoLabel, TaskGroup, type TaskItem } from "./task-list"
 import type { SymbolKind, Tone } from "./variants"
 
 type KanbanColumnData = {
@@ -48,7 +48,10 @@ function KanbanColumn({
   )
 }
 
-/** A task card: ID and status, title, repository, date and agents. */
+/**
+ * A task card: ID and status, title (and its summary), repository, the
+ * assignee where tasks have one, date and agents.
+ */
 function BoardCard({
   task,
   className,
@@ -70,12 +73,25 @@ function BoardCard({
         </span>
         <StatusBadge status={task.status}>{task.statusLabel}</StatusBadge>
       </span>
-      <span className="mt-3.5 mb-3 block text-[0.8125rem] leading-[1.6] font-[450]">
+      <span
+        className={cn(
+          "mt-3.5 block text-[0.8125rem] leading-[1.6] font-[450]",
+          task.summary ? "mb-1" : "mb-3"
+        )}
+      >
         {task.title}
       </span>
+      {task.summary && (
+        <span className="mb-3 line-clamp-2 block text-2xs leading-normal text-muted-foreground">
+          {task.summary}
+        </span>
+      )}
       <RepoLabel className="text-muted-foreground">
         {task.repository ?? "No repository"}
       </RepoLabel>
+      {task.assignee !== undefined && (
+        <AssigneeLabel assignee={task.assignee} className="mt-2" />
+      )}
       <span className="mt-[22px] flex items-center justify-between text-3xs text-subtle">
         <span>{task.updated ?? "Not started"}</span>
         <AgentAvatars agents={task.agents ?? []} />

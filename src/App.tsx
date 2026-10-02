@@ -76,6 +76,8 @@ import {
 import { AssistantSection } from "@/demo/sections/assistant"
 import { DataTableSection } from "@/demo/sections/data-table"
 import { IntegrationsSection } from "@/demo/sections/integrations"
+import { AgentWorkspaceSection } from "@/demo/sections/agent-workspace"
+import { RichTextEditorSection } from "@/demo/sections/rich-text-editor"
 import {
   ColorsSection,
   IconsSection,
@@ -443,6 +445,10 @@ function SectionView({
       return <SheetsSection />
     case "integrations":
       return <IntegrationsSection />
+    case "agent-workspace":
+      return <AgentWorkspaceSection />
+    case "rich-text-editor":
+      return <RichTextEditorSection />
     case "task-page":
       return <TaskPageSection />
     case "submission":

@@ -14,7 +14,7 @@ source, the source wins — read it.
 - empty-state, feedback, activity
 - run-log, changes, handoff, metrics-table
 - data-table
-- assistant (Google ADK)
+- assistant (Google ADK), agent-workspace, rich-text-editor
 - Tuned primitives (`@/components/ui`)
 
 ## icon (`icon.tsx`, `icons.ts`)
@@ -53,6 +53,9 @@ Also exported: `statusLabels`, `statusBadgeVariants`, `chipVariants`.
 - `AgentOrb` — `variant?: number` (cycles 5 gradients), `size?`.
 - `AgentAvatars` — `agents: Agent[]` (`{ id, name, role? }`), `max?=5`,
   `size?`, `emptyLabel?`, `hideEmptyLabel?`; overlapping orbs with tooltips.
+- `PersonAvatar` — `name` (shows initials), `size?: "default" | "lg"`
+  (18 / 22px); `EmptyPersonAvatar` — the dashed seat for "Unassigned".
+  Decorative: show the name beside them.
 
 ## app-shell (`app-shell.tsx`, `app-shell-context.ts`)
 
@@ -64,7 +67,9 @@ Also exported: `statusLabels`, `statusBadgeVariants`, `chipVariants`.
 - `SkipLink`, `MainPanel` (`<main>`).
 - `Topbar` — `sidebarTrigger?=true` (needs `AppShell` when true);
   `TopbarBreadcrumb`; `TopbarCrumb` (`icon?` + button props; hidden ≤800px);
-  `TopbarCrumbSeparator`; `TopbarPage` (`children` required, `icon?`;
+  `TopbarCrumbSeparator` (a chevron); `TopbarCrumbMenu` (`label?`,
+  children `DropdownMenuItem`s: ancestor crumbs folded behind an ellipsis);
+  `TopbarPage` (`children` required, `icon?`;
   renders the **h1**); `TopbarActions`; `TopbarAgents` (hidden ≤1270px);
   `PrimaryAction` (`icon?="addCircle"` + Button props; icon-only ≤600px);
   `SidebarTrigger`.
@@ -110,15 +115,18 @@ Also exported: `statusLabels`, `statusBadgeVariants`, `chipVariants`.
 
 `TaskList > TaskGroup > TaskTable`.
 
-- `TaskItem` = `{ id, title, status, statusLabel?, repository?, updated?,
-  agents?, runCount? }`.
+- `TaskItem` = `{ id, title, summary?, status, statusLabel?, repository?,
+  updated?, agents?, runCount?, assignee?: { id, name } | null }`
+  (`summary` shows under the title on cards and in the title's tooltip;
+  `null` assignee reads "Unassigned", leaving it out hides the assignee).
 - `TaskList` — `density?: "default" | "compact"`.
 - `TaskGroup` — `title: string`, `count?`, `symbol?: SymbolKind="backlog"`,
   `tone?` (defaults from the symbol), `actions?` (use `TaskGroupAction` —
   `icon: IconProp` + aria-label), `layout?: "list" | "board"`, `open?`,
   `defaultOpen?=true`, `onOpenChange?`. Collapsible, sets the tone.
-- `TaskTable` — `tasks: TaskItem[]`, `onSelect?`, `emptyLabel?`; min 760px
-  wide.
+- `TaskTable` — `tasks: TaskItem[]`, `onSelect?`, `emptyLabel?`,
+  `showAssignee?` (adds an Assignee column); min 760px wide (860px with
+  assignees). `AssigneeLabel` — `assignee`.
 - Custom rows: `TaskTableHead` (`icon?: IconProp | null="sort"`),
   `TaskTableRow`, `TaskTableCell`, `TaskTitle` (`id`, `title`, `runCount?`),
   `RepoLabel`, `DateLabel`.
@@ -260,8 +268,12 @@ Also exported: `statusLabels`, `statusBadgeVariants`, `chipVariants`.
 - `FileNavigator` > `FileFilter`, `FileListLabel` (`count?`), `FileList >
   ChangedFile` (`path`, `added?`, `removed?`, `icon?="code"`, `active?`).
 - `FileDiff` > `FileDiffHeader` (`path`, `added?`, `removed?`, `actions?`),
-  `DiffView` (`lines: DiffLine[]`, `wrap?`); `DiffLine = { type: "context"
-  | "insert" | "delete" | "hunk", old?, new?, content }`.
+  `DiffView` (`lines: DiffLine[]`, `wrap?`, `renderGutter?(line, side,
+  index)` to replace a gutter's number, e.g. with a comment button,
+  `renderAfterLine?(line, index)` for a full-width row under a line, e.g.
+  comments); `DiffLine = { type: "context" | "insert" | "delete" | "hunk",
+  old?, new?, content }`. Rows carry `data-line-index` / `data-line-type`,
+  gutters `data-side` / `data-line`, for context menus.
 - `DiffTotals` — `added`, `removed`, `label?`.
 
 ## handoff (`handoff.tsx`)
@@ -306,7 +318,9 @@ const columns = helper.columns([          // module scope or useMemo
   "compact"` (omit it to follow the user's density preference; the View menu
   can override per table or go back to Automatic), `isLoading`, `emptyState`, `getRowId`, `getSubRows`,
   `initialState`, `onRowClick`, `onCellEdit`, `onRowReorder`,
-  `selectedRowsActions`, `toolbarActions`, `contextMenuItems`, `stateKey`
+  `selectedRowsActions`, `toolbarActions`, `statusBarActions` (controls at
+  the status bar's end, e.g. load more), `fill` (fill the parent's height
+  with the rows scrolling between toolbar and status bar), `contextMenuItems`, `stateKey`
   (persists layout to localStorage), `tableHeight` (a class like
   `max-h-[560px]`), `tableOptions` (TanStack passthrough),
   `exportFileName`.
@@ -379,12 +393,35 @@ const { runtime, artifacts, modelSettings } = useAdkAssistant({
   `request.authUri`, resolve with `{ authType: "oauth2", oauth2: {
   authResponseUri } }`), `title?="Assistant"`, `welcome?`, `suggestions?`,
   `toolkit?` (your `defineToolkit` tool UIs, merged over the ADK ones),
-  `sidebar?`, `actions?` (top bar), `commands?: AssistantCommand[]` (the
-  `/` menu), `showModels?` + `modelSettings`
-  (required together; TypeScript enforces it).
-- **Model section** (`showModels`): the agent's name (the active ADK agent,
-  else `title`), the model picker when `models` has more than one, and the
-  thinking level. While it's shown, every run sends the selection as ADK
+  `sidebar?` (extra content above the conversations; `false` drops the
+  sidebar), `navigation?` / `actions?` (top bar, before the title / after
+  the agent), `aside?` (a panel beside the conversation), `commands?:
+  AssistantCommand[]` (the `/` menu), `showModels?` + `modelSettings`
+  (required together; TypeScript enforces it), and the slots
+  `composerLead?` (component above the composer), `composerContext?`
+  (node at the top of the composer), `composerActions?` (node after the
+  model picker; `composerChip` is their class string),
+  `composerTrailingActions?` (component before Send), `messageMeta?`
+  (component beside each reply's actions), `followUps?` (component above
+  the composer after a reply), `onOpenArtifact?(name)`, `agents?` (ADK
+  agent names → display names; calls to them show as `AdkDelegation`),
+  `approvals?: Record<toolName, ApprovalView>` (`title`, `description`,
+  `preview: ComponentType<{ args }>`, `approveLabel`, `approvedLabel`,
+  `deniedLabel`), `sources?: AssistantSourcesConfig` (`fromToolCall(name,
+  result) → AssistantSource[]`, each `{ ref, document: { key, title,
+  subtitle?, href? }, location?, excerpt? }`; the agent cites `[S3]`).
+  `AssistantModal` also takes `open` / `onOpenChange`.
+- `useAdkAssistant` also takes `runState?: () => stateDelta` (sent with
+  every run, e.g. the page the person is on); a failed request to the agent
+  server shows as a failed reply.
+- **Model section** (`showModels`): one ghost trigger (the model's icon,
+  name and thinking level) opening a searchable picker grouped by each
+  model's `group`, with the chosen model's levels. `AssistantModel` =
+  `{ id, name, description?, group?, icon?, thinkingLevels?: string[] }`;
+  `extendedThinkingLevels` (off … xhigh) is the full list, a model's own
+  `thinkingLevels` narrows it, and `nearestThinkingLevel` picks the closest
+  when switching models. `models` may arrive after the first render. While
+  it's shown, every run sends the selection as ADK
   `stateDelta` — `{ model, thinking_level }` by default — which the agent
   applies in a `before_model_callback` (set `llm_request.model` and
   `llm_request.config.thinking_config`). Nothing is sent without
@@ -413,9 +450,63 @@ const { runtime, artifacts, modelSettings } = useAdkAssistant({
   `placeholder` prop. The mic shows whenever the runtime has a dictation adapter; the
   recognised words stream into the input, and nothing sends until the user
   does.
+- Replies render Markdown with KaTeX (`$$ … $$`, `\( \)`, `\[ \]`),
+  ` ```mermaid ` diagrams and Shiki-highlighted code (both lazy-loaded);
+  reasoning reads "Thought for 12 seconds"; selecting reply text offers
+  Quote; ↑ in an empty composer recalls earlier messages.
+- `Thread` slots added for the assistant's options: `Text`,
+  `MessageFooter`, `MessageMeta`, `FollowUps`, `ComposerHeader`,
+  `ComposerLead`, `ComposerTrailingActions`.
 - Limits: consecutive assistant messages merge, so a hand-off within one
   turn shows as one reply; ADK sessions have no titles (conversations are
   named after their first message while the page is open).
+
+## agent-workspace (`agent-workspace/index.ts`) — around a capable agent
+
+Everything around the assistant's conversation for an agent that plans,
+keeps notes, writes documents and uses tools. Mount it through
+`AssistantScreen`'s slots; don't rebuild these panels.
+
+- `useAgentWorkspace({ adkUrl, appName, userId, chatApi?, notConnectedMessage? })`
+  → `{ runtime, artifacts, modelSection, tools, catalog, defaultModel,
+  connected }`. Spread `modelSection` into the screen; `chatApi` loads the
+  models and tools from the chat API (adk-chat) and saves 👍/👎.
+- `composerLead={ProgressDock}`; `composerActions` with `<ToolsMenu
+  {...tools} />` and `<ContextMeter adkUrl appName userId catalog
+  defaultModel />` (it syncs the usage stats `MessageStats` and the dock
+  read); `messageMeta={MessageStats}`; `composerTrailingActions` a
+  module-level wrapper around `<ChatHistoryPalette adkUrl appName userId
+  shortcut? />` (⌘K unless `shortcut={false}`); `followUps` a wrapper
+  around `<FollowUps adkUrl appName userId />`.
+- `actions={<><PlanButton /><NotesButton /></>}`,
+  `aside={<><NotesPanel /><PlanPanel /><CanvasPanel /></>}` (one panel at a
+  time, `useScreen`); `onOpenArtifact={(name) =>
+  useCanvas.getState().openDocument(name)}`.
+- `toolkit={toolUIs}`, `approvals={approvalViews}`,
+  `commands={workspaceCommands}` (spread it to add your own). `ToolFrame`
+  (`part`, `label`, `running`, children once done) for your own tool cards;
+  `useToolFinished` / `useToolApproved` to change the screen when one
+  finishes; `toolResult(result)` reads a result whether it's a value, JSON
+  text or `{ result }`.
+- Agent conventions: session state `plan` (`{ id, title, steps: [{ text,
+  status: pending | in_progress | done | skipped, started_at?,
+  finished_at? }] }`, via `set_plan` / `update_plan_step`; the dock shows
+  only when the latest turn called one) and `notes` (`[{ id, text }]`);
+  documents are ADK artifacts.
+
+## rich-text-editor (`rich-text-editor/index.ts`)
+
+- `RichTextEditor` — `format?: "html" | "markdown" | "json"` with
+  `value` / `defaultValue` / `onChange(value, editor)`, `preset?: "full" |
+  "standard" | "minimal"`, `features?: Partial<RichTextFeatures>`,
+  `placeholder?`, `readOnly?`, `disabled?`, `autoFocus?`, `maxLength?`,
+  `toolbar?`, `showCount?`, `mentions?: (query, signal) => MentionItem[]`,
+  `onUpload?(file) → url` (else data URLs), `maxFileSize?`, `name?` (native
+  forms), `contentClassName?` (min/max height), `bare?`, `ref`
+  (`RichTextEditorHandle`). Lazy: Tiptap loads when an editor renders.
+- `RichTextView` — read-only `value` in the editor's typography.
+- Use it for any formatted text field (descriptions, comments, documents);
+  a plain `Textarea` for plain text.
 
 ## shell (`shell/index.ts`) — dynamic app shell
 
@@ -447,8 +538,10 @@ The Forge shell drawn from a store that pages change. Root:
   inline configs are fine (compared by data; handlers stay current).
 - Slots (page JSX in the shell, keeping the page's state):
   `ShellHeaderActions`, `ShellToolbar` (a `ViewToolbar`), `ShellFooter` (a
-  `WorkspaceFooter`), `ShellSidebarTop`, `ShellSidebarBottom`; generic
-  `ShellSlot name=…`.
+  `WorkspaceFooter`), `ShellSidebarHeader` (pinned under the brand while the
+  sub nav scrolls), `ShellSidebarTop` (scrolls with the sections),
+  `ShellSidebarBottom` (pinned below); generic `ShellSlot name=…`. A
+  breadcrumb trail longer than two crumbs folds its middle into a menu.
 - Anywhere: `useShellApi()` → `configure(config | (shell) => config)`,
   `updateItem(id, patch)` (base items; page items follow page state),
   `setActive({ rail?, sidebar? })`; `useShell(selector)` reads the

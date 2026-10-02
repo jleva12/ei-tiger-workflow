@@ -13,13 +13,14 @@ import {
   LoaderIcon,
 } from "@/components/assistant-ui/elements/aui-icons"
 import { cva, type VariantProps } from "class-variance-authority"
-import { useScrollLock } from "@assistant-ui/react"
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { cn } from "cn"
+
+import { useDisclosureAnchor } from "./use-disclosure-anchor"
 
 const ANIMATION_DURATION = 200
 
@@ -56,20 +57,20 @@ function ToolGroupRoot({
 }: ToolGroupRootProps) {
   const collapsibleRef = useRef<HTMLDivElement>(null)
   const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen)
-  const lockScroll = useScrollLock(collapsibleRef, ANIMATION_DURATION)
+  const holdInPlace = useDisclosureAnchor(collapsibleRef, ANIMATION_DURATION)
 
   const isControlled = controlledOpen !== undefined
   const isOpen = isControlled ? controlledOpen : uncontrolledOpen
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
-      lockScroll()
+      holdInPlace()
       if (!isControlled) {
         setUncontrolledOpen(open)
       }
       controlledOnOpenChange?.(open)
     },
-    [lockScroll, isControlled, controlledOnOpenChange]
+    [holdInPlace, isControlled, controlledOnOpenChange]
   )
 
   return (

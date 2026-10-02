@@ -53,7 +53,7 @@ function CellMenuItems({
   const column = target ? table.getColumn(target.columnId) : undefined
   const hasRange = features.cellSelection && table.getSelectedCellCount() > 1
   const hasSelectedRows =
-    features.rowSelection && table.getSelectedRowModel().rows.length > 0
+    features.rowSelection && table.getSelectedRowModel().flatRows.length > 0
   const custom = row && column && items ? items({ row, column, table }) : null
 
   const cellGroup =

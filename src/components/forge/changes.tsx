@@ -226,21 +226,54 @@ type DiffLine = {
   content: string
 }
 
-/** GitHub-style unified diff: two gutters, +/− markers and tinted rows. */
+/** A diff line's side: the original file ("old") or the changed one ("new"). */
+type DiffSide = "old" | "new"
+
+// The side a line's content belongs to: deletes are only in the original.
+const contentSide = (line: DiffLine): DiffSide =>
+  line.type === "delete" ? "old" : "new"
+
+/**
+ * GitHub-style unified diff: two gutters, +/− markers and tinted rows.
+ *
+ * Rows carry `data-line-index` (the line's index in `lines`) and
+ * `data-line-type`; gutter cells carry `data-side` and `data-line` (their
+ * number), and the content cell those of its own side (new, or old for a
+ * delete), so a surrounding handler (a context menu) can tell which line
+ * and side an event is on. Hunk rows (`data-line-type="hunk"`) have no
+ * sides.
+ *
+ * `renderGutter` replaces a gutter's number (e.g. with a button);
+ * `renderAfterLine` adds a full-width row under a line (comments, a
+ * composer) when it returns something. That row stays in view as the diff
+ * scrolls sideways.
+ */
 function DiffView({
   lines,
   wrap = false,
   className,
+  renderGutter,
+  renderAfterLine,
 }: {
   lines: DiffLine[]
   wrap?: boolean
   className?: string
+  /** A gutter's content; the line's number on that side by default. */
+  renderGutter?: (
+    line: DiffLine,
+    side: DiffSide,
+    index: number
+  ) => React.ReactNode
+  /** Content for a full-width row right under a line, or nothing. */
+  renderAfterLine?: (line: DiffLine, index: number) => React.ReactNode
 }) {
   return (
     <div
       data-slot="diff-view"
       className={cn(
         "relative min-h-0 flex-1 overflow-auto overscroll-contain",
+        // Lets rows under a line size to the visible width (`100cqw`).
+        renderAfterLine && "@container/diff-view",
         className
       )}
     >
@@ -256,47 +289,73 @@ function DiffView({
           <col />
         </colgroup>
         <tbody>
-          {lines.map((line, index) =>
-            line.type === "hunk" ? (
-              <tr key={index}>
-                <td
-                  colSpan={3}
-                  className="bg-[color-mix(in_srgb,var(--primary)_7%,var(--background))] px-3 py-[7px] whitespace-pre-wrap text-muted-foreground"
-                >
-                  {line.content}
-                </td>
-              </tr>
-            ) : (
-              <tr key={index} className="leading-[1.7]">
-                {[line.old, line.new].map((number, gutter) => (
+          {lines.map((line, index) => {
+            if (line.type === "hunk") {
+              return (
+                <tr key={index} data-line-index={index} data-line-type="hunk">
                   <td
-                    key={gutter}
+                    colSpan={3}
+                    className="bg-[color-mix(in_srgb,var(--primary)_7%,var(--background))] px-3 py-[7px] whitespace-pre-wrap text-muted-foreground"
+                  >
+                    {line.content}
+                  </td>
+                </tr>
+              )
+            }
+            const after = renderAfterLine?.(line, index)
+            const side = contentSide(line)
+            return (
+              <React.Fragment key={index}>
+                <tr
+                  data-line-index={index}
+                  data-line-type={line.type}
+                  className="leading-[1.7]"
+                >
+                  {(["old", "new"] as const).map((gutter) => (
+                    <td
+                      key={gutter}
+                      data-side={gutter}
+                      data-line={line[gutter]}
+                      className={cn(
+                        "min-w-[5ch] px-2 text-right align-top text-muted-foreground select-none",
+                        line.type === "insert" && "bg-diff-insert-gutter",
+                        line.type === "delete" && "bg-diff-delete-gutter"
+                      )}
+                    >
+                      {renderGutter
+                        ? renderGutter(line, gutter, index)
+                        : line[gutter]}
+                    </td>
+                  ))}
+                  <td
+                    data-side={side}
+                    data-line={line[side]}
                     className={cn(
-                      "min-w-[5ch] px-2 text-right align-top text-muted-foreground select-none",
-                      line.type === "insert" && "bg-diff-insert-gutter",
-                      line.type === "delete" && "bg-diff-delete-gutter"
+                      "relative pr-3.5 pl-6 align-top before:absolute before:top-0 before:left-2 before:select-none",
+                      wrap
+                        ? "wrap-anywhere whitespace-pre-wrap"
+                        : "whitespace-pre",
+                      line.type === "insert" &&
+                        "bg-diff-insert before:content-['+']",
+                      line.type === "delete" &&
+                        "bg-diff-delete before:content-['−']"
                     )}
                   >
-                    {number}
+                    {line.content}
                   </td>
-                ))}
-                <td
-                  className={cn(
-                    "relative pr-3.5 pl-6 align-top before:absolute before:top-0 before:left-2 before:select-none",
-                    wrap
-                      ? "wrap-anywhere whitespace-pre-wrap"
-                      : "whitespace-pre",
-                    line.type === "insert" &&
-                      "bg-diff-insert before:content-['+']",
-                    line.type === "delete" &&
-                      "bg-diff-delete before:content-['−']"
-                  )}
-                >
-                  {line.content}
-                </td>
-              </tr>
+                </tr>
+                {after != null && after !== false && (
+                  <tr data-slot="diff-line-after" data-after-line-index={index}>
+                    <td colSpan={3} className="p-0">
+                      <div className="sticky left-0 w-[100cqw] max-w-full font-sans text-sm whitespace-normal">
+                        {after}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
             )
-          )}
+          })}
         </tbody>
       </table>
     </div>
@@ -315,4 +374,5 @@ export {
   FileDiffHeader,
   DiffView,
   type DiffLine,
+  type DiffSide,
 }

@@ -11,9 +11,11 @@ import {
   TopbarActions,
   TopbarBreadcrumb,
   TopbarCrumb,
+  TopbarCrumbMenu,
   TopbarCrumbSeparator,
   TopbarPage,
 } from "@/components/forge/app-shell"
+import { Icon } from "@/components/forge/icon"
 import {
   AppMark,
   IconRail,
@@ -34,6 +36,7 @@ import {
   UserAccessContext,
   type UserAccessState,
 } from "@/lib/user-access"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 
 import {
   matchActive,
@@ -156,12 +159,27 @@ export function ShellFooter({ children }: { children?: React.ReactNode }) {
   return <ShellSlot name="footer">{children}</ShellSlot>
 }
 
-/** Sidebar content above the sections, e.g. `CommandButton` or a switcher. */
+/**
+ * Sidebar content pinned under the brand, which stays in view while the rest
+ * of the sub nav scrolls: a scope switcher, a page's top block of items.
+ */
+export function ShellSidebarHeader({
+  children,
+}: {
+  children?: React.ReactNode
+}) {
+  return <ShellSlot name="sidebar-header">{children}</ShellSlot>
+}
+
+/**
+ * Sidebar content above the sections, scrolling with them, e.g.
+ * `CommandButton` or a page's own sub nav.
+ */
 export function ShellSidebarTop({ children }: { children?: React.ReactNode }) {
   return <ShellSlot name="sidebar-top">{children}</ShellSlot>
 }
 
-/** Sidebar content below the sections, e.g. `SidebarStatus`. */
+/** Sidebar content pinned below the sections, e.g. `SidebarStatus`. */
 export function ShellSidebarBottom({
   children,
 }: {
@@ -292,21 +310,61 @@ function ShellRailButton({
   )
 }
 
+/** Go where a crumb goes: its handler, then its page. */
+function follow(crumb: ShellCrumb, routing: Routing) {
+  crumb.onSelect?.()
+  if (!crumb.href) return
+  if (routing.navigate) routing.navigate(crumb.href)
+  else window.location.assign(crumb.href)
+}
+
 function Crumb({ crumb, routing }: { crumb: ShellCrumb; routing: Routing }) {
   return (
     <>
-      <TopbarCrumb
-        icon={crumb.icon}
-        onClick={() => {
-          crumb.onSelect?.()
-          if (!crumb.href) return
-          if (routing.navigate) routing.navigate(crumb.href)
-          else window.location.assign(crumb.href)
-        }}
-      >
+      <TopbarCrumb icon={crumb.icon} onClick={() => follow(crumb, routing)}>
         {crumb.label}
       </TopbarCrumb>
       <TopbarCrumbSeparator />
+    </>
+  )
+}
+
+// A trail longer than this shows its first and last crumbs; the ones
+// between fold into a menu.
+const MAX_CRUMBS = 2
+
+/** The crumbs before the page's title: all of them, or their ends around a menu of the rest. */
+function Crumbs({
+  crumbs,
+  routing,
+}: {
+  crumbs: ShellCrumb[]
+  routing: Routing
+}) {
+  if (crumbs.length <= MAX_CRUMBS) {
+    return crumbs.map((crumb, index) => (
+      <Crumb key={crumb.id ?? index} crumb={crumb} routing={routing} />
+    ))
+  }
+  const folded = crumbs.slice(1, -1)
+  return (
+    <>
+      <Crumb crumb={crumbs[0]} routing={routing} />
+      <TopbarCrumbMenu>
+        {folded.map((crumb, index) => (
+          <DropdownMenuItem
+            key={crumb.id ?? index}
+            // A crumb that goes nowhere is only a name.
+            disabled={!crumb.href && !crumb.onSelect}
+            onClick={() => follow(crumb, routing)}
+          >
+            {crumb.icon && <Icon icon={crumb.icon} />}
+            {crumb.label}
+          </DropdownMenuItem>
+        ))}
+      </TopbarCrumbMenu>
+      <TopbarCrumbSeparator />
+      <Crumb crumb={crumbs[crumbs.length - 1]} routing={routing} />
     </>
   )
 }
@@ -407,50 +465,58 @@ export function ShellLayout({
         // A hidden sub nav still backs the mobile menu, for the rail's items.
         className={sidebarHidden ? "hidden" : undefined}
       >
+        {/* The brand, the header and the bottom stay put; only the body
+            between them scrolls on a short screen. */}
         {brand && <SidebarBrand>{brand}</SidebarBrand>}
-        <SlotOutlet name="sidebar-top" />
-        {railItems.length > 0 && (
-          // The rail hides on phones; its items lead the mobile menu instead.
-          <SidebarSection
-            variant="primary"
-            className={sidebarHidden ? undefined : "hidden max-[600px]:block"}
-          >
-            <ShellNavItems
-              items={[...railItems, ...railFooter]}
-              activeId={activeRail}
-              routing={routing}
-            />
-          </SidebarSection>
-        )}
-        {!sidebarHidden &&
-          sections.map((section, index) => (
+        <div data-slot="shell-sidebar-pinned" className="shrink-0">
+          <SlotOutlet name="sidebar-header" />
+        </div>
+        <div
+          data-slot="shell-sidebar-body"
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto"
+        >
+          <SlotOutlet name="sidebar-top" />
+          {railItems.length > 0 && (
+            // The rail hides on phones; its items lead the mobile menu instead.
             <SidebarSection
-              key={section.id}
-              variant={
-                section.variant ??
-                (index === sections.length - 1 ? "flush" : "default")
-              }
+              variant="primary"
+              className={sidebarHidden ? undefined : "hidden max-[600px]:block"}
             >
-              {section.title && (
-                <NavSectionHeading action={section.action}>
-                  {section.title}
-                </NavSectionHeading>
-              )}
               <ShellNavItems
-                items={section.items}
-                activeId={activeSidebar}
+                items={[...railItems, ...railFooter]}
+                activeId={activeRail}
                 routing={routing}
               />
             </SidebarSection>
-          ))}
+          )}
+          {!sidebarHidden &&
+            sections.map((section, index) => (
+              <SidebarSection
+                key={section.id}
+                variant={
+                  section.variant ??
+                  (index === sections.length - 1 ? "flush" : "default")
+                }
+              >
+                {section.title && (
+                  <NavSectionHeading action={section.action}>
+                    {section.title}
+                  </NavSectionHeading>
+                )}
+                <ShellNavItems
+                  items={section.items}
+                  activeId={activeSidebar}
+                  routing={routing}
+                />
+              </SidebarSection>
+            ))}
+        </div>
         <SlotOutlet name="sidebar-bottom" />
       </WorkspaceSidebar>
       <MainPanel>
         <Topbar>
           <TopbarBreadcrumb>
-            {breadcrumbs.map((crumb, index) => (
-              <Crumb key={crumb.id ?? index} crumb={crumb} routing={routing} />
-            ))}
+            <Crumbs crumbs={breadcrumbs} routing={routing} />
             {title && <TopbarPage icon={icon}>{title}</TopbarPage>}
           </TopbarBreadcrumb>
           <TopbarActions>

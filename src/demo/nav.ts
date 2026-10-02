@@ -87,6 +87,12 @@ export const sections = [
     group: "Workspace",
   },
   {
+    id: "agent-workspace",
+    label: "Agent workspace",
+    icon: "robot",
+    group: "Workspace",
+  },
+  {
     id: "navigation",
     label: "Navigation",
     icon: "sidebar",
@@ -112,6 +118,12 @@ export const sections = [
     id: "integrations",
     label: "Integrations",
     icon: "link",
+    group: "Workspace",
+  },
+  {
+    id: "rich-text-editor",
+    label: "Rich text editor",
+    icon: "file",
     group: "Workspace",
   },
   {

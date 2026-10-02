@@ -3,6 +3,7 @@ import { cn } from "cn"
 import type { RowData } from "@tanstack/react-table"
 
 import { Input } from "@/components/ui/input"
+import { localDay } from "@/lib/timestamps"
 import {
   Select,
   SelectContent,
@@ -19,7 +20,8 @@ function toDraft(value: unknown, editor: DataTableEditor) {
   if (value === null || value === undefined) return ""
   if (editor === "date") {
     const date = toDate(value)
-    return date ? date.toISOString().slice(0, 10) : ""
+    // The day it is here; the date input shows and edits a local day.
+    return date ? localDay(date) : ""
   }
   return String(value)
 }

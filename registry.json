@@ -36,6 +36,23 @@
           "color-chart-3": "var(--chart-3)",
           "color-chart-2": "var(--chart-2)",
           "color-chart-1": "var(--chart-1)",
+          "color-chart-positive": "var(--chart-positive)",
+          "color-chart-neutral": "var(--chart-neutral)",
+          "color-chart-negative": "var(--chart-negative)",
+          "color-viz-1": "var(--viz-1)",
+          "color-viz-2": "var(--viz-2)",
+          "color-viz-3": "var(--viz-3)",
+          "color-viz-4": "var(--viz-4)",
+          "color-viz-5": "var(--viz-5)",
+          "color-viz-ramp-1": "var(--viz-ramp-1)",
+          "color-viz-ramp-2": "var(--viz-ramp-2)",
+          "color-viz-ramp-3": "var(--viz-ramp-3)",
+          "color-viz-ramp-4": "var(--viz-ramp-4)",
+          "color-graph-file": "var(--graph-file)",
+          "color-graph-type": "var(--graph-type)",
+          "color-graph-callable": "var(--graph-callable)",
+          "color-graph-value": "var(--graph-value)",
+          "color-graph-other": "var(--graph-other)",
           "color-ring": "var(--ring)",
           "color-input": "var(--input)",
           "color-border": "var(--border)",
@@ -158,11 +175,28 @@
           "border": "oklch(0.925 0.004 260)",
           "input": "oklch(0.935 0.004 260)",
           "ring": "oklch(0.708 0 0)",
-          "chart-1": "oklch(0.87 0 0)",
-          "chart-2": "oklch(0.556 0 0)",
-          "chart-3": "oklch(0.439 0 0)",
-          "chart-4": "oklch(0.371 0 0)",
-          "chart-5": "oklch(0.269 0 0)",
+          "chart-1": "oklch(0.33 0.012 260)",
+          "chart-2": "oklch(0.55 0.014 260)",
+          "chart-3": "oklch(0.74 0.012 260)",
+          "chart-4": "oklch(0.86 0.008 260)",
+          "chart-5": "oklch(0.93 0.005 260)",
+          "chart-positive": "#23874a",
+          "chart-neutral": "#a9aeb8",
+          "chart-negative": "#c94f4f",
+          "viz-1": "#3d6fd9",
+          "viz-2": "#159a8a",
+          "viz-3": "#e0932b",
+          "viz-4": "#d6558c",
+          "viz-5": "#7b5cd6",
+          "viz-ramp-1": "#2a4fa6",
+          "viz-ramp-2": "#3d6fd9",
+          "viz-ramp-3": "#6590e8",
+          "viz-ramp-4": "#88abef",
+          "graph-file": "#2a78d6",
+          "graph-type": "#eb6834",
+          "graph-callable": "#1baf7a",
+          "graph-value": "#4a3aa7",
+          "graph-other": "#9a9ca3",
           "sidebar": "oklch(0.998 0.002 260)",
           "sidebar-foreground": "oklch(0.235 0.009 260)",
           "sidebar-primary": "oklch(0.19 0.006 260)",
@@ -280,6 +314,28 @@
           "sidebar-accent-foreground": "oklch(0.91 0.005 260)",
           "sidebar-border": "oklch(0.29 0.008 260)",
           "sidebar-ring": "oklch(0.556 0 0)",
+          "chart-1": "oklch(0.9 0.006 260)",
+          "chart-2": "oklch(0.72 0.01 260)",
+          "chart-3": "oklch(0.55 0.012 260)",
+          "chart-4": "oklch(0.38 0.01 260)",
+          "chart-5": "oklch(0.29 0.008 260)",
+          "chart-positive": "#2f9a5a",
+          "chart-neutral": "#5f6570",
+          "chart-negative": "#e06a6a",
+          "viz-1": "#5b88ec",
+          "viz-2": "#16998a",
+          "viz-3": "#c28027",
+          "viz-4": "#d6588f",
+          "viz-5": "#8f74e6",
+          "viz-ramp-1": "#86a9f2",
+          "viz-ramp-2": "#5b88ec",
+          "viz-ramp-3": "#3b64c4",
+          "viz-ramp-4": "#274a9c",
+          "graph-file": "#3987e5",
+          "graph-type": "#d95926",
+          "graph-callable": "#199e70",
+          "graph-value": "#7a48c0",
+          "graph-other": "#6b6e75",
           "subtle": "oklch(0.6 0.01 260)",
           "nav-foreground": "oklch(0.7 0.009 260)",
           "rail-foreground": "oklch(0.7 0.009 260)",
@@ -338,11 +394,11 @@
           "--border": "oklch(0.925 0.004 260)",
           "--input": "oklch(0.935 0.004 260)",
           "--ring": "oklch(0.708 0 0)",
-          "--chart-1": "oklch(0.87 0 0)",
-          "--chart-2": "oklch(0.556 0 0)",
-          "--chart-3": "oklch(0.439 0 0)",
-          "--chart-4": "oklch(0.371 0 0)",
-          "--chart-5": "oklch(0.269 0 0)",
+          "--chart-1": "oklch(0.33 0.012 260)",
+          "--chart-2": "oklch(0.55 0.014 260)",
+          "--chart-3": "oklch(0.74 0.012 260)",
+          "--chart-4": "oklch(0.86 0.008 260)",
+          "--chart-5": "oklch(0.93 0.005 260)",
           "--sidebar": "oklch(0.998 0.002 260)",
           "--sidebar-foreground": "oklch(0.235 0.009 260)",
           "--sidebar-primary": "oklch(0.19 0.006 260)",
@@ -352,6 +408,11 @@
           "--sidebar-border": "oklch(0.925 0.004 260)",
           "--sidebar-ring": "oklch(0.708 0 0)",
           "--radius": "0.5rem",
+          "--graph-file-ink": "var(--background)",
+          "--graph-type-ink": "var(--foreground)",
+          "--graph-callable-ink": "var(--foreground)",
+          "--graph-value-ink": "var(--background)",
+          "--graph-other-ink": "var(--foreground)",
           "--text-ui": "0.875rem",
           "--forge-row-height": "45px",
           "--radius-chip": "4px",
@@ -396,6 +457,16 @@
           "--sidebar-accent-foreground": "oklch(0.91 0.005 260)",
           "--sidebar-border": "oklch(0.29 0.008 260)",
           "--sidebar-ring": "oklch(0.556 0 0)",
+          "--chart-1": "oklch(0.9 0.006 260)",
+          "--chart-2": "oklch(0.72 0.01 260)",
+          "--chart-3": "oklch(0.55 0.012 260)",
+          "--chart-4": "oklch(0.38 0.01 260)",
+          "--chart-5": "oklch(0.29 0.008 260)",
+          "--graph-file-ink": "var(--background)",
+          "--graph-type-ink": "var(--background)",
+          "--graph-callable-ink": "var(--background)",
+          "--graph-value-ink": "var(--foreground)",
+          "--graph-other-ink": "var(--foreground)",
           "color-scheme": "dark"
         },
         "@import \"@fontsource-variable/geist\"": {},
@@ -448,6 +519,16 @@
           "--scrollbar-thumb": "oklch(0.51 0.012 260)",
           "--scrollbar-thumb-hover": "oklch(0.64 0.012 260)",
           "--scrollbar-thumb-active": "oklch(0.73 0.012 260)"
+        },
+        "@utility scrollbar-panel": {
+          "&:not(:hover)": {
+            "--scrollbar-thumb": "transparent"
+          },
+          "@media (forced-colors: none)": {
+            "&::-webkit-scrollbar-track": {
+              "margin-block": "0.25rem calc(var(--radius-xl) + 0.125rem)"
+            }
+          }
         },
         "@utility shimmer": {
           "background-image": "linear-gradient(\n        90deg,\n        currentColor 35%,\n        color-mix(in oklab, currentColor 30%, transparent) 50%,\n        currentColor 65%\n    )",
@@ -679,6 +760,26 @@
           "path": "src/components/ui/button.tsx",
           "type": "registry:ui",
           "target": "@ui/button.tsx"
+        }
+      ]
+    },
+    {
+      "name": "chart",
+      "type": "registry:ui",
+      "title": "Chart",
+      "description": "Recharts container, tooltip and legend on the chart, data-viz and graph tokens.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "recharts@^3.10.1"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/chart.tsx",
+          "type": "registry:ui",
+          "target": "@ui/chart.tsx"
         }
       ]
     },
@@ -1096,6 +1197,25 @@
       ]
     },
     {
+      "name": "switch",
+      "type": "registry:ui",
+      "title": "Switch",
+      "description": "On/off switch: a 32 × 18px track, the dark primary when on.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/switch.tsx",
+          "type": "registry:ui",
+          "target": "@ui/switch.tsx"
+        }
+      ]
+    },
+    {
       "name": "table",
       "type": "registry:ui",
       "title": "Table",
@@ -1156,7 +1276,7 @@
       "name": "toast",
       "type": "registry:ui",
       "title": "Toast",
-      "description": "Base UI toast, restyled as a bottom-centre notice.",
+      "description": "Base UI toast, restyled as a notice at the top centre, under the top bar.",
       "dependencies": [
         "@base-ui/react@^1.8.0",
         "class-variance-authority@^0.7.1",
@@ -1293,7 +1413,7 @@
       "name": "avatars",
       "type": "registry:component",
       "title": "Avatars",
-      "description": "Workspace orb and gradient agent avatars with tooltips.",
+      "description": "Workspace orb, gradient agent avatars with tooltips, and initials avatars for people.",
       "dependencies": [
         "@base-ui/react@^1.8.0",
         "class-variance-authority@^0.7.1",
@@ -1302,6 +1422,7 @@
         "@hugeicons/core-free-icons@^4.3.5"
       ],
       "registryDependencies": [
+        "@forge-ui/avatar",
         "@forge-ui/tooltip",
         "@forge-ui/icon"
       ],
@@ -1328,6 +1449,7 @@
       "registryDependencies": [
         "@forge-ui/breadcrumb",
         "@forge-ui/button",
+        "@forge-ui/dropdown-menu",
         "@forge-ui/kbd",
         "@forge-ui/tooltip",
         "@forge-ui/icon"
@@ -1811,6 +1933,7 @@
         "@forge-ui/icon",
         "@forge-ui/illustration",
         "@forge-ui/status",
+        "@forge-ui/timestamps",
         "@forge-ui/toolbar"
       ],
       "files": [
@@ -2087,6 +2210,7 @@
         "zustand@^5.0.15"
       ],
       "registryDependencies": [
+        "@forge-ui/dropdown-menu",
         "@forge-ui/app-shell",
         "@forge-ui/icon-rail",
         "@forge-ui/workspace-sidebar",
@@ -2113,6 +2237,61 @@
       ]
     },
     {
+      "name": "timestamps",
+      "type": "registry:lib",
+      "title": "Timestamps",
+      "description": "parseTimestamp and localDay: API times read as UTC and bare dates as local days, for tables and forms.",
+      "files": [
+        {
+          "path": "src/lib/timestamps.ts",
+          "type": "registry:lib",
+          "target": "@lib/timestamps.ts"
+        }
+      ]
+    },
+    {
+      "name": "attachments",
+      "type": "registry:lib",
+      "title": "Attachments",
+      "description": "ChatAttachmentAdapter: images, PDFs and text files on messages, named so the thread can show them.",
+      "dependencies": [
+        "@assistant-ui/react@^0.15.22"
+      ],
+      "files": [
+        {
+          "path": "src/lib/attachments.ts",
+          "type": "registry:lib",
+          "target": "@lib/attachments.ts"
+        }
+      ]
+    },
+    {
+      "name": "use-now",
+      "type": "registry:hook",
+      "title": "use-now",
+      "description": "A one-second clock shared by every component showing elapsed time.",
+      "files": [
+        {
+          "path": "src/hooks/use-now.ts",
+          "type": "registry:hook",
+          "target": "@hooks/use-now.ts"
+        }
+      ]
+    },
+    {
+      "name": "use-debounced-value",
+      "type": "registry:hook",
+      "title": "use-debounced-value",
+      "description": "A value that settles a moment after it stops changing.",
+      "files": [
+        {
+          "path": "src/hooks/use-debounced-value.ts",
+          "type": "registry:hook",
+          "target": "@hooks/use-debounced-value.ts"
+        }
+      ]
+    },
+    {
       "name": "assistant-thread",
       "type": "registry:component",
       "title": "Assistant thread",
@@ -2126,23 +2305,37 @@
         "@assistant-ui/react@^0.15.22",
         "@assistant-ui/react-markdown@^0.14.17",
         "remark-gfm@^4.0.1",
+        "remark-math@^6.0.0",
+        "rehype-katex@^7.0.1",
+        "katex@^0.18.10",
+        "mermaid@^11.17.2",
+        "shiki@^4.4.3",
         "zustand@^5.0.15"
       ],
       "registryDependencies": [
         "@forge-ui/avatar",
         "@forge-ui/button",
         "@forge-ui/collapsible",
+        "@forge-ui/command",
         "@forge-ui/dialog",
         "@forge-ui/input",
+        "@forge-ui/popover",
         "@forge-ui/skeleton",
         "@forge-ui/textarea",
-        "@forge-ui/tooltip"
+        "@forge-ui/tooltip",
+        "@forge-ui/icon",
+        "@forge-ui/attachments"
       ],
       "files": [
         {
           "path": "src/components/assistant-ui/elements/assistant-modal.aui.tsx",
           "type": "registry:component",
           "target": "@components/assistant-ui/elements/assistant-modal.aui.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/attachment-notice.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/attachment-notice.tsx"
         },
         {
           "path": "src/components/assistant-ui/elements/attachment.aui.tsx",
@@ -2180,6 +2373,21 @@
           "target": "@components/assistant-ui/elements/markdown-text.tsx"
         },
         {
+          "path": "src/components/assistant-ui/elements/mermaid-diagram.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/mermaid-diagram.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/model-selector.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/model-selector.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/quote-toolbar.aui.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/quote-toolbar.aui.tsx"
+        },
+        {
           "path": "src/components/assistant-ui/elements/reasoning.aui.tsx",
           "type": "registry:component",
           "target": "@components/assistant-ui/elements/reasoning.aui.tsx"
@@ -2188,6 +2396,16 @@
           "path": "src/components/assistant-ui/elements/reasoning.tsx",
           "type": "registry:component",
           "target": "@components/assistant-ui/elements/reasoning.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/syntax-highlighter.css",
+          "type": "registry:file",
+          "target": "@components/assistant-ui/elements/syntax-highlighter.css"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/syntax-highlighter.tsx",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/syntax-highlighter.tsx"
         },
         {
           "path": "src/components/assistant-ui/elements/thread-list.aui.tsx",
@@ -2213,6 +2431,21 @@
           "path": "src/components/assistant-ui/elements/tooltip-icon-button.tsx",
           "type": "registry:component",
           "target": "@components/assistant-ui/elements/tooltip-icon-button.tsx"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/use-disclosure-anchor.ts",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/use-disclosure-anchor.ts"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/use-follow-reply.ts",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/use-follow-reply.ts"
+        },
+        {
+          "path": "src/components/assistant-ui/elements/use-reasoning-duration.ts",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/use-reasoning-duration.ts"
         },
         {
           "path": "src/hooks/use-attachment-src.ts",
@@ -2243,8 +2476,10 @@
       "registryDependencies": [
         "@forge-ui/assistant-thread",
         "@forge-ui/button",
+        "@forge-ui/collapsible",
         "@forge-ui/dropdown-menu",
         "@forge-ui/input",
+        "@forge-ui/popover",
         "@forge-ui/spinner",
         "@forge-ui/app-shell",
         "@forge-ui/avatars",
@@ -2304,9 +2539,459 @@
           "target": "@components/forge/assistant/model-settings.ts"
         },
         {
+          "path": "src/components/forge/assistant/source-refs.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/source-refs.ts"
+        },
+        {
+          "path": "src/components/forge/assistant/sources.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/sources.tsx"
+        },
+        {
           "path": "src/components/forge/assistant/use-adk-assistant.ts",
           "type": "registry:component",
           "target": "@components/forge/assistant/use-adk-assistant.ts"
+        }
+      ]
+    },
+    {
+      "name": "agent-workspace",
+      "type": "registry:component",
+      "title": "Agent workspace",
+      "description": "Everything around the assistant's conversation for a capable agent: progress by the composer, plan, notes and canvas panels, response and context stats, a chat history palette, follow-ups, a tools menu and tool cards for the chat API's built-in tools.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5",
+        "@assistant-ui/react@^0.15.22",
+        "@assistant-ui/react-google-adk@^0.0.32",
+        "highlight.js@^11.12.0",
+        "react-markdown@^10.1.0",
+        "remark-gfm@^4.0.1",
+        "zustand@^5.0.15"
+      ],
+      "registryDependencies": [
+        "@forge-ui/assistant",
+        "@forge-ui/assistant-thread",
+        "@forge-ui/attachments",
+        "@forge-ui/icon",
+        "@forge-ui/button",
+        "@forge-ui/checkbox",
+        "@forge-ui/command",
+        "@forge-ui/dialog",
+        "@forge-ui/dropdown-menu",
+        "@forge-ui/input",
+        "@forge-ui/native-select",
+        "@forge-ui/popover",
+        "@forge-ui/sheet",
+        "@forge-ui/skeleton",
+        "@forge-ui/spinner",
+        "@forge-ui/switch",
+        "@forge-ui/tabs",
+        "@forge-ui/textarea",
+        "@forge-ui/tooltip"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/agent-workspace/activity-mark.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/activity-mark.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/canvas-panel.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/canvas-panel.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/canvas.css",
+          "type": "registry:file",
+          "target": "@components/forge/agent-workspace/canvas.css"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/chat-history-palette.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/chat-history-palette.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/context-meter.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/context-meter.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/follow-ups.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/follow-ups.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/index.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/index.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/activity.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/activity.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/agent-tools.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/agent-tools.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/assistant-models.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/assistant-models.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/canvas.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/canvas.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/chat-history.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/chat-history.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/commands.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/commands.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/documents.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/documents.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/follow-ups.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/follow-ups.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/format.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/format.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/notes.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/notes.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/plan.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/plan.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/screen-store.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/screen-store.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/tool-result.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/tool-result.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/turn-stats.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/turn-stats.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/use-agent-activity.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/use-agent-activity.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/use-agent-workspace.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/use-agent-workspace.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/lib/use-tool-finished.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/lib/use-tool-finished.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/message-stats.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/message-stats.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/notes-panel.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/notes-panel.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/plan-panel.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/plan-panel.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/plan-steps.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/plan-steps.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/progress-dock.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/progress-dock.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/side-panel.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/side-panel.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/stats-list.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/stats-list.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/tool-uis/ask-user.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/tool-uis/ask-user.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/tool-uis/basic-tools.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/tool-uis/basic-tools.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/tool-uis/document-tools.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/tool-uis/document-tools.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/tool-uis/index.ts",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/tool-uis/index.ts"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/tool-uis/note-preview.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/tool-uis/note-preview.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/tool-uis/note-tools.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/tool-uis/note-tools.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/tool-uis/plan-tools.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/tool-uis/plan-tools.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/tool-uis/tool-frame.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/tool-uis/tool-frame.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/tools-menu.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/tools-menu.tsx"
+        },
+        {
+          "path": "src/components/forge/agent-workspace/turn-details.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/agent-workspace/turn-details.tsx"
+        }
+      ]
+    },
+    {
+      "name": "rich-text-editor",
+      "type": "registry:component",
+      "title": "Rich text editor",
+      "description": "Tiptap editor in the workspace look: toolbar, bubble menus, / commands, mentions, tables, code with highlighting, maths, media, find and replace, outline, drag handles and Markdown in and out.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5",
+        "@tiptap/core@^3.31.4",
+        "@tiptap/extension-audio@^3.31.4",
+        "@tiptap/extension-bubble-menu@^3.31.4",
+        "@tiptap/extension-code-block-lowlight@^3.31.4",
+        "@tiptap/extension-details@^3.31.4",
+        "@tiptap/extension-drag-handle@^3.31.4",
+        "@tiptap/extension-drag-handle-react@^3.31.4",
+        "@tiptap/extension-emoji@^3.31.4",
+        "@tiptap/extension-file-handler@^3.31.4",
+        "@tiptap/extension-find-and-replace@^3.31.4",
+        "@tiptap/extension-floating-menu@^3.31.4",
+        "@tiptap/extension-highlight@^3.31.4",
+        "@tiptap/extension-image@^3.31.4",
+        "@tiptap/extension-invisible-characters@^3.31.4",
+        "@tiptap/extension-list@^3.31.4",
+        "@tiptap/extension-mathematics@^3.31.4",
+        "@tiptap/extension-mention@^3.31.4",
+        "@tiptap/extension-node-range@^3.31.4",
+        "@tiptap/extension-subscript@^3.31.4",
+        "@tiptap/extension-superscript@^3.31.4",
+        "@tiptap/extension-table@^3.31.4",
+        "@tiptap/extension-text-align@^3.31.4",
+        "@tiptap/extension-text-style@^3.31.4",
+        "@tiptap/extension-twitch@^3.31.4",
+        "@tiptap/extension-typography@^3.31.4",
+        "@tiptap/extension-unique-id@^3.31.4",
+        "@tiptap/extension-youtube@^3.31.4",
+        "@tiptap/extensions@^3.31.4",
+        "@tiptap/markdown@^3.31.4",
+        "@tiptap/pm@^3.31.4",
+        "@tiptap/react@^3.31.4",
+        "@tiptap/starter-kit@^3.31.4",
+        "@tiptap/suggestion@^3.31.4",
+        "highlight.js@^11.12.0",
+        "katex@^0.18.10",
+        "lowlight@^3.3.0"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button",
+        "@forge-ui/dialog",
+        "@forge-ui/dropdown-menu",
+        "@forge-ui/field",
+        "@forge-ui/input",
+        "@forge-ui/kbd",
+        "@forge-ui/popover",
+        "@forge-ui/select",
+        "@forge-ui/separator",
+        "@forge-ui/skeleton",
+        "@forge-ui/spinner",
+        "@forge-ui/textarea",
+        "@forge-ui/toast",
+        "@forge-ui/toggle",
+        "@forge-ui/tooltip"
+      ],
+      "files": [
+        {
+          "path": "src/components/forge/rich-text-editor/block-handle.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/block-handle.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/bubble-menus.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/bubble-menus.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/code-block-view.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/code-block-view.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/commands.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/commands.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/content.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/content.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/controls.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/controls.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/extensions.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/extensions.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/features.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/features.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/files.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/files.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/find-replace.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/find-replace.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/index.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/index.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/insert-dialog.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/insert-dialog.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/lazy.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/lazy.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/lowlight.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/lowlight.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/markdown-paste.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/markdown-paste.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/outline.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/outline.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/palette.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/palette.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/rich-text-editor.css",
+          "type": "registry:file",
+          "target": "@components/forge/rich-text-editor/rich-text-editor.css"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/rich-text-editor.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/rich-text-editor.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/shortcuts.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/shortcuts.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/slash-command.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/slash-command.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/suggestion-menu.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/suggestion-menu.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/suggestion.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/suggestion.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/toolbar.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/toolbar.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/types.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/types.ts"
         }
       ]
     },
@@ -2323,6 +3008,7 @@
         "@forge-ui/badge",
         "@forge-ui/breadcrumb",
         "@forge-ui/button",
+        "@forge-ui/chart",
         "@forge-ui/checkbox",
         "@forge-ui/collapsible",
         "@forge-ui/command",
@@ -2343,6 +3029,7 @@
         "@forge-ui/sheet",
         "@forge-ui/skeleton",
         "@forge-ui/spinner",
+        "@forge-ui/switch",
         "@forge-ui/table",
         "@forge-ui/tabs",
         "@forge-ui/textarea",
@@ -2430,6 +3117,7 @@
         "@forge-ui/badge",
         "@forge-ui/breadcrumb",
         "@forge-ui/button",
+        "@forge-ui/chart",
         "@forge-ui/checkbox",
         "@forge-ui/collapsible",
         "@forge-ui/command",
@@ -2450,6 +3138,7 @@
         "@forge-ui/sheet",
         "@forge-ui/skeleton",
         "@forge-ui/spinner",
+        "@forge-ui/switch",
         "@forge-ui/table",
         "@forge-ui/tabs",
         "@forge-ui/textarea",
@@ -2485,7 +3174,11 @@
         "@forge-ui/user",
         "@forge-ui/preferences",
         "@forge-ui/shell",
-        "@forge-ui/assistant"
+        "@forge-ui/assistant",
+        "@forge-ui/agent-workspace",
+        "@forge-ui/rich-text-editor",
+        "@forge-ui/use-now",
+        "@forge-ui/use-debounced-value"
       ]
     }
   ]

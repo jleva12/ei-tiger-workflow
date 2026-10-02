@@ -1,5 +1,6 @@
 import type { RowData } from "@tanstack/react-table"
 
+import { localDay, parseTimestamp } from "@/lib/timestamps"
 import type {
   Column,
   DataTableEditor,
@@ -43,7 +44,7 @@ export function toDate(value: unknown): Date | undefined {
   if (value instanceof Date)
     return Number.isNaN(value.getTime()) ? undefined : value
   if (typeof value === "number" || typeof value === "string") {
-    const date = new Date(value)
+    const date = parseTimestamp(value)
     return Number.isNaN(date.getTime()) ? undefined : date
   }
   return undefined
@@ -197,11 +198,13 @@ export function coerceText(
       return undefined
     case "date": {
       if (trimmed === "") return null
-      const date = toDate(trimmed)
+      // A person's input: a time without a zone is their own, local one.
+      const date = toDate(trimmed.includes(":") ? new Date(trimmed) : trimmed)
       if (!date) return undefined
       if (previous instanceof Date) return date
       if (typeof previous === "number") return date.getTime()
-      return trimmed
+      // Kept as text: a day as the day, a time as UTC with its zone.
+      return trimmed.includes(":") ? date.toISOString() : localDay(date)
     }
     case "select": {
       const option = options?.find(

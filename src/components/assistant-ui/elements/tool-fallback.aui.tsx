@@ -11,7 +11,6 @@ import {
 import {
   toolApprovalAcceptsText,
   useAuiState,
-  useScrollLock,
   useToolCallElapsed,
   type ToolApprovalOption,
   type ToolCallMessagePart,
@@ -27,6 +26,8 @@ import {
 import { cn } from "cn"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+
+import { useDisclosureAnchor } from "./use-disclosure-anchor"
 
 const ANIMATION_DURATION = 200
 
@@ -51,20 +52,20 @@ function ToolFallbackRoot({
 }: ToolFallbackRootProps) {
   const collapsibleRef = useRef<HTMLDivElement>(null)
   const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen)
-  const lockScroll = useScrollLock(collapsibleRef, ANIMATION_DURATION)
+  const holdInPlace = useDisclosureAnchor(collapsibleRef, ANIMATION_DURATION)
 
   const isControlled = controlledOpen !== undefined
   const isOpen = isControlled ? controlledOpen : uncontrolledOpen
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
-      lockScroll()
+      holdInPlace()
       if (!isControlled) {
         setUncontrolledOpen(open)
       }
       controlledOnOpenChange?.(open)
     },
-    [lockScroll, isControlled, controlledOnOpenChange]
+    [holdInPlace, isControlled, controlledOnOpenChange]
   )
 
   return (
@@ -130,11 +131,14 @@ function ToolFallbackDuration({
 function ToolFallbackTrigger({
   toolName,
   status,
+  label: named,
   className,
   ...props
 }: React.ComponentProps<typeof CollapsibleTrigger> & {
   toolName: string
   status?: ToolCallMessagePartStatus
+  /** What the call did, in place of "Used tool: <toolName>". */
+  label?: React.ReactNode
 }) {
   const statusType = status?.type ?? "complete"
   const isRunning = statusType === "running"
@@ -169,7 +173,11 @@ function ToolFallbackTrigger({
           isRunning && "shimmer motion-reduce:animate-none"
         )}
       >
-        {label}: <b>{toolName}</b>
+        {named ?? (
+          <>
+            {label}: <b>{toolName}</b>
+          </>
+        )}
       </span>
       <ToolFallbackDuration />
       <ChevronDownIcon

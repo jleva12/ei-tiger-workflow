@@ -16,6 +16,10 @@ export type AssistantModalProps = AssistantOptions & {
   actions?: React.ReactNode
   /** Start with the panel open. */
   defaultOpen?: boolean
+  /** Whether the panel is open, to control it; `defaultOpen` otherwise. */
+  open?: boolean
+  /** Called when the panel opens or closes. */
+  onOpenChange?: (open: boolean) => void
   /**
    * Classes for the launcher's anchor. It's fixed to the viewport's
    * bottom-right corner by default; `absolute` pins it inside a positioned
@@ -39,6 +43,8 @@ function LauncherMark() {
 function AssistantModal({
   actions,
   defaultOpen,
+  open,
+  onOpenChange,
   className,
   ...options
 }: AssistantModalProps) {
@@ -47,6 +53,8 @@ function AssistantModal({
       <AssistantModalElement
         label={options.title ?? "Assistant"}
         defaultOpen={defaultOpen}
+        open={open}
+        onOpenChange={onOpenChange}
         icon={<LauncherMark />}
         className={className}
         thread={<AssistantThread />}

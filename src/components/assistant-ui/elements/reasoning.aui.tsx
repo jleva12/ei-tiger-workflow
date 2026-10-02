@@ -2,7 +2,6 @@
 
 import { memo, useCallback, useRef } from "react"
 import {
-  useScrollLock,
   useAuiState,
   type ReasoningMessagePartComponent,
   type ReasoningGroupComponent,
@@ -18,22 +17,24 @@ import {
   reasoningVariants,
   type ReasoningRootProps,
 } from "./reasoning"
+import { useDisclosureAnchor } from "./use-disclosure-anchor"
+import { useReasoningDuration } from "./use-reasoning-duration"
 
 export type { ReasoningRootProps } from "./reasoning"
 
-/** `ReasoningRoot` with the thread viewport scroll locked during disclosure animations. */
+/** `ReasoningRoot` held in place on screen while it opens and closes (`useDisclosureAnchor`). */
 function ReasoningRoot({
   ref,
   onAnimationStart,
   ...props
 }: ReasoningRootProps) {
   const collapsibleRef = useRef<HTMLDivElement | null>(null)
-  const lockScroll = useScrollLock(collapsibleRef, ANIMATION_DURATION)
+  const holdInPlace = useDisclosureAnchor(collapsibleRef, ANIMATION_DURATION)
 
   const handleAnimationStart = useCallback(() => {
-    lockScroll()
+    holdInPlace()
     onAnimationStart?.()
-  }, [lockScroll, onAnimationStart])
+  }, [holdInPlace, onAnimationStart])
 
   const composedRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -70,10 +71,11 @@ const ReasoningGroupImpl: ReasoningGroupComponent = ({
     }
     return false
   })
+  const duration = useReasoningDuration(startIndex, isReasoningStreaming)
 
   return (
     <ReasoningRoot streaming={isReasoningStreaming}>
-      <ReasoningTrigger active={isReasoningStreaming} />
+      <ReasoningTrigger active={isReasoningStreaming} duration={duration} />
       <ReasoningContent aria-busy={isReasoningStreaming}>
         <ReasoningText>{children}</ReasoningText>
       </ReasoningContent>

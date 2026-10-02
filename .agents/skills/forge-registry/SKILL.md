@@ -73,6 +73,11 @@ Pick the list that matches the file's kind:
   npm deps; an extra npm package needs the same kind of special case as
   `data-table` has (and must be in `package.json` dependencies — `version()`
   reads the range from there).
+- **A folder with subfolders** (`agent-workspace`, `rich-text-editor`) → a
+  standalone object whose `files` come from `forgeFolder("<folder>")`, which
+  ships every file, nested ones and CSS (as `registry:file`) included. Add
+  standalone items to `items` near the bottom, and to `base` if new apps
+  should get them.
 - **Library** (e.g. `apiClient`, `queryClient`, `resource`) → a standalone
   object with `type: "registry:lib"`, files targeting `@lib/...`,
   `dependencies: [version("<npm package>")]` and `registryDependencies`
@@ -93,6 +98,7 @@ status bands and the flat task table.").
 ```bash
 npm run registry:build   # regenerates registry.json and public/r
 npx tsc -b               # typecheck (what `npm run build` runs)
+npm test                 # node --test over tests/*.test.ts
 npx eslint <changed files>
 npx prettier --check <changed files>
 ```

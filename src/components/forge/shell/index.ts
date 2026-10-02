@@ -5,6 +5,7 @@ export {
   ShellPage,
   ShellProvider,
   ShellSidebarBottom,
+  ShellSidebarHeader,
   ShellSidebarTop,
   ShellSlot,
   ShellToolbar,

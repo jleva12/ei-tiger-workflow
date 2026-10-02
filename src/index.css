@@ -39,11 +39,51 @@
     --border: oklch(0.925 0.004 260);
     --input: oklch(0.935 0.004 260);
     --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
+    /* Charts: a graphite ramp on hue 260, darkest first. A chart's story
+       series takes chart-1 and context series step lighter, so emphasis,
+       not hue, tells them apart. Outcomes use the diverging trio below:
+       good and bad poles with a neutral midpoint, validated for colour
+       vision on both surfaces; the neutral sits under 3:1, so outcome
+       charts always carry a legend with counts. */
+    --chart-1: oklch(0.33 0.012 260);
+    --chart-2: oklch(0.55 0.014 260);
+    --chart-3: oklch(0.74 0.012 260);
+    --chart-4: oklch(0.86 0.008 260);
+    --chart-5: oklch(0.93 0.005 260);
+    --chart-positive: #23874a;
+    --chart-neutral: #a9aeb8;
+    --chart-negative: #c94f4f;
+    /* Delivery charts: a cool categorical set for series that are the
+       subject (models, fixed order, never cycled), and one blue ramp for
+       a single story series and ordered kinds, strongest first. Both
+       validated with the data-viz palette checks on each surface (CVD
+       adjacent ΔE ≥ 11.7, normal-vision ≥ 17.4); amber sits under 3:1 on
+       light, so these charts always carry a legend and a table twin. */
+    --viz-1: #3d6fd9;
+    --viz-2: #159a8a;
+    --viz-3: #e0932b;
+    --viz-4: #d6558c;
+    --viz-5: #7b5cd6;
+    --viz-ramp-1: #2a4fa6;
+    --viz-ramp-2: #3d6fd9;
+    --viz-ramp-3: #6590e8;
+    --viz-ramp-4: #88abef;
+    /* Code graph node families: four data-viz reference hues, validated to
+       stay apart for every pair and colour-vision type on these surfaces
+       (dark mode steps violet deeper to clear blue), and a neutral for the
+       rest. Nodes also differ by family shape and kind glyph and carry
+       their names, so colour never identifies a node alone. Each family's
+       ink is whichever of paper or graphite its glyph reads best on. */
+    --graph-file: #2a78d6;
+    --graph-type: #eb6834;
+    --graph-callable: #1baf7a;
+    --graph-value: #4a3aa7;
+    --graph-other: #9a9ca3;
+    --graph-file-ink: var(--background);
+    --graph-type-ink: var(--foreground);
+    --graph-callable-ink: var(--foreground);
+    --graph-value-ink: var(--background);
+    --graph-other-ink: var(--foreground);
     --radius: 0.5rem;
     --sidebar: oklch(0.998 0.002 260);
     --sidebar-foreground: oklch(0.235 0.009 260);
@@ -206,6 +246,33 @@
     --sidebar-accent-foreground: oklch(0.91 0.005 260);
     --sidebar-border: oklch(0.29 0.008 260);
     --sidebar-ring: oklch(0.556 0 0);
+    --chart-1: oklch(0.9 0.006 260);
+    --chart-2: oklch(0.72 0.01 260);
+    --chart-3: oklch(0.55 0.012 260);
+    --chart-4: oklch(0.38 0.01 260);
+    --chart-5: oklch(0.29 0.008 260);
+    --chart-positive: #2f9a5a;
+    --chart-neutral: #5f6570;
+    --chart-negative: #e06a6a;
+    --viz-1: #5b88ec;
+    --viz-2: #16998a;
+    --viz-3: #c28027;
+    --viz-4: #d6588f;
+    --viz-5: #8f74e6;
+    --viz-ramp-1: #86a9f2;
+    --viz-ramp-2: #5b88ec;
+    --viz-ramp-3: #3b64c4;
+    --viz-ramp-4: #274a9c;
+    --graph-file: #3987e5;
+    --graph-type: #d95926;
+    --graph-callable: #199e70;
+    --graph-value: #7a48c0;
+    --graph-other: #6b6e75;
+    --graph-file-ink: var(--background);
+    --graph-type-ink: var(--background);
+    --graph-callable-ink: var(--background);
+    --graph-value-ink: var(--foreground);
+    --graph-other-ink: var(--foreground);
 
     --subtle: oklch(0.6 0.01 260);
     --nav-foreground: oklch(0.7 0.009 260);
@@ -278,6 +345,23 @@
     --color-chart-3: var(--chart-3);
     --color-chart-2: var(--chart-2);
     --color-chart-1: var(--chart-1);
+    --color-chart-positive: var(--chart-positive);
+    --color-chart-neutral: var(--chart-neutral);
+    --color-chart-negative: var(--chart-negative);
+    --color-viz-1: var(--viz-1);
+    --color-viz-2: var(--viz-2);
+    --color-viz-3: var(--viz-3);
+    --color-viz-4: var(--viz-4);
+    --color-viz-5: var(--viz-5);
+    --color-viz-ramp-1: var(--viz-ramp-1);
+    --color-viz-ramp-2: var(--viz-ramp-2);
+    --color-viz-ramp-3: var(--viz-ramp-3);
+    --color-viz-ramp-4: var(--viz-ramp-4);
+    --color-graph-file: var(--graph-file);
+    --color-graph-type: var(--graph-type);
+    --color-graph-callable: var(--graph-callable);
+    --color-graph-value: var(--graph-value);
+    --color-graph-other: var(--graph-other);
     --color-ring: var(--ring);
     --color-input: var(--input);
     --color-border: var(--border);
@@ -457,6 +541,24 @@
     --scrollbar-thumb: oklch(0.51 0.012 260);
     --scrollbar-thumb-hover: oklch(0.64 0.012 260);
     --scrollbar-thumb-active: oklch(0.73 0.012 260);
+}
+
+/*
+ * Scrollbars in rounded floating panels such as the assistant: the thumb
+ * shows while the pointer is over the panel, and the track stops short of the
+ * header above and the rounded corner below. Like scrollbar-dark, it sets the
+ * variables the global scrollbar rules read, which a utility can't override.
+ */
+@utility scrollbar-panel {
+    &:not(:hover) {
+        --scrollbar-thumb: transparent;
+    }
+
+    @media (forced-colors: none) {
+        &::-webkit-scrollbar-track {
+            margin-block: 0.25rem calc(var(--radius-xl) + 0.125rem);
+        }
+    }
 }
 
 /*

@@ -16,7 +16,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { AgentAvatars, type Agent } from "./avatars"
+import {
+  AgentAvatars,
+  EmptyPersonAvatar,
+  PersonAvatar,
+  type Agent,
+} from "./avatars"
 import { Icon } from "./icon"
 import type { IconProp } from "./icons"
 import { CountBadge, StatusBadge, StatusSymbol } from "./status"
@@ -28,9 +33,17 @@ import {
   type Tone,
 } from "./variants"
 
+/** The person a task is assigned to. */
+type TaskAssignee = {
+  id: string
+  name: string
+}
+
 type TaskItem = {
   id: string
   title: string
+  /** Secondary text under the title on cards, e.g. the task's description. */
+  summary?: string
   status: TaskStatus
   /** Overrides the default status label (e.g. "Running · Implementing"). */
   statusLabel?: string
@@ -39,6 +52,11 @@ type TaskItem = {
   updated?: string
   agents?: Agent[]
   runCount?: number
+  /**
+   * Who it's assigned to; `null` when nobody is. Leave it out where tasks
+   * aren't assigned, and cards show no assignee.
+   */
+  assignee?: TaskAssignee | null
 }
 
 /** Wraps task groups; `density="compact"` tightens rows and group spacing. */
@@ -190,22 +208,27 @@ function TaskTableCell({
   return <TableCell className={cn(cellClass, className)} {...props} />
 }
 
-/** ID, title and run count; the whole cell is the row's primary action. */
+/**
+ * ID, title and run count; the whole cell is the row's primary action. A
+ * `summary` joins the title in its tooltip.
+ */
 function TaskTitle({
   id,
   title,
+  summary,
   runCount,
   className,
   ...props
 }: React.ComponentProps<"button"> & {
   id: string
   title: string
+  summary?: string
   runCount?: number
 }) {
   return (
     <button
       type="button"
-      title={title}
+      title={summary ? `${title}\n${summary}` : title}
       className={cn(
         "flex h-[calc(var(--forge-row-height,45px)-3px)] w-full min-w-0 items-center gap-[15px] text-left group-data-[density=compact]/tasklist:h-8",
         className
@@ -266,18 +289,47 @@ function DateLabel({
   )
 }
 
+/** A task's assignee: their avatar and name, or a quiet "Unassigned". */
+function AssigneeLabel({
+  assignee,
+  className,
+  ...props
+}: React.ComponentProps<"span"> & {
+  assignee: TaskAssignee | null | undefined
+}) {
+  return (
+    <span
+      data-slot="assignee-label"
+      title={assignee?.name}
+      className={cn(
+        "flex min-w-0 items-center gap-[7px] text-2xs",
+        assignee ? "text-muted-foreground" : "text-subtle",
+        className
+      )}
+      {...props}
+    >
+      {assignee ? <PersonAvatar name={assignee.name} /> : <EmptyPersonAvatar />}
+      <span className="truncate">{assignee?.name ?? "Unassigned"}</span>
+    </span>
+  )
+}
+
 /**
- * The flat five-column task table used inside a TaskGroup: name, status,
- * repository, updated and agents. Scrolls horizontally below 760px.
+ * The flat task table used inside a TaskGroup: name, status, repository,
+ * updated and agents, and with `showAssignee` each task's assignee after
+ * the repository. Scrolls horizontally below 760px (860px with assignees).
  */
 function TaskTable({
   tasks,
   onSelect,
+  showAssignee = false,
   emptyLabel = "No tasks here yet",
   className,
 }: {
   tasks: TaskItem[]
   onSelect?: (task: TaskItem) => void
+  /** Add an Assignee column (from each task's `assignee`). */
+  showAssignee?: boolean
   emptyLabel?: string
   className?: string
 }) {
@@ -285,22 +337,37 @@ function TaskTable({
     <Table
       data-slot="task-table"
       className={cn(
-        "min-w-[760px] table-fixed border-separate border-spacing-0 @max-[800px]/shell:min-w-[800px]",
+        "table-fixed border-separate border-spacing-0",
+        showAssignee
+          ? "min-w-[860px]"
+          : "min-w-[760px] @max-[800px]/shell:min-w-[800px]",
         className
       )}
     >
-      <colgroup>
-        <col className="w-[46%] @max-[1270px]/shell:w-[43%]" />
-        <col className="w-[12%]" />
-        <col className="w-[19%] @max-[1270px]/shell:w-[21%]" />
-        <col className="w-[16%]" />
-        <col className="w-[7%] @max-[1270px]/shell:w-[8%]" />
-      </colgroup>
+      {showAssignee ? (
+        <colgroup>
+          <col className="w-[38%] @max-[1270px]/shell:w-[34%]" />
+          <col className="w-[12%] @max-[1270px]/shell:w-[13%]" />
+          <col className="w-[16%] @max-[1270px]/shell:w-[17%]" />
+          <col className="w-[14%] @max-[1270px]/shell:w-[15%]" />
+          <col className="w-[13%]" />
+          <col className="w-[7%] @max-[1270px]/shell:w-[8%]" />
+        </colgroup>
+      ) : (
+        <colgroup>
+          <col className="w-[46%] @max-[1270px]/shell:w-[43%]" />
+          <col className="w-[12%]" />
+          <col className="w-[19%] @max-[1270px]/shell:w-[21%]" />
+          <col className="w-[16%]" />
+          <col className="w-[7%] @max-[1270px]/shell:w-[8%]" />
+        </colgroup>
+      )}
       <TableHeader className="[&_tr]:border-0">
         <TableRow className="border-0 hover:bg-transparent">
           <TaskTableHead>Name</TaskTableHead>
           <TaskTableHead>Status</TaskTableHead>
           <TaskTableHead>Repository</TaskTableHead>
+          {showAssignee && <TaskTableHead>Assignee</TaskTableHead>}
           <TaskTableHead icon="clock">Updated</TaskTableHead>
           <TaskTableHead className="pr-[17px] pl-0 text-right">
             Agents
@@ -314,6 +381,7 @@ function TaskTable({
               <TaskTitle
                 id={task.id}
                 title={task.title}
+                summary={task.summary}
                 runCount={task.runCount}
                 onClick={() => onSelect?.(task)}
               />
@@ -326,6 +394,11 @@ function TaskTable({
                 {task.repository ?? "No repository"}
               </RepoLabel>
             </TaskTableCell>
+            {showAssignee && (
+              <TaskTableCell>
+                <AssigneeLabel assignee={task.assignee} />
+              </TaskTableCell>
+            )}
             <TaskTableCell>
               <DateLabel>{task.updated ?? "Not started"}</DateLabel>
             </TaskTableCell>
@@ -337,7 +410,7 @@ function TaskTable({
         {!tasks.length && (
           <TableRow className="border-0 hover:bg-transparent">
             <TableCell
-              colSpan={5}
+              colSpan={showAssignee ? 6 : 5}
               className="h-[34px] px-[18px] pt-[5px] pb-[13px] text-2xs text-subtle"
             >
               {emptyLabel}
@@ -390,6 +463,8 @@ export {
   TaskTitle,
   RepoLabel,
   DateLabel,
+  AssigneeLabel,
   TaskListSkeleton,
   type TaskItem,
+  type TaskAssignee,
 }

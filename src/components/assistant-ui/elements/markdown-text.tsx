@@ -1,6 +1,7 @@
 "use client"
 
 import "@assistant-ui/react-markdown/styles/dot.css"
+import "katex/dist/katex.min.css"
 
 import {
   type CodeHeaderProps,
@@ -8,17 +9,65 @@ import {
   unstable_memoizeMarkdownComponents as memoizeMarkdownComponents,
   useIsMarkdownCodeBlock,
 } from "@assistant-ui/react-markdown"
+import rehypeKatex from "rehype-katex"
 import remarkGfm from "remark-gfm"
+import remarkMath from "remark-math"
+import type * as React from "react"
 import { type FC, memo, useMemo, useRef } from "react"
 import type { TextMessagePartProps } from "@assistant-ui/react"
-import { CheckIcon, CopyIcon } from "@/components/assistant-ui/elements/aui-icons"
+import {
+  CheckIcon,
+  CopyIcon,
+} from "@/components/assistant-ui/elements/aui-icons"
 
+import { MermaidDiagram } from "@/components/assistant-ui/elements/mermaid-diagram"
+import { SyntaxHighlighter } from "@/components/assistant-ui/elements/syntax-highlighter"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard"
 import { cn } from "cn"
 
+type RemarkPlugins = NonNullable<
+  React.ComponentProps<typeof MarkdownTextPrimitive>["remarkPlugins"]
+>
+
 type MarkdownTextProps = Partial<TextMessagePartProps> & {
   components?: Parameters<typeof memoizeMarkdownComponents>[0]
+  /** Run after GFM; pass a stable array. */
+  remarkPlugins?: RemarkPlugins
+}
+
+// GFM, and math between $$ … $$ (inline or on their own lines). A single $
+// stays text, so prices don't turn into formulas.
+const basePlugins: RemarkPlugins = [
+  remarkGfm,
+  [remarkMath, { singleDollarTextMath: false }],
+]
+const rehypePlugins: React.ComponentProps<
+  typeof MarkdownTextPrimitive
+>["rehypePlugins"] = [[rehypeKatex, { throwOnError: false, strict: "ignore" }]]
+
+// ```mermaid blocks draw as diagrams.
+const componentsByLanguage = { mermaid: { SyntaxHighlighter: MermaidDiagram } }
+
+/**
+ * Models write math as \( … \) and \[ … \] too (OpenAI's do): as $$ … $$,
+ * which remark-math reads, outside code spans and fences.
+ */
+function normalizeMath(text: string) {
+  if (!text.includes("\\(") && !text.includes("\\[")) return text
+  return text
+    .split(/(```[\s\S]*?(?:```|$)|`[^`\n]*`)/)
+    .map((piece, index) =>
+      index % 2 === 1
+        ? piece
+        : piece
+            .replace(
+              /\\\[([\s\S]+?)\\\]/g,
+              (_, math) => `\n$$\n${math.trim()}\n$$\n`
+            )
+            .replace(/\\\(([\s\S]+?)\\\)/g, (_, math) => `$$${math.trim()}$$`)
+    )
+    .join("")
 }
 
 const useShallowStable = <T extends Record<string, unknown> | undefined>(
@@ -37,7 +86,10 @@ const useShallowStable = <T extends Record<string, unknown> | undefined>(
   return ref.current
 }
 
-const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components }) => {
+const MarkdownTextImpl: FC<MarkdownTextProps> = ({
+  components,
+  remarkPlugins,
+}) => {
   const stableComponents = useShallowStable(components)
   const markdownComponents = useMemo(() => {
     if (!stableComponents) return defaultComponents
@@ -46,12 +98,19 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({ components }) => {
       ...memoizeMarkdownComponents(stableComponents),
     }
   }, [stableComponents])
+  const plugins = useMemo(
+    () => (remarkPlugins ? [...basePlugins, ...remarkPlugins] : basePlugins),
+    [remarkPlugins]
+  )
 
   return (
     <MarkdownTextPrimitive
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={plugins}
+      rehypePlugins={rehypePlugins}
+      preprocess={normalizeMath}
       className="aui-md"
       components={markdownComponents}
+      componentsByLanguage={componentsByLanguage}
       defer
     />
   )
@@ -84,6 +143,7 @@ const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
 }
 
 const defaultComponents = memoizeMarkdownComponents({
+  SyntaxHighlighter,
   h1: ({ className, ...props }) => (
     <h1
       className={cn(

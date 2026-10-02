@@ -160,6 +160,12 @@ const ui = [
     [],
     "Button: 7px radius, 12px/450 labels, colour-only transitions.",
   ],
+  [
+    "chart",
+    [version("recharts")],
+    [],
+    "Recharts container, tooltip and legend on the chart, data-viz and graph tokens.",
+  ],
   ["checkbox", icons, [], "Bordered 4px checkbox."],
   ["collapsible", [], [], "Collapsible primitive."],
   [
@@ -210,6 +216,12 @@ const ui = [
   ["sheet", icons, ["button"], "Sheet primitive."],
   ["skeleton", [], [], "Skeleton primitive."],
   ["spinner", icons, [], "Spinner primitive."],
+  [
+    "switch",
+    [],
+    [],
+    "On/off switch: a 32 × 18px track, the dark primary when on.",
+  ],
   ["table", [], [], "Table primitive."],
   ["tabs", [], [], "Tabs with 7px radius."],
   ["textarea", [], [], "Bordered textarea."],
@@ -217,7 +229,7 @@ const ui = [
     "toast",
     icons,
     ["button"],
-    "Base UI toast, restyled as a bottom-centre notice.",
+    "Base UI toast, restyled as a notice at the top centre, under the top bar.",
   ],
   ["toggle", [], [], "Toggle with 7px radius."],
   ["toggle-group", [], ["toggle"], "Toggle group."],
@@ -267,14 +279,14 @@ const components = [
     "avatars",
     "Avatars",
     ["avatars.tsx"],
-    ["tooltip", forge("icon")],
-    "Workspace orb and gradient agent avatars with tooltips.",
+    ["avatar", "tooltip", forge("icon")],
+    "Workspace orb, gradient agent avatars with tooltips, and initials avatars for people.",
   ],
   [
     "app-shell",
     "App shell",
     ["app-shell-context.ts", "app-shell.tsx"],
-    ["breadcrumb", "button", "kbd", "tooltip", forge("icon")],
+    ["breadcrumb", "button", "dropdown-menu", "kbd", "tooltip", forge("icon")],
     "Container-query app shell: main panel, topbar, breadcrumb, view toolbar, content and footer.",
   ],
   [
@@ -441,6 +453,7 @@ const components = [
       forge("icon"),
       forge("illustration"),
       forge("status"),
+      forge("timestamps"),
       forge("toolbar"),
     ],
     "Spreadsheet-grade TanStack Table v9 grid: typed filters, multi-sort, grouping and aggregation, column groups, pinning, resizing, drag to reorder or group, range selection with copy/paste, inline editing, virtualization, tree data, cell spanning, row drag, CSV export, context menu, status bar and persisted layouts.",
@@ -612,6 +625,7 @@ const shell = {
     "ShellProvider, ShellLayout and hooks: the app shell's icon rail, sidebar sub nav and header driven by pages, with slots for page actions, toolbars and footers.",
   dependencies: [...base, ...icons, version("zustand")],
   registryDependencies: [
+    forge("dropdown-menu"),
     forge("app-shell"),
     forge("icon-rail"),
     forge("workspace-sidebar"),
@@ -654,24 +668,36 @@ const assistantThread = {
     version("@assistant-ui/react"),
     version("@assistant-ui/react-markdown"),
     version("remark-gfm"),
+    version("remark-math"),
+    version("rehype-katex"),
+    version("katex"),
+    // Loaded on first use: Mermaid for ```mermaid blocks, Shiki for code.
+    version("mermaid"),
+    version("shiki"),
     version("zustand"),
   ],
   registryDependencies: [
-    "avatar",
-    "button",
-    "collapsible",
-    "dialog",
-    "input",
-    "skeleton",
-    "textarea",
-    "tooltip",
-  ].map(forge),
+    ...[
+      "avatar",
+      "button",
+      "collapsible",
+      "command",
+      "dialog",
+      "input",
+      "popover",
+      "skeleton",
+      "textarea",
+      "tooltip",
+    ].map(forge),
+    forge("icon"),
+    forge("attachments"),
+  ],
   files: [
     ...readdirSync(resolve(root, "src/components/assistant-ui/elements"))
       .sort()
       .map((file) => ({
         path: `src/components/assistant-ui/elements/${file}`,
-        type: "registry:component",
+        type: file.endsWith(".css") ? "registry:file" : "registry:component",
         target: `@components/assistant-ui/elements/${file}`,
       })),
     ...["use-attachment-src.ts", "use-copy-to-clipboard.ts"].map((file) => ({
@@ -696,7 +722,14 @@ const assistant = {
   ],
   registryDependencies: [
     forge("assistant-thread"),
-    ...["button", "dropdown-menu", "input", "spinner"].map(forge),
+    ...[
+      "button",
+      "collapsible",
+      "dropdown-menu",
+      "input",
+      "popover",
+      "spinner",
+    ].map(forge),
     forge("app-shell"),
     forge("avatars"),
     forge("icon"),
@@ -707,6 +740,159 @@ const assistant = {
   files: readdirSync(resolve(root, "src/components/forge/assistant"))
     .sort()
     .map((file) => forgeFile(`assistant/${file}`)),
+}
+
+/** Parses API timestamps (UTC, ISO 8601) and formats local days. */
+const timestamps = {
+  name: "timestamps",
+  type: "registry:lib",
+  title: "Timestamps",
+  description:
+    "parseTimestamp and localDay: API times read as UTC and bare dates as local days, for tables and forms.",
+  files: [
+    {
+      path: "src/lib/timestamps.ts",
+      type: "registry:lib",
+      target: "@lib/timestamps.ts",
+    },
+  ],
+}
+
+/** Composer attachments the agent can read: images, PDFs and text files. */
+const attachments = {
+  name: "attachments",
+  type: "registry:lib",
+  title: "Attachments",
+  description:
+    "ChatAttachmentAdapter: images, PDFs and text files on messages, named so the thread can show them.",
+  dependencies: [version("@assistant-ui/react")],
+  files: [
+    {
+      path: "src/lib/attachments.ts",
+      type: "registry:lib",
+      target: "@lib/attachments.ts",
+    },
+  ],
+}
+
+const hooks = [
+  [
+    "use-now",
+    "A one-second clock shared by every component showing elapsed time.",
+  ],
+  [
+    "use-debounced-value",
+    "A value that settles a moment after it stops changing.",
+  ],
+].map(([name, description]) => ({
+  name,
+  type: "registry:hook",
+  title: name,
+  description,
+  files: [
+    {
+      path: `src/hooks/${name}.ts`,
+      type: "registry:hook",
+      target: `@hooks/${name}.ts`,
+    },
+  ],
+}))
+
+const tiptap = Object.keys(pkg.dependencies)
+  .filter((name) => name.startsWith("@tiptap/"))
+  .map(version)
+
+/** Every file under a Forge folder, subfolders included. */
+const forgeFolder = (folder) =>
+  readdirSync(resolve(root, "src/components/forge", folder), {
+    recursive: true,
+    withFileTypes: true,
+  })
+    .filter((entry) => entry.isFile())
+    .map(
+      (entry) =>
+        `${entry.parentPath.slice(resolve(root, "src/components/forge").length + 1)}/${entry.name}`
+    )
+    .sort()
+    .map((file) => ({
+      ...forgeFile(file),
+      ...(file.endsWith(".css") && { type: "registry:file" }),
+    }))
+
+const richTextEditor = {
+  name: "rich-text-editor",
+  type: "registry:component",
+  title: "Rich text editor",
+  description:
+    "Tiptap editor in the workspace look: toolbar, bubble menus, / commands, mentions, tables, code with highlighting, maths, media, find and replace, outline, drag handles and Markdown in and out.",
+  dependencies: [
+    ...base,
+    ...icons,
+    ...tiptap,
+    version("highlight.js"),
+    version("katex"),
+    version("lowlight"),
+  ],
+  registryDependencies: [
+    "button",
+    "dialog",
+    "dropdown-menu",
+    "field",
+    "input",
+    "kbd",
+    "popover",
+    "select",
+    "separator",
+    "skeleton",
+    "spinner",
+    "textarea",
+    "toast",
+    "toggle",
+    "tooltip",
+  ].map(forge),
+  files: forgeFolder("rich-text-editor"),
+}
+
+const agentWorkspace = {
+  name: "agent-workspace",
+  type: "registry:component",
+  title: "Agent workspace",
+  description:
+    "Everything around the assistant's conversation for a capable agent: progress by the composer, plan, notes and canvas panels, response and context stats, a chat history palette, follow-ups, a tools menu and tool cards for the chat API's built-in tools.",
+  dependencies: [
+    ...base,
+    ...icons,
+    version("@assistant-ui/react"),
+    version("@assistant-ui/react-google-adk"),
+    version("highlight.js"),
+    version("react-markdown"),
+    version("remark-gfm"),
+    version("zustand"),
+  ],
+  registryDependencies: [
+    forge("assistant"),
+    forge("assistant-thread"),
+    forge("attachments"),
+    forge("icon"),
+    ...[
+      "button",
+      "checkbox",
+      "command",
+      "dialog",
+      "dropdown-menu",
+      "input",
+      "native-select",
+      "popover",
+      "sheet",
+      "skeleton",
+      "spinner",
+      "switch",
+      "tabs",
+      "textarea",
+      "tooltip",
+    ].map(forge),
+  ],
+  files: forgeFolder("agent-workspace"),
 }
 
 const all = {
@@ -786,6 +972,9 @@ const appBase = {
     forge("preferences"),
     forge("shell"),
     forge("assistant"),
+    forge("agent-workspace"),
+    forge("rich-text-editor"),
+    ...hooks.map((hook) => forge(hook.name)),
   ],
 }
 
@@ -807,8 +996,13 @@ const registry = {
     userAccess,
     user,
     shell,
+    timestamps,
+    attachments,
+    ...hooks,
     assistantThread,
     assistant,
+    agentWorkspace,
+    richTextEditor,
     all,
     indexCss,
     appBase,

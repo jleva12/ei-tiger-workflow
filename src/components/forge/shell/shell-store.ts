@@ -93,7 +93,12 @@ export type ResolvedShell = {
 }
 
 export type ShellSlotName =
-  "header-actions" | "toolbar" | "footer" | "sidebar-top" | "sidebar-bottom"
+  | "header-actions"
+  | "toolbar"
+  | "footer"
+  | "sidebar-header"
+  | "sidebar-top"
+  | "sidebar-bottom"
 
 const emptyShell: ResolvedShell = {
   rail: { items: [], footer: [] },

@@ -25,7 +25,7 @@ export const ANIMATION_DURATION = 200
 
 const ReasoningPreviewContext = createContext(false)
 
-const reasoningVariants = cva("aui-reasoning-root mb-4 w-full", {
+const reasoningVariants = cva("aui-reasoning-root my-5 w-full", {
   variants: {
     variant: {
       outline: "rounded-(--radius-card) border px-3 py-2",
@@ -34,9 +34,15 @@ const reasoningVariants = cva("aui-reasoning-root mb-4 w-full", {
     },
   },
   defaultVariants: {
-    variant: "outline",
+    variant: "ghost",
   },
 })
+
+/** "12 seconds", "1 second", "1m 5s". */
+const formatSeconds = (seconds: number) =>
+  seconds < 60
+    ? `${seconds} ${seconds === 1 ? "second" : "seconds"}`
+    : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 
 export type ReasoningRootProps = Omit<
   React.ComponentProps<typeof Collapsible>,
@@ -47,15 +53,19 @@ export type ReasoningRootProps = Omit<
     onOpenChange?: (open: boolean) => void
     defaultOpen?: boolean
     /**
-     * Whether the reasoning is currently streaming. While `true` the
-     * disclosure is held open with a bottom-pinned live preview; when
-     * streaming ends it returns to `defaultOpen`, and the first manual
-     * toggle takes over the open/close state permanently. The live preview
-     * keeps following the newest tokens while the disclosure is open during
-     * streaming, even after a manual toggle, and pauses while the reader is
-     * scrolled up.
+     * Whether the reasoning is currently streaming. While the disclosure is
+     * open during streaming it shows a bottom-pinned live preview that keeps
+     * following the newest tokens, and pauses while the reader is scrolled
+     * up.
      */
     streaming?: boolean
+    /**
+     * Opens the disclosure by itself while `streaming`, and closes it when
+     * streaming ends (back to `defaultOpen`), until the first manual toggle
+     * takes over. Off by default: in a thread, a panel opening and closing
+     * by itself while the reply streams shakes the conversation.
+     */
+    openWhileStreaming?: boolean
     /** Called right before the disclosure animates, on toggle and on streaming transitions. */
     onAnimationStart?: () => void
   }
@@ -67,6 +77,7 @@ function ReasoningRoot({
   onOpenChange: controlledOnOpenChange,
   defaultOpen = false,
   streaming,
+  openWhileStreaming = false,
   onAnimationStart,
   children,
   ...props
@@ -75,21 +86,35 @@ function ReasoningRoot({
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
 
   const isControlled = controlledOpen !== undefined
+  const autoOpen = openWhileStreaming && streaming === true
   const isOpen = isControlled
     ? controlledOpen
-    : (userOpen ?? (streaming || initialOpen))
+    : (userOpen ?? (autoOpen || initialOpen))
   const isPreview = streaming === true && isOpen
 
   const prevStreamingRef = useRef(streaming)
   useLayoutEffect(() => {
     if (prevStreamingRef.current === streaming) return
     prevStreamingRef.current = streaming
-    // A streaming transition only animates the panel when the resting state
-    // is collapsed; with `defaultOpen` the disclosure stays open across it.
-    if (!isControlled && userOpen === null && !initialOpen) {
+    // A streaming transition only animates the panel when it opens by
+    // itself and the resting state is collapsed; with `defaultOpen` the
+    // disclosure stays open across it.
+    if (
+      openWhileStreaming &&
+      !isControlled &&
+      userOpen === null &&
+      !initialOpen
+    ) {
       onAnimationStart?.()
     }
-  }, [streaming, isControlled, userOpen, initialOpen, onAnimationStart])
+  }, [
+    streaming,
+    openWhileStreaming,
+    isControlled,
+    userOpen,
+    initialOpen,
+    onAnimationStart,
+  ])
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
@@ -170,16 +195,22 @@ function ReasoningTrigger({
   className,
   ...props
 }: React.ComponentProps<typeof CollapsibleTrigger> & {
+  /** Still thinking: "Thinking", shimmering. */
   active?: boolean
-  duration?: number
+  /** How long it thought, in seconds, once known: "Thought for 12 seconds". */
+  duration?: number | undefined
 }) {
-  const durationText = duration ? ` (${duration}s)` : ""
+  const label = active
+    ? "Thinking"
+    : duration
+      ? `Thought for ${formatSeconds(duration)}`
+      : "Thoughts"
 
   return (
     <CollapsibleTrigger
       data-slot="reasoning-trigger"
       className={cn(
-        "aui-reasoning-trigger group/trigger flex max-w-[75%] origin-left items-center gap-2 py-1.5 text-sm text-muted-foreground transition-[color,scale] hover:text-foreground active:scale-[0.98]",
+        "aui-reasoning-trigger group/trigger flex max-w-[75%] origin-left items-center gap-2 py-1 text-sm text-muted-foreground transition-[color,scale] hover:text-foreground active:scale-[0.98]",
         className
       )}
       {...props}
@@ -195,16 +226,16 @@ function ReasoningTrigger({
           active && "shimmer motion-reduce:animate-none"
         )}
       >
-        Reasoning{durationText}
+        {label}
       </span>
+      {/* Down while closed, up while open. */}
       <ChevronDownIcon
         data-slot="reasoning-trigger-chevron"
         className={cn(
-          "aui-reasoning-trigger-chevron mt-0.5 size-4 shrink-0",
+          "aui-reasoning-trigger-chevron size-4 shrink-0",
           "transition-transform duration-(--animation-duration) ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
-          "-rotate-90",
-          "group-data-open/trigger:rotate-0",
-          "group-data-panel-open/trigger:rotate-0"
+          "group-data-open/trigger:rotate-180",
+          "group-data-panel-open/trigger:rotate-180"
         )}
       />
     </CollapsibleTrigger>
@@ -298,7 +329,7 @@ function ReasoningText({
       ref={scrollRef}
       data-slot="reasoning-text"
       className={cn(
-        "aui-reasoning-text relative z-0 max-h-64 overflow-y-auto ps-6 pt-2 pb-2 leading-relaxed text-pretty",
+        "aui-reasoning-text relative z-0 max-h-64 overflow-y-auto pt-3 pb-1 leading-relaxed text-pretty",
         "transform-gpu transition-[transform,opacity] ease-[cubic-bezier(0.32,0.72,0,1)]",
         "motion-reduce:animate-none",
         "group-data-open/collapsible-content:animate-in",

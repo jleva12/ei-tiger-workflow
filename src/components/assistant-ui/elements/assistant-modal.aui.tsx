@@ -211,6 +211,10 @@ export type AssistantModalProps = {
   label?: string
   /** Start with the panel open. */
   defaultOpen?: boolean
+  /** Whether the panel is open, to control it; `defaultOpen` otherwise. */
+  open?: boolean
+  /** Called when the panel opens or closes. */
+  onOpenChange?: (open: boolean) => void
   /**
    * The launcher's icon while closed; it crossfades to a chevron once open.
    * Hover effects can target the button as `group/launcher`. Default: a bot.
@@ -230,10 +234,17 @@ export const AssistantModal: FC<AssistantModalProps> = ({
   banner,
   label = "Assistant",
   defaultOpen = false,
+  open: openProp,
+  onOpenChange,
   icon,
   className,
 }) => {
-  const [open, setOpen] = useState(defaultOpen)
+  const [openState, setOpenState] = useState(defaultOpen)
+  const open = openProp ?? openState
+  const setOpen = (next: boolean) => {
+    setOpenState(next)
+    onOpenChange?.(next)
+  }
   const [view, setView] = useState<ModalView>("thread")
   const contentRef = useRef<HTMLDivElement>(null)
   const { size, reset, handleProps } = useModalSize(contentRef)
@@ -288,7 +299,7 @@ export const AssistantModal: FC<AssistantModalProps> = ({
           <PopoverPrimitive.Popup
             ref={contentRef}
             style={size ?? undefined}
-            className="group/modal aui-root aui-modal-content z-50 flex h-125 max-h-(--available-height) w-100 max-w-[calc(100vw-2rem)] origin-(--transform-origin) flex-col gap-0 overflow-clip overscroll-contain rounded-xl bg-popover p-0 text-base text-popover-foreground antialiased shadow-[0_16px_48px_-24px_rgb(0_0_0/0.25)] ring-1 ring-foreground/10 transition-none ease-[cubic-bezier(0.32,0.72,0,1)] outline-none motion-reduce:animate-none dark:shadow-[0_16px_48px_-24px_rgb(0_0_0/0.6)] data-open:animate-in data-open:duration-300 data-open:fade-in-0 data-open:zoom-in-95 data-open:slide-in-from-bottom-2 data-closed:animate-out data-closed:duration-200 data-closed:fade-out-0 data-closed:zoom-out-95 data-closed:slide-out-to-bottom-2 [&_.aui-thread-root]:bg-inherit [&_.aui-thread-viewport-footer]:bg-popover motion-reduce:[&_.aui-thread-viewport-footer]:animate-none [&_[data-slot=aui\_thread-viewport]]:[scrollbar-gutter:stable_both-edges] [&[data-open]_.aui-thread-viewport-footer]:animate-in [&[data-open]_.aui-thread-viewport-footer]:delay-100 [&[data-open]_.aui-thread-viewport-footer]:duration-300 [&[data-open]_.aui-thread-viewport-footer]:ease-[cubic-bezier(0.32,0.72,0,1)] [&[data-open]_.aui-thread-viewport-footer]:fade-in-0 [&[data-open]_.aui-thread-viewport-footer]:fill-mode-backwards [&[data-open]_.aui-thread-viewport-footer]:slide-in-from-bottom-2"
+            className="group/modal aui-root aui-modal-content z-50 flex h-125 max-h-(--available-height) w-100 max-w-[calc(100vw-2rem)] origin-(--transform-origin) flex-col gap-0 overflow-clip overscroll-contain rounded-xl bg-popover p-0 text-base text-popover-foreground antialiased shadow-[0_16px_48px_-24px_rgb(0_0_0/0.25)] ring-1 ring-foreground/10 transition-none ease-[cubic-bezier(0.32,0.72,0,1)] outline-none motion-reduce:animate-none dark:shadow-[0_16px_48px_-24px_rgb(0_0_0/0.6)] data-open:animate-in data-open:duration-300 data-open:fade-in-0 data-open:zoom-in-95 data-open:slide-in-from-bottom-2 data-closed:animate-out data-closed:duration-200 data-closed:fade-out-0 data-closed:zoom-out-95 data-closed:slide-out-to-bottom-2 [&_.aui-thread-root]:bg-inherit [&_.aui-thread-viewport-footer]:bg-popover motion-reduce:[&_.aui-thread-viewport-footer]:animate-none [&_[data-slot=aui\_thread-viewport]]:scrollbar-panel [&_[data-slot=aui\_thread-viewport]]:[scrollbar-gutter:stable_both-edges] [&[data-open]_.aui-thread-viewport-footer]:animate-in [&[data-open]_.aui-thread-viewport-footer]:delay-100 [&[data-open]_.aui-thread-viewport-footer]:duration-300 [&[data-open]_.aui-thread-viewport-footer]:ease-[cubic-bezier(0.32,0.72,0,1)] [&[data-open]_.aui-thread-viewport-footer]:fade-in-0 [&[data-open]_.aui-thread-viewport-footer]:fill-mode-backwards [&[data-open]_.aui-thread-viewport-footer]:slide-in-from-bottom-2"
           >
             <AssistantModalResizeHandle
               {...handleProps}
@@ -418,7 +429,7 @@ const AssistantModalResizeHandle: FC<ComponentPropsWithoutRef<"button">> = (
   )
 }
 
-type AssistantModalButtonProps = Omit<
+export type AssistantModalButtonProps = Omit<
   ComponentPropsWithoutRef<typeof TooltipIconButton>,
   "tooltip"
 > & {
@@ -427,7 +438,8 @@ type AssistantModalButtonProps = Omit<
   icon: ReactNode
 }
 
-const AssistantModalButton = forwardRef<
+/** The round launcher, with `icon` while closed and a chevron while open. */
+export const AssistantModalButton = forwardRef<
   HTMLButtonElement,
   AssistantModalButtonProps
 >(({ open, label, icon, ...rest }, ref) => {

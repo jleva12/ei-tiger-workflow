@@ -21,5 +21,7 @@ jobs:
       - run: npm ci
       - name: Typecheck
         run: npx tsc -b
+      - name: Tests
+        run: npm test
       - name: Registry is built and committed
         run: npm run registry:check

@@ -193,7 +193,7 @@ function Footnote({
 }) {
   return (
     <p className={cn("flex items-center gap-2", className)}>
-      {icon && <Icon icon={icon} />}
+      {icon && <Icon icon={icon} className="shrink-0" />}
       {children}
     </p>
   )

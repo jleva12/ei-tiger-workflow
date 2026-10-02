@@ -1,0 +1,21 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "switch",
+  "title": "Switch",
+  "description": "On/off switch: a 32 × 18px track, the dark primary when on.",
+  "dependencies": [
+    "@base-ui/react@^1.8.0",
+    "class-variance-authority@^0.7.1",
+    "cn@^0.4.0"
+  ],
+  "registryDependencies": [],
+  "files": [
+    {
+      "path": "src/components/ui/switch.tsx",
+      "content": "import { Switch as SwitchPrimitive } from \"@base-ui/react/switch\"\nimport { cn } from \"cn\"\n\n/**\n * An on/off setting that applies at once: a 32 × 18px track, the dark\n * primary when on, with a thumb that slides across.\n */\nfunction Switch({ className, ...props }: SwitchPrimitive.Root.Props) {\n  return (\n    <SwitchPrimitive.Root\n      data-slot=\"switch\"\n      className={cn(\n        \"peer group/switch relative inline-flex h-[1.125rem] w-8 shrink-0 cursor-pointer items-center rounded-full p-0.5 transition-colors duration-150 outline-none after:absolute after:-inset-x-2 after:-inset-y-2 data-checked:bg-primary data-unchecked:bg-muted-foreground/35 data-disabled:cursor-not-allowed data-disabled:opacity-50\",\n        className\n      )}\n      {...props}\n    >\n      <SwitchPrimitive.Thumb\n        data-slot=\"switch-thumb\"\n        className=\"pointer-events-none block size-3.5 rounded-full bg-background shadow-sm transition-transform duration-150 ease-out data-checked:translate-x-3.5 dark:data-checked:bg-primary-foreground data-unchecked:translate-x-0 dark:data-unchecked:bg-foreground\"\n      />\n    </SwitchPrimitive.Root>\n  )\n}\n\nexport { Switch }\n",
+      "type": "registry:ui",
+      "target": "@ui/switch.tsx"
+    }
+  ],
+  "type": "registry:ui"
+}

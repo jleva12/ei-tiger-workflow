@@ -222,32 +222,34 @@ export const ThreadListNew = forwardRef<
   ComponentPropsWithoutRef<typeof Button> & { labelClassName?: string }
 >(({ className, labelClassName, children, ...props }, ref) => {
   return (
-    <ThreadListPrimitive.New asChild>
-      <Button
-        ref={ref}
-        variant="ghost"
-        data-slot="aui_thread-list-new"
-        className={cn(
-          "h-9 justify-start gap-3 rounded-(--radius-control) px-2.5 text-sm font-normal text-nav-foreground hover:bg-muted hover:text-foreground data-active:bg-muted",
-          className
-        )}
-        {...props}
-      >
-        {children ?? (
-          <>
-            <PlusIcon
-              data-slot="aui_thread-list-new-icon"
-              className="size-4 shrink-0"
-            />
-            <span
-              data-slot="aui_thread-list-new-label"
-              className={cn("whitespace-nowrap", labelClassName)}
-            >
-              New conversation
-            </span>
-          </>
-        )}
-      </Button>
+    <ThreadListPrimitive.New
+      render={
+        <Button
+          ref={ref}
+          variant="ghost"
+          data-slot="aui_thread-list-new"
+          className={cn(
+            "h-9 justify-start gap-3 rounded-(--radius-control) px-2.5 text-sm font-normal text-nav-foreground hover:bg-muted hover:text-foreground data-active:bg-muted",
+            className
+          )}
+          {...props}
+        />
+      }
+    >
+      {children ?? (
+        <>
+          <PlusIcon
+            data-slot="aui_thread-list-new-icon"
+            className="size-4 shrink-0"
+          />
+          <span
+            data-slot="aui_thread-list-new-label"
+            className={cn("whitespace-nowrap", labelClassName)}
+          >
+            New conversation
+          </span>
+        </>
+      )}
     </ThreadListPrimitive.New>
   )
 })
@@ -393,16 +395,18 @@ const ThreadListItemRename: FC<{
 const ThreadListItemMore: FC<{ onRename: () => void }> = ({ onRename }) => {
   return (
     <ThreadListItemMorePrimitive.Root sharedFocusGroup>
-      <ThreadListItemMorePrimitive.Trigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          data-slot="aui_thread-list-item-more"
-          className="absolute end-1.5 top-1/2 size-6 -translate-y-1/2 p-0 opacity-0 group-hover:opacity-100 group-has-focus-visible:opacity-100 group-data-active:opacity-100 data-[state=open]:bg-accent data-[state=open]:opacity-100"
-        >
-          <MoreHorizontalIcon className="size-3.5" />
-          <span className="sr-only">More options</span>
-        </Button>
+      <ThreadListItemMorePrimitive.Trigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            data-slot="aui_thread-list-item-more"
+            className="absolute end-1.5 top-1/2 size-6 -translate-y-1/2 p-0 opacity-0 group-hover:opacity-100 group-has-focus-visible:opacity-100 group-data-active:opacity-100 data-[state=open]:bg-accent data-[state=open]:opacity-100"
+          />
+        }
+      >
+        <MoreHorizontalIcon className="size-3.5" />
+        <span className="sr-only">More options</span>
       </ThreadListItemMorePrimitive.Trigger>
       <ThreadListItemMorePrimitive.Content
         side="right"
@@ -419,23 +423,27 @@ const ThreadListItemMore: FC<{ onRename: () => void }> = ({ onRename }) => {
           <PencilIcon className="size-4" />
           Rename
         </ThreadListItemMorePrimitive.Item>
-        <ThreadListItemPrimitive.Archive asChild>
-          <ThreadListItemMorePrimitive.Item
-            data-slot="aui_thread-list-item-more-item"
-            className="flex min-h-8 cursor-default items-center gap-2 rounded-(--radius-item) px-2 py-1.5 text-xs outline-none select-none focus:bg-accent focus:text-accent-foreground"
-          >
-            <ArchiveIcon className="size-4" />
-            Archive
-          </ThreadListItemMorePrimitive.Item>
+        <ThreadListItemPrimitive.Archive
+          render={
+            <ThreadListItemMorePrimitive.Item
+              data-slot="aui_thread-list-item-more-item"
+              className="flex min-h-8 cursor-default items-center gap-2 rounded-(--radius-item) px-2 py-1.5 text-xs outline-none select-none focus:bg-accent focus:text-accent-foreground"
+            />
+          }
+        >
+          <ArchiveIcon className="size-4" />
+          Archive
         </ThreadListItemPrimitive.Archive>
-        <ThreadListItemPrimitive.Delete asChild>
-          <ThreadListItemMorePrimitive.Item
-            data-slot="aui_thread-list-item-more-item"
-            className="flex min-h-8 cursor-default items-center gap-2 rounded-(--radius-item) px-2 py-1.5 text-xs text-destructive outline-none select-none focus:bg-destructive/10 focus:text-destructive"
-          >
-            <TrashIcon className="size-4" />
-            Delete
-          </ThreadListItemMorePrimitive.Item>
+        <ThreadListItemPrimitive.Delete
+          render={
+            <ThreadListItemMorePrimitive.Item
+              data-slot="aui_thread-list-item-more-item"
+              className="flex min-h-8 cursor-default items-center gap-2 rounded-(--radius-item) px-2 py-1.5 text-xs text-destructive outline-none select-none focus:bg-destructive/10 focus:text-destructive"
+            />
+          }
+        >
+          <TrashIcon className="size-4" />
+          Delete
         </ThreadListItemPrimitive.Delete>
       </ThreadListItemMorePrimitive.Content>
     </ThreadListItemMorePrimitive.Root>

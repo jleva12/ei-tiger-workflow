@@ -3,12 +3,19 @@ import { cn } from "cn"
 
 import {
   Breadcrumb,
+  BreadcrumbEllipsis,
   BreadcrumbItem,
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Kbd } from "@/components/ui/kbd"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { AppShellContext, useAppShell } from "./app-shell-context"
@@ -182,10 +189,44 @@ function TopbarCrumb({
   )
 }
 
-function TopbarCrumbSeparator() {
+/**
+ * Ancestor crumbs folded behind an ellipsis, so a long trail stays short:
+ * pass the folded crumbs as `DropdownMenuItem`s. Hidden with the other
+ * ancestors on narrow shells.
+ */
+function TopbarCrumbMenu({
+  label = "More breadcrumbs",
+  children,
+}: {
+  label?: string
+  children: React.ReactNode
+}) {
   return (
-    <BreadcrumbSeparator className="mx-0.5 text-subtle">/</BreadcrumbSeparator>
+    <BreadcrumbItem data-crumb="ancestor">
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={label}
+              className="-my-1 text-muted-foreground hover:text-foreground"
+            />
+          }
+        >
+          <BreadcrumbEllipsis />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-44">
+          <DropdownMenuGroup>{children}</DropdownMenuGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </BreadcrumbItem>
   )
+}
+
+/** A chevron between crumbs. */
+function TopbarCrumbSeparator() {
+  return <BreadcrumbSeparator className="mx-0.5 text-subtle" />
 }
 
 /** The current page title, rendered as the document's h1. */
@@ -334,6 +375,7 @@ export {
   Topbar,
   TopbarBreadcrumb,
   TopbarCrumb,
+  TopbarCrumbMenu,
   TopbarCrumbSeparator,
   TopbarPage,
   TopbarActions,

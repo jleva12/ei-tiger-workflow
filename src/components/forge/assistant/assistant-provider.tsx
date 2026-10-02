@@ -12,15 +12,21 @@ import {
 import { Thread } from "@/components/assistant-ui/elements/thread.aui"
 
 import { AdkMessageAuthor, AdkModelSection, AdkToolFallback } from "./adk"
-import { adkToolkit } from "./adk-toolkit"
+import { adkToolkit, delegationToolkit } from "./adk-toolkit"
 import {
   AssistantSettingsContext,
   useAssistantSettings,
+  type ApprovalView,
   type AssistantWelcome,
   type AuthRequestHandler,
 } from "./assistant-context"
 import { AssistantCommandMenu, type AssistantCommand } from "./commands"
 import type { ModelSettings } from "./model-settings"
+import {
+  MessageSources,
+  SourcedMarkdownText,
+  type AssistantSourcesConfig,
+} from "./sources"
 import type { AdkArtifactsApi } from "./use-adk-assistant"
 
 type SuggestionList = Parameters<typeof Suggestions>[0]
@@ -44,6 +50,52 @@ export type AssistantOptions = {
   toolkit?: Toolkit
   /** `/` commands in the composer; see `AssistantCommand`. */
   commands?: AssistantCommand[]
+  /**
+   * Shown at the top of the composer: what the agent gets with the next
+   * message besides the text, e.g. the page the person is on (`runState` on
+   * `useAdkAssistant` sends it).
+   */
+  composerContext?: React.ReactNode
+  /** Persistent progress or task controls just above the composer. */
+  composerLead?: React.ComponentType
+  /**
+   * Controls in the composer's bottom row, after the model section: e.g. a
+   * menu choosing what the agent may use with the next message
+   * (`composerChip` matches their look).
+   */
+  composerActions?: React.ReactNode
+  /** Right-aligned controls immediately before Send. */
+  composerTrailingActions?: React.ComponentType
+  /**
+   * How tools that need the person's approval (ADK `require_confirmation`)
+   * ask for it, by tool name: a friendly title and a preview of what will
+   * happen, in place of the tool's name and raw arguments.
+   */
+  approvals?: Readonly<Record<string, ApprovalView>>
+  /** Beside each reply's copy and retry actions, e.g. its timing and tokens. */
+  messageMeta?: React.ComponentType
+  /**
+   * Above the composer once a reply is done, e.g. suggested follow-up
+   * questions; the runtime's own suggestions otherwise.
+   */
+  followUps?: React.ComponentType
+  /**
+   * Opens an artifact picked in the top bar's menu, e.g. in a canvas; it
+   * downloads otherwise.
+   */
+  onOpenArtifact?: (name: string) => void
+  /**
+   * Cited sources: reads the passages in tool results, each with a ref the
+   * agent cites as "[S3]", and draws the citations as numbered chips with a
+   * list of the documents under the answer.
+   */
+  sources?: AssistantSourcesConfig
+  /**
+   * What the app's agents are called, by their ADK names, e.g. the
+   * specialists an ADK supervisor hands requests to; others are shown by
+   * their names. A call handing a request to one of them shows as asking it.
+   */
+  agents?: Readonly<Record<string, string>>
 } & (
   | { showModels?: false; modelSettings?: ModelSettings }
   | {
@@ -101,6 +153,16 @@ function AssistantProvider({
   title = "Assistant",
   welcome,
   commands,
+  composerContext,
+  composerLead,
+  composerActions,
+  composerTrailingActions,
+  approvals,
+  messageMeta,
+  followUps,
+  onOpenArtifact,
+  sources,
+  agents,
   showModels,
   modelSettings,
   children,
@@ -108,10 +170,16 @@ function AssistantProvider({
   const config = React.useMemo(
     () =>
       AuiConfig({
-        tools: Tools({ toolkit: { ...adkToolkit, ...toolkit } }),
+        tools: Tools({
+          toolkit: {
+            ...adkToolkit,
+            ...(agents && delegationToolkit(agents)),
+            ...toolkit,
+          },
+        }),
         ...(suggestions && { suggestions: Suggestions(suggestions) }),
       }),
-    [toolkit, suggestions]
+    [toolkit, suggestions, agents]
   )
   const settings = React.useMemo(
     () => ({
@@ -120,6 +188,16 @@ function AssistantProvider({
       welcome,
       title,
       commands,
+      composerContext,
+      composerLead,
+      composerActions,
+      composerTrailingActions,
+      approvals,
+      messageMeta,
+      followUps,
+      onOpenArtifact,
+      sources,
+      agents,
       showModels,
       modelSettings,
     }),
@@ -129,6 +207,16 @@ function AssistantProvider({
       welcome,
       title,
       commands,
+      composerContext,
+      composerLead,
+      composerActions,
+      composerTrailingActions,
+      approvals,
+      messageMeta,
+      followUps,
+      onOpenArtifact,
+      sources,
+      agents,
       showModels,
       modelSettings,
     ]
@@ -161,27 +249,71 @@ function AssistantWelcomeMessage() {
   )
 }
 
+function AssistantComposerContext() {
+  const { composerContext } = useAssistantSettings()
+  return <>{composerContext}</>
+}
+
+/** The composer's bottom row: the model section, then the app's controls. */
+function AssistantComposerActions() {
+  const { showModels, composerActions } = useAssistantSettings()
+  return (
+    <>
+      {showModels && <AdkModelSection />}
+      {composerActions}
+    </>
+  )
+}
+
 const threadComponents = {
   Welcome: AssistantWelcomeMessage,
   ToolFallback: AdkToolFallback,
   MessageHeader: AdkMessageAuthor,
+  Text: SourcedMarkdownText,
+  MessageFooter: MessageSources,
 }
 
 /**
  * The conversation and composer with the Forge and ADK parts: welcome, ADK
- * tool cards, agent labels, and the composer's model section and `/`
- * commands when they're configured. Render it inside `AssistantProvider`.
+ * tool cards, agent labels, and the composer's context, model section and
+ * `/` commands when they're configured. Render it inside `AssistantProvider`.
  */
 function AssistantThread() {
-  const { showModels, commands } = useAssistantSettings()
+  const {
+    showModels,
+    commands,
+    composerContext,
+    composerLead,
+    composerActions,
+    composerTrailingActions,
+    messageMeta,
+    followUps,
+  } = useAssistantSettings()
   const hasCommands = Boolean(commands?.length)
+  const hasContext = composerContext != null
+  const hasActions = showModels || composerActions != null
   const components = React.useMemo(
     () => ({
       ...threadComponents,
-      ...(showModels && { ComposerActions: AdkModelSection }),
+      ...(hasContext && { ComposerHeader: AssistantComposerContext }),
+      ...(composerLead && { ComposerLead: composerLead }),
+      ...(composerTrailingActions && {
+        ComposerTrailingActions: composerTrailingActions,
+      }),
+      ...(hasActions && { ComposerActions: AssistantComposerActions }),
       ...(hasCommands && { ComposerTriggers: AssistantCommandMenu }),
+      ...(messageMeta && { MessageMeta: messageMeta }),
+      ...(followUps && { FollowUps: followUps }),
     }),
-    [showModels, hasCommands]
+    [
+      hasContext,
+      hasActions,
+      hasCommands,
+      messageMeta,
+      followUps,
+      composerLead,
+      composerTrailingActions,
+    ]
   )
   return (
     <Thread

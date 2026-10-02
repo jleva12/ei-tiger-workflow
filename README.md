@@ -205,46 +205,51 @@ copies `public/r` into `dist/r`.
 
 ### Registry items
 
-| Item                                    | Contents                                                                                                                                         |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `@forge-ui/theme`                       | All tokens (light/dark), Geist, type scale, radii, elevation, orb utilities, focus ring, scrollbars, reduced motion                              |
-| `@forge-ui/all`                         | The theme, the theme provider, every primitive and component                                                                                     |
-| `@forge-ui/index-css`                   | The theme as this repo's exact `src/index.css`, replacing a Vite app's stylesheet                                                                |
-| `@forge-ui/base`                        | A new Vite app in one `shadcn init`: registry and token header, the exact `index.css`, then everything                                           |
-| `@forge-ui/icon`                        | `Icon` + the workspace icon vocabulary                                                                                                           |
-| `@forge-ui/status`                      | `StatusBadge`, `StatusSymbol`, `ConnectionDot`, `CountBadge`, `Chip`, `RunStateIcon`                                                             |
-| `@forge-ui/avatars`                     | `WorkspaceOrb`, `AgentOrb`, `AgentAvatars`                                                                                                       |
-| `@forge-ui/app-shell`                   | `AppShell`, `MainPanel`, `Topbar*`, `ViewToolbar`, `ToolbarFilters`, `PageContent`, `WorkspaceFooter`, `SkipLink`                                |
-| `@forge-ui/icon-rail`                   | `IconRail`, `AppMark`, `RailNav`, `RailFooter`, `RailButton`                                                                                     |
-| `@forge-ui/workspace-sidebar`           | `WorkspaceSidebar`, `SidebarBrand*`, `CommandButton`, `NavItem`, `ProjectItem`, `SidebarStatus`, …                                               |
-| `@forge-ui/toolbar`                     | `ViewTabsList/Trigger`, `LayoutSwitch`, `SearchField`, `ToolbarButton`                                                                           |
-| `@forge-ui/task-list`                   | `TaskList`, `TaskGroup`, `TaskTable` (+ parts), `TaskListSkeleton`                                                                               |
-| `@forge-ui/kanban`                      | `TaskBoard`, `KanbanBoard`, `KanbanColumn`, `BoardCard`                                                                                          |
-| `@forge-ui/illustration`                | `Illustration` — CSS paper drawings for empty, waiting, error, search, offline and other states                                                  |
-| `@forge-ui/empty-state`                 | `EmptyWorkspace`, `EmptyIllustration`, `WorkflowSteps`, `PanelEmpty`, `PageEmpty`                                                                |
-| `@forge-ui/feedback`                    | `ErrorCallout`, `PreviewBanner`, `ActiveFilters`, `LoadMore`                                                                                     |
-| `@forge-ui/settings-list`               | `SettingsList`, `SettingsRow` — divided settings rows with a current value and one action                                                        |
-| `@forge-ui/integrations`                | `IntegrationRow`, `IntegrationLogo` and brand logos — OAuth connect rows for GitHub, Jira, Figma, …                                              |
-| `@forge-ui/activity`                    | `EventList/Item`, `StatGrid/Stat`, `ViewHeading`, `StatusHeading`, `Footnotes`                                                                   |
-| `@forge-ui/task-sheet`                  | `TaskSheetContent/Header`, `TaskForm`, `FormColumns`, `FormFooter`, `DetailList`, `PlanEntry`                                                    |
-| `@forge-ui/task-page`                   | Detail header, line tabs, `SubmissionLayout`, `ExecutionPlan`, `WaitingNotice`, `Disclosure`, `RecordList`                                       |
-| `@forge-ui/run-log`                     | Job list and the always-dark `LogConsole` family                                                                                                 |
-| `@forge-ui/changes`                     | `DiffWorkspace`, `ChangedFile`, `FileDiff`, `DiffView`, `DiffTotals`                                                                             |
-| `@forge-ui/handoff`                     | `VerificationRound/Commands/Status`, `HandoffIteration/Agent/Result`, `Finding`                                                                  |
-| `@forge-ui/metrics-table`               | `MetricsTable`, `MetricsRow`, `MetricValue`, `MetricsSummary`                                                                                    |
-| `@forge-ui/data-table`                  | `DataTable` + `createColumnHelper` — the spreadsheet-grade TanStack Table v9 grid                                                                |
-| `@forge-ui/api-client`                  | `createApiClient`, `ApiError` — the axios wrapper (not in `@forge-ui/all`)                                                                       |
-| `@forge-ui/query-client`                | `createQueryClient` — TanStack Query wired to `@forge-ui/api-client`                                                                             |
-| `@forge-ui/resource`                    | `createResource` — typed CRUD hooks for a REST collection                                                                                        |
-| `@forge-ui/context-store`               | `createContextStore` — a Zustand store per Provider, seeded from props or context                                                                |
-| `@forge-ui/user-preferences`            | `UserPreferencesProvider` + hooks — density, text size, contrast, motion and your own preferences                                                |
-| `@forge-ui/preferences`                 | `PreferencesPanel` — the display settings form (theme, density, text size, contrast, motion)                                                     |
-| `@forge-ui/user-access`                 | `UserAccessProvider`, `Guard`, `useCan` / `useHasRole` / `useGuard` — roles and permissions from a Casbin backend                                |
-| `@forge-ui/user`                        | `UserProvider` — preferences plus roles and permissions in one provider                                                                          |
-| `@forge-ui/shell`                       | `ShellProvider`, `ShellLayout`, `useShellPage` — the app shell's rail, sub nav and header driven by pages (not in `@forge-ui/all`)               |
-| `@forge-ui/assistant`                   | `AssistantScreen`, `AssistantModal`, `useAdkAssistant` — the Google ADK assistant, full screen or floating (not in `@forge-ui/all`)              |
-| `@forge-ui/assistant-thread`            | assistant-ui's thread, composer, conversation list, floating modal and `/` or `@` trigger popover, restyled (installed by `@forge-ui/assistant`) |
-| `@forge-ui/button`, `@forge-ui/tabs`, … | The 32 shadcn primitives, tuned to the workspace (incl. `@forge-ui/command`, the cmdk palette)                                                   |
+| Item                                         | Contents                                                                                                                                         |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@forge-ui/theme`                            | All tokens (light/dark), Geist, type scale, radii, elevation, orb utilities, focus ring, scrollbars, reduced motion                              |
+| `@forge-ui/all`                              | The theme, the theme provider, every primitive and component                                                                                     |
+| `@forge-ui/index-css`                        | The theme as this repo's exact `src/index.css`, replacing a Vite app's stylesheet                                                                |
+| `@forge-ui/base`                             | A new Vite app in one `shadcn init`: registry and token header, the exact `index.css`, then everything                                           |
+| `@forge-ui/icon`                             | `Icon` + the workspace icon vocabulary                                                                                                           |
+| `@forge-ui/status`                           | `StatusBadge`, `StatusSymbol`, `ConnectionDot`, `CountBadge`, `Chip`, `RunStateIcon`                                                             |
+| `@forge-ui/avatars`                          | `WorkspaceOrb`, `AgentOrb`, `AgentAvatars`                                                                                                       |
+| `@forge-ui/app-shell`                        | `AppShell`, `MainPanel`, `Topbar*`, `ViewToolbar`, `ToolbarFilters`, `PageContent`, `WorkspaceFooter`, `SkipLink`                                |
+| `@forge-ui/icon-rail`                        | `IconRail`, `AppMark`, `RailNav`, `RailFooter`, `RailButton`                                                                                     |
+| `@forge-ui/workspace-sidebar`                | `WorkspaceSidebar`, `SidebarBrand*`, `CommandButton`, `NavItem`, `ProjectItem`, `SidebarStatus`, …                                               |
+| `@forge-ui/toolbar`                          | `ViewTabsList/Trigger`, `LayoutSwitch`, `SearchField`, `ToolbarButton`                                                                           |
+| `@forge-ui/task-list`                        | `TaskList`, `TaskGroup`, `TaskTable` (+ parts), `TaskListSkeleton`                                                                               |
+| `@forge-ui/kanban`                           | `TaskBoard`, `KanbanBoard`, `KanbanColumn`, `BoardCard`                                                                                          |
+| `@forge-ui/illustration`                     | `Illustration` — CSS paper drawings for empty, waiting, error, search, offline and other states                                                  |
+| `@forge-ui/empty-state`                      | `EmptyWorkspace`, `EmptyIllustration`, `WorkflowSteps`, `PanelEmpty`, `PageEmpty`                                                                |
+| `@forge-ui/feedback`                         | `ErrorCallout`, `PreviewBanner`, `ActiveFilters`, `LoadMore`                                                                                     |
+| `@forge-ui/settings-list`                    | `SettingsList`, `SettingsRow` — divided settings rows with a current value and one action                                                        |
+| `@forge-ui/integrations`                     | `IntegrationRow`, `IntegrationLogo` and brand logos — OAuth connect rows for GitHub, Jira, Figma, …                                              |
+| `@forge-ui/activity`                         | `EventList/Item`, `StatGrid/Stat`, `ViewHeading`, `StatusHeading`, `Footnotes`                                                                   |
+| `@forge-ui/task-sheet`                       | `TaskSheetContent/Header`, `TaskForm`, `FormColumns`, `FormFooter`, `DetailList`, `PlanEntry`                                                    |
+| `@forge-ui/task-page`                        | Detail header, line tabs, `SubmissionLayout`, `ExecutionPlan`, `WaitingNotice`, `Disclosure`, `RecordList`                                       |
+| `@forge-ui/run-log`                          | Job list and the always-dark `LogConsole` family                                                                                                 |
+| `@forge-ui/changes`                          | `DiffWorkspace`, `ChangedFile`, `FileDiff`, `DiffView`, `DiffTotals`                                                                             |
+| `@forge-ui/handoff`                          | `VerificationRound/Commands/Status`, `HandoffIteration/Agent/Result`, `Finding`                                                                  |
+| `@forge-ui/metrics-table`                    | `MetricsTable`, `MetricsRow`, `MetricValue`, `MetricsSummary`                                                                                    |
+| `@forge-ui/data-table`                       | `DataTable` + `createColumnHelper` — the spreadsheet-grade TanStack Table v9 grid                                                                |
+| `@forge-ui/api-client`                       | `createApiClient`, `ApiError` — the axios wrapper (not in `@forge-ui/all`)                                                                       |
+| `@forge-ui/query-client`                     | `createQueryClient` — TanStack Query wired to `@forge-ui/api-client`                                                                             |
+| `@forge-ui/resource`                         | `createResource` — typed CRUD hooks for a REST collection                                                                                        |
+| `@forge-ui/context-store`                    | `createContextStore` — a Zustand store per Provider, seeded from props or context                                                                |
+| `@forge-ui/user-preferences`                 | `UserPreferencesProvider` + hooks — density, text size, contrast, motion and your own preferences                                                |
+| `@forge-ui/preferences`                      | `PreferencesPanel` — the display settings form (theme, density, text size, contrast, motion)                                                     |
+| `@forge-ui/user-access`                      | `UserAccessProvider`, `Guard`, `useCan` / `useHasRole` / `useGuard` — roles and permissions from a Casbin backend                                |
+| `@forge-ui/user`                             | `UserProvider` — preferences plus roles and permissions in one provider                                                                          |
+| `@forge-ui/shell`                            | `ShellProvider`, `ShellLayout`, `useShellPage` — the app shell's rail, sub nav and header driven by pages (not in `@forge-ui/all`)               |
+| `@forge-ui/assistant`                        | `AssistantScreen`, `AssistantModal`, `useAdkAssistant` — the Google ADK assistant, full screen or floating (not in `@forge-ui/all`)              |
+| `@forge-ui/assistant-thread`                 | assistant-ui's thread, composer, conversation list, floating modal and `/` or `@` trigger popover, restyled (installed by `@forge-ui/assistant`) |
+| `@forge-ui/agent-workspace`                  | Progress dock, plan / notes / canvas panels, stats, history palette, tools menu, tool cards (not in `@forge-ui/all`)                             |
+| `@forge-ui/rich-text-editor`                 | `RichTextEditor`, `RichTextView` — Tiptap rich text in the workspace look (not in `@forge-ui/all`)                                               |
+| `@forge-ui/attachments`                      | `ChatAttachmentAdapter` — images, PDFs and text files on messages                                                                                |
+| `@forge-ui/timestamps`                       | `parseTimestamp`, `localDay` — API times as UTC, bare dates as local days                                                                        |
+| `@forge-ui/use-now`, `…/use-debounced-value` | A shared one-second clock; a value that settles after it stops changing                                                                          |
+| `@forge-ui/button`, `@forge-ui/tabs`, …      | The 34 shadcn primitives, tuned to the workspace (incl. `@forge-ui/command`, the cmdk palette, `chart`, `switch`)                                |
 
 ## Project layout
 
@@ -978,9 +983,12 @@ const { allowed } = useGuard({ permission: ["projects/42", "delete"] })
 [Google ADK](https://google.github.io/adk-docs/) agent, built on
 [assistant-ui](https://www.assistant-ui.com) and its ADK runtime
 (`@assistant-ui/react-google-adk`), in the workspace shell: conversations in
-the sidebar, the active agent and artifacts in the top bar, and the thread.
-The thread, composer and conversation list are assistant-ui's own elements
-(`@forge-ui/assistant-thread`); the composer keeps assistant-ui's look.
+the sidebar (or none, with `sidebar={false}`), the active agent and
+artifacts in the top bar, the thread, and an optional panel beside it. The
+thread, composer and conversation list are assistant-ui's own elements
+(`@forge-ui/assistant-thread`); the composer keeps assistant-ui's look. For
+the panels, statistics and tool cards around a capable agent, add
+[`@forge-ui/agent-workspace`](#agent-workspace).
 
 ```bash
 npx shadcn@latest add @forge-ui/assistant
@@ -1035,6 +1043,79 @@ What ADK does, and what the screen shows:
 
 Your own tool UIs go in `toolkit` (`defineToolkit` from assistant-ui),
 merged over the ADK ones.
+
+### Screen options
+
+Beyond the connection, `AssistantScreen` (and `AssistantModal`, which also
+takes `open` / `onOpenChange`) has slots for an app's own parts:
+
+| Option                    | What it does                                                                            |
+| ------------------------- | --------------------------------------------------------------------------------------- |
+| `sidebar`                 | Extra sidebar content above the conversations; `false` drops the sidebar                |
+| `navigation`, `actions`   | Before the title / after the agent and artifacts in the top bar                         |
+| `aside`                   | A panel beside the conversation, inside the assistant's providers                       |
+| `composerLead`            | A component just above the composer, e.g. task progress                                 |
+| `composerContext`         | Shown at the top of the composer: what the agent gets with the next message             |
+| `composerActions`         | After the model picker in the composer's bottom row (`composerChip` matches their look) |
+| `composerTrailingActions` | A component right before Send, e.g. a chat history button                               |
+| `messageMeta`             | A component beside each reply's actions, e.g. its timing and tokens                     |
+| `followUps`               | A component above the composer after a reply, in place of the runtime's suggestions     |
+| `onOpenArtifact`          | Opens an artifact picked in the top bar (e.g. in a canvas) instead of downloading it    |
+| `agents`                  | Names for the app's ADK agents; a call handing a request to one shows as asking it      |
+| `approvals`               | Per gated tool: a title, description, preview and button labels for its approval card   |
+| `sources`                 | Reads cited passages from tool results; see [Cited sources](#cited-sources)             |
+
+`useAdkAssistant` also takes `runState`, ADK session state sent with every
+run (e.g. `() => ({ page_context: currentPage() })`); a request the agent
+server refuses or can't receive shows as a failed reply.
+
+### Rich replies
+
+Replies render GitHub-flavoured Markdown with KaTeX maths (`$$ … $$`, and
+the `\( … \)` and `\[ … \]` some models write; a single `$` stays text),
+` ```mermaid ` blocks drawn as diagrams, and code highlighted by Shiki in
+GitHub's light and dark themes. Mermaid and Shiki load on first use.
+Reasoning shows as "Thought for 12 seconds", collapsed; ↑ in an empty
+composer recalls earlier messages; selecting text in a reply offers to quote
+it.
+
+### Approvals
+
+A tool with ADK's `require_confirmation` asks before it runs. The card says
+what the agent wants to do, waits for Approve or Deny, then folds to one line
+with the outcome. Describe each gated tool in `approvals` to replace its name
+and raw arguments:
+
+```tsx
+approvals={{
+  add_note: {
+    title: "Add this note?",
+    description: "The assistant wants to save it to this conversation's notes.",
+    preview: ({ args }) => <blockquote>{String(args.text)}</blockquote>,
+    approveLabel: "Add note",
+  },
+}}
+```
+
+### Cited sources
+
+When an agent's tools return passages with refs and its answer cites them as
+`[S3]`, `sources` turns the citations into numbered chips and lists the
+documents under the answer. Tell it how to read your tool's result:
+
+```tsx
+sources={{
+  fromToolCall: (toolName, result) =>
+    toolName === "search_docs"
+      ? toolResult<{ passages: Passage[] }>(result).passages?.map((p) => ({
+          ref: p.ref,
+          document: { key: p.file, title: p.file, subtitle: p.team },
+          location: p.section,
+          excerpt: p.text,
+        })) ?? []
+      : [],
+}}
+```
 
 ### Feedback
 
@@ -1134,13 +1215,18 @@ speech service to transcribe it.
 
 ### Model section
 
-`showModels` (with `modelSettings` from `useAdkAssistant`) adds a section to
-the composer: the agent's name, the model when `models` lists more than one,
-and a thinking level (`thinkingLevels`, default off / low / medium / high;
-`defaultModel` and `defaultThinkingLevel` pick the starting values). While
-it's shown, every run sends the selection to the agent as ADK session state,
-`{ model, thinking_level }` (reshape it with `modelStateDelta`). Apply it in
-a `before_model_callback`:
+`showModels` (with `modelSettings` from `useAdkAssistant`) adds a model
+picker to the composer: one ghost trigger showing the model's mark, name and
+thinking level, opening a searchable list grouped by each model's `group`
+(e.g. its provider, with its `icon`) and the levels the chosen model offers.
+`thinkingLevels` lists every level (default off / low / medium / high;
+`extendedThinkingLevels` adds minimal and extra high), and a model's own
+`thinkingLevels` narrows them; switching to a model that lacks the chosen
+level picks the nearest it has. `models` may arrive after the first render,
+e.g. from the agent server. `defaultModel` and `defaultThinkingLevel` pick
+the starting values. While it's shown, every run sends the selection to the
+agent as ADK session state, `{ model, thinking_level }` (reshape it with
+`modelStateDelta`). Apply it in a `before_model_callback`:
 
 ```python
 from google.genai import types
@@ -1168,6 +1254,158 @@ root_agent = Agent(..., before_model_callback=apply_model_settings)
   message for as long as the page is open.
 - Edit and regenerate need `getCheckpointId`, since ADK has to fork the
   session from a checkpoint.
+
+## Agent workspace
+
+`@forge-ui/agent-workspace` is everything around the assistant's
+conversation that makes a capable agent's work legible, mounted through
+`AssistantScreen`'s slots:
+
+- **Progress** — `ProgressDock` above the composer names the current
+  activity and the plan's resolved steps, and expands into a checklist.
+  `PlanPanel` (with `PlanButton`) separates the latest plan from the latest
+  reply's tool activity; each action opens to its input and result.
+- **Notes and documents** — `NotesPanel` / `NotesButton` and `CanvasPanel`,
+  which shows the agent's documents (ADK artifacts) with their versions.
+- **Statistics** — `ContextMeter` (context used and the conversation's cost)
+  and `MessageStats` / `TurnDetails` (each reply's time, tokens and cost).
+  Missing prices show as unavailable, never as $0.
+- **Navigation** — `ChatHistoryPalette`, a button before Send (and ⌘K)
+  opening New chat and the conversations, searched by what was said.
+- **Choices** — `ToolsMenu` (which tools the agent may use, remembered) and
+  `FollowUps` (suggested next questions).
+- **Tool cards** — `toolUIs` and `approvalViews` for the chat API's built-in
+  tools (plans, notes, documents, the calculator, dice, time) and
+  `AskUserUI` for ADK's `adk_request_input`; `ToolFrame` for your own.
+
+```bash
+npx shadcn@latest add @forge-ui/agent-workspace
+```
+
+```tsx
+import { AssistantScreen } from "@/components/forge/assistant"
+import {
+  CanvasPanel,
+  ChatHistoryPalette,
+  ContextMeter,
+  FollowUps,
+  MessageStats,
+  NotesButton,
+  NotesPanel,
+  PlanButton,
+  PlanPanel,
+  ProgressDock,
+  ToolsMenu,
+  approvalViews,
+  toolUIs,
+  useAgentWorkspace,
+  useCanvas,
+  workspaceCommands,
+} from "@/components/forge/agent-workspace"
+
+const connection = {
+  adkUrl: "/api/v1/agents",
+  appName: "assistant",
+  userId: "local",
+}
+const History = () => <ChatHistoryPalette {...connection} />
+const Followups = () => <FollowUps {...connection} />
+
+export function App() {
+  const agent = useAgentWorkspace({ ...connection, chatApi: true })
+  return (
+    <AssistantScreen
+      sidebar={false}
+      runtime={agent.runtime}
+      artifacts={agent.artifacts}
+      {...agent.modelSection}
+      commands={workspaceCommands}
+      composerLead={ProgressDock}
+      composerActions={
+        <>
+          <ToolsMenu {...agent.tools} />
+          <ContextMeter
+            {...connection}
+            catalog={agent.catalog}
+            defaultModel={agent.defaultModel}
+          />
+        </>
+      }
+      composerTrailingActions={History}
+      messageMeta={MessageStats}
+      followUps={Followups}
+      toolkit={toolUIs}
+      approvals={approvalViews}
+      onOpenArtifact={(name) => useCanvas.getState().openDocument(name)}
+      actions={
+        <>
+          <PlanButton />
+          <NotesButton />
+        </>
+      }
+      aside={
+        <>
+          <NotesPanel />
+          <PlanPanel />
+          <CanvasPanel />
+        </>
+      }
+    />
+  )
+}
+```
+
+`useAgentWorkspace` wraps `useAdkAssistant` with what the panels need:
+attachments, the model and tool lists from the chat API (remembered between
+visits), and 👍/👎 feedback. Without an `adkUrl` the assistant replies with
+how to connect one. `ChatHistoryPalette` takes `shortcut={false}` when the
+app already uses ⌘K.
+
+What the workspace expects of the agent (the chat API, adk-chat, follows
+these; a plain ADK API server gets the assistant without the parts that need
+them):
+
+| Part            | Convention                                                                                                                                   |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Plan            | Session state `plan`: `{ id, title, steps: [{ text, status, started_at?, finished_at? }] }`, kept by `set_plan` and `update_plan_step`       |
+| Progress strip  | Shown only when the latest turn called `set_plan` or `update_plan_step`                                                                      |
+| Notes           | Session state `notes`: `[{ id, text }]`, kept by `add_note`, `remove_note`, `list_notes`                                                     |
+| Documents       | ADK artifacts written by `write_document`, read by `read_document`                                                                           |
+| Statistics      | Usage from the persisted ADK events, priced from the model list; `ContextMeter` syncs them for `MessageStats` and the progress strip         |
+| Chat API routes | `/apps/{app}/models`, `/apps/{app}/tools`, `…/sessions/{id}/feedback`, `…/sessions/{id}/follow-ups` (`useAgentWorkspace({ chatApi: true })`) |
+
+## Rich text editor
+
+`@forge-ui/rich-text-editor` is a complete rich text field on
+[Tiptap](https://tiptap.dev) in the workspace look: a fixed toolbar,
+selection and table menus, `/` commands, `@` mentions, block handles, find
+and replace (⌘F), an outline, full screen, uploads, YouTube / Twitch /
+audio embeds and KaTeX formulas. Its value is HTML, Markdown or Tiptap JSON.
+It loads lazily: importing it doesn't pull Tiptap into a page's bundle until
+an editor renders.
+
+```bash
+npx shadcn@latest add @forge-ui/rich-text-editor
+```
+
+```tsx
+import { RichTextEditor, RichTextView } from "@/components/forge/rich-text-editor"
+
+<RichTextEditor
+  format="markdown"
+  value={body}
+  onChange={setBody}
+  mentions={(query) => people.filter((p) => p.label.includes(query))}
+  onUpload={async (file) => (await api.upload(file)).url}
+/>
+
+<RichTextEditor preset="standard" placeholder="Add a comment…" />  // lighter fields
+<RichTextView value={html} />                                     // saved content, read-only
+```
+
+`preset` is `full` (everything), `standard` (no styling, tables or media) or
+`minimal` (inline formatting); `features` switches single groups on or off
+over a preset. Without `onUpload`, added files are embedded as data URLs.
 
 ## Conventions
 

@@ -356,10 +356,12 @@ function HeaderCell({
       ) : (
         <>
           <ColumnLabel header={header} />
-          {/* Overlaid on the side away from the label so it never truncates it. */}
+          {/* Overlaid on the side away from the label so it never truncates
+              it; its backing shows only with the menu, so at rest it never
+              covers a long label's sort icon either. */}
           <span
             className={cn(
-              "absolute top-1/2 flex -translate-y-1/2 rounded-(--radius-control) bg-background",
+              "absolute top-1/2 flex -translate-y-1/2 rounded-(--radius-control) group-hover/th:bg-background focus-within:bg-background has-aria-expanded:bg-background pointer-coarse:bg-background",
               meta?.align === "right" ? "left-2" : "right-2"
             )}
           >
