@@ -19,12 +19,12 @@ const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"))
 // packages/forge-ui; see "Use it in another project" in the README.
 const homepage =
   process.env.REGISTRY_HOMEPAGE ??
-  "https://github.com/jleva12/ei-tiger-agent-workflow-builder/tree/main/packages/forge-ui"
+  "https://github.com/jleva12/ei-tiger-workflow/tree/main/packages/forge-ui"
 // Where apps fetch items from; the `base` item writes it into a new app's
 // components.json. Override to host the same files somewhere else.
 const registryUrl =
   process.env.REGISTRY_URL ??
-  "https://raw.githubusercontent.com/jleva12/ei-tiger-agent-workflow-builder/main/packages/forge-ui/public/r/{name}.json"
+  "https://raw.githubusercontent.com/jleva12/ei-tiger-workflow/main/packages/forge-ui/public/r/{name}.json"
 
 /* -------------------------------------------------------------------------- */
 /* Minimal nested CSS parser (enough for index.css)                           */
@@ -931,7 +931,7 @@ const indexCss = {
 /**
  * Starts a new app on Forge UI in one command:
  *   FORGE_UI_TOKEN=$(gh auth token) npx shadcn@latest init \
- *     jleva12/ei-tiger-agent-workflow-builder/base#main --template vite --base base --name my-app
+ *     jleva12/ei-tiger-workflow/base#main --template vite --base base --name my-app
  * (the monorepo's root registry.json includes this package's registry.json).
  * `init` merges `config` into the new components.json (so the private
  * @forge-ui registry and its token header are set up), then installs

@@ -38,7 +38,7 @@ Press `d` to toggle dark mode, `/` or `⌘K` to find a component.
 
 The library is a shadcn registry served straight from the private GitHub
 monorepo it lives in,
-[`jleva12/ei-tiger-agent-workflow-builder`](https://github.com/jleva12/ei-tiger-agent-workflow-builder),
+[`jleva12/ei-tiger-workflow`](https://github.com/jleva12/ei-tiger-workflow),
 under `packages/forge-ui`: the generated `registry.json` and
 `public/r/*.json` are committed, and apps read them from
 `raw.githubusercontent.com` with a GitHub token. There's no server to run.
@@ -50,7 +50,7 @@ With the GitHub CLI logged in (`gh auth login`) to an account that can read
 the repo:
 
 ```bash
-FORGE_UI_TOKEN=$(gh auth token) npx shadcn@latest init jleva12/ei-tiger-agent-workflow-builder/base#main --template vite --base base --name my-app
+FORGE_UI_TOKEN=$(gh auth token) npx shadcn@latest init jleva12/ei-tiger-workflow/base#main --template vite --base base --name my-app
 ```
 
 shadcn reads the `owner/repo/item` form from the repo's root
@@ -77,7 +77,7 @@ To add Forge UI to an existing app instead, follow these steps:
 1. **Get a token that can read the repo.** Either:
    - a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)
      with _Repository access_ → _Only select repositories_ →
-     `ei-tiger-agent-workflow-builder` and _Permissions_ → _Contents_ →
+     `ei-tiger-workflow` and _Permissions_ → _Contents_ →
      _Read-only_, or
    - if you use the GitHub CLI, the token it already has:
      `FORGE_UI_TOKEN=$(gh auth token) npx shadcn@latest add …`
@@ -110,7 +110,7 @@ To add Forge UI to an existing app instead, follow these steps:
    {
      "registries": {
        "@forge-ui": {
-         "url": "https://raw.githubusercontent.com/jleva12/ei-tiger-agent-workflow-builder/main/packages/forge-ui/public/r/{name}.json",
+         "url": "https://raw.githubusercontent.com/jleva12/ei-tiger-workflow/main/packages/forge-ui/public/r/{name}.json",
          "headers": { "Authorization": "Bearer ${FORGE_UI_TOKEN}" }
        }
      }
@@ -1468,7 +1468,7 @@ here too. Point it at `packages/forge-ui`: from the monorepo's root it would
 find the copies installed in the root `.claude/skills` instead:
 
 ```bash
-npx skills add https://github.com/jleva12/ei-tiger-agent-workflow-builder/tree/main/packages/forge-ui --skill forge-ui forge-data forge-state -a claude-code -y
+npx skills add https://github.com/jleva12/ei-tiger-workflow/tree/main/packages/forge-ui --skill forge-ui forge-data forge-state -a claude-code -y
 ```
 
 They're copied into the app's `.claude/skills/` and recorded in

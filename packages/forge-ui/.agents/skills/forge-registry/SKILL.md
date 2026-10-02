@@ -111,9 +111,9 @@ problems in files you didn't touch; only your files need to be clean.
 ### Publishing
 
 This package lives at `packages/forge-ui` in the private monorepo
-`jleva12/ei-tiger-agent-workflow-builder`. Apps install from the files
+`jleva12/ei-tiger-workflow`. Apps install from the files
 committed there
-(`raw.githubusercontent.com/jleva12/ei-tiger-agent-workflow-builder/<ref>/packages/forge-ui/public/r/{name}.json`,
+(`raw.githubusercontent.com/jleva12/ei-tiger-workflow/<ref>/packages/forge-ui/public/r/{name}.json`,
 with a token in `FORGE_UI_TOKEN`), so a change is published when it's
 pushed — and only if the rebuilt `registry.json` and `public/r` are
 committed with it. `npm run registry:check` rebuilds and fails on
@@ -123,7 +123,7 @@ uncommitted registry changes; the monorepo's `Forge UI registry` workflow
 Releases are `forge-ui-`prefixed git tags (`forge-ui-v0.1.0`) that apps
 can pin in their registry URL.
 The `base` item (`registry:base`) starts new apps with
-`npx shadcn@latest init jleva12/ei-tiger-agent-workflow-builder/base#main --template vite --base base`:
+`npx shadcn@latest init jleva12/ei-tiger-workflow/base#main --template vite --base base`:
 that `owner/repo/item` form reads the monorepo's root `registry.json`,
 which only `include`s this package's `registry.json` — keep it that way.
 Its `config` writes the registry and token header into the new

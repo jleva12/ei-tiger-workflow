@@ -1,6 +1,6 @@
 {
   "$schema": "https://ui.shadcn.com/schema/registry.json",
   "name": "forge-ui",
-  "homepage": "https://github.com/jleva12/ei-tiger-agent-workflow-builder/tree/main/packages/forge-ui",
+  "homepage": "https://github.com/jleva12/ei-tiger-workflow/tree/main/packages/forge-ui",
   "include": ["packages/forge-ui/registry.json"]
 }

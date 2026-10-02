@@ -51,7 +51,7 @@ builds into `forge-ui/registry.json` and `forge-ui/public/r`, read from
 this repo on GitHub with a token (`FORGE_UI_TOKEN`), which works for any
 project, inside this repo or not. The root `registry.json` only includes
 `forge-ui/registry.json`, so `npx shadcn@latest init
-jleva12/ei-tiger-agent-workflow-builder/base#main` can start a new app.
+jleva12/ei-tiger-workflow/base#main` can start a new app.
 Rebuild the registry with a change and commit both (`make
 forge-ui-registry`); `make forge-ui-check` and the `Forge UI registry`
 workflow fail when they differ. It came from `jleva12/forge-ui` with its

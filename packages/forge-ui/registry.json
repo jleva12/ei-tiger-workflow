@@ -1,7 +1,7 @@
 {
   "$schema": "https://ui.shadcn.com/schema/registry.json",
   "name": "forge-ui",
-  "homepage": "https://github.com/jleva12/ei-tiger-agent-workflow-builder/tree/main/packages/forge-ui",
+  "homepage": "https://github.com/jleva12/ei-tiger-workflow/tree/main/packages/forge-ui",
   "items": [
     {
       "name": "theme",
@@ -3092,7 +3092,7 @@
         "menuAccent": "subtle",
         "registries": {
           "@forge-ui": {
-            "url": "https://raw.githubusercontent.com/jleva12/ei-tiger-agent-workflow-builder/main/packages/forge-ui/public/r/{name}.json",
+            "url": "https://raw.githubusercontent.com/jleva12/ei-tiger-workflow/main/packages/forge-ui/public/r/{name}.json",
             "headers": {
               "Authorization": "Bearer ${FORGE_UI_TOKEN}"
             }
