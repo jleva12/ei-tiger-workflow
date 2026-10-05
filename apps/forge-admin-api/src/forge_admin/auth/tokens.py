@@ -10,12 +10,17 @@ assistant mints short-lived ones for the person it is talking to
 """
 
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
 import jwt
 
-from forge_admin.auth.authorization import ROLE_KEY_PATTERN, SUBJECT_PATTERN
+from forge_admin.auth.authorization import (
+    GROUP_NAME_PATTERN,
+    SUBJECT_PATTERN,
+    is_reserved_subject,
+)
 from forge_admin.config import Settings
 from forge_admin.db.audit import utc_now
 from forge_admin.models import User
@@ -23,8 +28,20 @@ from forge_admin.models import User
 ALGORITHM = "HS256"
 
 
+# The most groups read from a token; a directory's long tail stops here.
+MAX_GROUPS = 500
+
+
 class TokenError(Exception):
     """A bearer token the API won't accept; the message says why."""
+
+
+@dataclass(frozen=True)
+class Identity:
+    """Who a token identifies: the user, and the company groups they're in."""
+
+    subject: str
+    groups: tuple[str, ...] = ()
 
 
 def mint_token(
@@ -33,18 +50,20 @@ def mint_token(
     *,
     lifetime: timedelta,
     now: datetime | None = None,
+    groups: list[str] | None = None,
 ) -> str:
     """
     Sign a token that identifies a user.
 
     Besides ``sub``, it carries the user's profile as an identity provider's
     would (``email``, ``given_name``, ``family_name``, ``name``, ``msid``); the
-    API reads only ``sub``.
+    API reads only ``sub``, and the groups claim when ``groups`` are given.
 
     :param settings: Settings with ``jwt_secret``.
     :param user: The user it identifies.
     :param lifetime: How long it is valid.
     :param now: When it is issued; defaults to the current time.
+    :param groups: The company groups it says they're in.
     :return: The encoded JWT.
     :raises TokenError: No ``jwt_secret`` is configured.
     """
@@ -59,6 +78,8 @@ def mint_token(
         "name": f"{user.first_name} {user.last_name}",
         "msid": user.msid,
     }
+    if groups:
+        claims[settings.jwt_groups_claim] = list(groups)
     return _sign(settings, claims)
 
 
@@ -82,9 +103,7 @@ def mint_subject_token(
     :raises TokenError: No ``jwt_secret`` is configured, or the subject isn't
         one ``verify_token`` would accept.
     """
-    if not re.fullmatch(SUBJECT_PATTERN, subject) or re.fullmatch(
-        ROLE_KEY_PATTERN, subject
-    ):
+    if not re.fullmatch(SUBJECT_PATTERN, subject) or is_reserved_subject(subject):
         raise TokenError("Invalid token subject")
     issued = now or utc_now()
     return _sign(settings, {"sub": subject, "iat": issued, "exp": issued + lifetime})
@@ -106,9 +125,35 @@ def verify_token(settings: Settings, token: str) -> str:
     """
     Check a bearer token and return the user it identifies.
 
+    :raises TokenError: As :func:`verify_identity`.
+    """
+    return verify_identity(settings, token).subject
+
+
+def groups_of(value: object) -> tuple[str, ...]:
+    """
+    The company groups a token's groups claim names: a list of names (or
+    one name). Names that couldn't be a group's are left out.
+    """
+    names = [value] if isinstance(value, str) else value
+    if not isinstance(names, list):
+        return ()
+    found = dict.fromkeys(
+        name
+        for name in names[:MAX_GROUPS]
+        if isinstance(name, str) and re.fullmatch(GROUP_NAME_PATTERN, name)
+    )
+    return tuple(found)
+
+
+def verify_identity(settings: Settings, token: str) -> Identity:
+    """
+    Check a bearer token and return who it identifies: the user, and the
+    company groups its ``jwt_groups_claim`` names.
+
     :param settings: The API's settings.
     :param token: The encoded JWT.
-    :return: Its ``sub``: the user's ID.
+    :return: Its ``sub`` (the user's ID), and its groups.
     :raises TokenError: Tokens aren't accepted, or this one is expired,
         wrongly signed, for another issuer or audience, or lacks a valid
         ``sub``, ``iat`` or ``exp``.
@@ -129,9 +174,7 @@ def verify_token(settings: Settings, token: str) -> str:
     except jwt.InvalidTokenError:
         raise TokenError("Invalid bearer token") from None
     subject = claims["sub"]
-    # Roles and subjects share Casbin's namespace; see members.assign_role.
-    if not re.fullmatch(SUBJECT_PATTERN, subject) or re.fullmatch(
-        ROLE_KEY_PATTERN, subject
-    ):
+    # Roles, groups and subjects share Casbin's namespace; see members.assign_role.
+    if not re.fullmatch(SUBJECT_PATTERN, subject) or is_reserved_subject(subject):
         raise TokenError("Invalid bearer token subject")
-    return str(subject)
+    return Identity(str(subject), groups_of(claims.get(settings.jwt_groups_claim)))

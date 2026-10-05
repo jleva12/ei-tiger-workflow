@@ -4,7 +4,7 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from forge_task_adk_workflows import run_store
+from forge_task_adk_workflows import run_store, usage_store
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
@@ -25,8 +25,11 @@ target_metadata = Base.metadata
 # Tables autogenerate leaves alone, which it would otherwise drop: those Google
 # ADK creates and migrates itself (the assistant's conversations), and the ADK
 # workflow runs', which the run store describes (0005adk_run_store creates
-# them as it does).
-OTHER_TABLES = ADK_TABLES | set(run_store.metadata.tables)
+# them as it does), and what organizations used, which the usage store
+# describes (0009usage).
+OTHER_TABLES = (
+    ADK_TABLES | set(run_store.metadata.tables) | set(usage_store.metadata.tables)
+)
 
 
 def include_name(name: str | None, type_: str, parent_names: object) -> bool:

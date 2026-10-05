@@ -75,6 +75,7 @@ export const FlowNodeView = React.memo(function FlowNodeView({
       ? info.label
       : undefined
   const detail = [kind, ui.detailOf(data, lookups)].filter(Boolean).join(" · ")
+  const badge = ui.badgeOf?.(data)
 
   return (
     <div
@@ -92,7 +93,14 @@ export const FlowNodeView = React.memo(function FlowNodeView({
         )}
         <KindGlyph info={info} />
         <div className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-xs font-medium text-foreground">{data.name}</span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-xs font-medium text-foreground">{data.name}</span>
+            {badge && (
+              <span className="shrink-0 rounded-full bg-primary px-1.5 text-[0.625rem] leading-4 font-medium text-primary-foreground">
+                {badge}
+              </span>
+            )}
+          </span>
           <span
             className={cn(
               "truncate text-2xs",

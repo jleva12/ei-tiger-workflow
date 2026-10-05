@@ -233,7 +233,7 @@ function readSettings(
         )
     } else if (key === "headers") {
       config[key] = readList(key, value, path, notes) ?? fallback
-    } else if (key === "parameters") {
+    } else if (key === "parameters" || key === "state_schema") {
       if (isRecord(value)) config[key] = value
       else notes.push(`${path} should be a JSON Schema object.`)
     } else if (key === "max_output_tokens") {

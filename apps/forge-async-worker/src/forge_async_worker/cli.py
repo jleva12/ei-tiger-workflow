@@ -1,6 +1,7 @@
 """Dev/ops CLI. Jobs run inline (no worker needed), except under ``worker``.
 
-    forge-async-worker worker --ensure-schema                 # the SAQ worker on the adk_workflows queue
+    forge-async-worker worker --ensure-schema                 # the SAQ worker on every enabled task's queue
+    forge-async-worker worker --queues=documents              # knowledge base documents only
     forge-async-worker worker --concurrency 8
     forge-async-worker worker --check                         # health: this host serves the queue
     forge-async-worker tasks                                  # installed task types and their queues
@@ -35,8 +36,12 @@ def _parser(task_commands: dict[str, Any]) -> argparse.ArgumentParser:
     sub.add_parser("tasks", help="installed task types and their queues")
     sub.add_parser("ensure-schema", help="set up the enabled tasks' storage (the ADK session tables)")
     sub.add_parser("prepare", help="download what every installed task fetches at runtime (for image builds)")
-    wk = sub.add_parser("worker", help="run the SAQ worker on the adk_workflows queue")
-    wk.add_argument("--queues", default="", help="the queue to serve: adk_workflows, the only one (the default)")
+    wk = sub.add_parser("worker", help="run the SAQ worker on the enabled tasks' queues")
+    wk.add_argument(
+        "--queues",
+        default="",
+        help="the queues to serve, comma separated: adk_workflows, documents (default: every enabled task's)",
+    )
     wk.add_argument("--concurrency", type=int, default=4, help="runs it runs at once (default 4)")
     wk.add_argument(
         "--grace-period", type=int, default=30, help="seconds running runs get at shutdown before they are re-queued"

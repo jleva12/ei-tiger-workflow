@@ -9,17 +9,23 @@
 members = [
     "apps/forge-admin-api",
     "apps/forge-async-worker",
+    "packages/python/agent-runtime",
     "packages/python/adk-workflows",
     "packages/python/common",
+    "packages/python/documents",
+    "packages/python/embeddings",
     "packages/python/jsonata",
     "packages/python/task-sdk",
 ]
 
 # Members depend on each other by name; these resolve them to the members.
 [tool.uv.sources]
+forge-agent-runtime = { workspace = true }
 forge-common = { workspace = true }
+forge-embeddings = { workspace = true }
 forge-jsonata = { workspace = true }
 forge-task-adk-workflows = { workspace = true }
+forge-task-documents = { workspace = true }
 forge-tasks = { workspace = true }
 
 # The tools every member's checks run (make admin-check, async-worker-check,
@@ -34,4 +40,11 @@ dev = [
     "pytest-timeout>=2.3",
     "ruff>=0.16.9",
     "types-pyyaml>=6.0",
+    # The documents and embeddings packages' tests (knowledge bases): a fake
+    # Mongo, the Voyage embedder's errors, docling's document model, and the
+    # PDF fixtures they build.
+    "docling-core>=2.0",
+    "mongomock>=4.1",
+    "reportlab>=4",
+    "voyageai>=0.3",
 ]

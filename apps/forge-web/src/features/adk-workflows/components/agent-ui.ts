@@ -52,7 +52,7 @@ function detailOf(step: AgentStep, lookups: AgentLookups): string {
       )
     case "saved": {
       const name = lookups.agents[step.config.agent]
-      return name ? `Runs ${name}` : "No ADK workflow picked"
+      return name ? `Runs ${name}` : "No workflow picked"
     }
     case "human_input": {
       const { names } = inputFields(step.config.response_schema)
@@ -99,8 +99,8 @@ function summaryOf(step: AgentStep): NodeSummary | null {
 
 export const AGENT_UI: BuilderUi = {
   nouns: {
-    doc: "ADK workflow",
-    docs: "ADK workflows",
+    doc: "Workflow",
+    docs: "Workflows",
     step: "node",
     steps: "nodes",
   },

@@ -148,11 +148,11 @@ function settingsIssues(
       break
     case "saved": {
       const target = step.config.agent
-      if (!target) out.push(["agent", "error", "Pick the ADK workflow it runs."])
+      if (!target) out.push(["agent", "error", "Pick the workflow it runs."])
       else if (target === context.selfId)
-        out.push(["agent", "error", "An ADK workflow can't run itself."])
+        out.push(["agent", "error", "A workflow can't run itself."])
       else if (context.agents && !context.agents.has(target)) {
-        out.push(["agent", "error", "That ADK workflow was deleted; pick another."])
+        out.push(["agent", "error", "That workflow was deleted; pick another."])
       } else if (
         context.agents &&
         context.selfId &&
@@ -162,7 +162,7 @@ function settingsIssues(
         out.push([
           "agent",
           "error",
-          `${name} runs this ADK workflow, so they'd run each other forever.`,
+          `${name} runs this workflow, so they'd run each other forever.`,
         ])
       }
       break
@@ -284,7 +284,7 @@ export function validateAgent(
   if (starts.length === 0)
     add("error", undefined, "start", "Add a start: every run begins there.")
   for (const extra of starts.slice(1)) {
-    add("error", extra.id, "start", "An ADK workflow has one start; remove this one.")
+    add("error", extra.id, "start", "A workflow has one start; remove this one.")
   }
   if (starts[0] && !(outgoing.get(starts[0].id)?.length ?? 0)) {
     add(

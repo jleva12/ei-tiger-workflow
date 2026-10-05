@@ -680,10 +680,10 @@ function SavedFields({ id, config }: Props<"saved">) {
   return (
     <ChoiceField
       issue="agent"
-      label="ADK workflow"
+      label="Workflow"
       value={config.agent}
       placeholder={
-        others.length ? "Pick an ADK workflow" : "No other ADK workflows yet"
+        others.length ? "Pick a workflow" : "No other workflows yet"
       }
       options={others.map(([value, label]) => ({ value, label }))}
       onChange={(value) => set("agent", value)}

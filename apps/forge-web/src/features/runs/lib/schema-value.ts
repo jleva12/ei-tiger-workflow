@@ -6,7 +6,7 @@ import { parseJsonSchema, type SchemaProperty } from "@/features/json/lib/json-s
  * A value a JSON Schema describes, as a person fills it in: the fields its
  * schema declares (nested objects as groups; lists and free-form objects
  * as JSON), or JSON outright. A run's input (the run dialog) and a
- * person's answer to a paused ADK workflow (its human input panel) are
+ * person's answer to a paused workflow (its human input panel) are
  * filled in this way; `SchemaValueEditor` draws it.
  */
 

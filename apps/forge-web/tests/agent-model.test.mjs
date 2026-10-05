@@ -87,7 +87,7 @@ test("importing drops what doesn't fit and says so", () => {
   assert.equal(kept.config.sub_agents[0].config.max_output_tokens, null)
   assert.equal("output_key" in kept.config.sub_agents[1].config, false)
   assert.equal(parseAgent("{", { organizationId: ORG }).ok, false)
-  assert.match(parseAgent({ format: "forge.workflow/v1", nodes: [] }, { organizationId: ORG }).error, /isn't a Forge ADK workflow/)
+  assert.match(parseAgent({ format: "forge.workflow/v1", nodes: [] }, { organizationId: ORG }).error, /isn't a Forge workflow/)
 })
 
 test("names are ADK names, kept apart across nodes and sub-agents", () => {
@@ -307,7 +307,7 @@ test("a saved agent can't be itself, gone, or run this one back", () => {
     ["ag_c", { name: "C", uses: ["ag_test"] }],
   ])
   assert.deepEqual(issuesOf(doc, { selfId: "ag_test", agents }), ["s:agent"])
-  assert.match(validateAgent(toGraph(doc), { selfId: "ag_test", agents })[0].message, /B runs this ADK workflow/)
+  assert.match(validateAgent(toGraph(doc), { selfId: "ag_test", agents })[0].message, /B runs this workflow/)
   assert.deepEqual(issuesOf(doc, { selfId: "ag_test", agents: new Map() }), ["s:agent"])
   assert.deepEqual(issuesOf(doc, { selfId: "ag_b" }), ["s:agent"])
   assert.deepEqual(issuesOf(doc, { selfId: "ag_test", agents: new Map([["ag_b", { name: "B", uses: [] }]]) }), [])

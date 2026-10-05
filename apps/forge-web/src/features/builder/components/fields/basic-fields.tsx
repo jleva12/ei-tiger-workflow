@@ -276,18 +276,26 @@ export function CheckField({
   checked,
   onChange,
   description,
+  disabled,
 }: {
   label: string
   checked: boolean
   onChange: (checked: boolean) => void
   description?: React.ReactNode
+  /** Offered, but not now: its description says why. */
+  disabled?: boolean
 }) {
   const id = React.useId()
   return (
-    <Field orientation="horizontal" className="items-start">
+    <Field
+      orientation="horizontal"
+      className="items-start"
+      data-disabled={disabled || undefined}
+    >
       <Checkbox
         id={id}
         checked={checked}
+        disabled={disabled}
         onCheckedChange={(on) => onChange(Boolean(on))}
         className="mt-0.5"
       />

@@ -1,0 +1,154 @@
+{
+  "format": "forge.chat_agent/v1",
+  "id": "ca_1k2cuqsuev",
+  "name": "Support assistant",
+  "description": "Example: answers customers' questions with their past conversations, their orders and the help center, and hands billing to a specialist.",
+  "organization_id": "org-1",
+  "nodes": [
+    {
+      "id": "agent",
+      "kind": "agent",
+      "name": "Support assistant",
+      "config": {
+        "description": "Answers customers' questions about their orders and the product.",
+        "instruction": "You're the support assistant. Be brief and kind. Look orders up before answering questions about them, check the help center before saying something can't be done, and hand billing questions (invoices, charges, refunds) to the billing specialist.",
+        "model": {
+          "provider": "",
+          "name": ""
+        },
+        "thinking_level": "",
+        "max_output_tokens": null,
+        "state_schema": {}
+      },
+      "outputs": [
+        "tools",
+        "agents"
+      ]
+    },
+    {
+      "id": "memory",
+      "kind": "memory",
+      "name": "Memory",
+      "config": {
+        "mode": "every_turn"
+      },
+      "outputs": []
+    },
+    {
+      "id": "orders",
+      "kind": "http_tool",
+      "name": "Look up order",
+      "config": {
+        "description": "Finds an order by its number: its items, status and delivery date.",
+        "method": "GET",
+        "url": "https://api.example.com/orders/{order_id}",
+        "headers": [
+          {
+            "id": "h_accept",
+            "name": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "parameters": {
+          "type": "object",
+          "required": [
+            "order_id"
+          ],
+          "properties": {
+            "order_id": {
+              "type": "string",
+              "description": "The order's number, e.g. A-10442."
+            }
+          }
+        },
+        "confirm": false
+      },
+      "outputs": []
+    },
+    {
+      "id": "help",
+      "kind": "mcp",
+      "name": "Help center",
+      "config": {
+        "server": "",
+        "transport": "streamable_http",
+        "url": "https://mcp.example.com/help-center",
+        "headers": [],
+        "tools": "",
+        "confirm": false
+      },
+      "outputs": []
+    },
+    {
+      "id": "billing",
+      "kind": "sub_agent",
+      "name": "Billing specialist",
+      "config": {
+        "description": "Handles billing: invoices, charges and refunds.",
+        "instruction": "You handle billing questions. Check what a refund would be before promising one, and say plainly when something can't be refunded.",
+        "model": {
+          "provider": "",
+          "name": ""
+        },
+        "thinking_level": "",
+        "max_output_tokens": null,
+        "mode": "chat",
+        "disallow_transfer_to_parent": false,
+        "disallow_transfer_to_peers": false,
+        "include_contents": "default"
+      },
+      "outputs": [
+        "tools",
+        "agents"
+      ]
+    },
+    {
+      "id": "billing_api",
+      "kind": "openapi",
+      "name": "Billing API",
+      "config": {
+        "source": "url",
+        "url": "https://api.example.com/billing/openapi.json",
+        "spec": "",
+        "operations": "getInvoice, listCharges, previewRefund",
+        "confirm": true
+      },
+      "outputs": []
+    }
+  ],
+  "edges": [
+    {
+      "id": "agent:tools->memory",
+      "source": "agent",
+      "source_output": "tools",
+      "target": "memory"
+    },
+    {
+      "id": "agent:tools->orders",
+      "source": "agent",
+      "source_output": "tools",
+      "target": "orders"
+    },
+    {
+      "id": "agent:tools->help",
+      "source": "agent",
+      "source_output": "tools",
+      "target": "help"
+    },
+    {
+      "id": "agent:agents->billing",
+      "source": "agent",
+      "source_output": "agents",
+      "target": "billing"
+    },
+    {
+      "id": "billing:tools->billing_api",
+      "source": "billing",
+      "source_output": "tools",
+      "target": "billing_api"
+    }
+  ],
+  "layout": {},
+  "created_at": "2026-10-04T16:22:33.164Z",
+  "updated_at": "2026-10-04T16:22:33.164Z"
+}

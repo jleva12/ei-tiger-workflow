@@ -1,9 +1,12 @@
 """
-The worker's queue: SAQ's ``adk_workflows`` queue on Redis. The admin API
-sends it ``run_adk`` for each run it starts or moves on (a decision, an
-answer, a retry); the worker sends its own: ``run_adk`` when a wait is over or
-a hiccup's backoff is, ``expire_pause`` at a pause's deadline, and the
-maintenance's.
+The worker's queues: SAQ's ``adk_workflows`` and ``documents`` queues on Redis.
+The ``documents`` queue takes ``run_job`` with a job spec of the documents task
+(``{"task_type": "documents", "kind": "ingest" | "delete", "payload": {...}}``),
+which the admin API sends for each knowledge base document uploaded, retried or
+removed. The admin API sends the ``adk_workflows`` queue ``run_adk`` for
+each run it starts or moves on (a decision, an answer, a retry); the worker
+sends its own: ``run_adk`` when a wait is over or a hiccup's backoff is,
+``expire_pause`` at a pause's deadline, and the maintenance's.
 
 Every job carries ``key`` (a job whose key is queued or running already isn't
 queued again) and the worker's settings for its function (``JOB_OPTIONS``,
@@ -22,7 +25,9 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 QUEUE = "adk_workflows"
+DOCUMENTS = "documents"
 RUN_ADK = "run_adk"
+RUN_JOB = "run_job"
 EXPIRE_PAUSE = "expire_pause"
 MAINTAIN = "maintain"
 #: Seconds a running ``run_adk`` may go untouched before SAQ's sweeper takes
@@ -36,6 +41,10 @@ JOB_OPTIONS: dict[str, dict[str, Any]] = {
     RUN_ADK: {"timeout": 0, "heartbeat": HEARTBEAT, "retries": 1},
     EXPIRE_PAUSE: {"timeout": 60, "heartbeat": 0, "retries": 1},
     MAINTAIN: {"timeout": 300, "heartbeat": 0, "retries": 1},
+    # A document's ingest: parsing a large PDF and embedding its chunks takes
+    # minutes; a TransientError (the embedder's rate limit, Mongo's hiccup)
+    # is retried by SAQ.
+    RUN_JOB: {"timeout": 1800, "heartbeat": HEARTBEAT, "retries": 3, "retry_delay": 10.0, "retry_backoff": True},
 }
 
 

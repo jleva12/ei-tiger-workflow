@@ -145,10 +145,10 @@ const plural = (n: number, word: string) =>
 const helper = createColumnHelper<AgentRow>()
 const COLUMNS = helper.columns([
   helper.accessor("name", {
-    header: "ADK workflow",
+    header: "Workflow",
     size: 320,
     enableHiding: false,
-    meta: { label: "ADK workflow" },
+    meta: { label: "Workflow" },
     cell: ({ row: { original: row } }) => (
       <span className="flex min-w-0 flex-col">
         <span className="truncate text-[0.8125rem] font-medium text-foreground">
@@ -244,10 +244,10 @@ function AgentMenu({ row }: { row: AgentRow }) {
 
 // The Runs tab, in the words of what runs.
 const RUN_WORDS: RunListWords = {
-  title: "ADK workflow runs",
-  list: "ADK workflow runs",
-  docs: "ADK workflows",
-  aDoc: "an ADK workflow",
+  title: "Workflow runs",
+  list: "Workflow runs",
+  docs: "Workflows",
+  aDoc: "a workflow",
   icon: AGENTS_ICON,
 }
 
@@ -261,7 +261,7 @@ function TabCount({ value }: { value: number | undefined }) {
   )
 }
 
-/** "Untitled ADK workflow", or "Untitled ADK workflow 2" when that's taken. */
+/** "Untitled workflow", or "Untitled workflow 2" when that's taken. */
 function freshName(base: string, taken: AgentDocument[]) {
   const names = new Set(taken.map((a) => a.name))
   if (!names.has(base)) return base
@@ -270,9 +270,9 @@ function freshName(base: string, taken: AgentDocument[]) {
 }
 
 /**
- * An organization's ADK workflows page, in two tabs. Overview lists the
+ * An organization's workflows page, in two tabs. Overview lists the
  * Google ADK graph workflows it has built, each opening its builder. New
- * ADK workflow starts one from its start; the example and an import start
+ * Workflow starts one from its start; the example and an import start
  * from more. The organization keeps them (the admin API, in MongoDB), so
  * everyone in it sees and reuses the same ones. Runs lists their runs by
  * status, each opening its own page.
@@ -343,8 +343,8 @@ export function OrganizationAgents({
   )
   const create = () =>
     void keep(
-      newAgent(organizationId, freshName("Untitled ADK workflow", agents)),
-      "Couldn't create the ADK workflow"
+      newAgent(organizationId, freshName("Untitled workflow", agents)),
+      "Couldn't create the workflow"
     )
   const startFromExample = () =>
     void keep(exampleAgent(organizationId), "Couldn't add the example")
@@ -357,7 +357,7 @@ export function OrganizationAgents({
             duplicate: (row: AgentRow) =>
               void keep(
                 copyAgent(row.doc, `${row.name} (copy)`),
-                "Couldn't duplicate the ADK workflow"
+                "Couldn't duplicate the workflow"
               ),
             remove: setRemoving,
           }
@@ -378,7 +378,7 @@ export function OrganizationAgents({
     void runs.refetch().then((result) => {
       setRefreshing(false)
       if (result.isSuccess)
-        toast.add({ title: "ADK workflow runs refreshed.", type: "info" })
+        toast.add({ title: "Workflow runs refreshed.", type: "info" })
     })
   }
 
@@ -401,14 +401,14 @@ export function OrganizationAgents({
             Import
           </Button>
           <PrimaryAction disabled={busy} onClick={create}>
-            ADK workflow
+            Workflow
           </PrimaryAction>
         </ShellHeaderActions>
       )}
 
       <ShellToolbar>
         <ViewToolbar>
-          <ViewTabsList aria-label="ADK workflows">
+          <ViewTabsList aria-label="Workflows">
             <ViewTabsTrigger value="overview" icon={AGENTS_ICON}>
               Overview
               <TabCount value={list.isPending ? undefined : rows.length} />
@@ -426,7 +426,7 @@ export function OrganizationAgents({
                     <Button
                       variant="outline"
                       size="icon"
-                      aria-label="Refresh ADK workflow runs"
+                      aria-label="Refresh workflow runs"
                       disabled={refreshing}
                       onClick={refresh}
                     />
@@ -434,7 +434,7 @@ export function OrganizationAgents({
                 >
                   {refreshing ? <Spinner /> : <Icon icon="refresh" size={15} />}
                 </TooltipTrigger>
-                <TooltipContent>Refresh ADK workflow runs</TooltipContent>
+                <TooltipContent>Refresh workflow runs</TooltipContent>
               </Tooltip>
             )}
           </ToolbarFilters>
@@ -444,7 +444,7 @@ export function OrganizationAgents({
       <TabsContent value="overview">
         {list.error ? (
           <ErrorCallout
-            title="Couldn't load the organization's ADK workflows"
+            title="Couldn't load the organization's workflows"
             action={
               <Button
                 variant="outline"
@@ -460,13 +460,13 @@ export function OrganizationAgents({
         ) : !list.isPending && rows.length === 0 ? (
           <EmptyWorkspace
             illustration={<EmptyIllustration name="waiting" />}
-            title={`Build ${organizationName}'s ADK workflows`}
-            description="An ADK workflow is a Google ADK graph: LLM agents and their teams (sequential, parallel, loop), with Forge's steps between them: HTTP requests, transforms, approvals and people's answers, If / Switch, loops and merges. Build it on a canvas; it's saved as a JSON graph ADK builds."
+            title={`Build ${organizationName}'s workflows`}
+            description="A workflow is a Google ADK graph: LLM agents and their teams (sequential, parallel, loop), with Forge's steps between them: HTTP requests, transforms, approvals and people's answers, If / Switch, loops and merges. Build it on a canvas; it's saved as a JSON graph ADK builds."
             actions={
               canManage ? (
                 <>
                   <Button variant="outline" disabled={busy} onClick={create}>
-                    New ADK workflow
+                    New workflow
                   </Button>
                   <Button
                     variant="outline"
@@ -488,8 +488,8 @@ export function OrganizationAgents({
           <ActionsContext.Provider value={actions}>
             <DataTable
               className="rounded-none border-0"
-              title="ADK workflows"
-              description={`Every ADK workflow ${organizationName} has built, shared by everyone in the organization. Open one to build it.`}
+              title="Workflows"
+              description={`Every workflow ${organizationName} has built, shared by everyone in the organization. Open one to build it.`}
               columns={COLUMNS}
               data={rows}
               isLoading={list.isPending}
@@ -498,7 +498,7 @@ export function OrganizationAgents({
               initialState={INITIAL_STATE}
               stateKey="organization-agents"
               exportFileName="adk-workflows"
-              labels={{ rows: "ADK workflows", rowSingular: "ADK workflow" }}
+              labels={{ rows: "Workflows", rowSingular: "Workflow" }}
               onRowClick={(row) => open(row.original.id)}
             />
           </ActionsContext.Provider>
@@ -519,15 +519,15 @@ export function OrganizationAgents({
         open={importing}
         onOpenChange={setImporting}
         format={AGENT_FORMAT}
-        nouns={{ doc: "ADK workflow", steps: "nodes" }}
+        nouns={{ doc: "Workflow", steps: "nodes" }}
         parse={parse}
-        title="Import an ADK workflow"
-        description={`Adds it to ${organizationName}'s ADK workflows and opens it. It gets a new ID, so it never replaces one you have.`}
+        title="Import a workflow"
+        description={`Adds it to ${organizationName}'s workflows and opens it. It gets a new ID, so it never replaces one you have.`}
         action="Import and open"
         onImport={(doc) =>
           void keep(
             copyAgent(doc, freshName(doc.name, agents)),
-            "Couldn't import the ADK workflow"
+            "Couldn't import the workflow"
           )
         }
       />
@@ -541,7 +541,7 @@ export function OrganizationAgents({
             <DialogTitle>Delete {removing?.name}?</DialogTitle>
             <DialogDescription>
               It's removed for everyone in {organizationName}, with its nodes
-              and edges. ADK workflows that run it as a saved workflow will need another.
+              and edges. Workflows that run it as a saved workflow will need another.
               You can't undo this; export its JSON first to keep a copy.
             </DialogDescription>
           </DialogHeader>
@@ -563,14 +563,14 @@ export function OrganizationAgents({
                   setRemoving(undefined)
                 } catch (caught) {
                   toast.add({
-                    title: "Couldn't delete the ADK workflow",
+                    title: "Couldn't delete the workflow",
                     description: toApiError(caught).message,
                     type: "error",
                   })
                 }
               }}
             >
-              Delete ADK workflow
+              Delete workflow
             </Button>
           </DialogFooter>
         </DialogContent>

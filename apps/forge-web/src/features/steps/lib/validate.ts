@@ -5,7 +5,7 @@ import type { Scope } from "./scope"
 import { oneOf, valuesOf } from "./types"
 
 /*
- * What's wrong in a Forge step's own settings, for an ADK workflow's
+ * What's wrong in a Forge step's own settings, for a workflow's
  * checks (adk-workflows/lib/validate): errors (it can't run) and warnings (it
  * can, but probably not as meant). And the cycles in a graph, which both
  * builders look for.

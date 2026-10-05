@@ -2,6 +2,7 @@ import * as React from "react"
 import { Link, useNavigate } from "@tanstack/react-router"
 import { useQueryClient } from "@tanstack/react-query"
 import { ReactFlowProvider, useReactFlow } from "@xyflow/react"
+import { PackageIcon, PencilEdit02Icon } from "@hugeicons/core-free-icons"
 import { cn } from "cn"
 
 import { useBuilderAutosave } from "@/features/builder/components/autosave"
@@ -54,21 +55,28 @@ import { Spinner } from "@/components/ui/spinner"
 import { toast } from "@/components/ui/toast"
 import { useMyOrganizations, type MyOrganization } from "@/lib/access"
 import { useOrganizationAgents } from "@/features/adk-workflows/lib/api"
+import { useOrganizationKnowledgeBases } from "@/features/knowledge/lib/api"
+import { useOrganizationMcpServers } from "@/features/mcp-servers/lib/api"
 import { toApiError } from "@/lib/api/index"
 import {
   cacheChatAgent,
+  conflictCode,
+  exportChatAgentVersion,
   getChatAgent,
+  publishProblems,
   saveChatAgent,
   useChatAgent,
-  useCreateChatAgent,
+  useChatAgentLifecycle,
+  useChatAgentVersion,
   useDeleteChatAgent,
+  useDuplicateChatAgent,
   useOrganizationChatAgents,
-  useSaver,
+  type ChatAgentDetail,
   type ChatAgentRecord,
 } from "@/features/agents/lib/api"
+import { useScopeAccess } from "@/lib/hierarchy"
 import {
   CHAT_AGENT_FORMAT,
-  copyChatAgent,
   parseChatAgent,
   storedChatAgent,
   usesOf,
@@ -79,6 +87,14 @@ import { CHAT_AGENT_JSON_SCHEMA } from "@/features/agents/lib/schema"
 import { usePageContext } from "@/features/assistant/lib/page-context"
 import { useAgentStepModels } from "@/features/steps/lib/models"
 import { ChatAgentDetails } from "./chat-agent-details"
+import { StandaloneDialog } from "./chat-agent-standalone"
+import { ChatAgentTestPanel } from "./chat-agent-test"
+import {
+  PublishDialog,
+  ReadOnlyBanner,
+  RunInfo,
+  VersionChip,
+} from "./chat-agent-versions"
 import { chatAgentFileName } from "./chat-agent-files"
 import {
   ChatBuilderProvider,
@@ -97,16 +113,19 @@ const SCHEMA_FILE = "forge-chat-agent.schema.json"
  * A chat agent's builder: the library of what can be attached in the
  * sidebar, the canvas with the agent and what it calls and hands off to,
  * the agent's details on the right, each node's settings in a dialog over
- * the canvas, and the agent's JSON a tab away. Changes are kept as they're
- * made (the builder kit's autosave), in this browser until the admin API
- * keeps agents.
+ * the canvas, and the agent's JSON a tab away. The draft is saved as it's
+ * changed (the builder kit's autosave); a published version is read-only,
+ * and changing it means starting a new version.
  */
 export function ChatAgentBuilderPage({
   organizationId,
   agentId,
+  version,
 }: {
   organizationId: string
   agentId: string
+  /** A published version to open read-only; the agent as it is now when omitted. */
+  version?: number
 }) {
   const myOrganizations = useMyOrganizations()
   const organization = myOrganizations.data?.find(
@@ -114,11 +133,25 @@ export function ChatAgentBuilderPage({
   )
   // Always the latest on opening: the builder saves from the revision it starts at.
   const agent = useChatAgent(organizationId, organization ? agentId : undefined)
+  const pinned = useChatAgentVersion(organizationId, agentId, version)
+  const can = useScopeAccess(organization ? `org:${organizationId}` : undefined)
+  const canManage = can("agents:manage")
   // What the builder opened. From then on it owns the document: a later
   // refetch, even a failed one, never closes it (and what's unsaved with it).
-  const [record, setRecord] = React.useState<ChatAgentRecord>()
-  if (!record && agent.isFetchedAfterMount && agent.isSuccess)
-    setRecord(agent.data)
+  // Publishing, a new version or discarding a draft opens what they answer.
+  const [record, setRecord] = React.useState<ChatAgentDetail>()
+  if (
+    !record &&
+    agent.isFetchedAfterMount &&
+    agent.isSuccess &&
+    (version === undefined || pinned.isSuccess)
+  ) {
+    setRecord(
+      pinned.data
+        ? { ...agent.data, document: pinned.data.document }
+        : agent.data
+    )
+  }
 
   useShellPage({
     header: {
@@ -146,7 +179,10 @@ export function ChatAgentBuilderPage({
     ],
   })
 
-  if (myOrganizations.isPending || (organization && !record && !agent.error)) {
+  if (
+    myOrganizations.isPending ||
+    (organization && !record && !agent.error && !pinned.error)
+  ) {
     return (
       <div className="flex flex-col gap-3" aria-busy="true">
         <Skeleton className="h-8 w-64" />
@@ -205,7 +241,11 @@ export function ChatAgentBuilderPage({
       <PageEmpty
         illustration="search"
         title="Agent not found"
-        description="There's no agent here: it may have been deleted, or it was made in another browser (agents are kept in the browser that made them for now), or the link is to another organization's."
+        description={
+          pinned.error
+            ? `The agent has no version ${version}.`
+            : "There's no agent here: it may have been deleted, or the link is to another organization's."
+        }
       >
         <Button
           variant="outline"
@@ -223,7 +263,21 @@ export function ChatAgentBuilderPage({
       </PageEmpty>
     )
   }
-  return <OpenChatAgent organization={organization} record={record} />
+  // A published version, or the agent for someone who can't change it, is read-only.
+  const readOnly = version !== undefined || !record.has_draft || !canManage
+  return (
+    <OpenChatAgent
+      key={`${version ?? (record.has_draft ? `draft${record.draft_version}` : `v${record.published_version}`)}:${readOnly}`}
+      organization={organization}
+      record={record}
+      viewing={version}
+      readOnly={readOnly}
+      canManage={canManage}
+      onRecord={(next) =>
+        setRecord((kept) => ({ versions: kept?.versions ?? [], ...next }))
+      }
+    />
+  )
 }
 
 /**
@@ -234,9 +288,17 @@ export function ChatAgentBuilderPage({
 function OpenChatAgent({
   organization,
   record,
+  viewing,
+  readOnly,
+  canManage,
+  onRecord,
 }: {
   organization: MyOrganization
-  record: ChatAgentRecord
+  record: ChatAgentDetail
+  viewing: number | undefined
+  readOnly: boolean
+  canManage: boolean
+  onRecord: (record: ChatAgentRecord) => void
 }) {
   const [doc] = React.useState(() =>
     storedChatAgent(record.document, organization.id)
@@ -244,13 +306,17 @@ function OpenChatAgent({
   return (
     <ChatBuilderProvider
       key={record.id}
-      initial={{ doc, context: { selfId: record.id } }}
+      initial={{ doc, context: { selfId: record.id }, readOnly }}
     >
       <BuilderUiContext.Provider value={CHAT_AGENT_UI}>
         <ReactFlowProvider>
           <Builder
             organization={organization}
             record={record}
+            viewing={viewing}
+            readOnly={readOnly}
+            canManage={canManage}
+            onRecord={onRecord}
             needsLayout={doc.nodes.some((n) => !doc.layout[n.id])}
           />
         </ReactFlowProvider>
@@ -260,9 +326,9 @@ function OpenChatAgent({
 }
 
 /**
- * Names for the IDs nodes hold (other agents, ADK workflows, models), what
- * saved-agent and ADK workflow nodes may pick, and what's checked against
- * them.
+ * Names for the IDs nodes hold (other agents, workflows, models, MCP
+ * servers, knowledge bases), what saved-agent, workflow, MCP and knowledge
+ * base nodes may pick, and what's checked against them.
  */
 function useLookups(organizationId: string) {
   const api = useChatBuilderApi()
@@ -270,6 +336,33 @@ function useLookups(organizationId: string) {
   const { agents: workflows, isSuccess: workflowsKnown } =
     useOrganizationAgents(organizationId)
   const { models, defaultModel } = useAgentStepModels()
+  const mcpServers = useOrganizationMcpServers(organizationId)
+  const knowledgeBases = useOrganizationKnowledgeBases(organizationId)
+  React.useEffect(() => {
+    const state = api.getState()
+    const found = knowledgeBases.data ?? []
+    state.setLookups({
+      knowledgeBases: Object.fromEntries(
+        found.map((kb) => [
+          kb.id,
+          {
+            name: kb.name,
+            description: kb.description,
+            documents: kb.documents,
+            ready: kb.ready,
+          },
+        ])
+      ),
+    })
+    // Unknown until they load (or when they can't be read).
+    state.setContext({
+      knowledgeBases: knowledgeBases.isSuccess
+        ? new Map(
+            found.map((kb) => [kb.id, { name: kb.name, ready: kb.ready }])
+          )
+        : undefined,
+    })
+  }, [api, knowledgeBases.data, knowledgeBases.isSuccess])
   React.useEffect(() => {
     const names = Object.fromEntries(models.map((m) => [m.id, m.name]))
     const fallback = defaultModel ? names[defaultModel] : undefined
@@ -301,22 +394,53 @@ function useLookups(organizationId: string) {
         : undefined,
     })
   }, [api, workflows, workflowsKnown])
+  React.useEffect(() => {
+    const state = api.getState()
+    const servers = mcpServers.data ?? []
+    state.setLookups({
+      mcpServers: Object.fromEntries(
+        servers.map((s) => [
+          s.id,
+          {
+            name: s.name,
+            url: s.url,
+            tools: s.checked_at ? s.tools.map((t) => t.name) : null,
+          },
+        ])
+      ),
+    })
+    // Unknown until they load (or when they can't be read).
+    state.setContext({
+      mcpServers: mcpServers.isSuccess
+        ? new Map(
+            servers.map((s) => [
+              s.id,
+              {
+                name: s.name,
+                connected: !s.auth.interactive || s.auth.connected === true,
+                tools: s.checked_at ? s.tools.map((t) => t.name) : null,
+              },
+            ])
+          )
+        : undefined,
+    })
+  }, [api, mcpServers.data, mcpServers.isSuccess])
 }
 
-/** Keeping the chat agent as it's built. */
+/** Keeping the chat agent's draft as it's built. */
 function useChatAgentAutosave(organizationId: string, record: ChatAgentRecord) {
   const client = useQueryClient()
-  const by = useSaver()
   const io = React.useMemo(
     () => ({
       save: (
         id: string,
-        body: { document: ChatAgentDocument; revision: number }
-      ) => saveChatAgent(organizationId, id, body, by),
+        body: { document: ChatAgentDocument; revision: number },
+        options?: { keepalive?: boolean }
+      ) => saveChatAgent(organizationId, id, body, options),
       fetch: (id: string) => getChatAgent(organizationId, id),
       cache: (saved: ChatAgentRecord) => cacheChatAgent(client, saved),
     }),
-    [organizationId, client, by]
+    [organizationId, client]
   )
   return useBuilderAutosave(record, io)
 }
@@ -324,10 +448,18 @@ function useChatAgentAutosave(organizationId: string, record: ChatAgentRecord) {
 function Builder({
   organization,
   record,
+  viewing,
+  readOnly,
+  canManage,
+  onRecord,
   needsLayout,
 }: {
   organization: MyOrganization
-  record: ChatAgentRecord
+  record: ChatAgentDetail
+  viewing: number | undefined
+  readOnly: boolean
+  canManage: boolean
+  onRecord: (record: ChatAgentRecord) => void
   needsLayout: boolean
 }) {
   const api = useChatBuilderApi()
@@ -339,12 +471,27 @@ function Builder({
   const details = useChatBuilder((s) => s.details)
   const [importing, setImporting] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
+  const [publishing, setPublishing] = React.useState(false)
+  const [discarding, setDiscarding] = React.useState(false)
+  const [testing, setTesting] = React.useState(false)
+  const [standalone, setStandalone] = React.useState(false)
+  const [problems, setProblems] = React.useState<string[]>([])
+  const errors = useChatBuilder(
+    (s) => s.issues.filter((i) => i.level === "error").length
+  )
   const [detailsWidth, setDetailsWidth] = useDetailsWidth(
     "forge.chat-agents.detailsWidth"
   )
   const saving = useChatAgentAutosave(organization.id, record)
-  const make = useCreateChatAgent(organization.id)
+  const copy = useDuplicateChatAgent(organization.id)
   const drop = useDeleteChatAgent(organization.id)
+  const lifecycle = useChatAgentLifecycle(organization.id, record.id)
+  const openVersion = (version?: number) =>
+    void navigate({
+      to: "/organizations/$organizationId/chat-agents/$chatAgentId",
+      params: { organizationId: organization.id, chatAgentId: record.id },
+      search: version ? { version } : {},
+    })
   const failed = (title: string) => (caught: unknown) =>
     toast.add({ title, description: toApiError(caught).message, type: "error" })
   useUndoKeys()
@@ -356,21 +503,84 @@ function Builder({
     (text: string) => parseChatAgent(text, { organizationId: organization.id }),
     [organization.id]
   )
+  // What the builder shows: a published version exports with the saved
+  // agents it uses bundled in, ready for forge-agent serve.
+  const shownVersion =
+    viewing ??
+    (record.has_draft ? undefined : (record.published_version ?? undefined))
   const exportJson = () => {
     const doc = chatDocumentOf(api.getState())
-    downloadJson(doc, chatAgentFileName(doc))
+    if (shownVersion === undefined) {
+      downloadJson(doc, chatAgentFileName(doc))
+      return
+    }
+    exportChatAgentVersion(organization.id, record.id, shownVersion).then(
+      (bundle) =>
+        downloadJson(
+          bundle,
+          chatAgentFileName(doc).replace(/\.json$/, `.v${shownVersion}.json`)
+        ),
+      failed("Couldn't export the agent")
+    )
   }
   const duplicate = () => {
-    const doc = chatDocumentOf(api.getState())
-    make.mutate(copyChatAgent(doc, `${doc.name} (copy)`), {
-      onSuccess: (copy) =>
-        void navigate({
-          to: "/organizations/$organizationId/chat-agents/$chatAgentId",
-          params: { organizationId: organization.id, chatAgentId: copy.id },
-        }),
-      onError: failed("Couldn't duplicate the agent"),
+    copy.mutate(
+      { id: record.id, name: `${name} (copy)` },
+      {
+        onSuccess: (made) =>
+          void navigate({
+            to: "/organizations/$organizationId/chat-agents/$chatAgentId",
+            params: { organizationId: organization.id, chatAgentId: made.id },
+          }),
+        onError: failed("Couldn't duplicate the agent"),
+      }
+    )
+  }
+  const publish = async () => {
+    setProblems([])
+    // Everything unsaved is saved first: what's published is what's on the canvas.
+    const revision = await saving.flush()
+    if (revision === null) {
+      setProblems([
+        "The latest changes aren't saved yet; publish once they are.",
+      ])
+      return
+    }
+    lifecycle.publish.mutate(revision, {
+      onSuccess: (published) => {
+        setPublishing(false)
+        toast.add({
+          title: `Published ${name} v${published.published_version}`,
+          description: `${published.id} now runs it.`,
+          type: "success",
+        })
+        onRecord(published)
+      },
+      onError: (caught) => {
+        const found = publishProblems(caught)
+        setProblems(found.length ? found : [toApiError(caught).message])
+      },
     })
   }
+  const newVersion = () =>
+    lifecycle.newVersion.mutate(viewing, {
+      onSuccess: (drafted) => {
+        if (viewing !== undefined) openVersion()
+        onRecord(drafted)
+      },
+      onError: (caught) =>
+        conflictCode(caught) === "DRAFT_EXISTS"
+          ? openVersion()
+          : failed("Couldn't start a new version")(caught),
+    })
+  const discard = () =>
+    lifecycle.discard.mutate(undefined, {
+      onSuccess: (kept) => {
+        setDiscarding(false)
+        onRecord(kept)
+      },
+      onError: failed("Couldn't discard the draft"),
+    })
   const remove = () => {
     drop.mutate(api.getState().meta.id, {
       onSuccess: () => {
@@ -390,8 +600,35 @@ function Builder({
       <StepLibrary organizationId={organization.id} />
 
       <ShellHeaderActions>
-        <SaveStatus saving={saving} organizationName={organization.name} />
+        <VersionChip record={record} viewing={viewing} />
+        {!readOnly && (
+          <SaveStatus saving={saving} organizationName={organization.name} />
+        )}
         <IssuesButton />
+        <Button
+          variant="outline"
+          size="sm"
+          aria-pressed={testing}
+          onClick={() => setTesting(!testing)}
+        >
+          <Icon icon="message" data-icon="inline-start" />
+          Test
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setStandalone(true)}>
+          <Icon icon={PackageIcon} data-icon="inline-start" />
+          Generate standalone agent
+        </Button>
+        {canManage && viewing === undefined && record.has_draft && (
+          <Button
+            size="sm"
+            onClick={() => {
+              setProblems([])
+              setPublishing(true)
+            }}
+          >
+            Publish v{record.draft_version}
+          </Button>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -405,31 +642,78 @@ function Builder({
             <Icon icon="more" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
+            {record.versions.length > 0 && (
+              <>
+                {record.has_draft && viewing !== undefined && (
+                  <DropdownMenuItem onClick={() => openVersion()}>
+                    <Icon icon={PencilEdit02Icon} />
+                    Open the draft (v{record.draft_version})
+                  </DropdownMenuItem>
+                )}
+                {record.versions.map((v) => (
+                  <DropdownMenuItem
+                    key={v.version}
+                    disabled={v.version === shownVersion}
+                    onClick={() =>
+                      openVersion(
+                        !record.has_draft &&
+                          v.version === record.published_version
+                          ? undefined
+                          : v.version
+                      )
+                    }
+                  >
+                    <Icon icon="clock" />
+                    Version {v.version}
+                    {v.version === record.published_version ? " (latest)" : ""}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+              </>
+            )}
             <DropdownMenuItem onClick={exportJson}>
               <Icon icon="download" />
-              Export JSON
+              {shownVersion === undefined
+                ? "Export JSON"
+                : `Export v${shownVersion} to run anywhere`}
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={duplicate}>
-              <Icon icon="copy" />
-              Duplicate agent
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setImporting(true)}>
-              <Icon icon="file" />
-              Replace from JSON…
-            </DropdownMenuItem>
+            {canManage && (
+              <DropdownMenuItem onClick={duplicate}>
+                <Icon icon="copy" />
+                Duplicate as a new agent
+              </DropdownMenuItem>
+            )}
+            {!readOnly && (
+              <DropdownMenuItem onClick={() => setImporting(true)}>
+                <Icon icon="file" />
+                Replace from JSON…
+              </DropdownMenuItem>
+            )}
+            {canManage &&
+              record.has_draft &&
+              record.published_version !== null && (
+                <DropdownMenuItem onClick={() => setDiscarding(true)}>
+                  <Icon icon="close" />
+                  Discard draft v{record.draft_version}…
+                </DropdownMenuItem>
+              )}
             <DropdownMenuItem
               onClick={() => downloadJson(CHAT_AGENT_JSON_SCHEMA, SCHEMA_FILE)}
             >
               <Icon icon="download" />
               Download the JSON Schema
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              variant="destructive"
-              onClick={() => setDeleting(true)}
-            >
-              Delete agent…
-            </DropdownMenuItem>
+            {canManage && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => setDeleting(true)}
+                >
+                  Delete agent…
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </ShellHeaderActions>
@@ -461,6 +745,17 @@ function Builder({
           inert={view === "json" || undefined}
         >
           <BuilderCanvas needsLayout={needsLayout} />
+          {readOnly && shownVersion !== undefined && (
+            <ReadOnlyBanner
+              version={shownVersion}
+              latest={record.published_version}
+              canManage={canManage}
+              hasDraft={record.has_draft}
+              pending={lifecycle.newVersion.isPending}
+              onNewVersion={newVersion}
+              onOpenCurrent={() => openVersion()}
+            />
+          )}
         </div>
         <aside
           id={DETAILS_PANEL_ID}
@@ -479,7 +774,9 @@ function Builder({
             className="@max-[900px]/shell:hidden"
           />
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <ChatAgentDetails />
+            <ChatAgentDetails>
+              <RunInfo record={record} />
+            </ChatAgentDetails>
           </div>
           {/* Kept clear for the assistant's launcher, which floats here. */}
           <div aria-hidden="true" className="h-18 shrink-0" />
@@ -514,6 +811,66 @@ function Builder({
 
       <StepDialog />
 
+      {testing && (
+        <ChatAgentTestPanel
+          record={record}
+          appName={
+            viewing !== undefined
+              ? `${record.id}@${viewing}`
+              : record.has_draft
+                ? `${record.id}@draft`
+                : record.id
+          }
+          onClose={() => setTesting(false)}
+        />
+      )}
+
+      <StandaloneDialog
+        key={shownVersion ?? "draft"}
+        open={standalone}
+        onOpenChange={setStandalone}
+        record={record}
+        shownVersion={shownVersion}
+      />
+
+      <PublishDialog
+        open={publishing}
+        onOpenChange={setPublishing}
+        record={record}
+        name={name}
+        errors={errors}
+        problems={problems}
+        pending={lifecycle.publish.isPending}
+        onPublish={() => void publish()}
+      />
+
+      <Dialog open={discarding} onOpenChange={setDiscarding}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discard draft v{record.draft_version}?</DialogTitle>
+            <DialogDescription>
+              Its changes are lost, and the agent is published v
+              {record.published_version} again. You can&apos;t undo this.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" />}>
+              Cancel
+            </DialogClose>
+            <Button
+              variant="destructive"
+              disabled={lifecycle.discard.isPending}
+              onClick={discard}
+            >
+              {lifecycle.discard.isPending && (
+                <Spinner data-icon="inline-start" />
+              )}
+              Discard draft
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <ImportDialog
         open={importing}
         onOpenChange={setImporting}
@@ -541,9 +898,9 @@ function Builder({
           <DialogHeader>
             <DialogTitle>Delete {name}?</DialogTitle>
             <DialogDescription>
-              It's removed from this browser, with everything attached to it.
-              Agents that use it as a saved agent will need another. You can't
-              undo this; export its JSON first to keep a copy.
+              Every version stops running: apps calling {record.id} get a 404.
+              Agents that use it as a saved agent will need another. You
+              can&apos;t undo this; export its JSON first to keep a copy.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

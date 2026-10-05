@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 
 from fastapi import FastAPI
 from forge_common.adk.models import ProviderModels
+from forge_common.adk.usage import UsagePlugin, price_from
+from forge_task_adk_workflows.usage_store import UsageStore
 from google.adk.apps import App
 from google.adk.artifacts import BaseArtifactService, InMemoryArtifactService
 from google.adk.runners import Runner
@@ -49,6 +51,8 @@ class AgentRuntime:
     people: PersonLookup | None = None
     screens: dict[str, Screens] = field(default_factory=dict)
     models: dict[str, ProviderModels] = field(default_factory=dict)
+    #: Where turns asked from an organization's pages are recorded, for its overview.
+    usage: UsageStore | None = None
 
     @classmethod
     def create(
@@ -68,8 +72,17 @@ class AgentRuntime:
             the person; without it, it has none of those tools.
         :return: The runtime.
         """
-        return cls.of(
-            [forge.create_app(settings, app=app)],
+        assistant = forge.create_app(settings, app=app)
+        usage = UsageStore(engine)
+        # Every model and tool call of a turn the run attributes (attributed()).
+        assistant.plugins.append(
+            UsagePlugin(
+                usage.record,
+                price=price_from(getattr(assistant.root_agent, "model", None)),
+            )
+        )
+        runtime = cls.of(
+            [assistant],
             sessions=DatabaseSessionService(db_engine=engine),
             artifacts=InMemoryArtifactService(),
             # The shared configuration has its own keys, each required.
@@ -80,6 +93,8 @@ class AgentRuntime:
             ),
             people=database_people(engine),
         )
+        runtime.usage = usage
+        return runtime
 
     @classmethod
     def of(

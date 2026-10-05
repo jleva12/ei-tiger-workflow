@@ -45,6 +45,7 @@ from google.adk.models.llm_response import LlmResponse
 from google.genai import Client, types
 from pydantic import PrivateAttr
 
+from forge_common.adk.usage import MODEL_KEY
 from forge_common.model_provider import (
     THINKING_LEVELS,
     ConfiguredModel,
@@ -377,6 +378,9 @@ class ProviderModels(BaseLlm):
         self._prepare(llm_request, call)
         async with aclosing(llm.generate_content_async(llm_request, stream=stream)) as replies:
             async for reply in replies:
+                # Which configured model answered, for what's recorded of it
+                # (forge_common.adk.usage) and priced by its ``cost``.
+                reply.custom_metadata = {**(reply.custom_metadata or {}), MODEL_KEY: target.ref}
                 yield reply
 
     def _prepare(self, request: LlmRequest, call: ModelCall) -> None:

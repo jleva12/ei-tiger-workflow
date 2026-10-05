@@ -1,5 +1,5 @@
 # The async worker (forge-async-worker): ADK workflow runs off the
-# adk_workflows queue. Redis is a shared service in compose.infrastructure.yaml;
+# adk_workflows queue, and knowledge base documents off the documents queue. Redis is a shared service in compose.infrastructure.yaml;
 # the runs and their ADK sessions are in the admin MySQL (admin-mysql).
 # Included by the root compose.yaml; run make async-worker or make up.
 # Settings come from apps/forge-async-worker/.env, whose ${NAME} references
@@ -67,3 +67,40 @@ services:
       retries: 6
     deploy:
       replicas: ${ASYNC_WORKER_ADK_WORKFLOWS_REPLICAS:-1}
+  # The documents queue: knowledge base documents the admin API stored in
+  # knowledge-s3, parsed, chunked and embedded into the shared mongo's
+  # forge_knowledge database (Atlas Search and Vector Search indexes, which
+  # --ensure-schema creates), and removed again. Embeds with OpenAI
+  # (OPENAI_API_KEY from .env.common, via ./.env).
+  async-worker-documents:
+    <<: *async-worker
+    command:
+      - forge-async-worker
+      - worker
+      - --ensure-schema
+      - --queues=documents
+      - --concurrency=${ASYNC_WORKER_DOCUMENTS_CONCURRENCY:-4}
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      knowledge-s3:
+        condition: service_healthy
+    environment:
+      <<: *async-worker-environment
+      HYBRID_ENABLED_TASKS: '["documents"]'
+      HYBRID_MONGO__URI: mongodb://${FORGE_MONGO_USER:-forge}:${FORGE_MONGO_PASSWORD:-local-forge}@mongo:27017/?authSource=admin&directConnection=true
+      HYBRID_MONGO__DATABASE: ${FORGE_KNOWLEDGE_DATABASE:-forge_knowledge}
+      HYBRID_S3__ENDPOINT_URL: http://knowledge-s3:9000
+      HYBRID_S3__REGION: us-east-1
+      HYBRID_S3__ACCESS_KEY_ID: ${FORGE_S3_ACCESS_KEY_ID:-forge-local}
+      HYBRID_S3__SECRET_ACCESS_KEY: ${FORGE_S3_SECRET_ACCESS_KEY:-local-forge-secret}
+    healthcheck:
+      test: ["CMD", "forge-async-worker", "worker", "--check", "--queues=documents"]
+      interval: 10s
+      timeout: 10s
+      start_period: 60s
+      retries: 6
+    deploy:
+      replicas: ${ASYNC_WORKER_DOCUMENTS_REPLICAS:-1}

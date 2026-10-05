@@ -22,6 +22,17 @@ adk-models = [
 # forge_common.logging and forge_common.middleware: structlog for every logger,
 # and the request-id and access-log middleware
 logging = ["pydantic>=2.11", "starlette>=0.46", "structlog>=26.1.0"]
+# forge_common.adk.memory: ADK memory in MongoDB Atlas, embedded by OpenAI (as
+# model_provider.yaml signs in to it) and searched with Atlas Vector Search
+adk-memory = [
+    "forge-common[model-provider]",
+    "google-adk>=2.9.2",
+    "httpx>=0.28",
+    "pymongo>=4.13",
+]
+# forge_common.adk.artifacts: ADK artifacts in S3 (or MinIO, RustFS, R2); its
+# conditional writes (If-None-Match) need botocore 1.35.16
+adk-artifacts-s3 = ["boto3>=1.35.16", "google-adk>=2.9.2"]
 
 [build-system]
 requires = ["uv_build>=0.11.17,<0.12.0"]
@@ -29,7 +40,7 @@ build-backend = "uv_build"
 
 # Every extra's libraries, for the tests (the tools are the workspace root's).
 [dependency-groups]
-dev = ["forge-common[adk,adk-models,logging]"]
+dev = ["forge-common[adk,adk-artifacts-s3,adk-memory,adk-models,logging]"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

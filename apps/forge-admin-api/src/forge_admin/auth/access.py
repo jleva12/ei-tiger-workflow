@@ -7,6 +7,8 @@ organization. See ``casbin_model.conf``.
 """
 
 import re
+from collections.abc import Iterable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated
@@ -16,7 +18,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from forge_admin.auth.authorization import assignments_of, get_enforcer
+from forge_admin.auth.authorization import assignments_of, get_enforcer, group_subject
 from forge_admin.models import Organization
 
 UUID_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -156,6 +158,28 @@ async def organization_memberships(
     ]
 
 
+# The company groups the request's user is in, from their token (or
+# FORGE_ADMIN_LOCAL_USER_GROUPS): security.authenticate sets them.
+_caller: ContextVar[tuple[str | None, tuple[str, ...]]] = ContextVar(
+    "forge_admin_caller", default=(None, ())
+)
+
+
+def set_caller(user: str | None, groups: Iterable[str]) -> None:
+    """Record who's calling, and their groups, for the rest of the request."""
+    _caller.set((user, tuple(groups)))
+
+
+def groups_of_caller(user: str) -> tuple[str, ...]:
+    """
+    :param user: A user being authorized.
+    :return: Their company groups, when they're the one calling; none for
+        anyone else (their groups are only known from their own token).
+    """
+    caller, groups = _caller.get()
+    return groups if caller == user else ()
+
+
 def current_user(request: Request) -> str:
     """
     FastAPI dependency: the calling user's ID.
@@ -180,7 +204,9 @@ def allows(
     enforcer: casbin.AsyncEnforcer, user: str, permission: str, domain: str
 ) -> bool:
     """
-    Ask the loaded enforcer whether a user holds a permission in a domain.
+    Ask the loaded enforcer whether a user holds a permission in a domain:
+    through their roles, or (when they're the caller) one of their company
+    groups, whose linked permissions hold everywhere.
 
     :param enforcer: The Casbin enforcer, with its policy loaded.
     :param user: The user ID.
@@ -189,7 +215,8 @@ def allows(
     :return: Casbin's decision.
     """
     resource, action = permission.split(":")
-    return bool(enforcer.enforce(user, domain, resource, action))
+    subjects = [user, *(group_subject(g) for g in groups_of_caller(user))]
+    return any(enforcer.enforce(s, domain, resource, action) for s in subjects)
 
 
 async def authorize(

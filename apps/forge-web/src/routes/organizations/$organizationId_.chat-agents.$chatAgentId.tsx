@@ -10,16 +10,23 @@ import { ChatAgentBuilderPage } from "@/features/agents/components/chat-agent-bu
 export const Route = createFileRoute(
   "/organizations/$organizationId_/chat-agents/$chatAgentId"
 )({
+  // ?version=3 opens that published version, read-only.
+  validateSearch: (search: Record<string, unknown>): { version?: number } => {
+    const version = Number(search.version)
+    return Number.isInteger(version) && version > 0 ? { version } : {}
+  },
   component: ChatAgentRoute,
 })
 
 function ChatAgentRoute() {
   const { organizationId, chatAgentId } = Route.useParams()
+  const { version } = Route.useSearch()
   return (
     <ChatAgentBuilderPage
-      key={chatAgentId}
+      key={`${chatAgentId}@${version ?? "current"}`}
       organizationId={organizationId}
       agentId={chatAgentId}
+      version={version}
     />
   )
 }

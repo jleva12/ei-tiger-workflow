@@ -229,6 +229,70 @@ class RunStore:
             total = int((await conn.execute(count)).scalar_one())
         return items, total
 
+    async def started_since(
+        self, organization_id: str, since: datetime, *, limit: int = 20_000
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """
+        :return: The organization's runs created since ``since``, newest
+            first, as an overview counts them (``id``, ``agent_id``,
+            ``agent_name``, ``status``, ``attempt``, ``requested_by``,
+            ``requested_by_name``, ``error``, and their times); and whether
+            there were more than ``limit`` (the oldest left out).
+        """
+        query = (
+            sa.select(
+                runs.c.id,
+                runs.c.agent_id,
+                runs.c.agent_name,
+                runs.c.status,
+                runs.c.attempt,
+                runs.c.requested_by,
+                runs.c.requested_by_name,
+                runs.c.error,
+                runs.c.created_at,
+                runs.c.started_at,
+                runs.c.finished_at,
+            )
+            .where(runs.c.organization_id == organization_id, runs.c.created_at >= _naive(since))
+            .order_by(runs.c.created_at.desc(), runs.c.id.desc())
+            .limit(limit + 1)
+        )
+        async with self.engine.connect() as conn:
+            found = [_row(r) for r in (await conn.execute(query)).mappings()]
+        return found[:limit], len(found) > limit
+
+    async def open_counts(self, organization_id: str) -> dict[str, int]:
+        """:return: How many of the organization's runs are in each status that isn't finished."""
+        query = (
+            sa.select(runs.c.status, sa.func.count().label("count"))
+            .where(runs.c.organization_id == organization_id, runs.c.status.in_(list(OPEN)))
+            .group_by(runs.c.status)
+        )
+        async with self.engine.connect() as conn:
+            found = {row["status"]: int(row["count"]) for row in (await conn.execute(query)).mappings()}
+        return {status: found.get(status, 0) for status in (QUEUED, RUNNING, PAUSED, WAITING)}
+
+    async def latest_by_agent(self, organization_id: str) -> list[dict[str, Any]]:
+        """:return: For each ADK workflow the organization ever ran: ``agent_id``, its
+        latest ``agent_name`` and when it was last run (``last_at``)."""
+        query = (
+            sa.select(runs.c.agent_id, runs.c.agent_name, sa.func.max(runs.c.created_at).label("last_at"))
+            .where(runs.c.organization_id == organization_id)
+            .group_by(runs.c.agent_id, runs.c.agent_name)
+        )
+        latest: dict[str, dict[str, Any]] = {}
+        async with self.engine.connect() as conn:
+            for row in (await conn.execute(query)).mappings():
+                when = _aware(row["last_at"])
+                seen = latest.get(row["agent_id"])
+                if seen is None or (when is not None and when > seen["last_at"]):
+                    latest[row["agent_id"]] = {
+                        "agent_id": row["agent_id"],
+                        "agent_name": row["agent_name"],
+                        "last_at": when,
+                    }
+        return list(latest.values())
+
     async def events(self, run_id: str) -> list[dict[str, Any]]:
         """:return: The run's activity, oldest first."""
         query = sa.select(events).where(events.c.run_id == run_id).order_by(events.c.id)

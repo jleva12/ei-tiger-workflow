@@ -18,6 +18,7 @@ const { toDocument, toGraph, parseChatAgent, usesOf } = await load("/src/feature
 const { exampleChatAgent } = await load("/src/features/agents/lib/example.ts")
 const model = await load("/src/features/agents/lib/model.ts")
 const { validateChatAgent } = await load("/src/features/agents/lib/validate.ts")
+const input = await load("/src/features/agents/lib/input.ts")
 const { CHAT_AGENT_ADAPTER } = await load("/src/features/agents/lib/adapter.ts")
 const { CHAT_AGENT_JSON_SCHEMA } = await load("/src/features/agents/lib/schema.ts")
 const { createBuilderStore, documentOf } = await load("/src/features/builder/components/store.ts")
@@ -198,4 +199,98 @@ test("the JSON Schema knows every kind", () => {
     const config = CHAT_AGENT_JSON_SCHEMA.$defs[`config_${kind}`]
     assert.deepEqual(Object.keys(config.properties).sort(), Object.keys(model.CHAT_KINDS[kind].defaults()).sort(), kind)
   }
+})
+
+const STATE = {
+  type: "object",
+  properties: { customer_tier: { type: "string", enum: ["free", "pro"] }, account: { type: "object", properties: { id: { type: "string" } } } },
+  required: ["customer_tier"],
+}
+
+test("the chat agent keeps the state it's sent; an older agent has none declared", () => {
+  const doc = agent([["a", "agent", "A", { ...told, state_schema: STATE }]])
+  const read = parseChatAgent(JSON.stringify(doc), { organizationId: ORG })
+  assert.deepEqual(read.notes, [])
+  assert.deepEqual(read.doc.nodes[0].config.state_schema, STATE)
+  delete doc.nodes[0].config.state_schema
+  assert.deepEqual(parseChatAgent(doc, { organizationId: ORG }).doc.nodes[0].config.state_schema, {})
+  assert.equal("state_schema" in model.newNode("sub_agent").config, false)
+})
+
+test("instructions read the request and the declared state, the sub-agents' too", () => {
+  const instruction =
+    "Help {{ request.userId }} on {{ state.model }}; they're {{ state.customer_tier }} ({{ state.account.id }})."
+  const doc = agent(
+    [
+      ["a", "agent", "A", { instruction, state_schema: STATE }],
+      ["s", "sub_agent", "S", { description: "Serves.", instruction: "Serve {{ state.customer_tier }} and {{ state.plan }}." }],
+    ],
+    [["a", model.HANDS_OFF, "s"]]
+  )
+  const issues = validateChatAgent(toGraph(doc))
+  assert.deepEqual(issues.map((i) => i.id), ["s:instruction:field:0"])
+  assert.equal(issues[0].field, "instruction")
+  assert.match(issues[0].message, /plan/)
+
+  const scope = input.chatScope(STATE)
+  assert.deepEqual([...scope.roots.keys()], ["request", "state"])
+  assert.deepEqual(Object.keys(scope.roots.get("request").type.properties), ["appName", "userId", "sessionId", "newMessage", "streaming"])
+  assert.deepEqual(Object.keys(scope.roots.get("state").type.properties), ["model", "thinking_level", "customer_tier", "account"])
+})
+
+test("declared state can't take the picker's keys or ADK's prefixes", () => {
+  const schema = { type: "object", properties: { model: { type: "string" }, "user:name": { type: "string" }, "two words": { type: "string" }, ok_name: { type: "string" } } }
+  const doc = agent([["a", "agent", "A", { ...told, state_schema: schema }]])
+  const issues = validateChatAgent(toGraph(doc)).filter((i) => i.field === "state_schema")
+  assert.deepEqual(issues.map((i) => i.id), ["a:state:model", "a:state:user:name", "a:state:two words"])
+  assert.equal(input.stateNameProblem("ok_name"), null)
+})
+
+test("an MCP tool picks one of the organization's servers, signed in to, with tools it has", () => {
+  const doc = agent(
+    [
+      ["agent", "agent", "Helper", told],
+      ["m", "mcp", "Linear", { server: "srv-1", tools: "list_issues, delete_everything" }],
+      ["g", "mcp", "Gone", { server: "srv-gone" }],
+    ],
+    [
+      ["agent", "tools", "m"],
+      ["agent", "tools", "g"],
+    ]
+  )
+  // A registered server needs no URL of its own; until the servers load, nothing's said.
+  assert.deepEqual(issuesOf(doc), [])
+  const context = {
+    mcpServers: new Map([
+      ["srv-1", { name: "Linear", connected: false, tools: ["list_issues", "create_issue"] }],
+    ]),
+  }
+  assert.deepEqual(issuesOf(doc, context), ["g:server", "m:server", "m:tools"])
+  const issues = validateChatAgent(toGraph(doc), context)
+  assert.equal(issues.find((i) => i.id === "g:server").level, "error")
+  assert.match(issues.find((i) => i.id === "m:server").message, /Nobody has signed in to Linear/)
+  assert.match(issues.find((i) => i.id === "m:tools").message, /didn't list delete_everything/)
+
+  // By URL, as before: the URL is needed.
+  doc.nodes.find((n) => n.id === "g").config.server = ""
+  assert.ok(issuesOf(doc, context).includes("g:url"))
+  // Read back, an older MCP tool is one by URL.
+  const read = parseChatAgent(JSON.stringify(doc), { organizationId: ORG })
+  assert.equal(read.doc.nodes.find((n) => n.id === "g").config.server, "")
+})
+
+test("a read-only builder (a published version) changes nothing, but steps can still be selected", () => {
+  const store = createBuilderStore({ adapter: CHAT_AGENT_ADAPTER, doc: example(), context: {}, readOnly: true })
+  const s = () => store.getState()
+  const before = documentOf(s())
+  s().addStep("mcp", { x: 0, y: 0 }, { source: "agent", output: model.TOOLS })
+  s().updateStep("agent", (step) => ({ ...step, name: "Renamed" }), "name")
+  s().updateMeta({ description: "Changed" }, "description")
+  s().removeSteps(["memory"])
+  s().connect("agent", model.HANDS_OFF, "billing")
+  s().onNodesChange([{ type: "position", id: "agent", position: { x: 999, y: 999 } }])
+  s().undo()
+  assert.deepEqual(documentOf(s()), before)
+  s().select("memory")
+  assert.equal(s().nodes.find((n) => n.id === "memory").selected, true)
 })

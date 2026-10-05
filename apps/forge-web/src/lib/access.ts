@@ -28,9 +28,19 @@ export type Permission = Audited & {
   resource: string
   action: string
   description: string
+  /**
+   * The company groups (from its external directory) linked to it: anyone
+   * whose sign-in names one of them holds it on the whole site.
+   */
+  groups: string[]
 }
 
-export type PermissionInput = { key: string; description: string }
+export type PermissionInput = {
+  key: string
+  description: string
+  /** Replaces the company groups linked to it. */
+  groups?: string[]
+}
 
 export const permissions = createResource<
   Permission,
@@ -40,6 +50,35 @@ export const permissions = createResource<
   path: "/permissions",
   key: "permissions",
   label: "permission",
+})
+
+/* -------------------------------------------------------------------------- */
+/* Linked groups                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One of the company's groups, from its external directory, linked to
+ * permissions (from each permission's `groups`): someone whose sign-in
+ * token names the group holds them on the whole site, as well as their
+ * roles'.
+ */
+export type GroupLink = Audited & {
+  id: number
+  /** The group's name, as the directory spells it. */
+  group_name: string
+  description: string
+  permissions: Omit<Permission, "groups">[]
+}
+
+/** A group's name, as the API takes it: printable ASCII, no space at either end. */
+export const GROUP_NAME_PATTERN = /^[!-~](?:[ -~]{0,198}[!-~])?$/
+
+/** The linked groups: listed, and unlinked from everything (delete). */
+export const groupLinks = createResource<GroupLink>({
+  api,
+  path: "/permission-groups",
+  key: "permission-groups",
+  label: "group link",
 })
 
 /* -------------------------------------------------------------------------- */

@@ -33,7 +33,7 @@ const declared = (schema: Record<string, unknown>) =>
 export function inputType(graph: AgentGraph): DataType {
   const start = graph.steps.find((s) => s.data.kind === "start")?.data
   if (start?.kind !== "start")
-    return t.unknown("The run's input (the ADK workflow has no start).")
+    return t.unknown("The run's input (the workflow has no start).")
   const schema = declared(start.config.input_schema)
   return schema
     ? { ...schema, description: "The values the run started with." }
@@ -87,7 +87,7 @@ function agentOutputType(
     case "parallel":
       return t.unknown("What its sub-agents answered.")
     case "saved":
-      return t.unknown("What the other ADK workflow handed on.")
+      return t.unknown("What the other workflow handed on.")
     case "human_input":
       return (
         declared(step.config.response_schema) ??

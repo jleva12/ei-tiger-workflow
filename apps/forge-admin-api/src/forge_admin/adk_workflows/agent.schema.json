@@ -705,7 +705,7 @@
     },
     "config_saved": {
       "type": "object",
-      "description": "Runs another of the organization's ADK workflows here, whole.",
+      "description": "Runs another of the organization's workflows here, whole.",
       "required": [
         "agent"
       ],

@@ -4,7 +4,6 @@ Anyone signed in can list them; adding, editing and removing them requires
 the users:* permissions on the site.
 """
 
-import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
@@ -13,7 +12,7 @@ from sqlalchemy import delete, select
 
 from forge_admin.api.routes.common import Audited, Session, commit_or_conflict
 from forge_admin.auth.access import SITE, CurrentUser, Enforcer, authorize, current_user
-from forge_admin.auth.authorization import ROLE_KEY_PATTERN, SUBJECT_PATTERN
+from forge_admin.auth.authorization import SUBJECT_PATTERN, is_reserved_subject
 from forge_admin.models import CasbinRule, User
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -129,11 +128,11 @@ async def create_user(
     """
     await authorize(session, enforcer, user, "users:create", SITE)
     if body.id is not None:
-        # Roles and subjects share Casbin's namespace; see assign_role.
-        if re.fullmatch(ROLE_KEY_PATTERN, body.id):
+        # Roles, groups and subjects share Casbin's namespace; see assign_role.
+        if is_reserved_subject(body.id):
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "User IDs cannot look like role keys",
+                "User IDs cannot look like role keys or start with group:",
             )
         if await session.get(User, body.id) is not None:
             raise HTTPException(status.HTTP_409_CONFLICT, "A user with this ID exists")

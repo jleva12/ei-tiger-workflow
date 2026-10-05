@@ -297,7 +297,7 @@ function AdkRunOverview({
           <RecordRow label="Run ID">
             <code>{run.id}</code>
           </RecordRow>
-          <RecordRow label="ADK workflow">
+          <RecordRow label="Workflow">
             {run.agent_name || run.agent_id} · revision {run.revision}
           </RecordRow>
           <RecordRow label="Run by">
@@ -417,10 +417,10 @@ function Step({
 }
 
 /**
- * The Steps tab: every node of the ADK workflow, in order, as the run went
+ * The Steps tab: every node of the workflow, in order, as the run went
  * through it (done, failed, waiting or not reached), with what each handed
  * on or why it failed, and when. What the run waits for is answered above
- * them, as on Overview. The nodes' kinds come from the ADK workflow the run
+ * them, as on Overview. The nodes' kinds come from the workflow the run
  * started with (else as it's saved now, else as the run says).
  */
 function AdkRunSteps({ organizationId, run }: { organizationId: string; run: AdkRunDetail }) {
@@ -464,7 +464,7 @@ function AdkRunSteps({ organizationId, run }: { organizationId: string; run: Adk
     body = (
       <>
         <p className="mb-2 max-w-[75ch] text-[0.8125rem] text-muted-foreground">
-          Every node of the ADK workflow, in order, and how far the run got with each:
+          Every node of the workflow, in order, and how far the run got with each:
           what it handed on (in a loop, its last item&apos;s), or why it failed. What
           runs inside a node, a team&apos;s sub-agents or a saved workflow&apos;s steps,
           counts as that node.
@@ -631,7 +631,7 @@ function RunActions({
             Resubmit
           </TooltipTrigger>
           <TooltipContent className="max-w-72">
-            Runs the same ADK workflow with the same input again, as a new run.
+            Runs the same workflow with the same input again, as a new run.
           </TooltipContent>
         </Tooltip>
       )}
@@ -687,7 +687,7 @@ function HeaderSkeleton() {
 }
 
 /**
- * One of the organization's ADK workflow runs, under ADK workflows: its
+ * One of the organization's workflow runs, under workflows: its
  * header (status, attempt, when it last moved) with Copy link and, for
  * those who manage the organization's runs (`agents:manage_runs`), Retry,
  * Resubmit and Abandon as its status allows; then Overview (what it waits
@@ -748,12 +748,12 @@ export function AdkRunPage({
       return (
         <PageEmpty
           illustration="search"
-          title="ADK workflow run not found"
+          title="Workflow run not found"
           description="It isn't one of this organization's runs, or it no longer exists."
         >
           <Button variant="outline" size="sm" onClick={onBack}>
             <Icon icon="left" data-icon="inline-start" />
-            All ADK workflow runs
+            All workflow runs
           </Button>
         </PageEmpty>
       )
@@ -761,7 +761,7 @@ export function AdkRunPage({
     if (detail.error) {
       return (
         <ErrorCallout
-          title={failureTitle(detail.error, "Couldn't load the ADK workflow run")}
+          title={failureTitle(detail.error, "Couldn't load the workflow run")}
           action={
             <Button variant="outline" size="sm" onClick={() => void detail.refetch()}>
               Retry
@@ -787,7 +787,7 @@ export function AdkRunPage({
     <FullBleed>
       <TaskPage>
         <TaskPageHeader>
-          <TaskPageEyebrow onBack={onBack} backLabel="All ADK workflow runs" reference={reference} />
+          <TaskPageEyebrow onBack={onBack} backLabel="All workflow runs" reference={reference} />
           <TaskTitleRow
             title={run.agent_name || run.agent_id}
             meta={

@@ -2,7 +2,7 @@ import type { NodeSummary } from "@/features/builder/components/ui"
 import type { StepData } from "@/features/steps/lib/model"
 
 /*
- * The lines a Forge step shows in an ADK workflow: under its name (how
+ * The lines a Forge step shows in a workflow: under its name (how
  * it's set up) and on its card (what it does).
  */
 

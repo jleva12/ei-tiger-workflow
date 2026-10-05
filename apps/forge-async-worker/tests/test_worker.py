@@ -78,13 +78,19 @@ async def test_the_queue_sends_each_job_with_its_settings_and_key() -> None:
     assert queue.name == "adk_workflows"
 
 
-def test_it_serves_the_adk_workflows_queue_only() -> None:
+def test_it_serves_the_enabled_tasks_queues() -> None:
     settings = worker_settings()
     assert saq_worker.serving(settings) == saq_worker.serving(settings, ["adk_workflows"]) == ["adk_workflows"]
     with pytest.raises(ValueError, match="nope"):
         saq_worker.serving(settings, ["nope"])
-    with pytest.raises(ValueError, match="isn't enabled"):
+    with pytest.raises(ValueError, match="documents"):
+        saq_worker.serving(settings, ["documents"])  # the documents task isn't enabled
+    with pytest.raises(ValueError, match="is enabled"):
         saq_worker.serving(worker_settings(enabled_tasks=[]))
+
+    both = worker_settings(enabled_tasks=["adk_workflows", "documents"])
+    assert saq_worker.serving(both) == ["adk_workflows", "documents"]
+    assert saq_worker.serving(both, ["documents"]) == ["documents"]
 
 
 def test_the_job_queue_is_saqs_adk_workflows_queue() -> None:
@@ -108,6 +114,38 @@ async def test_the_worker_runs_the_jobs_and_maintains_every_minute(worker: Worke
     assert built.concurrency == 3 and built.context[saq_worker.CONTEXT_KEY] is worker.state
     assert str(built.id).startswith(f"{socket.gethostname()}.") and ":" not in str(built.id)
     await worker.state.queue.close()
+
+
+async def test_the_documents_queue_runs_task_jobs(worker: Worker) -> None:
+    worker.state.settings = worker_settings(enabled_tasks=["adk_workflows", "documents"])
+    [built] = saq_worker.build_workers(worker.state, concurrency=2, queues=["documents"])
+
+    assert set(built.functions) == {"run_job"} and not built.cron_jobs
+    assert built.queue.name == "documents" and built.concurrency == 2
+    assert str(built.id).endswith(".documents") and built.context[saq_worker.CONTEXT_KEY] is worker.state
+
+
+async def test_run_job_runs_the_spec_and_answers_its_result() -> None:
+    from types import SimpleNamespace
+
+    from forge_tasks.runner import ok
+
+    ran: list[JobSpec] = []
+
+    async def run(spec: JobSpec) -> Any:
+        ran.append(spec)
+        return ok(doc_id="d1", chunk_count=3)
+
+    state = SimpleNamespace(runtime=SimpleNamespace(runner=SimpleNamespace(run=run)))
+    ctx = {"job": FakeJob("run_job"), saq_worker.CONTEXT_KEY: state}
+    spec = {"task_type": "documents", "kind": "ingest", "payload": {"tenant_id": "kb", "doc_id": "d1"}}
+
+    out = await saq_worker.run_job(ctx, spec=spec)
+    assert out["status"] == "ok" and out["detail"] == {"doc_id": "d1", "chunk_count": 3}
+    assert [(s.task_type, s.kind) for s in ran] == [("documents", "ingest")]
+
+    bad = await saq_worker.run_job(ctx, spec={"kind": "ingest"})
+    assert bad["status"] == "failed" and "invalid job spec" in bad["error"]
 
 
 async def test_a_worker_without_a_run_store_says_what_to_set() -> None:

@@ -33,10 +33,31 @@ export type ChatEdgeView = FlowEdge
 export type ChatLookups = {
   /** The organization's other agents, by ID. */
   agents: Record<string, string>
-  /** The organization's ADK workflows, by ID. */
+  /** The organization's workflows, by ID. */
   workflows: Record<string, string>
   /** The models agents may run on (`provider/model`), and the default as "". */
   models: Record<string, string>
+  /** The organization's MCP servers, by ID. */
+  mcpServers: Record<string, McpServerLookup>
+  /** The organization's knowledge bases, by ID. */
+  knowledgeBases: Record<string, KnowledgeBaseLookup>
+}
+
+/** A knowledge base, as a knowledge base tool node shows it. */
+export type KnowledgeBaseLookup = {
+  name: string
+  description: string
+  /** Its documents, and how many of them are searchable. */
+  documents: number
+  ready: number
+}
+
+/** An MCP server, as an MCP tool node shows it. */
+export type McpServerLookup = {
+  name: string
+  url: string
+  /** Its tools' names, when it's been checked. */
+  tools: string[] | null
 }
 
 export type ChatBuilderState = BuilderState<
@@ -50,6 +71,8 @@ export type ChatBuilderState = BuilderState<
 type ChatBuilderInit = {
   doc: ChatAgentDocument
   context: ChatAgentValidationContext
+  /** A published version (or an agent the person can't change): shown, never changed. */
+  readOnly?: boolean
 }
 
 export function ChatBuilderProvider({

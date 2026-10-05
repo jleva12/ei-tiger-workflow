@@ -107,7 +107,7 @@ function AssistantWindow({
       welcome={{
         title: "How can I help?",
         description: connected
-          ? "Ask about your organizations, their ADK workflows and agents, or have it help you build one. It sees the page you're on in Forge."
+          ? "Ask about your organizations, their workflows and agents, or have it help you build one. It sees the page you're on in Forge."
           : "No agent is connected yet; send a message to see how to connect one.",
       }}
       composerContext={

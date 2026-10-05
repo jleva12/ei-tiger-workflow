@@ -95,7 +95,7 @@ import {
 } from "./agent-store"
 import { AGENT_UI } from "./agent-ui"
 
-const NOUNS = { doc: "ADK workflow", steps: "nodes" }
+const NOUNS = { doc: "Workflow", steps: "nodes" }
 
 /**
  * An agent's builder, for the organization's members: the node library in
@@ -131,7 +131,7 @@ export function AgentBuilderPage({
 
   useShellPage({
     header: {
-      title: agent.data?.document.name ?? "ADK workflow",
+      title: agent.data?.document.name ?? "Workflow",
       icon: AGENTS_ICON,
       breadcrumbs: organization
         ? [
@@ -140,14 +140,14 @@ export function AgentBuilderPage({
               href: `/organizations/${organizationId}`,
             },
             {
-              label: "ADK workflows",
+              label: "Workflows",
               href: `/organizations/${organizationId}?view=agents`,
             },
           ]
         : [],
     },
     // The builder draws its own sub nav (the node library), not the workspace's.
-    sidebar: { label: "ADK workflow nodes", sections: [] },
+    sidebar: { label: "Workflow nodes", sections: [] },
   })
   usePageContext({
     entities: [
@@ -187,14 +187,14 @@ export function AgentBuilderPage({
       <PageEmpty
         illustration="locked"
         title="You're not in this organization"
-        description="Only an organization's members can open its ADK workflows. Pick one of your organizations at the top of the sidebar, or ask one of the organization's admins to add you."
+        description="Only an organization's members can open its workflows. Pick one of your organizations at the top of the sidebar, or ask one of the organization's admins to add you."
       />
     )
   }
   if (!record && agent.error && toApiError(agent.error).status !== 404) {
     return (
       <ErrorCallout
-        title="Couldn't open the ADK workflow"
+        title="Couldn't open the workflow"
         action={
           <Button
             variant="outline"
@@ -213,8 +213,8 @@ export function AgentBuilderPage({
     return (
       <PageEmpty
         illustration="search"
-        title="ADK workflow not found"
-        description="The organization has no ADK workflow here: it may have been deleted, or the link is to another organization's."
+        title="Workflow not found"
+        description="The organization has no workflow here: it may have been deleted, or the link is to another organization's."
       >
         <Button
           variant="outline"
@@ -227,7 +227,7 @@ export function AgentBuilderPage({
             />
           }
         >
-          All ADK workflows
+          All workflows
         </Button>
       </PageEmpty>
     )
@@ -339,21 +339,21 @@ function Builder({
   const saving = useAgentAutosave(organization.id, record)
   const scoped = organizationAgents.scope({ organizationId: organization.id })
   const make = scoped.useCreate({
-    meta: { errorTitle: "Couldn't duplicate the ADK workflow" },
+    meta: { errorTitle: "Couldn't duplicate the workflow" },
   })
   const drop = scoped.useDelete({
-    meta: { errorTitle: "Couldn't delete the ADK workflow" },
+    meta: { errorTitle: "Couldn't delete the workflow" },
   })
   useUndoKeys()
   useLookups(organization.id)
 
-  useShellPage({ header: { title: name || "Untitled ADK workflow" } })
+  useShellPage({ header: { title: name || "Untitled workflow" } })
 
   const canRun = useScopeAccess(`org:${organization.id}`)("agents:run")
   const errors = useAgentBuilder(
     (s) => s.issues.filter((i) => i.level === "error").length
   )
-  // A run takes the ADK workflow as it's saved: only once what's shown is.
+  // A run takes the workflow as it's saved: only once what's shown is.
   const unsaved = saving.state.kind !== "saved"
   const runBlocked = errors
     ? `Fix the ${errors === 1 ? "problem" : `${errors} problems`} first: it wouldn't build with ${errors === 1 ? "it" : "them"}.`
@@ -430,7 +430,7 @@ function Builder({
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="More ADK workflow actions"
+                aria-label="More workflow actions"
               />
             }
           >
@@ -443,7 +443,7 @@ function Builder({
             </DropdownMenuItem>
             <DropdownMenuItem onClick={duplicate}>
               <Icon icon="copy" />
-              Duplicate ADK workflow
+              Duplicate workflow
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => setImporting(true)}>
               <Icon icon="file" />
@@ -462,7 +462,7 @@ function Builder({
               variant="destructive"
               onClick={() => setDeleting(true)}
             >
-              Delete ADK workflow…
+              Delete workflow…
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -528,7 +528,7 @@ function Builder({
         </div>
         <aside
           id={DETAILS_PANEL_ID}
-          aria-label="ADK workflow details"
+          aria-label="Workflow details"
           inert={view === "json" || undefined}
           className={cn(
             "relative flex min-h-0 flex-col border-l bg-background",
@@ -604,7 +604,7 @@ function Builder({
             <DialogTitle>Delete {name}?</DialogTitle>
             <DialogDescription>
               It's removed for everyone in {organization.name}, with its nodes
-              and edges. ADK workflows that run it as a saved workflow will need another.
+              and edges. Workflows that run it as a saved workflow will need another.
               You can't undo this; export its JSON first to keep a copy.
             </DialogDescription>
           </DialogHeader>
@@ -618,7 +618,7 @@ function Builder({
               onClick={remove}
             >
               {drop.isPending && <Spinner data-icon="inline-start" />}
-              Delete ADK workflow
+              Delete workflow
             </Button>
           </DialogFooter>
         </DialogContent>

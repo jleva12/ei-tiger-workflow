@@ -2,11 +2,14 @@
 
 The model is ``casbin_model.conf``. Its policy lives in the ``casbin_rule``
 table: ``p`` lines grant permissions to roles, ``g`` lines assign roles to
-subjects within a domain pattern. The API writes those lines in the same
+subjects within a domain pattern. ``p`` lines also grant permissions to the
+company's own groups, from an external directory (``group:<name>``): someone
+whose token names the group holds them on the whole site. The API writes those lines in the same
 transaction as the role, permission and hierarchy records they belong to;
 the enforcer reads them.
 """
 
+import re
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
@@ -29,6 +32,39 @@ ROLE_KEY_PATTERN = r"^(?:site|org):[a-z][a-z0-9_]*$"
 PERMISSION_KEY_PATTERN = r"^(?:[a-z][a-z0-9_]*|\*):(?:[a-z][a-z0-9_]*|\*)$"
 # A user or service ID, e.g. a UUID or an email.
 SUBJECT_PATTERN = r"^[A-Za-z0-9._@:+-]{1,255}$"
+# An external group's Casbin subject is its name after this prefix, e.g.
+# "group:Engineering", so no user or role can be one.
+GROUP_PREFIX = "group:"
+# An external group's name, as the directory spells it: printable ASCII,
+# spaces inside (e.g. "CN=Forge Admins,OU=Groups"), up to 200 characters.
+GROUP_NAME_PATTERN = r"^[!-~](?:[ -~]{0,198}[!-~])?$"
+
+
+# What Casbin reads a policy line's tokens apart by (commas, and the
+# brackets it nests), and % so encoding is reversible: percent-encoded in a
+# group's subject, so "CN=Admins,OU=Groups" stays one token.
+_ESCAPED = {c: f"%{ord(c):02X}" for c in '%,[]()"'}
+# casbin_rule's subject column.
+MAX_SUBJECT = 255
+
+
+def group_subject(name: str) -> str:
+    """
+    :return: The Casbin subject of an external group: ``group:`` and its
+        name, with the characters Casbin splits lines on percent-encoded.
+    """
+    return GROUP_PREFIX + "".join(_ESCAPED.get(c, c) for c in name)
+
+
+def is_reserved_subject(subject: str) -> bool:
+    """
+    Whether a subject ID is one no user or service may have: a role key, or
+    an external group's subject. Roles, groups and subjects share Casbin's
+    namespace, so a user named like either would hold its grants.
+    """
+    return bool(re.fullmatch(ROLE_KEY_PATTERN, subject)) or subject.startswith(
+        GROUP_PREFIX
+    )
 
 
 def new_enforcer(adapter: Adapter | None = None) -> casbin.AsyncEnforcer:
@@ -286,7 +322,10 @@ async def remove_assignments_in(session: AsyncSession, pattern: str) -> None:
 
 
 async def load_access(
-    enforcer: casbin.AsyncEnforcer, subject: str, domain: str
+    enforcer: casbin.AsyncEnforcer,
+    subject: str,
+    domain: str,
+    groups: Iterable[str] = (),
 ) -> tuple[list[str], list[list[str]]]:
     """
     Evaluate a subject's effective roles and permissions in a domain.
@@ -297,13 +336,15 @@ async def load_access(
     :param enforcer: The Casbin enforcer.
     :param subject: The user or service ID.
     :param domain: The scope's domain, e.g. ``org:<id>``.
+    :param groups: The external groups the subject is in (their token's),
+        whose linked permissions they hold everywhere.
     :return: The roles the subject holds there (including those held above
         it), and the p lines granting their permissions, ``[role, resource,
-        action]``.
+        action]``, and their groups', ``[group:<name>, resource, action]``.
     """
     await enforcer.load_policy()
     roles = sorted(await enforcer.get_implicit_roles_for_user(subject, domain))
-    held = set(roles)
+    held = set(roles) | {group_subject(name) for name in groups}
     # Grants carry no domain, so read them directly rather than through
     # get_implicit_permissions_for_user, which filters grants by domain.
     policies = sorted(rule for rule in enforcer.get_policy() if rule[0] in held)

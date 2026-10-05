@@ -31,7 +31,10 @@ export const Route = createFileRoute("/admin/permissions")({
 // The dialogs show failures themselves, so skip the error toast.
 const SILENT = { meta: { silent: true } }
 
-/** A permission and the names of the roles that grant it. */
+/**
+ * A permission, the names of the roles that grant it, and (its own) the
+ * company groups linked to it.
+ */
 type PermissionRow = Permission & { roles: string[] }
 
 const INITIAL_STATE: InitialTableState = {
@@ -70,6 +73,14 @@ const COLUMNS = helper.columns([
     cell: ({ getValue }) =>
       getValue() || <span className="text-subtle">No roles</span>,
   }),
+  helper.accessor((permission) => permission.groups.join(", "), {
+    id: "groups",
+    header: "Linked groups",
+    size: 220,
+    meta: { label: "Linked groups", cellClassName: "text-muted-foreground" },
+    cell: ({ getValue }) =>
+      getValue() || <span className="text-subtle">None</span>,
+  }),
   helper.accessor("updated_at", {
     header: "Updated",
     size: 170,
@@ -107,6 +118,7 @@ function PermissionsPage() {
   const can = useScopeAccess("site")
   const list = permissions.useList()
   const roles = useRoles()
+
   const create = permissions.useCreate(SILENT)
   const update = permissions.useUpdate(SILENT)
   const remove = permissions.useDelete(SILENT)
@@ -173,7 +185,7 @@ function PermissionsPage() {
         <RowActionsContext.Provider value={handlers}>
           <DataTable
             className="rounded-none border-0"
-            description="What roles can let people do, as resource:action. The API checks them on every request."
+            description="What roles can let people do, as resource:action, and what the company's groups are linked to. The API checks them on every request."
             columns={COLUMNS}
             data={rows}
             isLoading={list.isPending}
@@ -217,9 +229,13 @@ function PermissionsPage() {
         onClose={() => setDeleting(undefined)}
         title={`Delete ${deleting?.key ?? "permission"}?`}
         description={
-          deletingCount > 0
-            ? `${deletingCount === 1 ? "One role grants" : `${deletingCount} roles grant`} it (${deleting?.roles.join(", ")}); they'll stop. It can't be undone.`
-            : "No role grants it. It can't be undone."
+          (deletingCount > 0
+            ? `${deletingCount === 1 ? "One role grants" : `${deletingCount} roles grant`} it (${deleting?.roles.join(", ")}); they'll stop.`
+            : "No role grants it.") +
+          (deleting?.groups.length
+            ? ` Linked groups lose it too (${deleting.groups.join(", ")}).`
+            : "") +
+          " It can't be undone."
         }
         confirmLabel="Delete permission"
         onConfirm={() => remove.mutateAsync(deleting!.id)}

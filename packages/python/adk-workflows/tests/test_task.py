@@ -16,7 +16,8 @@ from typing import Any
 import httpx
 import pytest
 from forge_common.adk.models import ModelCall, ProviderModels
-from forge_common.model_provider import ModelProviderConfig
+from forge_common.adk.usage import UsageCall, recording
+from forge_common.model_provider import Cost, ModelProviderConfig
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import Runner
@@ -867,6 +868,52 @@ async def test_an_llm_node_runs_on_the_model_and_thinking_level_it_picks(session
     # Each call has the task's model timeout, in milliseconds.
     assert asked_deep.config.http_options is not None
     assert asked_deep.config.http_options.timeout == 30_000
+
+
+class MeteredGemini(FakeGemini):
+    """FakeGemini, saying what each answer used."""
+
+    async def generate_content_async(self, llm_request: LlmRequest, stream: bool = False) -> AsyncGenerator[Any]:
+        async for reply in super().generate_content_async(llm_request, stream):
+            reply.usage_metadata = types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=1_000, candidates_token_count=200, total_token_count=1_200
+            )
+            yield reply
+
+
+async def test_a_runs_model_calls_are_recorded_for_its_workflow_at_its_models_price(
+    sessions: DatabaseSessionService,
+) -> None:
+    priced = PROVIDERS.model_copy(deep=True)
+    priced.providers["google"].models[0] = (
+        priced.providers["google"]
+        .models[0]
+        .model_copy(update={"cost": Cost.model_validate({"input": 2, "output": 10})})
+    )
+    gemini = MeteredGemini()
+    w = worker(sessions, model=ProviderModels(priced, build=gemini.build))
+    calls: list[UsageCall] = []
+
+    async def sink(call: UsageCall) -> None:
+        calls.append(call)
+
+    with recording(sink):
+        result = await w.run(payload(line(node("triage", "llm", llm_config()), end("done")), {}))
+
+    assert result.status is JobStatus.OK
+    [call] = calls
+    assert call.attribution.organization_id == ORGANIZATION
+    assert (call.attribution.kind, call.attribution.subject_name) == ("workflow", "Test agent")
+    assert call.user_id == MEMBER
+    assert (call.call, call.name) == ("model", "google/gemini-test")
+    assert (call.input_tokens, call.output_tokens) == (1_000, 200)
+    assert call.cost == pytest.approx((1_000 * 2 + 200 * 10) / 1_000_000)
+
+
+async def test_a_run_outside_a_recording_worker_records_nothing(sessions: DatabaseSessionService) -> None:
+    w = worker(sessions, model=ProviderModels(PROVIDERS, build=MeteredGemini().build))
+    result = await w.run(payload(line(node("triage", "llm", llm_config()), end("done")), {}))
+    assert result.status is JobStatus.OK
 
 
 async def test_an_llm_node_on_a_worker_without_models_fails_the_run_saying_so(

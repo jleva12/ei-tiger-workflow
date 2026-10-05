@@ -4,7 +4,7 @@ UV ?= uv
 # .env.common supplies the ${NAME} references in each app's .env; it adds no
 # variables to a container by itself.
 COMPOSE = $(DOCKER) compose --env-file .env.compose --env-file .env.common -f compose.yaml
-SERVICES := web admin async-worker-adk-workflows
+SERVICES := web admin async-worker-adk-workflows async-worker-documents
 # The web apps each own package.json and node_modules; the Python apps and
 # packages are one uv workspace, with one uv.lock and .venv at the root
 # (pyproject.toml lists its members).
@@ -12,9 +12,10 @@ WEB_DIR := apps/forge-web
 ADMIN_DIR := apps/forge-admin-api
 ASYNC_WORKER_DIR := apps/forge-async-worker
 # The task packages the async worker bundles: checked and tested with it.
-TASK_PACKAGES := $(addprefix packages/python/,task-sdk adk-workflows)
+TASK_PACKAGES := $(addprefix packages/python/,task-sdk adk-workflows documents embeddings)
 # Python packages the apps share.
 COMMON_DIR := packages/python/common
+AGENT_RUNTIME_DIR := packages/python/agent-runtime
 JSONATA_DIR := packages/python/jsonata
 # The Forge UI design system: its demo and the shadcn registry apps install from.
 FORGE_UI_DIR := packages/forge-ui
@@ -25,6 +26,7 @@ LOCAL_APPS := web admin async-worker
 .PHONY: admin admin-install admin-deps admin-migrate admin-check admin-test-mysql admin-fmt
 .PHONY: async-worker async-worker-install async-worker-deps async-worker-check async-worker-fmt async-worker-test-redis
 .PHONY: common-check common-fmt
+.PHONY: agent-runtime-check agent-runtime-fmt starter-wheels
 .PHONY: shared-deps infrastructure-check
 .PHONY: jsonata-check jsonata-fmt jsonata-test-re2
 .PHONY: forge-ui forge-ui-install forge-ui-check forge-ui-registry
@@ -38,10 +40,10 @@ append = { [ -z "$$(tail -c1 $(2))" ] || echo >> $(2); echo "$(1)" >> $(2); }
 help:
 	@echo "make install            Install the web apps' and Forge UI's npm dependencies, and the Python workspace into .venv"
 	@echo "make infrastructure     Start admin MySQL, migrate (default roles) and seed you as the site admin user"
-	@echo "make shared-deps        Start the shared MongoDB and Redis"
+	@echo "make shared-deps        Start the shared MongoDB, Redis and S3 (RustFS, for knowledge base documents)"
 	@echo "make infrastructure-check Validate the Compose stack: shared services, connections and queues"
 	@echo "make web-token          Sign the web console in as you: a bearer token in apps/forge-web/.env.local and .env.compose"
-	@echo "make start / make up    Build and start web, admin, the async worker (the adk_workflows queue) and their databases (web on 18190, admin on 18201)"
+	@echo "make start / make up    Build and start web, admin, the async workers (the adk_workflows and documents queues) and their databases (web on 18190, admin on 18201)"
 	@echo "make up-all-local       Start the databases, then run web, admin and async-worker natively in this terminal; Ctrl-C stops them"
 	@echo "make down               Stop the stack (MySQL, MongoDB and Redis data persist in their volumes)"
 	@echo "make logs / logs-web / logs-admin / logs-async-worker  Follow logs"
@@ -63,6 +65,8 @@ help:
 	@echo "make async-worker-fmt   Format and autofix the async worker and task package sources"
 	@echo "make async-worker-test-redis  Start the shared Redis and run the SAQ worker integration tests"
 	@echo "make common-check       Shared Python package (forge-common): lint, format check, types and unit tests"
+	@echo "make agent-runtime-check The chat agent runtime (forge-agent-runtime): lint, format check, types, tests and a package build"
+	@echo "make starter-wheels     The runtime's wheels standalone agent projects carry (into the runtime's dist/)"
 	@echo "make common-fmt         Format and autofix the shared Python package sources"
 	@echo "make jsonata-check      Local JSONata engine: lint, format and full upstream compatibility suite"
 	@echo "make jsonata-fmt        Format and autofix the local JSONata engine"
@@ -84,6 +88,13 @@ env:
 	    perl -i -pe "s/^FORGE_ADMIN_JWT_SECRET=.*/FORGE_ADMIN_JWT_SECRET=$$secret/" $(ADMIN_DIR)/.env; \
 	  else $(call append,FORGE_ADMIN_JWT_SECRET=$$secret,$(ADMIN_DIR)/.env); fi; \
 	  echo "Generated FORGE_ADMIN_JWT_SECRET in $(ADMIN_DIR)/.env"; }
+	@# The key the admin API encrypts MCP servers' credentials with, once.
+	@grep -Eq '^FORGE_ADMIN_SECRETS_KEY=.{32,}' $(ADMIN_DIR)/.env || { \
+	  secret=$$(openssl rand -hex 32); \
+	  if grep -q '^FORGE_ADMIN_SECRETS_KEY=' $(ADMIN_DIR)/.env; then \
+	    perl -i -pe "s/^FORGE_ADMIN_SECRETS_KEY=.*/FORGE_ADMIN_SECRETS_KEY=$$secret/" $(ADMIN_DIR)/.env; \
+	  else $(call append,FORGE_ADMIN_SECRETS_KEY=$$secret,$(ADMIN_DIR)/.env); fi; \
+	  echo "Generated FORGE_ADMIN_SECRETS_KEY in $(ADMIN_DIR)/.env"; }
 
 install: web-install python-install forge-ui-install
 
@@ -135,7 +146,7 @@ logs-admin: env
 	$(COMPOSE) logs -f --tail=100 admin
 
 logs-async-worker: env
-	$(COMPOSE) logs -f --tail=100 async-worker-adk-workflows
+	$(COMPOSE) logs -f --tail=100 async-worker-adk-workflows async-worker-documents
 
 status: env
 	$(COMPOSE) ps -a
@@ -146,7 +157,7 @@ restart: env
 docker-build: env
 	$(COMPOSE) build $(SERVICES)
 
-check: infrastructure-check web-check web-test web-build admin-check async-worker-check common-check jsonata-check forge-ui-check
+check: infrastructure-check web-check web-test web-build admin-check async-worker-check common-check agent-runtime-check jsonata-check forge-ui-check
 
 web-install:
 	cd $(WEB_DIR) && $(NPM) ci
@@ -186,7 +197,7 @@ web-lint:
 admin-install: python-install
 
 shared-deps: env
-	$(COMPOSE) up -d --wait mongo redis
+	$(COMPOSE) up -d --wait mongo redis knowledge-s3
 
 infrastructure-check:
 	python3 -m unittest discover -s tests/infrastructure -v
@@ -214,11 +225,13 @@ async-worker-install: python-install
 # Redis for the SAQ queue, and the admin MySQL for the runs (the run store,
 # which make admin-migrate creates) and their ADK sessions.
 async-worker-deps: env
-	$(COMPOSE) up -d --wait redis admin-mysql
+	$(COMPOSE) up -d --wait redis admin-mysql mongo knowledge-s3
 
-# Natively against redis and admin-mysql (settings from
+# Natively against redis, admin-mysql, mongo and knowledge-s3 (settings from
 # apps/forge-async-worker/.env): sets up the ADK session tables and checks the
-# run store's, then runs the adk_workflows queue's runs and upkeep.
+# run store's, and the knowledge bases' Atlas Search and Vector Search
+# indexes, then runs the adk_workflows queue's runs and upkeep and the
+# documents queue's ingests.
 async-worker: async-worker-deps
 	cd $(ASYNC_WORKER_DIR) && $(UV) run forge-async-worker worker --ensure-schema
 
@@ -247,6 +260,18 @@ async-worker-test-redis: env
 common-check:
 	cd $(COMMON_DIR) && $(UV) run ruff check . && $(UV) run ruff format --check . && $(UV) run mypy src tests && $(UV) run pytest
 
+agent-runtime-check:
+	cd $(AGENT_RUNTIME_DIR) && $(UV) run ruff check . && $(UV) run ruff format --check . && $(UV) run mypy src tests && $(UV) run pytest
+	$(UV) build --package forge-agent-runtime -o $(AGENT_RUNTIME_DIR)/dist
+
+starter-wheels:
+	for package in forge-agent-runtime forge-common forge-jsonata; do \
+		$(UV) build --package $$package --wheel -o $(AGENT_RUNTIME_DIR)/dist || exit 1; \
+	done
+
+agent-runtime-fmt:
+	cd $(AGENT_RUNTIME_DIR) && $(UV) run ruff check --fix . && $(UV) run ruff format .
+
 common-fmt:
 	cd $(COMMON_DIR) && $(UV) run ruff check --fix . && $(UV) run ruff format .
 
@@ -271,4 +296,4 @@ forge-ui-registry:
 # registry:check rebuilds the registry and fails when registry.json or
 # public/r differ from what's committed: apps install the committed files.
 forge-ui-check:
-	cd $(FORGE_UI_DIR) && npx tsc -b && $(NPM) test && $(NPM) run registry:check
+	cd $(FORGE_UI_DIR) && npx tsc -b && $(NPM) test && $(NPM) run registry:check && $(NPM) run starter:build -- --check

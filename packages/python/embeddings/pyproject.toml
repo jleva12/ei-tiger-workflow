@@ -1,0 +1,47 @@
+[project]
+name = "forge-embeddings"
+version = "0.1.0"
+description = "Model clients shared by the Forge embedding tasks: embedders, reranker, tokenizers, LLM clients, lexical and fused search helpers, Mongo vector encoding"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "forge-tasks",
+  "google-cloud-spanner>=3.70,<4",
+  "pydantic>=2.7",
+  "pymongo>=4.10",   # BSON vector support
+  "openai>=1.40",    # default embedder (OpenAI / Azure OpenAI) and LLM
+  "tiktoken>=0.7",   # exact token counts for OpenAI limits
+  "anthropic>=0.40", # Claude LLM client
+]
+
+[project.optional-dependencies]
+# HYBRID_EMBEDDING__PROVIDER=voyage or HYBRID_RERANK__PROVIDER=voyage.
+voyage = ["voyageai>=0.3"]
+# HYBRID_TOKENIZER__KIND=huggingface (tiktoken is always installed).
+tokenizers = ["tokenizers>=0.19"]
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"
+
+# Tests run in the workspace environment: make async-worker-check, or uv run pytest here.
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["forge_tasks", "forge_embeddings", "forge_task_documents", "forge_async_worker"]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = true

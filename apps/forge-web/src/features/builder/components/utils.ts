@@ -64,6 +64,15 @@ export const DETAILS_PANEL_ID = "builder-details"
 export const DIALOG_CARD =
   "pointer-events-auto flex min-h-0 flex-col overflow-hidden rounded-(--radius-dialog) bg-popover text-popover-foreground shadow-xl ring-1 ring-foreground/5 outline-none dark:ring-foreground/10"
 
+/** Where a settings dialog's cards sit: centred, the window's height; around them is the backdrop. */
+export const SETTINGS_POPUP =
+  "pointer-events-none fixed inset-3 z-50 flex justify-center gap-3 outline-none " +
+  // Closing, they hold their faded end until removed rather than snap back.
+  "duration-150 ease-out data-open:animate-in data-open:fade-in-0 data-open:slide-in-from-bottom-2 data-closed:animate-out data-closed:fade-out-0 data-closed:slide-out-to-bottom-1 data-closed:fill-mode-forwards"
+
+/** A settings dialog's card (settings-dialog.tsx), at its width. */
+export const SETTINGS_CARD = `${DIALOG_CARD} w-[clamp(34rem,34vw,52rem)] max-w-full shrink-0`
+
 /**
  * The panel beside a step's settings, where a setting opens a larger
  * editor (a schema's fields). One at a time; the step dialog owns it.
@@ -201,9 +210,16 @@ export function useBuilderDocument<Doc>(): Doc {
 
 /** Saves JSON as a file in the browser's downloads. */
 export function downloadJson(value: unknown, fileName: string) {
-  const blob = new Blob([`${JSON.stringify(value, null, 2)}\n`], {
-    type: "application/json",
-  })
+  downloadBlob(
+    new Blob([`${JSON.stringify(value, null, 2)}\n`], {
+      type: "application/json",
+    }),
+    fileName
+  )
+}
+
+/** Saves a file the app has (a zip, an export) as `fileName`. */
+export function downloadBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob)
   const link = document.createElement("a")
   link.href = url

@@ -71,10 +71,10 @@ export function AgentDetails() {
     <div className="flex flex-col">
       <header className="border-b px-4 pt-4 pb-3.5">
         <h2 className="truncate text-sm font-medium text-foreground">
-          {meta.name || "Untitled ADK workflow"}
+          {meta.name || "Untitled workflow"}
         </h2>
         <p className="text-2xs text-muted-foreground">
-          Google ADK workflow · click a node to set it up
+          Google ADK graph · click a node to set it up
         </p>
       </header>
       <Section>

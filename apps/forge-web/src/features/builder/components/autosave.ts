@@ -36,6 +36,11 @@ export type Autosave = {
   loadTheirs: () => Promise<void>
   /** Save these changes over the version someone else saved. */
   keepMine: () => Promise<void>
+  /**
+   * Save what's unsaved now and wait for it: the revision everything is
+   * saved at, or null when it couldn't be (a conflict, a refusal, an error).
+   */
+  flush: () => Promise<number | null>
 }
 
 // What saving compares: the document without the times the API sets.
@@ -201,6 +206,13 @@ export function useBuilderAutosave<Doc, Rec extends SavedRecord<Doc>>(
         refused = undefined
         await save()
       },
+      flush: async () => {
+        refused = undefined
+        clearTimeout(timer)
+        await save()
+        while (running) await running
+        return halted || refused !== undefined || pending() ? null : revision
+      },
     }
 
     return () => {
@@ -220,6 +232,7 @@ export function useBuilderAutosave<Doc, Rec extends SavedRecord<Doc>>(
       saveNow: () => controls.current?.saveNow(),
       loadTheirs: async () => controls.current?.loadTheirs(),
       keepMine: async () => controls.current?.keepMine(),
+      flush: async () => (controls.current ? controls.current.flush() : null),
     }),
     [state]
   )

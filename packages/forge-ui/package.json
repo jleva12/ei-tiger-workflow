@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "registry:build": "node scripts/build-registry.mjs && shadcn build",
     "registry:check": "npm run registry:build && node scripts/check-registry.mjs",
+    "starter:build": "node scripts/build-starter.mjs",
     "test": "node --experimental-strip-types --test tests/*.test.ts"
   },
   "dependencies": {

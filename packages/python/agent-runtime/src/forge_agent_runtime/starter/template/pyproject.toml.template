@@ -1,0 +1,13 @@
+[project]
+name = "@@SLUG@@"
+version = "0.1.0"
+description = "@@NAME@@: a Forge chat agent, served on its own"
+requires-python = ">=3.11"
+dependencies = [
+@@DEPENDENCIES@@
+]
+
+# An app, run with `uv run main.py`; not a package to publish.
+[tool.uv]
+package = false
+@@UV_SOURCES@@

@@ -20,7 +20,7 @@ import { useSchemaValue } from "@/features/runs/lib/schema-value"
 import { SchemaValueEditor } from "./schema-value-editor"
 
 /*
- * Running a workflow (or an ADK workflow) by hand: its input, as the fields
+ * Running a workflow by hand: its input, as the fields
  * its start declares (nested objects as groups; lists and free-form objects
  * as JSON), or as JSON outright. The API checks the input against the start
  * and answers why it doesn't fit, which shows here.

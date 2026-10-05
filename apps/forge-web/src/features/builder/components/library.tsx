@@ -51,6 +51,7 @@ export function StepLibrary({ organizationId }: { organizationId: string }) {
   const name = useBuilder((s) => s.meta.name)
   const steps = useBuilder((s) => s.nodes.length)
   const api = useBuilderApi()
+  const readOnly = useBuilder((s) => s.readOnly)
   const flow = useReactFlow<FlowNode, FlowEdge>()
 
   const words = query.trim().toLowerCase()
@@ -151,6 +152,7 @@ export function StepLibrary({ organizationId }: { organizationId: string }) {
                     kind={kind}
                     info={adapter.kinds[kind]}
                     placed={placed.has(kind)}
+                    readOnly={readOnly}
                     onAdd={() => add(kind)}
                   />
                 ))}
@@ -165,6 +167,10 @@ export function StepLibrary({ organizationId }: { organizationId: string }) {
         </SidebarSection>
         <SidebarSection variant="flush" className="pt-3">
           <SidebarHint className="px-1">
+            {readOnly ? (
+              (ui.readOnlyHint ?? "Read-only") + "."
+            ) : (
+              <>
             Drag a {nouns.step} onto the canvas, or onto a connection to put it in between.{" "}
             {after ? (
               <>
@@ -173,6 +179,8 @@ export function StepLibrary({ organizationId }: { organizationId: string }) {
               </>
             ) : (
               "Click one to add it in the middle of the view."
+            )}
+              </>
             )}
           </SidebarHint>
         </SidebarSection>
@@ -205,12 +213,15 @@ function LibraryItem({
   kind,
   info,
   placed,
+  readOnly = false,
   onAdd,
 }: {
   kind: string
   info: KindInfo
   /** The one of its kind a graph can have is already on the canvas. */
   placed: boolean
+  /** Nothing can be added: the builder is read-only. */
+  readOnly?: boolean
   onAdd: () => void
 }) {
   const ghost = React.useRef<HTMLDivElement>(null)
@@ -222,8 +233,8 @@ function LibraryItem({
           render={
             <NavItem
               size="sm"
-              draggable={!placed}
-              disabled={placed}
+              draggable={!placed && !readOnly}
+              disabled={placed || readOnly}
               meta={placed ? "Added" : undefined}
               onClick={onAdd}
               onDragStart={(event: React.DragEvent<HTMLButtonElement>) => {

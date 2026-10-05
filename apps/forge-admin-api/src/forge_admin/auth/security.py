@@ -6,7 +6,8 @@ from typing import Annotated
 from fastapi import HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
-from forge_admin.auth.tokens import TokenError, verify_token
+from forge_admin.auth.access import set_caller
+from forge_admin.auth.tokens import TokenError, groups_of, verify_identity
 from forge_admin.db.audit import set_actor
 
 # Declaring the headers through FastAPI's security classes also documents
@@ -28,9 +29,11 @@ async def authenticate(
     Check the API key, if one is configured, and identify the user.
 
     The key is compared in constant time. The user comes from an
-    ``Authorization: Bearer <JWT>`` header (see ``tokens.verify_token``);
+    ``Authorization: Bearer <JWT>`` header (see ``tokens.verify_identity``);
     without one, from ``FORGE_ADMIN_LOCAL_USER_ID`` (local development and
     tests only), or there is none. ``request.state.user_id`` holds the user,
+    ``request.state.groups`` the company groups their token names (whose
+    linked permissions authorization counts),
     and changes are audited as them, or as ``api-key`` when a key was verified,
     or ``anonymous``. This dependency is async so the actor stays set for the
     route that follows.
@@ -54,9 +57,11 @@ async def authenticate(
             detail="Invalid or missing API key",
         )
     user_id = settings.local_user_id
+    groups = groups_of(settings.local_user_groups) if user_id else ()
     if credentials is not None:
         try:
-            user_id = verify_token(settings, credentials.credentials)
+            identity = verify_identity(settings, credentials.credentials)
+            user_id, groups = identity.subject, identity.groups
         except TokenError as error:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -64,5 +69,7 @@ async def authenticate(
                 headers={"WWW-Authenticate": "Bearer"},
             ) from None
     request.state.user_id = user_id
+    request.state.groups = groups
+    set_caller(user_id, groups)
     fallback = ANONYMOUS_ACTOR if expected is None else API_KEY_ACTOR
     set_actor(user_id or fallback)

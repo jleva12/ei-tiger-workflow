@@ -19,10 +19,10 @@ import { AGENT_FORMAT, type AgentDocument } from "@/features/adk-workflows/lib/d
 import { AGENT_KINDS, isAgentKind, type AgentKind } from "@/features/adk-workflows/lib/model"
 
 /*
- * Running an organization's ADK workflows. The admin API keeps each run
+ * Running an organization's workflows. The admin API keeps each run
  * (beside its ADK session, in its MySQL) and a worker carries it on: from
  * queued to running, through what it waits for (a person's decision or
- * answer, a time), to succeeded or failed. A run takes the ADK workflow as
+ * answer, a time), to succeeded or failed. A run takes the workflow as
  * it's saved when it starts and acts as the member who ran it. Its steps
  * are read from its ADK session (`/adk-runs/{run}/steps`), and what it
  * waits for is answered there: an approval decided, a person's answer
@@ -103,7 +103,7 @@ export type AdkRunFailure = {
 export type AdkRun = {
   id: string
   organization_id: string
-  /** The ADK workflow it runs, and its name and revision when it started. */
+  /** The workflow it runs, and its name and revision when it started. */
   agent_id: string
   agent_name: string
   revision: number
@@ -175,7 +175,7 @@ export type AdkRunDetail = AdkRun & {
   input: unknown
   /** What the run handed on, once it ended with a result. */
   result: unknown
-  /** The ADK workflow as the run started with it. */
+  /** The workflow as the run started with it. */
   document: unknown
   /** What started it, e.g. `{type: "manual", by}`. */
   trigger: Record<string, unknown> | null
@@ -280,13 +280,13 @@ export const isFailureEvent = (event: Pick<AdkRunEvent, "kind">) =>
 export const failureTitle = (
   error: { status?: number } | null | undefined,
   fallback: string
-) => (error?.status === 503 ? "ADK workflow runs are unavailable" : fallback)
+) => (error?.status === 503 ? "Workflow runs are unavailable" : fallback)
 
 /* -------------------------------------------------------------------------- */
 /* Where the page looks                                                       */
 /* -------------------------------------------------------------------------- */
 
-/** The ADK workflows page's tabs; Overview is the default. */
+/** The workflows page's tabs; Overview is the default. */
 export type AgentsTab = "overview" | "runs"
 
 export const isAgentsTab = (value: unknown): value is AgentsTab =>
@@ -311,7 +311,7 @@ export const isAdkRunTab = (value: unknown): value is AdkRunTab =>
 export type AdkStepStatus =
   "done" | "failed" | "waiting" | "running" | "not_reached"
 
-/** A node of the ADK workflow, as a run went through it. */
+/** A node of the workflow, as a run went through it. */
 export type AdkRunStep = {
   /** The node's ID in the document. */
   id: string
@@ -422,7 +422,7 @@ export function stepErrorOf(error: unknown): StepError | undefined {
   return found
 }
 
-/** The ADK workflow a run started with, when it's one the builder reads. */
+/** The workflow a run started with, when it's one the builder reads. */
 export function runDocumentOf(document: unknown) {
   if (!document || typeof document !== "object") return undefined
   const doc = document as Partial<AgentDocument>
@@ -548,7 +548,7 @@ function loadedRuns(data: InfiniteData<AdkRunPage, number>): AdkRunPage {
 }
 
 /**
- * The organization's ADK workflow runs, newest first, 100 at a time
+ * The organization's workflow runs, newest first, 100 at a time
  * (`fetchNextPage` for more). Refreshes every few seconds while one is
  * still going, else every 30 s. `data` is the loaded runs and how many there are.
  */
@@ -574,12 +574,12 @@ export function useOrganizationAdkRuns(organizationId: string) {
             query.state.data?.pages.some((page) => page.items.some(isOpenRun))
           ? OPEN_POLL_MS
           : IDLE_POLL_MS,
-    meta: { errorTitle: "Couldn't refresh the ADK workflow runs" },
+    meta: { errorTitle: "Couldn't refresh the workflow runs" },
   })
 }
 
 /**
- * An ADK workflow's latest runs, newest first. Refreshes every few seconds
+ * A workflow's latest runs, newest first. Refreshes every few seconds
  * while one is still going, else every 30 s.
  */
 export function useAdkWorkflowRuns(
@@ -599,12 +599,12 @@ export function useAdkWorkflowRuns(
       isFollowing(organizationId) && query.state.status !== "error"
         ? OPEN_POLL_MS
         : runsPollMs(query.state),
-    meta: { errorTitle: "Couldn't load the ADK workflow's runs" },
+    meta: { errorTitle: "Couldn't load the workflow's runs" },
   })
 }
 
 /**
- * One run, with its input, result, the ADK workflow it ran and its
+ * One run, with its input, result, the workflow it ran and its
  * activity. Refreshes every few seconds while a worker has it (or it was
  * just acted on), every 30 s while it waits for a person or a time.
  */
@@ -621,7 +621,7 @@ export function useAdkRun(organizationId: string, runId: string | undefined) {
         return OPEN_POLL_MS
       return run && isOpenRun(run) ? IDLE_POLL_MS : false
     },
-    meta: { errorTitle: "Couldn't refresh the ADK workflow run" },
+    meta: { errorTitle: "Couldn't refresh the workflow run" },
   })
 }
 
@@ -684,8 +684,8 @@ export function useAdkRunSteps(
 type MutationMeta = { meta?: { silent?: boolean; errorTitle?: string } }
 
 /**
- * Run the ADK workflow as it's saved, with an input that fits its start
- * (the API answers 422 with why when it doesn't, or when the ADK workflow
+ * Run the workflow as it's saved, with an input that fits its start
+ * (the API answers 422 with why when it doesn't, or when the workflow
  * doesn't build). The run is queued at once; a worker takes it seconds
  * later. Errors are the caller's to show: the run dialog shows them by the
  * input.
@@ -701,7 +701,7 @@ export function useRunAdkWorkflow(organizationId: string, agentId: string) {
 }
 
 /**
- * Approve or reject what an ADK workflow run waits for: it carries on down
+ * Approve or reject what a workflow run waits for: it carries on down
  * the node's approved or rejected way, on a worker, within seconds. A
  * decision names the approval, so one someone else decided first, or a
  * question that isn't an approval (409), never lands on a later one.
@@ -737,11 +737,11 @@ export function useDecideAdkRun(
   })
 }
 
-/** A person's answer to what an ADK workflow run asks. */
+/** A person's answer to what a workflow run asks. */
 export type AdkAnswer = { requestId: string; answer: unknown }
 
 /**
- * Answer what an ADK workflow run asks a person: the run carries on with
+ * Answer what a workflow run asks a person: the run carries on with
  * the answer, on a worker, within seconds. The API holds the answer to the
  * node's response schema and to 4,000 characters of JSON (422 with why when
  * it doesn't fit); 409 when it's no longer asked.

@@ -192,14 +192,27 @@ async def delete_organization(
             organization_id,
             error,
         )
-    store = request.app.state.organization_agents
-    if store is None:
-        return
-    try:
-        await store.delete_organization(organization_id)
-    except PyMongoError as error:
-        logger.warning(
-            "Organization %s is deleted, but its agents are still in MongoDB: %s",
-            organization_id,
-            error,
-        )
+    usage = getattr(request.app.state, "usage", None)
+    if usage is not None:
+        try:
+            await usage.delete_organization(organization_id)
+        except (SQLAlchemyError, OSError) as error:
+            logger.warning(
+                "Organization %s is deleted, but what it used is still kept: %s",
+                organization_id,
+                error,
+            )
+    for store in (
+        request.app.state.organization_agents,
+        getattr(request.app.state, "chat_agents", None),
+    ):
+        if store is None:
+            continue
+        try:
+            await store.delete_organization(organization_id)
+        except PyMongoError as error:
+            logger.warning(
+                "Organization %s is deleted, but its agents are still in MongoDB: %s",
+                organization_id,
+                error,
+            )

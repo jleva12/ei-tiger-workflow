@@ -1,6 +1,7 @@
 import {
-  AiNetworkIcon,
+  AiBrain01Icon,
   ApiIcon,
+  BookOpen01Icon,
   Brain01Icon,
   ChatBotIcon,
   Globe02Icon,
@@ -9,7 +10,7 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import type { IconProp } from "@/components/forge/icons"
-import { adkName, type ModelChoice } from "@/features/adk-workflows/lib/model"
+import { AGENTS_ICON, adkName, type ModelChoice } from "@/features/adk-workflows/lib/model"
 import type { KindGroup, KindInfo, StepOutput } from "@/features/builder/lib/types"
 import type {
   HeaderRow,
@@ -20,14 +21,14 @@ import type {
 /*
  * A chat agent, as the Agents page builds it: one Google ADK `LlmAgent`
  * people talk to, and what's attached to it on the canvas. It has two
- * ways out: its tools (what it can call: memory, HTTP endpoints, an
- * OpenAPI spec, an MCP server, an ADK workflow, another agent), and
+ * ways out: its tools (what it can call: memory, knowledge bases, HTTP
+ * endpoints, an OpenAPI spec, an MCP server, a workflow, another agent), and
  * the agents it hands off to (sub-agents it transfers the conversation
  * to, or gives a task). A sub-agent has the same two ways out, so a
  * specialist can have tools of its own.
  */
 
-export const CHAT_AGENTS_ICON: IconProp = ChatBotIcon
+export const CHAT_AGENTS_ICON: IconProp = AiBrain01Icon
 
 /** What an LLM agent is set up with: the chat agent's, and a sub-agent's. */
 export type ChatAgentSettings = {
@@ -47,7 +48,14 @@ export type ChatAgentSettings = {
 export type HandOff = "chat" | "task" | "single_turn"
 
 export type ChatConfigs = {
-  agent: ChatAgentSettings
+  agent: ChatAgentSettings & {
+    /**
+     * A JSON Schema of the state the chat sends in stateDelta besides the
+     * model picker's (agents/lib/input.ts): what its instructions read as
+     * `state.<field>`. `{}` declares none.
+     */
+    state_schema: Record<string, unknown>
+  }
   sub_agent: ChatAgentSettings & {
     /**
      * chat: it takes over the conversation; task: it does one task, asking
@@ -63,11 +71,22 @@ export type ChatConfigs = {
   }
   /** Another of the organization's agents, by ID, used whole. */
   saved_agent: { agent: string }
-  /** One of the organization's ADK workflows, by ID, called as a tool. */
+  /** One of the organization's workflows, by ID, called as a tool. */
   adk_workflow: { workflow: string }
   memory: {
     /** on_demand: it looks things up when it decides to; every_turn: what's relevant comes with each message. */
     mode: "on_demand" | "every_turn"
+  }
+  knowledge_base: {
+    /**
+     * The organization's knowledge bases it searches, by ID (the Knowledge
+     * bases page): their documents, parsed, chunked and embedded.
+     */
+    knowledge_bases: string[]
+    /** What the model is told it finds there; empty to describe the knowledge bases. */
+    description: string
+    /** The most passages one search answers (1–20). */
+    max_results: number
   }
   http_tool: {
     /** What it does: the model reads this to decide when to call it. */
@@ -92,6 +111,12 @@ export type ChatConfigs = {
     confirm: boolean
   }
   mcp: {
+    /**
+     * One of the organization's MCP servers, by ID (the MCP servers page):
+     * its URL, headers and sign-in come from there. Empty for a server set
+     * up here, by `transport`, `url` and `headers`.
+     */
+    server: string
     transport: "streamable_http" | "sse"
     url: string
     headers: HeaderRow[]
@@ -170,7 +195,7 @@ export const CHAT_KINDS: { [K in ChatKind]: ChatKindInfo<K> } = {
     keywords: "chat agent llm root assistant bot",
     orb: 0,
     idPrefix: "agent",
-    defaults: agentSettings,
+    defaults: () => ({ ...agentSettings(), state_schema: {} }),
   },
   sub_agent: {
     label: "Sub-agent",
@@ -192,7 +217,7 @@ export const CHAT_KINDS: { [K in ChatKind]: ChatKindInfo<K> } = {
   saved_agent: {
     label: "Saved agent",
     group: "agents",
-    icon: ChatBotIcon,
+    icon: CHAT_AGENTS_ICON,
     summary:
       "Another of the organization's agents, whole: handed off to, or called as a tool.",
     keywords: "saved agent reuse other existing",
@@ -208,6 +233,17 @@ export const CHAT_KINDS: { [K in ChatKind]: ChatKindInfo<K> } = {
     keywords: "memory remember recall history past conversations",
     idPrefix: "memory",
     defaults: () => ({ mode: "on_demand" }),
+  },
+  knowledge_base: {
+    label: "Knowledge base",
+    group: "tools",
+    icon: BookOpen01Icon,
+    summary:
+      "Searches the organization's knowledge bases: the documents uploaded to them, by meaning and by their words.",
+    keywords:
+      "knowledge base documents rag retrieval search vector embeddings files pdf",
+    idPrefix: "knowledge",
+    defaults: () => ({ knowledge_bases: [], description: "", max_results: 5 }),
   },
   http_tool: {
     label: "HTTP tool",
@@ -244,10 +280,12 @@ export const CHAT_KINDS: { [K in ChatKind]: ChatKindInfo<K> } = {
     label: "MCP server",
     group: "tools",
     icon: McpServerIcon,
-    summary: "The tools of a remote MCP server, over streamable HTTP or SSE.",
-    keywords: "mcp model context protocol server tools remote",
+    summary:
+      "The tools of a remote MCP server: one of the organization's, or one by URL.",
+    keywords: "mcp model context protocol server tools remote oauth",
     idPrefix: "mcp",
     defaults: () => ({
+      server: "",
       transport: "streamable_http",
       url: "",
       headers: [],
@@ -256,11 +294,11 @@ export const CHAT_KINDS: { [K in ChatKind]: ChatKindInfo<K> } = {
     }),
   },
   adk_workflow: {
-    label: "ADK workflow",
+    label: "Workflow",
     group: "tools",
-    icon: AiNetworkIcon,
+    icon: AGENTS_ICON,
     summary:
-      "One of the organization's ADK workflows, as a tool: the agent runs it with its input and gets its result.",
+      "One of the organization's workflows, as a tool: the agent runs it with its input and gets its result.",
     keywords: "adk workflow graph tool run process",
     idPrefix: "workflow",
     defaults: () => ({ workflow: "" }),

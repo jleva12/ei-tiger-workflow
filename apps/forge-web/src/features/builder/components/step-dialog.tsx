@@ -4,25 +4,28 @@ import { cn } from "cn"
 
 import { Icon } from "@/components/forge/icon"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogClose,
-  DialogDescription,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { Dialog, DialogClose, DialogPortal } from "@/components/ui/dialog"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { FieldIssuesProvider } from "@/features/builder/components/fields/field-issues"
+import { FieldsReadOnly } from "./fields/read-only"
 import { KindGlyph } from "./glyph"
 import { IssueList } from "./issue-list"
+import {
+  SettingsBody,
+  SettingsFooter,
+  SettingsHeader,
+  SettingsHint,
+  SettingsOverlay,
+  SettingsSection as Section,
+} from "./settings-dialog"
 import { useBuilder, useBuilderApi, type FlowNode } from "./store"
 import { useBuilderUi } from "./ui"
 import {
   CompanionContext,
-  DIALOG_CARD,
   reducedMotion,
+  SETTINGS_CARD,
+  SETTINGS_POPUP,
   withViewTransition,
   type Companion,
 } from "./utils"
@@ -45,30 +48,6 @@ function fieldFor(root: HTMLElement, key: string): HTMLElement | null {
     if (found) return found
   }
   return null
-}
-
-function Section({
-  title,
-  className,
-  children,
-}: {
-  title?: string
-  className?: string
-  children: React.ReactNode
-}) {
-  return (
-    <section
-      className={cn(
-        "flex flex-col gap-4 border-t px-5 py-4 first:border-t-0",
-        className
-      )}
-    >
-      {title && (
-        <h3 className="-mb-1 text-xs font-medium text-foreground">{title}</h3>
-      )}
-      {children}
-    </section>
-  )
 }
 
 /**
@@ -149,23 +128,19 @@ export function StepDialog() {
     >
       <DialogPortal>
         {/* It fades with the cards: shorter, it would be done (and gone) before them. */}
-        <DialogOverlay className="bg-black/20 duration-150 supports-backdrop-filter:backdrop-blur-none dark:bg-black/45" />
+        <SettingsOverlay />
         {/* The cards sit side by side, centred as a pair; around them is the backdrop. */}
         <DialogPrimitive.Popup
           ref={popup}
           initialFocus={popup}
           data-slot="dialog-content"
-          className={cn(
-            "pointer-events-none fixed inset-3 z-50 flex justify-center gap-3 outline-none",
-            // Closing, they hold their faded end until removed rather than snap back.
-            "duration-150 ease-out data-open:animate-in data-open:fade-in-0 data-open:slide-in-from-bottom-2 data-closed:animate-out data-closed:fade-out-0 data-closed:slide-out-to-bottom-1 data-closed:fill-mode-forwards"
-          )}
+          className={SETTINGS_POPUP}
         >
           <CompanionContext.Provider value={context}>
             <div
               className={cn(
-                DIALOG_CARD,
-                "w-[clamp(34rem,34vw,52rem)] max-w-full shrink-0 [view-transition-name:step-settings]",
+                SETTINGS_CARD,
+                "[view-transition-name:step-settings]",
                 // Too narrow for two: the editor covers the settings.
                 companion && "max-[1080px]:invisible"
               )}
@@ -193,6 +168,7 @@ function StepSettings({ node }: { node: FlowNode }) {
     [allIssues, id]
   )
   const api = useBuilderApi()
+  const readOnly = useBuilder((s) => s.readOnly)
   const nameId = React.useId()
 
   // An issue clicked: its setting comes into view, ready to fix. Two frames
@@ -222,34 +198,14 @@ function StepSettings({ node }: { node: FlowNode }) {
 
   return (
     <>
-      <header className="flex items-start gap-3 border-b px-5 pt-4 pb-3.5">
-        <KindGlyph info={info} />
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <DialogTitle className="truncate text-sm leading-snug font-medium text-foreground">
-            {data.name.trim() || info.label}
-          </DialogTitle>
-          <DialogDescription className="truncate text-2xs text-muted-foreground">
-            {info.label} · {ui.detailOf(data, lookups)}
-          </DialogDescription>
-        </div>
-        <DialogClose
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Close the ${ui.nouns.step}'s settings`}
-              className="-mt-0.5 -mr-1.5 text-muted-foreground"
-            />
-          }
-        >
-          <Icon icon="close" />
-        </DialogClose>
-      </header>
+      <SettingsHeader
+        glyph={<KindGlyph info={info} />}
+        title={data.name.trim() || info.label}
+        description={`${info.label} · ${ui.detailOf(data, lookups)}`}
+        closeLabel={`Close the ${ui.nouns.step}'s settings`}
+      />
 
-      <div
-        ref={body}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
-      >
+      <SettingsBody ref={body}>
         <Section className="gap-3">
           <p className="text-xs/[1.6] text-muted-foreground">{info.summary}</p>
           {issues.length > 0 && (
@@ -269,6 +225,7 @@ function StepSettings({ node }: { node: FlowNode }) {
               <FieldLabel htmlFor={nameId}>Name</FieldLabel>
               <Input
                 id={nameId}
+                disabled={readOnly}
                 value={data.name}
                 onChange={(event) =>
                   api
@@ -283,7 +240,12 @@ function StepSettings({ node }: { node: FlowNode }) {
             </Field>
           )}
           <FieldIssuesProvider issues={issues}>
-            <Fields id={id} step={data} />
+            <FieldsReadOnly.Provider value={readOnly}>
+              {/* Read-only, every native field is disabled with it. */}
+              <fieldset disabled={readOnly} className="contents">
+                <Fields id={id} step={data} />
+              </fieldset>
+            </FieldsReadOnly.Provider>
           </FieldIssuesProvider>
         </Section>
 
@@ -292,37 +254,41 @@ function StepSettings({ node }: { node: FlowNode }) {
             <DataSection id={id} step={data} />
           </Section>
         )}
-      </div>
+      </SettingsBody>
 
-      <footer className="flex items-center gap-2 border-t px-5 py-3">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            const store = api.getState()
-            const copy = store.duplicateStep(id)
-            if (copy) store.edit(copy)
-          }}
-        >
-          <Icon icon="copy" data-icon="inline-start" />
-          Duplicate
-        </Button>
-        <Button
-          variant="destructive"
-          size="sm"
-          onClick={() => api.getState().removeSteps([id])}
-        >
-          Remove {ui.nouns.step}
-        </Button>
-        <span className="ml-auto text-2xs text-subtle max-[600px]:hidden">
-          Changes apply as you make them
-        </span>
+      <SettingsFooter>
+        {!readOnly && (
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const store = api.getState()
+                const copy = store.duplicateStep(id)
+                if (copy) store.edit(copy)
+              }}
+            >
+              <Icon icon="copy" data-icon="inline-start" />
+              Duplicate
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => api.getState().removeSteps([id])}
+            >
+              Remove {ui.nouns.step}
+            </Button>
+          </>
+        )}
+        <SettingsHint>
+          {readOnly ? (ui.readOnlyHint ?? "Read-only") : "Changes apply as you make them"}
+        </SettingsHint>
         <DialogClose
           render={<Button size="sm" className="max-[600px]:ml-auto" />}
         >
           Done
         </DialogClose>
-      </footer>
+      </SettingsFooter>
     </>
   )
 }

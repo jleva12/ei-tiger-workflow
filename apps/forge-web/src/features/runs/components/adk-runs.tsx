@@ -7,12 +7,12 @@ import {
 } from "@/features/runs/lib/runs"
 
 /*
- * Running an ADK workflow from its builder: the run dialog and runs menu,
- * on the ADK workflow's own runs (runs/lib/runs). Each run opens its page
- * under the ADK workflows page's Runs.
+ * Running a workflow from its builder: the run dialog and runs menu,
+ * on the workflow's own runs (runs/lib/runs). Each run opens its page
+ * under the workflows page's Runs.
  */
 
-/** The ADK workflow's latest runs, each opening its page. */
+/** The workflow's latest runs, each opening its page. */
 export function AdkRunsMenu({
   organizationId,
   agentId,
@@ -26,7 +26,7 @@ export function AdkRunsMenu({
       organizationId={organizationId}
       runs={runs}
       all={{
-        label: "All ADK workflow runs",
+        label: "All workflow runs",
         search: { view: "agents", agentsTab: "runs" },
       }}
       runSearch={(runId) => ({ view: "agents", agentRun: runId })}
@@ -34,7 +34,7 @@ export function AdkRunsMenu({
   )
 }
 
-/** Running the ADK workflow as it's saved now, with an input for its start. */
+/** Running the workflow as it's saved now, with an input for its start. */
 export function AdkRunDialog({
   open,
   onOpenChange,
@@ -63,13 +63,13 @@ export function AdkRunDialog({
       words={{
         description: (
           <>
-            {name || "The ADK workflow"} runs as it&apos;s saved now, as you.
+            {name || "The workflow"} runs as it&apos;s saved now, as you.
             Follow it under Runs, or on its own page.
           </>
         ),
         refused: "The run can't start",
         forbidden: {
-          title: "You can't run the organization's ADK workflows",
+          title: "You can't run the organization's workflows",
           description:
             "Running them takes agents:run in the organization. Ask an organization admin.",
         },

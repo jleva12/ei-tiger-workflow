@@ -59,7 +59,12 @@ const LLM = {
 }
 
 const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
-  agent: LLM,
+  agent: {
+    ...LLM,
+    state_schema: jsonSchema(
+      "A JSON Schema of the state the chat sends in stateDelta besides model and thinking_level; {} declares none."
+    ),
+  },
   sub_agent: {
     ...LLM,
     mode: {
@@ -84,7 +89,7 @@ const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
     workflow: {
       ...text,
       description:
-        "One of the organization's ADK workflows, by ID, called as a tool.",
+        "One of the organization's workflows, by ID, called as a tool.",
     },
   },
   memory: {
@@ -92,6 +97,25 @@ const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
       ...oneOf("on_demand", "every_turn"),
       description:
         "on_demand: it looks memories up when it decides to (load_memory); every_turn: they come with each message (preload_memory).",
+    },
+  },
+  knowledge_base: {
+    knowledge_bases: {
+      type: "array",
+      items: text,
+      description:
+        "The organization's knowledge bases it searches, by ID: their documents, parsed, chunked and embedded.",
+    },
+    description: {
+      ...text,
+      description:
+        "What the model is told it finds there; empty to describe the knowledge bases.",
+    },
+    max_results: {
+      type: "integer",
+      minimum: 1,
+      maximum: 20,
+      description: "The most passages one search answers.",
     },
   },
   http_tool: {
@@ -129,6 +153,11 @@ const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
     confirm: bool,
   },
   mcp: {
+    server: {
+      ...text,
+      description:
+        "One of the organization's MCP servers, by ID: its URL, headers and sign-in come from there. Empty for one set up by transport, url and headers.",
+    },
     transport: oneOf("streamable_http", "sse"),
     url: text,
     headers,
@@ -179,6 +208,17 @@ export const CHAT_AGENT_JSON_SCHEMA = {
     },
     created_at: { type: "string", format: "date-time" },
     updated_at: { type: "string", format: "date-time" },
+    version: {
+      description:
+        "Which version this is: a published version's number, or draft. The builder leaves it out; exports carry it.",
+      oneOf: [{ type: "integer", minimum: 1 }, { const: "draft" }],
+    },
+    dependencies: {
+      type: "object",
+      description:
+        'The saved agents it uses, each a chat agent document of its own, by "<id>@<version>": what an exported agent needs to run on its own.',
+      additionalProperties: { type: "object" },
+    },
   },
   $defs: {
     nodeId: {

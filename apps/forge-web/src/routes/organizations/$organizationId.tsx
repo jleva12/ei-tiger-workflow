@@ -3,8 +3,16 @@ import { createFileRoute } from "@tanstack/react-router"
 
 import { LEVELS } from "@/features/admin/components/levels"
 import { AdkRunPage } from "@/features/runs/components/adk-run-page"
+import { OrganizationOverview } from "@/features/overview/components/organization-overview"
+import { PeriodSwitch } from "@/features/overview/components/panels"
+import {
+  DEFAULT_PERIOD,
+  isOverviewPeriod,
+} from "@/features/overview/lib/overview"
 import { OrganizationAgents } from "@/features/adk-workflows/components/organization-agents"
 import { OrganizationChatAgents } from "@/features/agents/components/organization-chat-agents"
+import { OrganizationMcpServers } from "@/features/mcp-servers/components/organization-mcp-servers"
+import { OrganizationKnowledgeBases } from "@/features/knowledge/components/organization-knowledge-bases"
 import { OrganizationMembers } from "@/features/admin/components/organization-members"
 import { PrimaryAction } from "@/components/forge/app-shell"
 import { PageEmpty } from "@/components/forge/empty-state"
@@ -28,12 +36,16 @@ import {
  * An organization's workspace, where its members work: what the switcher
  * opens when you pick one of your organizations, with its own sub nav. Only
  * its members (anyone holding a role in the organization) get in; site roles,
- * site administration included, don't. ADK workflows, the default, lists its
- * Google ADK graph workflows, each opening its builder at
+ * site administration included, don't. Overview, the default, is what its
+ * workflows, agents and assistant did and used over 7, 30 or 90 days
+ * (`period`), each run waiting on people opening its page; Workflows lists
+ * its Google ADK graph workflows, each opening its builder at
  * /organizations/$organizationId/agents/$agentId, and their runs by status
  * (`agentsTab=runs`), each opening its own page (`agentRun`, with
  * `agentRunTab`); Agents lists its chat agents, each opening its builder at
- * /organizations/$organizationId/chat-agents/$chatAgentId; Members is who
+ * /organizations/$organizationId/chat-agents/$chatAgentId; MCP servers lists
+ * the remote MCP servers its agents use as tools, one open in a dialog
+ * (`mcpServer`); Members is who
  * holds which role in it, which its admins change. Configuring an
  * organization is also site administration, at
  * /admin/organizations/$organizationId.
@@ -43,6 +55,9 @@ export const Route = createFileRoute("/organizations/$organizationId")({
     const view = isWorkspaceView(search.view) ? search.view : DEFAULT_VIEW
     return {
       view: view === DEFAULT_VIEW ? undefined : view,
+      ...(view === "overview" &&
+        isOverviewPeriod(search.period) &&
+        search.period !== DEFAULT_PERIOD && { period: search.period }),
       ...(view === "agents" &&
         search.agentsTab === "runs" && { agentsTab: "runs" as const }),
       ...(view === "agents" &&
@@ -54,6 +69,9 @@ export const Route = createFileRoute("/organizations/$organizationId")({
               ? search.agentRunTab
               : undefined,
         }),
+      ...(view === "mcp-servers" &&
+        typeof search.mcpServer === "string" &&
+        search.mcpServer && { mcpServer: search.mcpServer }),
     }
   },
   component: OrganizationWorkspacePage,
@@ -63,9 +81,11 @@ function OrganizationWorkspacePage() {
   const { organizationId } = Route.useParams()
   const {
     view = DEFAULT_VIEW,
+    period = DEFAULT_PERIOD,
     agentsTab = "overview",
     agentRun,
     agentRunTab = "overview",
+    mcpServer,
   } = Route.useSearch()
   const navigate = Route.useNavigate()
   const myOrganizations = useMyOrganizations()
@@ -153,7 +173,31 @@ function OrganizationWorkspacePage() {
         view={view}
         members={canReadMembers}
       />
-      {view === "config" ? (
+      {view === "overview" ? (
+        <>
+          <ShellHeaderActions>
+            <PeriodSwitch
+              value={period}
+              onValueChange={(next) =>
+                void navigate({
+                  search: {
+                    period: next === DEFAULT_PERIOD ? undefined : next,
+                  },
+                  replace: true,
+                })
+              }
+            />
+          </ShellHeaderActions>
+          <OrganizationOverview
+            organizationId={organizationId}
+            organizationName={organization.name}
+            period={period}
+            onOpenRun={(id) =>
+              void navigate({ search: { view: "agents", agentRun: id } })
+            }
+          />
+        </>
+      ) : view === "config" ? (
         !canReadMembers ? (
           <PageEmpty
             illustration="locked"
@@ -176,9 +220,30 @@ function OrganizationWorkspacePage() {
             />
           </>
         )
+      ) : view === "mcp-servers" ? (
+        <OrganizationMcpServers
+          organizationId={organizationId}
+          organizationName={organization.name}
+          openServer={mcpServer}
+          onOpenServer={(id) =>
+            void navigate({
+              search: (prev) => ({ ...prev, mcpServer: id }),
+              replace: true,
+            })
+          }
+        />
+      ) : view === "knowledge" ? (
+        // Each knowledge base opens its own page.
+        <OrganizationKnowledgeBases
+          organizationId={organizationId}
+          organizationName={organization.name}
+        />
       ) : view === "chat-agents" ? (
         // Each chat agent opens its builder, a page of its own.
-        <OrganizationChatAgents organizationId={organizationId} organizationName={organization.name} />
+        <OrganizationChatAgents
+          organizationId={organizationId}
+          organizationName={organization.name}
+        />
       ) : agentRun ? (
         // Each run opens its task page, with its steps and what it waits for.
         <AdkRunPage
@@ -196,22 +261,31 @@ function OrganizationWorkspacePage() {
               replace: true,
             })
           }
-          onBack={() => void navigate({ search: { agentsTab: "runs" } })}
-          onOpenRun={(id) => void navigate({ search: { agentRun: id } })}
+          onBack={() =>
+            void navigate({ search: { view: "agents", agentsTab: "runs" } })
+          }
+          onOpenRun={(id) =>
+            void navigate({ search: { view: "agents", agentRun: id } })
+          }
         />
       ) : (
-        // Each ADK workflow opens its builder, a page of its own.
+        // Each workflow opens its builder, a page of its own.
         <OrganizationAgents
           organizationId={organizationId}
           organizationName={organization.name}
           tab={agentsTab}
           onTabChange={(next) =>
             void navigate({
-              search: { agentsTab: next === "runs" ? "runs" : undefined },
+              search: {
+                view: "agents",
+                agentsTab: next === "runs" ? "runs" : undefined,
+              },
               replace: true,
             })
           }
-          onOpenRun={(id) => void navigate({ search: { agentRun: id } })}
+          onOpenRun={(id) =>
+            void navigate({ search: { view: "agents", agentRun: id } })
+          }
         />
       )}
     </>

@@ -41,19 +41,19 @@ export type RunListWords = {
   title: string
   /** The list in a sentence, e.g. "runs". */
   list: string
-  /** What runs, e.g. "ADK workflows". */
+  /** What runs, e.g. "Workflows". */
   docs: string
-  /** One of them, e.g. "an ADK workflow". */
+  /** One of them, e.g. "a workflow". */
   aDoc: string
   icon: IconProp
 }
 
-/** A row of a group: one run of one of the organization's ADK workflows. */
+/** A row of a group: one run of one of the organization's workflows. */
 type RunRow = {
   id: string
   /** The run's short ID, as its page's reference. */
   reference: string
-  /** The ADK workflow's name, as it was when the run started. */
+  /** The workflow's name, as it was when the run started. */
   title: string
   status: TaskStatus
   statusLabel: string
@@ -162,7 +162,7 @@ function RunTable({
 }
 
 /**
- * Every run of the organization's ADK workflows, in the Forge task list's
+ * Every run of the organization's workflows, in the Forge task list's
  * status bands (queued or waiting, running, waiting for a person,
  * succeeded, failed, abandoned), newest first in each. Each opens its own page, where
  * approvals are decided and failed runs retried. It follows runs in

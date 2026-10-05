@@ -10,6 +10,7 @@ what it imports.
 | `forge_common.model_provider` | `model-provider` | The shared `model_provider.yaml` files and their loader: the model providers and models the apps may use |
 | `forge_common.adk.models` | `adk-models` | `ProviderModels`: an ADK model that runs each turn on one of `model_provider.yaml`'s models |
 | `forge_common.logging`, `forge_common.middleware` | `logging` | Structured logs for every logger (structlog), and `RequestContextMiddleware`: request ids and access lines |
+| `forge_common.adk.memory` | `adk-memory` | `AtlasVectorMemoryService`: ADK memory in MongoDB Atlas, embedded by OpenAI and searched with Atlas Vector Search |
 
 A codebase depends on it with a path source, as on any shared package:
 
@@ -236,6 +237,44 @@ to every line logged while the request runs, returns it in `X-Request-ID`, and
 writes one `http.request` line per request with its status and duration. An
 unhandled exception is logged once, with its traceback, and answers a JSON 500
 carrying the request id.
+
+## ADK memory in Atlas
+
+`AtlasVectorMemoryService` is ADK's `InMemoryMemoryService` kept in MongoDB:
+one document per event (or memory written directly) with text, holding its
+content, author, time and embedding. A search embeds the query and runs
+`$vectorSearch` over that app's and user's memories, nearest first.
+`OpenAIEmbedder` makes the embeddings with OpenAI's embeddings API
+(`text-embedding-3-small`, 1,536 dimensions, by default); `from_provider`
+signs in as a model_provider.yaml provider does, with its base URL, headers
+and key or OAuth2 token, so a gateway in front of OpenAI works too.
+
+```python
+from forge_common.adk.memory import AtlasVectorMemoryService, OpenAIEmbedder
+from forge_common.model_provider import load_model_provider_config
+
+memory = AtlasVectorMemoryService.from_uri(
+    mongo_uri,
+    database="forge_admin",
+    embedder=OpenAIEmbedder.from_provider(load_model_provider_config(path), "openai"),
+)
+runner = Runner(app=app, session_service=sessions, memory_service=memory)
+```
+
+Like every ADK memory service, it keeps only what something adds: a callback
+calling `ctx.add_session_to_memory()` after each turn (only new events are
+embedded), a tool calling `tool_context.add_memory(...)`, or the app when a
+conversation ends. Agents read it with ADK's `load_memory` or
+`preload_memory` tools.
+
+The collection (`adk_memories`) and its vector index are made on first use; a
+new index takes a few seconds to build, and new memories take about a second
+to become searchable. The index is made for the embedder's dimensions, so
+changing them means a new collection or index. It works on any Atlas cluster
+and on the `mongodb-atlas-local` image the Compose infrastructure runs.
+
+Its tests run against that Mongo when `FORGE_TEST_MONGO_URI` (or
+`FORGE_MONGO_URI`) is set, with a stand-in embedder, and skip otherwise.
 
 ## Checks
 

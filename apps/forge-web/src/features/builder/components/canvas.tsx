@@ -65,6 +65,7 @@ const edgeTypes: EdgeTypes = { step: StepEdgeView }
 export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
   const api = useBuilderApi()
   const adapter = useBuilder((s) => s.adapter)
+  const readOnly = useBuilder((s) => s.readOnly)
   const ui = useBuilderUi()
   const nodes = useBuilder((s) => s.nodes)
   const edges = useBuilder((s) => s.edges)
@@ -272,6 +273,9 @@ export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
           }}
           onDragOver={onDragOver}
           onDrop={onDrop}
+          // Read-only: steps are looked at and opened, never moved or joined.
+          nodesDraggable={!readOnly}
+          nodesConnectable={!readOnly}
           deleteKeyCode={null}
           snapToGrid
           snapGrid={[GRID, GRID]}

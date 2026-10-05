@@ -3,7 +3,7 @@ import { formatRelative } from "@/lib/format"
 import type { AdkRun, AdkRunStatus } from "@/features/runs/lib/runs"
 
 /*
- * How ADK workflow runs read in lists (an ADK workflow's Runs menu, the
+ * How workflow runs read in lists (a workflow's Runs menu, the
  * Runs tab) and on their page: each status's badge and label, what stands
  * out about a run, the lists' status groups, and how often a run or a list
  * refreshes while one is still going.

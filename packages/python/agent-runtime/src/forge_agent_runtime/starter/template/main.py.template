@@ -1,0 +1,26 @@
+"""@@NAME@@: a Forge chat agent, served on its own.
+
+@@RUN_DOC@@
+It runs once .env has what model_provider.yaml, the agent's tools and the
+choices below ask for (see .env.example).
+"""
+
+from pathlib import Path
+
+from forge_agent_runtime import @@IMPORTS@@
+
+HERE = Path(__file__).parent
+
+server = (
+	AgentServer()  # FORGE_AGENT_* settings, from the environment and .env
+	# The agent, as Forge exported it (@@VERSION_LABEL@@).
+	.with_agent(HERE / "@@AGENT_FILE@@")
+	# The models it may run on; their keys are ${NAME}s from .env.
+	.with_models(HERE / "model_provider.yaml")
+@@CHAIN@@	# Your own API routes beside the agent's:
+	# .with_routes(my_router)
+@@SERVICES@@)  # fmt: skip
+app = server.build()
+
+if __name__ == "__main__":
+	server.run()

@@ -69,6 +69,22 @@ class Role(AuditBase):
         return self.key.split(":", 1)[0]
 
 
+class PermissionGroupLink(AuditBase):
+    """
+    One of the company's groups, from an external directory, linked to
+    permissions here: someone whose token names the group holds them on the
+    whole site. The grants are ``p`` lines for the subject ``group:<name>``
+    (forge_admin.auth.authorization.group_subject), as a role's are for it.
+    """
+
+    __tablename__ = "authz_group_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    #: The group's name, as the directory and tokens spell it.
+    group_name: Mapped[str] = mapped_column(ascii_string(200), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+
+
 class Permission(AuditBase):
     """
     An action on a resource that roles can be granted, written as one key,

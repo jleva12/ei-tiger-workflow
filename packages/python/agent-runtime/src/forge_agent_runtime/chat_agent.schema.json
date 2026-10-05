@@ -1,0 +1,696 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Forge chat agent",
+  "description": "An organization's chat agent: one Google ADK LlmAgent people talk to, the tools it can call and the agents it hands off to, joined by edges from an agent's ways out.",
+  "type": "object",
+  "required": [
+    "format",
+    "id",
+    "name",
+    "nodes",
+    "edges"
+  ],
+  "properties": {
+    "format": {
+      "const": "forge.chat_agent/v1"
+    },
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "organization_id": {
+      "type": "string"
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/edge"
+      }
+    },
+    "layout": {
+      "type": "object",
+      "description": "Where the builder draws each node, by ID. Runners ignore it.",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "properties": {
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "version": {
+      "description": "Which version this is: a published version's number, or draft. The builder leaves it out; exports carry it.",
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "const": "draft"
+        }
+      ]
+    },
+    "dependencies": {
+      "type": "object",
+      "description": "The saved agents it uses, each a chat agent document of its own, by \"<id>@<version>\": what an exported agent needs to run on its own.",
+      "additionalProperties": {
+        "type": "object"
+      }
+    }
+  },
+  "$defs": {
+    "nodeId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,47}$",
+      "description": "Made by the builder, unique in the agent and never reused."
+    },
+    "node": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "config",
+        "outputs"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nodeId"
+        },
+        "kind": {
+          "enum": [
+            "agent",
+            "sub_agent",
+            "saved_agent",
+            "memory",
+            "knowledge_base",
+            "http_tool",
+            "openapi",
+            "mcp",
+            "adk_workflow"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "description": "An agent's ADK name, or an HTTP tool's name, is this as a Python identifier."
+        },
+        "config": {
+          "type": "object"
+        },
+        "outputs": {
+          "type": "array",
+          "description": "An agent's ways out: tools (what it can call) and agents (who it hands off to); none for the rest.",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "agent"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_agent"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "sub_agent"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_sub_agent"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "saved_agent"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_saved_agent"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "memory"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_memory"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "knowledge_base"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_knowledge_base"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "http_tool"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_http_tool"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "openapi"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_openapi"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "mcp"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_mcp"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "adk_workflow"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_adk_workflow"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "edge": {
+      "type": "object",
+      "required": [
+        "id",
+        "source",
+        "source_output",
+        "target"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/nodeId"
+        },
+        "source_output": {
+          "enum": [
+            "tools",
+            "agents"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/nodeId"
+        }
+      }
+    },
+    "config_agent": {
+      "type": "object",
+      "description": "The agent people chat with: what it's told, its model, what it can call and who it hands off to.",
+      "required": [
+        "description",
+        "instruction",
+        "model",
+        "thinking_level",
+        "max_output_tokens",
+        "state_schema"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "What it's for: what agents read when they hand off to it, or call it."
+        },
+        "instruction": {
+          "type": "string",
+          "description": "Its system instruction."
+        },
+        "model": {
+          "type": "object",
+          "description": "One of the models Forge offers: its provider's key and its id. Both empty: the default.",
+          "required": [
+            "provider",
+            "name"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "provider": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        "thinking_level": {
+          "type": "string",
+          "enum": [
+            "",
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "description": "How long the model thinks: the nearest level it offers. Empty: the model's own."
+        },
+        "max_output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "Null: the model's limit."
+        },
+        "state_schema": {
+          "type": "object",
+          "description": "A JSON Schema of the state the chat sends in stateDelta besides model and thinking_level; {} declares none."
+        }
+      }
+    },
+    "config_sub_agent": {
+      "type": "object",
+      "description": "Another LLM agent: it takes over when handed off to, does a task and hands back, or is a tool the agent calls.",
+      "required": [
+        "description",
+        "instruction",
+        "model",
+        "thinking_level",
+        "max_output_tokens",
+        "mode",
+        "disallow_transfer_to_parent",
+        "disallow_transfer_to_peers",
+        "include_contents"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "What it's for: what agents read when they hand off to it, or call it."
+        },
+        "instruction": {
+          "type": "string",
+          "description": "Its system instruction."
+        },
+        "model": {
+          "type": "object",
+          "description": "One of the models Forge offers: its provider's key and its id. Both empty: the default.",
+          "required": [
+            "provider",
+            "name"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "provider": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        "thinking_level": {
+          "type": "string",
+          "enum": [
+            "",
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "description": "How long the model thinks: the nearest level it offers. Empty: the model's own."
+        },
+        "max_output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "Null: the model's limit."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "chat",
+            "task",
+            "single_turn"
+          ],
+          "description": "Handed off to: chat takes over the conversation; task does one task and hands back; single_turn answers once."
+        },
+        "disallow_transfer_to_parent": {
+          "type": "boolean"
+        },
+        "disallow_transfer_to_peers": {
+          "type": "boolean"
+        },
+        "include_contents": {
+          "type": "string",
+          "enum": [
+            "default",
+            "none"
+          ],
+          "description": "none: it sees only what it's given."
+        }
+      }
+    },
+    "config_saved_agent": {
+      "type": "object",
+      "description": "Another of the organization's agents, whole: handed off to, or called as a tool.",
+      "required": [
+        "agent"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "Another of the organization's agents, by ID."
+        }
+      }
+    },
+    "config_memory": {
+      "type": "object",
+      "description": "Recalls what was said in earlier conversations with the same person.",
+      "required": [
+        "mode"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "on_demand",
+            "every_turn"
+          ],
+          "description": "on_demand: it looks memories up when it decides to (load_memory); every_turn: they come with each message (preload_memory)."
+        }
+      }
+    },
+    "config_knowledge_base": {
+      "type": "object",
+      "description": "Searches the organization's knowledge bases: the documents uploaded to them, by meaning and by their words.",
+      "required": [
+        "knowledge_bases",
+        "description",
+        "max_results"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "knowledge_bases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The organization's knowledge bases it searches, by ID: their documents, parsed, chunked and embedded."
+        },
+        "description": {
+          "type": "string",
+          "description": "What the model is told it finds there; empty to describe the knowledge bases."
+        },
+        "max_results": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "description": "The most passages one search answers."
+        }
+      }
+    },
+    "config_http_tool": {
+      "type": "object",
+      "description": "Calls an HTTP endpoint with arguments the model fills in.",
+      "required": [
+        "description",
+        "method",
+        "url",
+        "headers",
+        "parameters",
+        "confirm"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "What it does: the model decides when to call it by this."
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "description": "Where it calls; {name} puts in an argument of that name."
+        },
+        "headers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "parameters": {
+          "type": "object",
+          "description": "A JSON Schema of the arguments the model fills in; {} takes none."
+        },
+        "confirm": {
+          "type": "boolean",
+          "description": "A person confirms each call before it's made."
+        }
+      }
+    },
+    "config_openapi": {
+      "type": "object",
+      "description": "The operations of an OpenAPI spec, each a tool.",
+      "required": [
+        "source",
+        "url",
+        "spec",
+        "operations",
+        "confirm"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": [
+            "url",
+            "inline"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "description": "Where the spec is, when its source is url."
+        },
+        "spec": {
+          "type": "string",
+          "description": "An OpenAPI 3 spec, JSON or YAML, when its source is inline."
+        },
+        "operations": {
+          "type": "string",
+          "description": "The operation IDs it may call, comma-separated; empty for all."
+        },
+        "confirm": {
+          "type": "boolean"
+        }
+      }
+    },
+    "config_mcp": {
+      "type": "object",
+      "description": "The tools of a remote MCP server: one of the organization's, or one by URL.",
+      "required": [
+        "server",
+        "transport",
+        "url",
+        "headers",
+        "tools",
+        "confirm"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "server": {
+          "type": "string",
+          "description": "One of the organization's MCP servers, by ID: its URL, headers and sign-in come from there. Empty for one set up by transport, url and headers."
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "streamable_http",
+            "sse"
+          ]
+        },
+        "url": {
+          "type": "string"
+        },
+        "headers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "tools": {
+          "type": "string",
+          "description": "The server's tools it may call, comma-separated; empty for all."
+        },
+        "confirm": {
+          "type": "boolean"
+        }
+      }
+    },
+    "config_adk_workflow": {
+      "type": "object",
+      "description": "One of the organization's workflows, as a tool: the agent runs it with its input and gets its result.",
+      "required": [
+        "workflow"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "workflow": {
+          "type": "string",
+          "description": "One of the organization's workflows, by ID, called as a tool."
+        }
+      }
+    }
+  }
+}

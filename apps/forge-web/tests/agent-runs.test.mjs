@@ -44,7 +44,7 @@ test("a run's words: its reference, its failures, its activity", () => {
   assert.equal(runs.eventTitle({ kind: "worker_moved" }), "Worker moved")
   assert.equal(runs.isFailureEvent({ kind: "failed" }), true)
   assert.equal(runs.isFailureEvent({ kind: "succeeded" }), false)
-  assert.equal(runs.failureTitle({ status: 503 }, "Couldn't"), "ADK workflow runs are unavailable")
+  assert.equal(runs.failureTitle({ status: 503 }, "Couldn't"), "Workflow runs are unavailable")
   assert.equal(runs.failureTitle({ status: 500 }, "Couldn't"), "Couldn't")
 })
 

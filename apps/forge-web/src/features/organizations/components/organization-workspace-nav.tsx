@@ -1,18 +1,24 @@
 import { Link } from "@tanstack/react-router"
 
-import { AssistantMark } from "@/components/forge/assistant/index"
 import { ShellSidebarHeader } from "@/components/forge/shell/index"
-import { NavItem, SidebarSection } from "@/components/forge/workspace-sidebar"
+import {
+  NavItem,
+  NavSectionHeading,
+  SidebarSection,
+} from "@/components/forge/workspace-sidebar"
 import {
   DEFAULT_VIEW,
+  WORKSPACE_SECTIONS,
   WORKSPACE_VIEWS,
   type WorkspaceView,
 } from "@/features/organizations/lib/organization-workspace"
 
 /**
- * An organization workspace's sub nav: ADK workflows, Agents (wearing the
- * assistant's mark) and, for those who may see its members, Members. Render it anywhere in the page: it goes in
- * the shell's pinned `ShellSidebarHeader`.
+ * An organization workspace's sub nav: Overview on top, then its sections:
+ * Workflows and agents (Workflows, Agents), Integrations (MCP servers,
+ * Knowledge bases) and, for those who may see its members, Settings
+ * (Members). Render it anywhere in the page: it goes in the shell's pinned
+ * `ShellSidebarHeader`.
  */
 export function OrganizationWorkspaceNav({
   organizationId,
@@ -30,11 +36,6 @@ export function OrganizationWorkspaceNav({
     <NavItem
       key={key}
       icon={WORKSPACE_VIEWS[key].icon}
-      mark={
-        "mark" in WORKSPACE_VIEWS[key] ? (
-          <AssistantMark className="size-[19px]" />
-        ) : undefined
-      }
       active={view === key}
       render={
         <Link
@@ -48,13 +49,24 @@ export function OrganizationWorkspaceNav({
     </NavItem>
   )
 
+  const sections = WORKSPACE_SECTIONS.map((section) => ({
+    ...section,
+    views: section.views.filter((key) => key !== "config" || members),
+  })).filter((section) => section.views.length > 0)
+
   return (
     <ShellSidebarHeader>
-      <SidebarSection variant="primary">
-        {viewItem("agents")}
-        {viewItem("chat-agents")}
-        {members && viewItem("config")}
-      </SidebarSection>
+      <SidebarSection variant="primary">{viewItem("overview")}</SidebarSection>
+      {sections.map((section, index) => (
+        <SidebarSection
+          key={section.title}
+          // The last one closes the sidebar's top without a rule of its own.
+          variant={index === sections.length - 1 ? "flush" : "default"}
+        >
+          <NavSectionHeading>{section.title}</NavSectionHeading>
+          {section.views.map(viewItem)}
+        </SidebarSection>
+      ))}
     </ShellSidebarHeader>
   )
 }

@@ -1,7 +1,7 @@
 [project]
 name = "forge-async-worker"
 version = "0.3.0"
-description = "The async worker: runs organizations' ADK workflow runs, kept in the admin MySQL, off a SAQ queue on Redis"
+description = "The async worker: runs organizations' ADK workflow runs, kept in the admin MySQL, and ingests knowledge base documents, off SAQ queues on Redis"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -9,6 +9,9 @@ dependencies = [
   # The ADK workflows task (it registers itself: entry point group
   # "forge_async_worker.tasks"), and the run store its runs live in.
   "forge-task-adk-workflows",
+  # The documents task (knowledge bases): parses, chunks and embeds uploaded
+  # files into MongoDB Atlas for hybrid search, off the documents queue.
+  "forge-task-documents",
   "pydantic>=2.7",
   "pydantic-settings>=2.3",
   # SAQ (asyncio job queue) on Redis.
@@ -43,7 +46,7 @@ select = ["E", "F", "I", "B", "UP"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["forge_tasks", "forge_task_adk_workflows", "forge_async_worker", "forge_jsonata"]
+known-first-party = ["forge_tasks", "forge_task_adk_workflows", "forge_task_documents", "forge_embeddings", "forge_async_worker", "forge_jsonata"]
 
 [tool.mypy]
 python_version = "3.13"

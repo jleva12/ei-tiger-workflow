@@ -96,5 +96,11 @@ export const CHAT_AGENT_ADAPTER: BuilderAdapter<
   },
   loopBodies: noLoops,
   toneOf,
-  lookups: () => ({ agents: {}, workflows: {}, models: {} }),
+  lookups: () => ({
+    agents: {},
+    workflows: {},
+    models: {},
+    mcpServers: {},
+    knowledgeBases: {},
+  }),
 }

@@ -11,7 +11,7 @@ import type {
 } from "./types"
 
 /*
- * What a builder (the ADK workflow builder, the chat agent builder) tells the
+ * What a builder (the workflow builder, the chat agent builder) tells the
  * builder kit about what it builds: its kinds of step, how a step is made,
  * copied and connected, how its document becomes the graph the canvas
  * edits and back, how the graph is checked, and how it's laid out and
@@ -33,8 +33,11 @@ export type BaseMeta = {
   updated_at: string
 }
 
-/** Names for the IDs steps hold (other documents, models), to show them by name. */
-export type Lookups = Record<string, Record<string, string>>
+/**
+ * What's known about the IDs steps hold (other documents, models, servers),
+ * by ID: their names, or more, to show them by.
+ */
+export type Lookups = Record<string, Record<string, unknown>>
 
 export type BuilderAdapter<
   S extends BaseStep = BaseStep,

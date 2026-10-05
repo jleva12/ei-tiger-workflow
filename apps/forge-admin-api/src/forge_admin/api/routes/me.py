@@ -13,6 +13,7 @@ from forge_admin.auth.access import (
     Enforcer,
     Scope,
     domain_of,
+    groups_of_caller,
     organization_memberships,
 )
 from forge_admin.auth.authorization import assignments_of, load_access
@@ -79,7 +80,8 @@ async def get_my_access(
 ) -> Access:
     """
     Return the calling user's effective roles and permissions in a scope, as
-    the web console's ``fromCasbin`` reads them.
+    the web console's ``fromCasbin`` reads them: their roles', and those
+    linked to the company groups their token names.
     \f
     :param user: The caller.
     :param session: The request's database session.
@@ -88,7 +90,7 @@ async def get_my_access(
     :return: The roles and permission policy lines.
     """
     domain = await domain_of(session, Scope.parse(scope))
-    roles, policies = await load_access(enforcer, user, domain)
+    roles, policies = await load_access(enforcer, user, domain, groups_of_caller(user))
     return Access(
         subject=user, scope=scope, domain=domain, roles=roles, policies=policies
     )

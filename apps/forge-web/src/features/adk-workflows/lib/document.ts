@@ -397,16 +397,16 @@ export function parseAgent(
   if (!isRecord(raw))
     return {
       ok: false,
-      error: "An ADK workflow is a JSON object, with nodes and edges.",
+      error: "A workflow is a JSON object, with nodes and edges.",
     }
   if (raw.format !== AGENT_FORMAT) {
     return {
       ok: false,
-      error: `This isn't a Forge ADK workflow: its "format" should be "${AGENT_FORMAT}".`,
+      error: `This isn't a Forge workflow: its "format" should be "${AGENT_FORMAT}".`,
     }
   }
   if (!Array.isArray(raw.nodes))
-    return { ok: false, error: `An ADK workflow's "nodes" is a list of its nodes.` }
+    return { ok: false, error: `A workflow's "nodes" is a list of its nodes.` }
 
   const notes: string[] = []
   const nodes: AgentNode[] = []
@@ -457,7 +457,7 @@ export function parseAgent(
   const seen = new Set<string>()
   const rawEdges = Array.isArray(raw.edges) ? raw.edges : []
   if (raw.edges !== undefined && !Array.isArray(raw.edges)) {
-    notes.push(`"edges" isn't a list; the ADK workflow has no connections.`)
+    notes.push(`"edges" isn't a list; the workflow has no connections.`)
   }
   rawEdges.forEach((item, index) => {
     const at = `edges[${index}]`
@@ -513,7 +513,7 @@ export function parseAgent(
     doc: {
       format: AGENT_FORMAT,
       id: typeof raw.id === "string" && raw.id ? raw.id : newAgentId(),
-      name: text(raw.name, "").trim() || "Imported ADK workflow",
+      name: text(raw.name, "").trim() || "Imported workflow",
       description: text(raw.description, ""),
       organization_id: organizationId,
       nodes,

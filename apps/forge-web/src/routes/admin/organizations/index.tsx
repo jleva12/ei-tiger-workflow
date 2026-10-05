@@ -59,7 +59,7 @@ function OrganizationsPage() {
             params: { organizationId: organization.id },
           })
         }
-        description="Each organization holds its members, ADK workflows and agents."
+        description="Each organization holds its members, workflows and agents."
       />
     </>
   )

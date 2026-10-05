@@ -43,6 +43,15 @@ def main(argv: list[str] | None = None) -> None:
     )
     who.add_argument("--email", help="the user's email address")
     parser.add_argument(
+        "--group",
+        action="append",
+        default=[],
+        help=(
+            "a company group the token says they're in (repeatable): to try "
+            "permissions linked to it"
+        ),
+    )
+    parser.add_argument(
         "--days",
         type=int,
         default=DEFAULT_DAYS,
@@ -62,7 +71,11 @@ def main(argv: list[str] | None = None) -> None:
     if user is None:
         who_text = f"MS ID {msid}" if msid else f"email {email}"
         raise SystemExit(f"No user with {who_text}; add them first (forge-admin-seed)")
-    print(mint_token(settings, user, lifetime=timedelta(days=args.days)))
+    print(
+        mint_token(
+            settings, user, lifetime=timedelta(days=args.days), groups=args.group
+        )
+    )
 
 
 if __name__ == "__main__":

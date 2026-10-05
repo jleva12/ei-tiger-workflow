@@ -256,3 +256,43 @@ async def test_deleting_an_organization_forgets_its_runs(store: RunStore) -> Non
     assert await store.get(run["id"]) is None
     assert await store.events(run["id"]) == []
     assert await store.get(other["id"]) is not None
+
+
+# ------------------------------------------------------------------ the overview
+
+
+async def test_runs_started_since_a_time_newest_first(store: RunStore, clock: Clock) -> None:
+    first = await started(store)
+    clock.advance(3600)
+    second = await started(store, agent="ag-2")
+    await started(store, organization="org-2")
+    found, truncated = await store.started_since("org-1", START)
+    assert [run["id"] for run in found] == [second["id"], first["id"]]
+    assert not truncated
+    assert {"payload", "state"}.isdisjoint(found[0])
+    found, truncated = await store.started_since("org-1", START + timedelta(minutes=30))
+    assert [run["id"] for run in found] == [second["id"]]
+    found, truncated = await store.started_since("org-1", START, limit=1)
+    assert [run["id"] for run in found] == [second["id"]] and truncated
+
+
+async def test_open_runs_are_counted_by_status(store: RunStore) -> None:
+    await started(store)
+    running = await started(store)
+    await store.claim(running["id"], owner="w1", lease_seconds=60)
+    done = await started(store)
+    await store.claim(done["id"], owner="w1", lease_seconds=60)
+    await store.finish(done["id"], owner="w1", state=None, succeeded=True)
+    assert await store.open_counts("org-1") == {QUEUED: 1, RUNNING: 1, PAUSED: 0, WAITING: 0}
+    assert await store.open_counts("org-2") == {QUEUED: 0, RUNNING: 0, PAUSED: 0, WAITING: 0}
+
+
+async def test_each_workflows_latest_run(store: RunStore, clock: Clock) -> None:
+    await started(store)
+    clock.advance(60)
+    await started(store, agent="ag-2")
+    clock.advance(60)
+    await started(store)
+    latest = {row["agent_id"]: row for row in await store.latest_by_agent("org-1")}
+    assert latest["ag-1"]["last_at"] == START + timedelta(seconds=120)
+    assert latest["ag-2"]["agent_name"] == "Support desk"

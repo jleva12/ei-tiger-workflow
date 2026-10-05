@@ -1,7 +1,9 @@
 import { adkName, RESERVED_NAMES } from "@/features/adk-workflows/lib/model"
 import type { BuilderIssue, IssueLevel } from "@/features/builder/lib/types"
+import { checkField } from "@/features/steps/lib/expressions"
 import { stronglyConnected } from "@/features/steps/lib/validate"
 import type { ChatAgentGraph } from "./document"
+import { chatScope, declaredState, stateNameProblem } from "./input"
 import {
   AGENT_LIKE,
   HANDS_OFF,
@@ -22,8 +24,21 @@ export type ChatAgentValidationContext = {
   selfId?: string
   /** The organization's agents: their names, and the agents each uses. */
   agents?: Map<string, { name: string; uses: string[] }>
-  /** The organization's ADK workflows, by ID, for the ADK workflow tools. */
+  /** The organization's workflows, by ID, for the workflow tools. */
   workflows?: Map<string, { name: string }>
+  /**
+   * The organization's MCP servers, by ID, for the MCP tools: whether
+   * they're signed in to, and their tools' names when they've been checked.
+   */
+  mcpServers?: Map<
+    string,
+    { name: string; connected: boolean; tools: string[] | null }
+  >
+  /**
+   * The organization's knowledge bases, by ID, for the knowledge base tools:
+   * their names, and how many of their documents are searchable.
+   */
+  knowledgeBases?: Map<string, { name: string; ready: number }>
 }
 
 type Found = [code: string, level: IssueLevel, message: string, field?: string]
@@ -115,14 +130,14 @@ function settingsIssues(
         out.push([
           "workflow",
           "error",
-          "Pick the ADK workflow it runs.",
+          "Pick the workflow it runs.",
           "workflow",
         ])
       else if (context.workflows && !context.workflows.has(target)) {
         out.push([
           "workflow",
           "error",
-          "That ADK workflow was deleted; pick another.",
+          "That workflow was deleted; pick another.",
           "workflow",
         ])
       }
@@ -194,8 +209,56 @@ function settingsIssues(
       }
       break
     }
+    case "knowledge_base": {
+      const c = step.config
+      if (!c.knowledge_bases.length) {
+        out.push([
+          "knowledge_bases",
+          "error",
+          "Pick the knowledge bases it searches.",
+          "knowledge_bases",
+        ])
+      }
+      for (const id of c.knowledge_bases) {
+        // Unknown until they load: a pick isn't called deleted meanwhile.
+        if (!context.knowledgeBases) break
+        const found = context.knowledgeBases.get(id)
+        if (!found) {
+          out.push([
+            "knowledge_bases",
+            "error",
+            "The organization has no such knowledge base any more: pick another.",
+            "knowledge_bases",
+          ])
+        } else if (found.ready === 0) {
+          out.push([
+            "knowledge_bases",
+            "warning",
+            `${found.name} has no searchable documents yet: upload some on the Knowledge bases page.`,
+            "knowledge_bases",
+          ])
+        }
+      }
+      if (
+        !Number.isInteger(c.max_results) ||
+        c.max_results < 1 ||
+        c.max_results > 20
+      ) {
+        out.push([
+          "max_results",
+          "error",
+          "Answer between 1 and 20 passages a search.",
+          "max_results",
+        ])
+      }
+      break
+    }
     case "mcp": {
       const c = step.config
+      if (c.server) {
+        out.push(...mcpServerIssues(c.server, c.tools, context))
+        break
+      }
       if (!c.url.trim())
         out.push(["url", "error", "Give the server's URL.", "url"])
       else if (!URLISH.test(c.url.trim())) {
@@ -213,6 +276,49 @@ function settingsIssues(
     }
     default:
       break
+  }
+  return out
+}
+
+/** An MCP tool's issues with the organization's server it picks. */
+function mcpServerIssues(
+  id: string,
+  tools: string,
+  context: ChatAgentValidationContext
+): Found[] {
+  // Unknown until they load: a pick isn't called deleted meanwhile.
+  if (!context.mcpServers) return []
+  const server = context.mcpServers.get(id)
+  if (!server)
+    return [
+      [
+        "server",
+        "error",
+        "The organization has no such MCP server any more: pick another.",
+        "server",
+      ],
+    ]
+  const out: Found[] = []
+  if (!server.connected) {
+    out.push([
+      "server",
+      "warning",
+      `Nobody has signed in to ${server.name} yet: sign in on the MCP servers page.`,
+      "server",
+    ])
+  }
+  const offered = server.tools ? new Set(server.tools) : undefined
+  const missing = tools
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name && offered && !offered.has(name))
+  if (missing.length) {
+    out.push([
+      "tools",
+      "warning",
+      `${server.name} didn't list ${missing.join(", ")} when last checked.`,
+      "tools",
+    ])
   }
   return out
 }
@@ -350,10 +456,36 @@ export function validateChatAgent(
     }
   }
 
+  // Every agent's instructions read the state the chat agent declares.
+  const entry = graph.steps.find((s) => s.data.kind === "agent")?.data
+  const stateSchema = entry?.kind === "agent" ? entry.config.state_schema : {}
+  const scope = chatScope(stateSchema)
+
   for (const step of graph.steps) {
     const { data } = step
     for (const [code, level, message, field] of settingsIssues(data, context)) {
       add(level, step.id, code, message, field)
+    }
+    if (data.kind === "agent") {
+      for (const [field] of declaredState(data.config.state_schema).fields) {
+        const problem = stateNameProblem(field)
+        if (problem)
+          add("error", step.id, `state:${field}`, problem, "state_schema")
+      }
+    }
+    if (data.kind === "agent" || data.kind === "sub_agent") {
+      // The field says these itself; ":field:" keeps it from saying them twice.
+      checkField(data.config.instruction, "template", scope, { textual: true })
+        .filter((d) => !d.local)
+        .forEach((d, n) =>
+          add(
+            d.severity,
+            step.id,
+            `instruction:field:${n}`,
+            d.message,
+            "instruction"
+          )
+        )
     }
     const into = incoming.get(step.id) ?? []
     const out = outgoing.get(step.id) ?? []

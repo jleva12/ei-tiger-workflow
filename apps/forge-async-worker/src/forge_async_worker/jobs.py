@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
+from forge_common.adk.usage import recording
 from pydantic import ValidationError
 
 from forge_async_worker.control import PauseRun, RunControl, WaitRun
@@ -51,6 +52,7 @@ from forge_async_worker.queue import RunQueue, run_key
 from forge_task_adk_workflows.run_store import PAUSED, QUEUED, LostLease, RunStore
 from forge_task_adk_workflows.runs import RunPayload
 from forge_task_adk_workflows.task import RUN, TASK_NAME
+from forge_task_adk_workflows.usage_store import UsageStore
 from forge_tasks.control import controlling
 from forge_tasks.errors import TransientError
 from forge_tasks.runner import JobRunner
@@ -92,6 +94,12 @@ class AdkRunJobs:
     queue: RunQueue
     runner: JobRunner
     name: str = field(default_factory=worker_name)
+    #: Where runs' model and tool calls are recorded; beside the runs by default.
+    usage: UsageStore | None = None
+
+    def __post_init__(self) -> None:
+        if self.usage is None:
+            self.usage = UsageStore(self.store.engine)
 
     def _owner(self) -> str:
         # One attempt's: a worker that lost a run and took it again isn't the same owner.
@@ -172,7 +180,8 @@ class AdkRunJobs:
                 await keeper
 
     async def _run_job(self, spec: JobSpec, control: RunControl) -> JobResult:
-        with controlling(control):
+        sink = self.usage.record if self.usage is not None else None
+        with controlling(control), recording(sink):
             return await self.runner.run(spec)
 
     async def _keep(self, control: RunControl, job: Any, work: asyncio.Task[Any]) -> None:

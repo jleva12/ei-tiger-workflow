@@ -20,7 +20,7 @@ import { useScopeAccess, type PermissionKey } from "@/lib/hierarchy"
 import { useSchemaValue } from "@/features/runs/lib/schema-value"
 import { SchemaValueEditor } from "./schema-value-editor"
 
-/** Deciding the approval an ADK workflow run waits at. */
+/** Deciding the approval a workflow run waits at. */
 export type DecideMutation = UseMutationResult<
   unknown,
   ApiError,
@@ -103,7 +103,7 @@ export function ApprovalPanel({
   pause,
   decide,
   permission,
-  docs = "ADK workflows",
+  docs = "Workflows",
   showDeadline = false,
 }: {
   organizationId: string
@@ -203,7 +203,7 @@ export function ApprovalPanel({
 }
 
 /**
- * What a run asks a person (an ADK workflow's human input): its question,
+ * What a run asks a person (a workflow's human input): its question,
  * and, for those who may answer (`permission`), a form of the fields its
  * `responseSchema` declares (or JSON, or plain text when it declares none),
  * sent through `answer`. The API holds the answer to the schema and says
@@ -215,7 +215,7 @@ export function HumanInputPanel({
   responseSchema,
   answer,
   permission,
-  docs = "ADK workflows",
+  docs = "Workflows",
 }: {
   organizationId: string
   pause: AdkRunPause

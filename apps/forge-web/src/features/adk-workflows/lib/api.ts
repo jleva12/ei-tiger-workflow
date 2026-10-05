@@ -42,7 +42,7 @@ export const organizationAgents = createNestedResource<
   key: "organization-agents",
   path: ({ organizationId }) =>
     `/organizations/${encodeURIComponent(organizationId)}/agents`,
-  label: "ADK workflow",
+  label: "Workflow",
   updateMethod: "put",
 })
 

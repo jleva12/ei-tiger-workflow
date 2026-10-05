@@ -1,0 +1,60 @@
+[project]
+name = "forge-task-documents"
+version = "0.1.0"
+description = "The documents task: parse PDF, Word, PowerPoint, Excel, CSV, Markdown, text and Visio files, chunk, embed and store them for hybrid (BM25 + vector) search on MongoDB Atlas"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+  "forge-tasks",
+  "forge-embeddings",
+  "pydantic>=2.7",
+  "pymongo>=4.10",
+  "python-docx>=1.1",       # Document.iter_inner_content
+  "openpyxl>=3.1",
+  "markdown-it-py>=3.0",
+  "charset-normalizer>=3.3",
+  "vsdx>=0.5",
+  "pdfplumber>=0.11",       # text lines with font sizes, and tables
+  "python-pptx>=1.0",
+  "pyyaml>=6",
+  "boto3>=1.34",            # s3:// source files
+]
+
+[project.optional-dependencies]
+# HYBRID_DOCUMENTS__DOCX_PARSER=docling or HYBRID_DOCUMENTS__PDF_PARSER=docling; pulls in PyTorch.
+docling = ["docling>=2.0"]
+
+# Registers the task with the Forge async worker.
+[project.entry-points."forge_async_worker.tasks"]
+documents = "forge_task_documents.task:DocumentsTaskFactory"
+
+# Plugins add document formats from *their* pyproject:
+# [project.entry-points."forge_task_documents.parsers"]
+# epub = "my_pkg.epub_parser:EpubParser"
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"
+
+# Tests run in the workspace environment: make async-worker-check, or uv run pytest here.
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]  # examples/
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["forge_tasks", "forge_embeddings", "forge_task_documents", "forge_async_worker"]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = true

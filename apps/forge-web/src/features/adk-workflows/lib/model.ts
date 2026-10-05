@@ -1,5 +1,5 @@
 import {
-  AiNetworkIcon,
+  FlowSquareIcon,
   DistributionIcon,
   LeftToRightListNumberIcon,
   PlayIcon,
@@ -35,7 +35,7 @@ import {
  * and the admin API builds every node into an ADK node (agent_graph).
  */
 
-export const AGENTS_ICON: IconProp = AiNetworkIcon
+export const AGENTS_ICON: IconProp = FlowSquareIcon
 
 export type ModelChoice = { provider: string; name: string }
 
@@ -96,7 +96,7 @@ export type SubAgent<K extends SubAgentKind = SubAgentKind> = {
 }[K]
 
 /**
- * Forge's steps an ADK workflow takes as they are: their kinds, settings
+ * Forge's steps a workflow takes as they are: their kinds, settings
  * and ways out come from steps/lib/model.ts.
  */
 export const FORGE_KINDS = [
@@ -258,8 +258,8 @@ export const AGENT_KINDS: { [K in AgentKind]: AgentKindInfo<K> } = {
   saved: {
     label: "Saved workflow",
     group: "agents",
-    icon: AiNetworkIcon,
-    summary: "Runs another of the organization's ADK workflows here, whole.",
+    icon: AGENTS_ICON,
+    summary: "Runs another of the organization's workflows here, whole.",
     keywords: "saved nested reuse subgraph workflow compose other agent",
     idPrefix: "saved",
     defaults: () => ({ agent: "" }),

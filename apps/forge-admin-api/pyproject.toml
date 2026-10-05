@@ -8,20 +8,33 @@ dependencies = [
     "aiomysql>=0.3.2",
     "alembic>=1.20.0",
     "casbin-async-sqlalchemy-adapter>=1.17.0",
-    # MySQL 8's caching_sha2_password sign-in, for aiomysql.
+    # MySQL 8's caching_sha2_password sign-in, for aiomysql; and MCP servers'
+    # credentials, encrypted at rest (Fernet).
     "cryptography>=50.0.1",
     "fastapi>=0.141.1",
     # The assistant's toolsets: ForgeBaseToolset's guard, and its models from
     # the shared model_provider.yaml (packages/python/common); and structured
     # logging with request ids (forge_common.logging).
     "forge-common[adk,adk-models,logging]",
+    # Organizations' chat agents, run by ID (packages/python/agent-runtime):
+    # built from their documents and served over ADK's run API.
+    "forge-agent-runtime[server]",
     # ADK workflows are built as the async worker runs them, to check them
     # before a run; runs are kept by its run store, and a run's steps are
     # read from its ADK session (packages/python/adk-workflows).
     "forge-task-adk-workflows",
+    # Knowledge bases: uploads stored in S3 (boto3) from multipart forms, and
+    # searched in-process with the documents task's hybrid search over the
+    # chunks the async worker embedded (packages/python/documents).
+    "boto3>=1.40",
+    "forge-task-documents",
+    "python-multipart>=0.0.20",
     "google-adk>=2.9.2",
     "httpx2>=2.13.1",
     "jsonschema>=4.26",
+    # Organizations' MCP servers: checking one lists its tools, and agents
+    # reach them through ADK's McpToolset, which takes 1.x or 2.x.
+    "mcp>=2.3.0,<3",
     "pycasbin>=2.8.0",
     "pydantic-settings>=2.15.0",
     "pyjwt>=2.10",

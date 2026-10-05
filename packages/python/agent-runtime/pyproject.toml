@@ -1,0 +1,72 @@
+[project]
+name = "forge-agent-runtime"
+version = "0.1.0"
+description = "Runs Forge chat agents (forge.chat_agent/v1) on Google ADK: build one from its JSON, serve it over ADK's run API, or embed it in your own app"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "Joseph Leva" }]
+keywords = ["google-adk", "agents", "llm", "chat", "forge"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "forge-common[adk,adk-models]",   # ProviderModels, model_provider.yaml, ForgeBaseToolset
+    "forge-jsonata",                  # instructions' {{ }} templates are JSONata
+    "google-adk>=2.9.2",
+    "httpx>=0.28",
+    "jsonschema>=4.23",
+    "mcp>=1.23,<3",                   # MCP tools: ADK's McpToolset exists only with it
+    "pydantic>=2.11",
+    "pydantic-settings>=2.6",
+]
+
+[project.optional-dependencies]
+# forge_agent_runtime.server and the forge-agent CLI's serve: ADK's run API over FastAPI
+server = ["fastapi>=0.115", "uvicorn>=0.30", "aiosqlite>=0.20", "sqlalchemy[asyncio]>=2.0"]
+# Long-term memory in MongoDB Atlas (forge_common.adk.memory)
+memory-atlas = ["forge-common[adk-memory]"]
+# Files agents make and people send, in S3 or anything that speaks it (forge_common.adk.artifacts)
+artifacts-s3 = ["forge-common[adk-artifacts-s3]"]
+# Conversations in PostgreSQL or MySQL (SQLite's driver comes with server)
+sessions-postgres = ["asyncpg>=0.30"]
+sessions-mysql = ["aiomysql>=0.2"]
+
+[project.scripts]
+forge-agent = "forge_agent_runtime.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["forge-agent-runtime[server]"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+# The starter's templates and the UI it copies in are the generated project's, not this package's.
+extend-exclude = ["src/forge_agent_runtime/starter/template", "src/forge_agent_runtime/starter/web_vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["forge_agent_runtime", "forge_common", "forge_jsonata"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+check_untyped_defs = true

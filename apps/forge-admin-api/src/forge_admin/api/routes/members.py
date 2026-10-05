@@ -1,6 +1,5 @@
 """Who holds which role in a scope: the site or a place in the hierarchy."""
 
-import re
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
@@ -19,6 +18,7 @@ from forge_admin.auth.authorization import (
     SUBJECT_PATTERN,
     assignments_around,
     find_assignment,
+    is_reserved_subject,
 )
 from forge_admin.models import CasbinRule, Role
 
@@ -118,12 +118,13 @@ async def assign_role(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"{role} is assigned at {record.level} scopes, not {target.level}",
         )
-    # Roles and subjects share Casbin's namespace: a subject named like a role
-    # would make that role inherit the assigned one.
-    if re.fullmatch(ROLE_KEY_PATTERN, subject_id):
+    # Roles, groups and subjects share Casbin's namespace: a subject named
+    # like a role would make that role inherit the assigned one, and one
+    # named like a group would hold its linked permissions.
+    if is_reserved_subject(subject_id):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "Subject IDs cannot look like role keys",
+            "Subject IDs cannot look like role keys or start with group:",
         )
     domain = await authorize(session, enforcer, user, "members:update", target)
     pattern = assignment_pattern(domain)

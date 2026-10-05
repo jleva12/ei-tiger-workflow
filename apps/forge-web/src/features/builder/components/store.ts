@@ -65,6 +65,8 @@ export type BuilderInit<
   adapter: BuilderAdapter<S, Doc, Context, Scope>
   doc: Doc
   context: Context
+  /** Shown, never changed: a published version, or for someone who can't edit. */
+  readOnly?: boolean
 }
 
 export type BuilderState<
@@ -106,6 +108,11 @@ export type BuilderState<
   focusField: string | null
   /** Whether the details panel shows, beside the canvas (over it in narrow builders). Tucked away at first. */
   details: boolean
+  /**
+   * Shown, never changed: every change to the document (adding, connecting,
+   * moving, editing, undo) does nothing. Selecting and opening steps still work.
+   */
+  readOnly: boolean
 
   setView: (view: BuilderView) => void
   /** Changes some of what checking depends on; the rest stays. */
@@ -198,6 +205,7 @@ export function createBuilderStore<S extends BaseStep, Doc, Context, Scope>({
   adapter,
   doc,
   context,
+  readOnly = false,
 }: BuilderInit<S, Doc, Context, Scope>): StoreApi<
   BuilderState<S, Doc, Context, Scope>
 > {
@@ -280,7 +288,7 @@ export function createBuilderStore<S extends BaseStep, Doc, Context, Scope>({
       })
     }
 
-    return {
+    const state: State = {
       adapter,
       meta: adapter.metaOf(doc),
       nodes,
@@ -301,6 +309,7 @@ export function createBuilderStore<S extends BaseStep, Doc, Context, Scope>({
       editing: null,
       focusField: null,
       details: false,
+      readOnly,
 
       setView: (view) => set({ view }),
       setContext: (patch) => {
@@ -310,7 +319,11 @@ export function createBuilderStore<S extends BaseStep, Doc, Context, Scope>({
       setLookups: (lookups) =>
         set({ lookups: { ...get().lookups, ...lookups } as Lookups }),
 
-      onNodesChange: (changes) => {
+      onNodesChange: (allChanges) => {
+        // Read-only: a step can be selected, and measured, but not moved or removed.
+        const changes = get().readOnly
+          ? allChanges.filter((c) => c.type === "select" || c.type === "dimensions")
+          : allChanges
         const structural = changes.some(
           (c) => c.type === "remove" || c.type === "add"
         )
@@ -325,7 +338,10 @@ export function createBuilderStore<S extends BaseStep, Doc, Context, Scope>({
           set({ nodes: nextNodes })
         }
       },
-      onEdgesChange: (changes) => {
+      onEdgesChange: (allChanges) => {
+        const changes = get().readOnly
+          ? allChanges.filter((c) => c.type === "select")
+          : allChanges
         const structural = changes.some(
           (c) => c.type === "remove" || c.type === "add"
         )
@@ -607,6 +623,27 @@ export function createBuilderStore<S extends BaseStep, Doc, Context, Scope>({
         commit(next)
       },
     }
+
+    // Read-only, every change to the document does nothing.
+    const changes = [
+      "addStep",
+      "connect",
+      "removeEdge",
+      "removeSteps",
+      "duplicateStep",
+      "updateStep",
+      "updateMeta",
+      "replaceDocument",
+      "arrange",
+      "undo",
+      "redo",
+    ] as const
+    for (const key of changes) {
+      const act = state[key] as (...args: unknown[]) => unknown
+      ;(state as Record<string, unknown>)[key] = (...args: unknown[]) =>
+        get().readOnly ? undefined : act(...args)
+    }
+    return state
   })
 }
 

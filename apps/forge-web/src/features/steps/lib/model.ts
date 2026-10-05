@@ -15,7 +15,7 @@ import type { IconProp } from "@/components/forge/icons"
 import type { StepOutput } from "@/features/builder/lib/types"
 
 /*
- * The steps an ADK workflow takes beside its agents: a person approving,
+ * The steps a workflow takes beside its agents: a person approving,
  * actions (an HTTP request, a transform, a delay), logic (if, switch,
  * match, loop, merge) and its ends. Each is a kind from the catalog below,
  * with that kind's settings (`config`) and the outputs it can leave by:

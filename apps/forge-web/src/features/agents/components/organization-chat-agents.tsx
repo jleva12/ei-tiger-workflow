@@ -34,10 +34,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
+import { Spinner } from "@/components/ui/spinner"
 import { toast } from "@/components/ui/toast"
 import { useOrganizationAgents } from "@/features/adk-workflows/lib/api"
 import { toApiError } from "@/lib/api/index"
 import {
+  forgetLocalChatAgents,
+  localChatAgents,
   useCreateChatAgent,
   useDeleteChatAgent,
   useOrganizationChatAgents,
@@ -78,6 +81,8 @@ type AgentRow = {
   updated_at: string
   /** Who saved it last. */
   updated_by: string
+  /** Where it is between draft and published. */
+  record: ChatAgentRecord
   doc: ChatAgentDocument
 }
 
@@ -102,7 +107,8 @@ const toRow = (
     errors,
     warnings: issues.length - errors,
     updated_at: record.updated_at,
-    updated_by: record.updated_by_name,
+    updated_by: record.updated_by_name ?? record.updated_by,
+    record,
     doc,
   }
 }
@@ -154,6 +160,22 @@ const COLUMNS = helper.columns([
         {plural(row.tools, "tool")}
         {row.agents > 0 && (
           <span className="text-muted-foreground">{` · ${plural(row.agents, "sub-agent")}`}</span>
+        )}
+      </span>
+    ),
+  }),
+  helper.accessor((row) => row.record.published_version ?? 0, {
+    id: "version",
+    header: "Version",
+    size: 176,
+    meta: { label: "Version" },
+    cell: ({ row: { original: row } }) => (
+      <span className="flex flex-wrap items-center gap-1">
+        {row.record.published_version !== null && (
+          <Chip tone="success">Published v{row.record.published_version}</Chip>
+        )}
+        {row.record.has_draft && (
+          <Chip tone="notice">Draft v{row.record.draft_version}</Chip>
         )}
       </span>
     ),
@@ -350,6 +372,14 @@ export function OrganizationChatAgents({
         </ShellHeaderActions>
       )}
 
+      {canManage && (
+        <MoveFromBrowser
+          organizationId={organizationId}
+          create={makeAsync}
+          known={records.length}
+        />
+      )}
+
       {list.error ? (
         <ErrorCallout
           title="Couldn't load the organization's agents"
@@ -369,7 +399,7 @@ export function OrganizationChatAgents({
         <EmptyWorkspace
           illustration={<EmptyIllustration name="waiting" />}
           title={`Build ${organizationName}'s agents`}
-          description="An agent is one Google ADK chat agent: what it's told and the model it runs on, the tools it can call (memory, HTTP endpoints, OpenAPI and MCP servers, your ADK workflows) and the sub-agents it hands off to, connected on a canvas. For now they're kept in this browser."
+          description="An agent is one Google ADK chat agent: what it's told and the model it runs on, the tools it can call (memory, HTTP endpoints, OpenAPI and MCP servers, your workflows) and the sub-agents it hands off to, connected on a canvas. Publish a version to run it from any app, by its ID."
           actions={
             canManage ? (
               <>
@@ -397,7 +427,7 @@ export function OrganizationChatAgents({
           <DataTable
             className="rounded-none border-0"
             title="Agents"
-            description={`The chat agents built for ${organizationName} in this browser. Open one to build it.`}
+            description={`The chat agents ${organizationName} has built, shared by everyone in the organization. Open one to build it, or to publish it.`}
             columns={COLUMNS}
             data={rows}
             isLoading={list.isPending}
@@ -473,5 +503,63 @@ export function OrganizationChatAgents({
         </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+/**
+ * Agents this browser kept for the organization before the API kept them:
+ * offered once, moved as drafts of their own (new IDs), then forgotten here.
+ */
+function MoveFromBrowser({
+  organizationId,
+  create,
+  known,
+}: {
+  organizationId: string
+  create: (doc: ChatAgentDocument) => Promise<ChatAgentRecord>
+  /** The agents the organization has: refreshed after a move. */
+  known: number
+}) {
+  const [local, setLocal] = React.useState(() => localChatAgents(organizationId))
+  const [moving, setMoving] = React.useState(false)
+  if (!local.length) return null
+  const move = async () => {
+    setMoving(true)
+    let moved = 0
+    for (const doc of local) {
+      try {
+        await create(storedChatAgent(doc, organizationId))
+        moved += 1
+      } catch (caught) {
+        toast.add({
+          title: `Couldn't move ${doc.name || "an agent"}`,
+          description: toApiError(caught).message,
+          type: "error",
+        })
+      }
+    }
+    setMoving(false)
+    if (moved === local.length) {
+      forgetLocalChatAgents(organizationId)
+      setLocal([])
+      toast.add({
+        title: `Moved ${plural(moved, "agent")} to the organization`,
+        description: `It has ${plural(known + moved, "agent")} now.`,
+        type: "success",
+      })
+    }
+  }
+  return (
+    <div className="mb-3 flex items-center gap-3 rounded-(--radius-card) border bg-notice-surface px-3 py-2 text-xs">
+      <Icon icon="info" size={14} className="shrink-0 text-notice-accent" />
+      <span className="min-w-0 flex-1 text-notice-foreground">
+        This browser still keeps {plural(local.length, "agent")} from before
+        agents were saved to the organization.
+      </span>
+      <Button size="xs" variant="outline" disabled={moving} onClick={() => void move()}>
+        {moving && <Spinner data-icon="inline-start" />}
+        Move {local.length === 1 ? "it" : "them"} here
+      </Button>
+    </div>
   )
 }

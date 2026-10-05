@@ -16,6 +16,7 @@ when malformed. Who the person is comes from their sign-in
 ``assistant/wire.py``).
 """
 
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import aclosing
@@ -24,7 +25,9 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from forge_common.adk.usage import Attribution, attributed
 from forge_common.model_provider import ModelProviderAuthError
+from forge_task_adk_workflows.usage_store import UsageStore
 
 # StreamingMode has no public export; ADK's own API server imports it from here too.
 from google.adk.agents.run_config import (
@@ -48,6 +51,7 @@ from forge_admin.assistant.runtime import AgentRuntime
 from forge_admin.assistant.screens import STICKY, page_of
 from forge_admin.assistant.wire import sse, to_wire
 from forge_admin.auth.access import CurrentUser
+from forge_admin.overview.recording import assistant_attribution
 
 logger = logging.getLogger(__name__)
 
@@ -468,25 +472,41 @@ def _error_event(author: str, error: Exception) -> Event:
 
 
 async def _stream(
-    runner: Runner, body: RunRequest, state_delta: dict[str, Any] | None
+    runner: Runner,
+    body: RunRequest,
+    state_delta: dict[str, Any] | None,
+    *,
+    usage: UsageStore | None = None,
+    attribution: Attribution | None = None,
 ) -> AsyncIterator[str]:
     # A comment first, so the response starts even while the model thinks.
     yield ":ok\n\n"
     mode = StreamingMode.SSE if body.streaming else StreamingMode.NONE
+    # The turn, and its model and tool calls, count for the organization it
+    # was asked from (forge_admin.overview.recording).
+    recorded = (
+        usage.invocation(attribution, session_id=body.session_id, user_id=body.user_id)
+        if usage is not None and attribution is not None
+        else contextlib.nullcontext()
+    )
     try:
         # aclosing ends the run when the client goes away (Stop).
-        async with aclosing(
-            runner.run_async(
-                user_id=body.user_id,
-                session_id=body.session_id,
-                invocation_id=body.invocation_id,
-                new_message=body.new_message,
-                state_delta=state_delta,
-                run_config=RunConfig(streaming_mode=mode),
-            )
-        ) as events:
-            async for event in events:
-                yield sse(event)
+        with attributed(attribution):
+            async with (
+                recorded,
+                aclosing(
+                    runner.run_async(
+                        user_id=body.user_id,
+                        session_id=body.session_id,
+                        invocation_id=body.invocation_id,
+                        new_message=body.new_message,
+                        state_delta=state_delta,
+                        run_config=RunConfig(streaming_mode=mode),
+                    )
+                ) as events,
+            ):
+                async for event in events:
+                    yield sse(event)
     except Exception as error:
         logger.exception(
             "Run of %s failed in session %s", runner.app_name, body.session_id
@@ -531,7 +551,18 @@ async def run_sse(
         person = await _person(runtime, user)
         if person is not None:
             state_delta = {**(state_delta or {}), PERSON: person}
-        events = _stream(runner, body, state_delta)
+        attribution = assistant_attribution(
+            (state_delta or {}).get(PAGE_CONTEXT),
+            (person or {}).get("organizations"),
+            user,
+        )
+        events = _stream(
+            runner,
+            body,
+            state_delta,
+            usage=runtime.usage,
+            attribution=attribution,
+        )
     return StreamingResponse(
         events, media_type="text/event-stream", headers=SSE_HEADERS
     )

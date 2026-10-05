@@ -9,7 +9,7 @@ type ModelChoice = { provider: string; name: string }
 /**
  * The models an LLM agent may run on: Forge's, as the assistant's model
  * section lists them (the admin API's model provider configuration, the
- * same model_provider.yaml the ADK workflow runner reads), its default first.
+ * same model_provider.yaml the workflow runner reads), its default first.
  * None while they load, or when the assistant's agent isn't Forge's own.
  */
 export function useAgentStepModels() {

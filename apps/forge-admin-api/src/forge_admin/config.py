@@ -14,6 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from forge_common.logging import LoggingSettings
+from forge_embeddings.config import EmbeddingSettings
 from pydantic import (
     AliasChoices,
     Field,
@@ -57,9 +58,15 @@ class Settings(BaseSettings):
     # When set, tokens must carry this iss and aud, and minted ones do.
     jwt_issuer: str | None = None
     jwt_audience: str | None = None
+    # The token claim listing the company groups (from its directory) the
+    # user is in: a list of names, e.g. ["Forge Admins"]. Permissions linked
+    # to a group (Permissions > Link permissions) are theirs on the whole site.
+    jwt_groups_claim: str = Field(default="groups", min_length=1)
     # LOCAL DEVELOPMENT ONLY: treat API requests without a bearer token as
     # this user. The tests use it; never set it in production.
     local_user_id: str | None = Field(default=None, max_length=255, pattern=r"^\S+$")
+    # LOCAL DEVELOPMENT ONLY: the company groups that user is in.
+    local_user_groups: list[str] = []
     # The web console's address, for links to its pages.
     web_url: str = "http://localhost:5190"
     # The async worker (apps/forge-async-worker): the Redis its SAQ job
@@ -87,6 +94,49 @@ class Settings(BaseSettings):
     site_admin_first_name: str | None = None
     site_admin_last_name: str | None = None
     site_admin_msid: str | None = None
+    # The key MCP servers' credentials (API keys, tokens, OAuth clients and
+    # grants) are encrypted with in MySQL: at least 32 characters, e.g.
+    # openssl rand -hex 32, which make env generates into .env. Changing it
+    # loses every saved credential. Unset, MCP servers answer that they
+    # aren't set up.
+    secrets_key: SecretStr | None = Field(default=None, min_length=32)
+    # Seconds the admin API waits for an MCP server, or its OAuth
+    # authorization server, to answer.
+    mcp_timeout: float = Field(default=15.0, gt=0, le=120)
+
+    # Knowledge bases (forge_admin.knowledge): an organization's named sets of
+    # documents its chat agents search. Uploads are stored in this S3 bucket,
+    # where the async worker's documents task reads them back, parses, chunks
+    # and embeds them into MongoDB Atlas (the documents queue, on
+    # embedding_redis_url). Unset, uploads answer that they aren't set up.
+    documents_bucket: str | None = Field(
+        default=None, pattern=r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+    )
+    # The largest upload accepted, in bytes; the worker's limit is 100 MiB.
+    documents_max_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
+    # The S3 service: an S3-compatible endpoint such as the local RustFS
+    # (knowledge-s3), addressed path-style; unset for AWS. Unset credentials
+    # fall back to boto3's own (AWS_* variables, an instance role).
+    s3_endpoint_url: str | None = Field(default=None, pattern=r"^https?://")
+    s3_region: str = "us-east-1"
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: SecretStr | None = None
+    # Create the bucket on first use when it's missing: for local
+    # development; provision it in production.
+    s3_create_bucket: bool = False
+    # Where the worker keeps the knowledge bases' chunks and their vectors:
+    # this database of the MongoDB Atlas at mongo_uri, which must be the
+    # worker's HYBRID_MONGO__URI / HYBRID_MONGO__DATABASE. Searching a
+    # knowledge base (its search route, chat agents' knowledge base tools)
+    # reads it; without mongo_uri, searching answers that it isn't set up.
+    knowledge_database: str = Field(
+        default="forge_knowledge", pattern=r"^[A-Za-z0-9_-]{1,63}$"
+    )
+    # How a search's question is embedded: the same provider, model and
+    # dimensions as the worker's HYBRID_EMBEDDING__*, or nothing matches.
+    # FORGE_ADMIN_KNOWLEDGE_EMBEDDING__API_KEY (else OPENAI_API_KEY),
+    # __DOCUMENT_MODEL (text-embedding-3-large), __DIMENSIONS (1024).
+    knowledge_embedding: EmbeddingSettings = EmbeddingSettings()
 
     # The assistant: Google ADK agents (forge_admin.assistant). The models it may
     # run on: a model_provider.yaml, the file ADK workflows' LLM nodes read too, e.g.
@@ -118,6 +168,29 @@ class Settings(BaseSettings):
     # What the assistant has on each screen: a YAML file in the shape of
     # assistant/screens.yaml, which is used when this is unset.
     agent_screens: Path | None = None
+
+    # Organizations' chat agents, run by ID at {api_prefix}/runtime
+    # (forge_agent_runtime's run API: run_sse and sessions). Public: anyone
+    # with an agent's ID can talk to it, spending its model and calling its
+    # tools; set false to ask for a Forge sign-in like every other route.
+    agent_runtime_public: bool = True
+    # How many built chat agents the runtime keeps ready.
+    agent_runtime_cache: int = Field(default=64, ge=1, le=4096)
+    # What chat agents' HTTP tools may reach besides the internet: private
+    # networks (local development only), or these hosts.
+    agent_tools_allow_private: bool = False
+    agent_tools_allowed_hosts: list[str] = []
+    # Standalone agent projects (the builder's Generate standalone agent): where
+    # their runtime comes from. wheels: the wheels in starter_wheels are copied
+    # into each project's vendor/, until the runtime is on PyPI; pypi:<version>
+    # pins that version instead.
+    starter_runtime: str = Field(
+        default="wheels", pattern=r"^(wheels|pypi:[0-9][0-9A-Za-z.+-]*)$"
+    )
+    # The wheels (forge_agent_runtime, forge_common, forge_jsonata). Unset, the
+    # runtime package's dist folder, which make starter-wheels fills; the image
+    # builds its own.
+    starter_wheels: Path | None = None
 
     # HTTP listener. The container listens on 0.0.0.0:8091.
     host: str = "127.0.0.1"
@@ -153,7 +226,9 @@ class Settings(BaseSettings):
     @field_validator(
         "agent_model",
         "agent_screens",
+        "starter_wheels",
         "api_key",
+        "documents_bucket",
         "embedding_redis_url",
         "google_api_key",
         "jwt_secret",
@@ -162,6 +237,10 @@ class Settings(BaseSettings):
         "local_user_id",
         "model_provider_config",
         "mongo_uri",
+        "s3_access_key_id",
+        "s3_endpoint_url",
+        "s3_secret_access_key",
+        "secrets_key",
         "site_admin_id",
         "site_admin_email",
         "site_admin_first_name",

@@ -41,7 +41,7 @@ import { useFieldIssues } from "@/features/builder/components/fields/field-issue
 import { ExpressionField } from "@/features/builder/components/fields/expression-field"
 
 /*
- * The settings of each kind of step an ADK workflow shares with Forge's
+ * The settings of each kind of step a workflow shares with Forge's
  * steps, as its settings dialog shows them. Every change goes to the
  * builder's store as it's typed; typing in one field is one step of undo.
  */

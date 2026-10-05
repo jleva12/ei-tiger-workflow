@@ -56,7 +56,10 @@ from datetime import datetime
 from typing import Any
 
 import httpx
+from forge_common.adk.usage import Attribution, UsagePlugin, current_sink, price_from
 from google.adk import Event
+from google.adk.apps import App
+from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, Session
 from google.genai import types
@@ -192,7 +195,8 @@ class AdkRun:
             graph = build_agent(self.payload.document, services=self.services, resolve=self.payload.saved.get)
         except AgentBuildError as error:
             return JobResult.failed(f"The ADK workflow can't run: {error}", outcome="failed")
-        runner = self.runner = Runner(node=graph, app_name=APP_NAME, session_service=self.sessions)
+        app = App.model_construct(name=APP_NAME, root_agent=graph, plugins=self._plugins())
+        runner = self.runner = Runner(app=app, session_service=self.sessions)
         try:
             await self._save("The run goes on")
             finished = await self._carry_on()
@@ -214,6 +218,22 @@ class AdkRun:
         await self._save(f"The run {finished.get('outcome') or 'succeeded'}")
         await self._note(f"The run {finished.get('outcome') or 'succeeded'}")
         return self._succeeded(finished)
+
+    def _plugins(self) -> list[BasePlugin]:
+        """What the run's App carries: the usage of its model and tool calls,
+        when the worker records it (``forge_common.adk.usage.recording``)."""
+        sink = current_sink()
+        if sink is None:
+            return []
+        attribution = Attribution(
+            organization_id=self.payload.tenant_id,
+            kind="workflow",
+            subject_id=self.payload.agent_id,
+            subject_name=self.workflow_name,
+            run_id=self.control.instance_id or None,
+            user_id=self.payload.run_as,
+        )
+        return [UsagePlugin(sink, attribution, price=price_from(self.services.model))]
 
     def _succeeded(self, finished: dict[str, Any]) -> JobResult:
         if finished.get("outcome") == "failed":

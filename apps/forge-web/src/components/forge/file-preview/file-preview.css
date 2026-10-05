@@ -1,0 +1,94 @@
+/*
+ * The file viewer's pages on the workspace's muted desk: pdf.js pages, Word
+ * pages (docx-preview) and slides (pptx-renderer) as sheets of paper with a
+ * hairline and the paper shadow, spaced alike. Loaded with the renderers
+ * that need it.
+ */
+
+[data-slot="file-preview"] {
+  --preview-page-shadow:
+    0 0 0 1px var(--border), 0 1px 2px oklch(0.2 0.01 260 / 4%),
+    var(--shadow-paper);
+}
+
+/* pdf.js ------------------------------------------------------------------ */
+
+/* pdf.js's find highlights in the workspace's amber (high-contrast mode
+   keeps pdf.js's own). */
+@media not (forced-colors: active) {
+  [data-slot="pdf-pages"] .textLayer .highlight {
+    --highlight-bg-color: color-mix(
+      in oklab,
+      var(--signal-running) 30%,
+      transparent
+    );
+    --highlight-selected-bg-color: color-mix(
+      in oklab,
+      var(--signal-running) 65%,
+      transparent
+    );
+  }
+}
+
+[data-slot="pdf-pages"] .pdfViewer {
+  padding: 20px 0 32px;
+}
+
+[data-slot="pdf-pages"] .pdfViewer.removePageBorders .page {
+  margin: 0 auto 16px;
+  box-shadow: var(--preview-page-shadow);
+  border-radius: 2px;
+}
+
+[data-slot="pdf-pages"] .pdfViewer .page .loadingIcon::after {
+  /* pdf.js's spinner gif; the page's own paper is enough while it draws. */
+  display: none;
+}
+
+/* docx-preview ------------------------------------------------------------ */
+
+[data-slot="docx-pages"] .docx-wrapper {
+  background: transparent;
+  padding: 24px 24px 8px;
+}
+
+[data-slot="docx-pages"] .docx-wrapper > section.docx {
+  margin-bottom: 16px;
+  /* Where going to a page leaves it: clear of the view's top. */
+  scroll-margin-top: 16px;
+  box-shadow: var(--preview-page-shadow);
+  border-radius: 2px;
+}
+
+[data-slot="docx-pages"] a[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* pptx-renderer ----------------------------------------------------------- */
+
+[data-slot="pptx-slides"] [data-slide-index] {
+  margin-bottom: 20px !important;
+  scroll-margin-top: 20px;
+}
+
+[data-slot="pptx-slides"] [data-slide-index] > div {
+  box-shadow: var(--preview-page-shadow) !important;
+  border-radius: 3px;
+}
+
+/* Images ------------------------------------------------------------------ */
+
+.checkerboard {
+  background-color: var(--background);
+  background-image:
+    linear-gradient(45deg, var(--muted) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--muted) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--muted) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--muted) 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+}

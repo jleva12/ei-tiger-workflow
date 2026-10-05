@@ -1,0 +1,735 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Forge Workspace design system
+ * ---------------------------------------------------------------------------
+ * A quiet, light product interface: pale cool-neutral surfaces (hue 260),
+ * restrained contrast, compact 12–14px type, small 4–9px radii, full-width
+ * pastel status bands and one dark primary action.
+ *
+ * Layers:
+ *   1. shadcn semantic tokens (background, primary, muted, border, …)
+ *   2. Forge tokens (subtle text, tones, statuses, signals, console, diff, …)
+ *   3. Tailwind mapping (@theme inline) so every token is a utility class
+ *   4. Base + global rules (focus ring, scrollbars, reduced motion)
+ */
+
+:root {
+    /* shadcn semantic tokens */
+    --background: oklch(0.998 0.002 260);
+    --foreground: oklch(0.235 0.009 260);
+    --card: oklch(0.998 0.002 260);
+    --card-foreground: oklch(0.235 0.009 260);
+    --popover: oklch(0.998 0.002 260);
+    --popover-foreground: oklch(0.235 0.009 260);
+    --primary: oklch(0.19 0.006 260);
+    --primary-foreground: oklch(0.985 0.003 260);
+    --secondary: oklch(0.97 0.003 260);
+    --secondary-foreground: oklch(0.235 0.009 260);
+    --muted: oklch(0.97 0.003 260);
+    --muted-foreground: oklch(0.53 0.014 260);
+    --accent: oklch(0.963 0.003 260);
+    --accent-foreground: oklch(0.235 0.009 260);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.925 0.004 260);
+    --input: oklch(0.935 0.004 260);
+    --ring: oklch(0.708 0 0);
+    /* Charts: a graphite ramp on hue 260, darkest first. A chart's story
+       series takes chart-1 and context series step lighter, so emphasis,
+       not hue, tells them apart. Outcomes use the diverging trio below:
+       good and bad poles with a neutral midpoint, validated for colour
+       vision on both surfaces; the neutral sits under 3:1, so outcome
+       charts always carry a legend with counts. */
+    --chart-1: oklch(0.33 0.012 260);
+    --chart-2: oklch(0.55 0.014 260);
+    --chart-3: oklch(0.74 0.012 260);
+    --chart-4: oklch(0.86 0.008 260);
+    --chart-5: oklch(0.93 0.005 260);
+    --chart-positive: #23874a;
+    --chart-neutral: #a9aeb8;
+    --chart-negative: #c94f4f;
+    /* Delivery charts: a cool categorical set for series that are the
+       subject (models, fixed order, never cycled), and one blue ramp for
+       a single story series and ordered kinds, strongest first. Both
+       validated with the data-viz palette checks on each surface (CVD
+       adjacent ΔE ≥ 11.7, normal-vision ≥ 17.4); amber sits under 3:1 on
+       light, so these charts always carry a legend and a table twin. */
+    --viz-1: #3d6fd9;
+    --viz-2: #159a8a;
+    --viz-3: #e0932b;
+    --viz-4: #d6558c;
+    --viz-5: #7b5cd6;
+    --viz-ramp-1: #2a4fa6;
+    --viz-ramp-2: #3d6fd9;
+    --viz-ramp-3: #6590e8;
+    --viz-ramp-4: #88abef;
+    /* Code graph node families: four data-viz reference hues, validated to
+       stay apart for every pair and colour-vision type on these surfaces
+       (dark mode steps violet deeper to clear blue), and a neutral for the
+       rest. Nodes also differ by family shape and kind glyph and carry
+       their names, so colour never identifies a node alone. Each family's
+       ink is whichever of paper or graphite its glyph reads best on. */
+    --graph-file: #2a78d6;
+    --graph-type: #eb6834;
+    --graph-callable: #1baf7a;
+    --graph-value: #4a3aa7;
+    --graph-other: #9a9ca3;
+    --graph-file-ink: var(--background);
+    --graph-type-ink: var(--foreground);
+    --graph-callable-ink: var(--foreground);
+    --graph-value-ink: var(--background);
+    --graph-other-ink: var(--foreground);
+    --radius: 0.5rem;
+    --sidebar: oklch(0.998 0.002 260);
+    --sidebar-foreground: oklch(0.235 0.009 260);
+    --sidebar-primary: oklch(0.19 0.006 260);
+    --sidebar-primary-foreground: oklch(0.985 0.003 260);
+    --sidebar-accent: oklch(0.97 0.003 260);
+    --sidebar-accent-foreground: oklch(0.235 0.009 260);
+    --sidebar-border: oklch(0.925 0.004 260);
+    --sidebar-ring: oklch(0.708 0 0);
+
+    /* Text roles */
+    --text-ui: 0.875rem;
+    --forge-row-height: 45px;
+    --subtle: oklch(0.64 0.012 260);
+    --nav-foreground: oklch(0.42 0.012 260);
+    --rail-foreground: oklch(0.44 0.012 260);
+    --focus: oklch(0.65 0.12 260);
+
+    /* Radii (use as rounded-(--radius-control) etc.) */
+    --radius-chip: 4px;
+    --radius-item: 5px;
+    --radius-soft: 6px;
+    --radius-control: 7px;
+    --radius-card: 8px;
+    --radius-band: 9px;
+    --radius-dialog: 16px;
+    --sheet-inset: 12px;
+
+    /* Elevation */
+    --shadow-raised: 0 1px 3px oklch(0.2 0 0 / 5%);
+    --shadow-tab: 0 0 0 1px var(--border), 0 1px 2px oklch(0.2 0 0 / 4%);
+    --shadow-paper: 0 6px 15px oklch(0.3 0.02 260 / 4%);
+    --shadow-float: 0 8px 35px oklch(0.2 0.01 260 / 12%);
+
+    /* Presence */
+    --online: oklch(0.66 0.13 157);
+    --offline: oklch(0.69 0.014 260);
+    --event: oklch(0.73 0.05 260);
+    --event-error: oklch(0.65 0.17 25);
+
+    /* Group tones: pastel band + saturated symbol */
+    --tone-neutral: oklch(0.972 0.004 260);
+    --tone-neutral-foreground: oklch(0.43 0.014 260);
+    --tone-amber: oklch(0.98 0.016 80);
+    --tone-amber-foreground: oklch(0.67 0.16 54);
+    --tone-pink: oklch(0.976 0.014 335);
+    --tone-pink-foreground: oklch(0.68 0.17 347);
+    --tone-green: oklch(0.978 0.022 155);
+    --tone-green-foreground: oklch(0.61 0.15 155);
+    --tone-red: oklch(0.977 0.015 25);
+    --tone-red-foreground: oklch(0.62 0.2 25);
+
+    /* Task status badges (dimmed with a filter in dark mode) */
+    --status-neutral: oklch(0.956 0.003 260);
+    --status-neutral-foreground: oklch(0.43 0.012 260);
+    --status-queued: oklch(0.934 0.033 256);
+    --status-queued-foreground: oklch(0.5 0.14 256);
+    --status-running: oklch(0.96 0.058 88);
+    --status-running-foreground: oklch(0.51 0.115 64);
+    --status-review: oklch(0.952 0.034 340);
+    --status-review-foreground: oklch(0.53 0.15 340);
+    --status-success: oklch(0.937 0.058 164);
+    --status-success-foreground: oklch(0.46 0.095 164);
+    --status-failed: oklch(0.936 0.036 20);
+    --status-failed-foreground: oklch(0.5 0.17 25);
+
+    /* Feedback surfaces */
+    --danger-surface: oklch(0.97 0.018 25);
+    --danger-border: oklch(0.89 0.045 25);
+    --danger-foreground: oklch(0.45 0.13 25);
+    --warning-surface: #fcf4e5;
+    --warning-foreground: #976a16;
+    --success-surface: #edf8f0;
+    --success-border: #d5eddd;
+    --success-foreground: #237d43;
+
+    /* Waiting notice (warm paper) */
+    --notice-surface: #fbfaf6;
+    --notice-border: #e9e6dd;
+    --notice-foreground: #807b6f;
+    --notice-accent: #9b813b;
+    --notice-icon-surface: #ffffff;
+    --notice-chip: #efebdf;
+    --notice-chip-foreground: #857345;
+
+    /* Run signals (job and step status icons) */
+    --signal-running: #bc9229;
+    --signal-success: #289b50;
+    --signal-failed: #ce5555;
+
+    /* Diffs */
+    --diff-added: #218449;
+    --diff-removed: #c04c50;
+    --diff-insert: #e6ffec;
+    --diff-insert-gutter: #ccffd8;
+    --diff-delete: #ffebe9;
+    --diff-delete-gutter: #ffd7d5;
+
+    /* Log console (always dark) */
+    --console: #151920;
+    --console-raised: #1b2029;
+    --console-hover: #1d232d;
+    --console-control: #303744;
+    --console-border: #303642;
+    --console-foreground: #d4d9e2;
+    --console-text: #aeb8c9;
+    --console-muted: #8b96a8;
+    --console-dim: #727f93;
+    --console-faint: #606b7e;
+    --console-success: #80b99a;
+    --console-danger: #f29a9a;
+    --console-warning: #d4b663;
+    --console-link: #9baecc;
+
+    /* Project markers */
+    --project-1: #b5abd2;
+    --project-2: #9abbb0;
+    --project-3: #d7b38e;
+    --project-4: #9badc9;
+
+    /* Empty-state illustration */
+    --illustration-check: oklch(0.93 0.025 160);
+    --illustration-check-foreground: oklch(0.55 0.08 160);
+    --illustration-fail: oklch(0.94 0.03 22);
+    --illustration-fail-foreground: oklch(0.57 0.14 25);
+    --illustration-spark: oklch(0.66 0.11 70);
+
+    /* Scrollbars */
+    color-scheme: light;
+    --scrollbar-size: 8px;
+    --scrollbar-thumb: oklch(0.64 0.008 260);
+    --scrollbar-thumb-hover: oklch(0.54 0.012 260);
+    --scrollbar-thumb-active: oklch(0.46 0.012 260);
+}
+
+.dark {
+    --background: oklch(0.18 0.008 260);
+    --foreground: oklch(0.91 0.005 260);
+    --card: oklch(0.18 0.008 260);
+    --card-foreground: oklch(0.91 0.005 260);
+    --popover: oklch(0.22 0.009 260);
+    --popover-foreground: oklch(0.91 0.005 260);
+    --primary: oklch(0.92 0.005 260);
+    --primary-foreground: oklch(0.18 0.008 260);
+    --secondary: oklch(0.25 0.008 260);
+    --secondary-foreground: oklch(0.91 0.005 260);
+    --muted: oklch(0.235 0.008 260);
+    --muted-foreground: oklch(0.7 0.009 260);
+    --accent: oklch(0.26 0.008 260);
+    --accent-foreground: oklch(0.91 0.005 260);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(0.29 0.008 260);
+    --input: oklch(0.3 0.008 260);
+    --ring: oklch(0.556 0 0);
+    --sidebar: oklch(0.18 0.008 260);
+    --sidebar-foreground: oklch(0.91 0.005 260);
+    --sidebar-primary: oklch(0.92 0.005 260);
+    --sidebar-primary-foreground: oklch(0.18 0.008 260);
+    --sidebar-accent: oklch(0.235 0.008 260);
+    --sidebar-accent-foreground: oklch(0.91 0.005 260);
+    --sidebar-border: oklch(0.29 0.008 260);
+    --sidebar-ring: oklch(0.556 0 0);
+    --chart-1: oklch(0.9 0.006 260);
+    --chart-2: oklch(0.72 0.01 260);
+    --chart-3: oklch(0.55 0.012 260);
+    --chart-4: oklch(0.38 0.01 260);
+    --chart-5: oklch(0.29 0.008 260);
+    --chart-positive: #2f9a5a;
+    --chart-neutral: #5f6570;
+    --chart-negative: #e06a6a;
+    --viz-1: #5b88ec;
+    --viz-2: #16998a;
+    --viz-3: #c28027;
+    --viz-4: #d6588f;
+    --viz-5: #8f74e6;
+    --viz-ramp-1: #86a9f2;
+    --viz-ramp-2: #5b88ec;
+    --viz-ramp-3: #3b64c4;
+    --viz-ramp-4: #274a9c;
+    --graph-file: #3987e5;
+    --graph-type: #d95926;
+    --graph-callable: #199e70;
+    --graph-value: #7a48c0;
+    --graph-other: #6b6e75;
+    --graph-file-ink: var(--background);
+    --graph-type-ink: var(--background);
+    --graph-callable-ink: var(--background);
+    --graph-value-ink: var(--foreground);
+    --graph-other-ink: var(--foreground);
+
+    --subtle: oklch(0.6 0.01 260);
+    --nav-foreground: oklch(0.7 0.009 260);
+    --rail-foreground: oklch(0.7 0.009 260);
+
+    --tone-neutral: oklch(0.235 0.01 260);
+    --tone-amber: oklch(0.26 0.025 75);
+    --tone-pink: oklch(0.26 0.025 335);
+    --tone-green: oklch(0.25 0.025 155);
+    --tone-red: oklch(0.25 0.025 25);
+
+    --danger-surface: oklch(0.27 0.035 25);
+    --danger-border: oklch(0.4 0.065 25);
+    --danger-foreground: oklch(0.8 0.08 25);
+    --warning-surface: #3a3020;
+    --warning-foreground: #dfbc7c;
+    --success-surface: #203326;
+    --success-border: #34533d;
+    --success-foreground: #8fc7a0;
+
+    --notice-surface: #29281f;
+    --notice-border: #3b382a;
+    --notice-foreground: #b1aa94;
+    --notice-accent: #c4ac70;
+    --notice-icon-surface: #22221c;
+    --notice-chip: #3e3828;
+    --notice-chip-foreground: #cdbb8b;
+
+    --diff-added: #81bf96;
+    --diff-removed: #e49192;
+    --diff-insert: #162f22;
+    --diff-insert-gutter: #244b32;
+    --diff-delete: #362024;
+    --diff-delete-gutter: #54282c;
+
+    --illustration-check: oklch(0.33 0.045 160);
+    --illustration-check-foreground: oklch(0.8 0.09 160);
+    --illustration-fail: oklch(0.33 0.055 25);
+    --illustration-fail-foreground: oklch(0.8 0.09 25);
+
+    color-scheme: dark;
+    --scrollbar-thumb: oklch(0.51 0.012 260);
+    --scrollbar-thumb-hover: oklch(0.64 0.012 260);
+    --scrollbar-thumb-active: oklch(0.73 0.012 260);
+}
+
+@theme inline {
+    --font-sans: 'Geist Variable', sans-serif;
+    --font-heading: var(--font-sans);
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    /* Compact type scale below text-xs (12px). text-sm (14px) is --text-ui. */
+    --text-xs--line-height: 1.5;
+    --text-sm--line-height: 1.5;
+    --text-lg--line-height: 1.5;
+    --text-2xs: 0.6875rem;
+    --text-3xs: 0.625rem;
+    --text-4xs: 0.5625rem;
+
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-chart-positive: var(--chart-positive);
+    --color-chart-neutral: var(--chart-neutral);
+    --color-chart-negative: var(--chart-negative);
+    --color-viz-1: var(--viz-1);
+    --color-viz-2: var(--viz-2);
+    --color-viz-3: var(--viz-3);
+    --color-viz-4: var(--viz-4);
+    --color-viz-5: var(--viz-5);
+    --color-viz-ramp-1: var(--viz-ramp-1);
+    --color-viz-ramp-2: var(--viz-ramp-2);
+    --color-viz-ramp-3: var(--viz-ramp-3);
+    --color-viz-ramp-4: var(--viz-ramp-4);
+    --color-graph-file: var(--graph-file);
+    --color-graph-type: var(--graph-type);
+    --color-graph-callable: var(--graph-callable);
+    --color-graph-value: var(--graph-value);
+    --color-graph-other: var(--graph-other);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+
+    /* Forge tokens */
+    --color-subtle: var(--subtle);
+    --color-nav-foreground: var(--nav-foreground);
+    --color-rail-foreground: var(--rail-foreground);
+    --color-focus: var(--focus);
+    --color-online: var(--online);
+    --color-offline: var(--offline);
+    --color-event: var(--event);
+    --color-event-error: var(--event-error);
+
+    --color-tone-neutral: var(--tone-neutral);
+    --color-tone-neutral-foreground: var(--tone-neutral-foreground);
+    --color-tone-amber: var(--tone-amber);
+    --color-tone-amber-foreground: var(--tone-amber-foreground);
+    --color-tone-pink: var(--tone-pink);
+    --color-tone-pink-foreground: var(--tone-pink-foreground);
+    --color-tone-green: var(--tone-green);
+    --color-tone-green-foreground: var(--tone-green-foreground);
+    --color-tone-red: var(--tone-red);
+    --color-tone-red-foreground: var(--tone-red-foreground);
+
+    --color-status-neutral: var(--status-neutral);
+    --color-status-neutral-foreground: var(--status-neutral-foreground);
+    --color-status-queued: var(--status-queued);
+    --color-status-queued-foreground: var(--status-queued-foreground);
+    --color-status-running: var(--status-running);
+    --color-status-running-foreground: var(--status-running-foreground);
+    --color-status-review: var(--status-review);
+    --color-status-review-foreground: var(--status-review-foreground);
+    --color-status-success: var(--status-success);
+    --color-status-success-foreground: var(--status-success-foreground);
+    --color-status-failed: var(--status-failed);
+    --color-status-failed-foreground: var(--status-failed-foreground);
+
+    --color-danger-surface: var(--danger-surface);
+    --color-danger-border: var(--danger-border);
+    --color-danger-foreground: var(--danger-foreground);
+    --color-warning-surface: var(--warning-surface);
+    --color-warning-foreground: var(--warning-foreground);
+    --color-success-surface: var(--success-surface);
+    --color-success-border: var(--success-border);
+    --color-success-foreground: var(--success-foreground);
+
+    --color-notice-surface: var(--notice-surface);
+    --color-notice-border: var(--notice-border);
+    --color-notice-foreground: var(--notice-foreground);
+    --color-notice-accent: var(--notice-accent);
+    --color-notice-icon-surface: var(--notice-icon-surface);
+    --color-notice-chip: var(--notice-chip);
+    --color-notice-chip-foreground: var(--notice-chip-foreground);
+
+    --color-signal-running: var(--signal-running);
+    --color-signal-success: var(--signal-success);
+    --color-signal-failed: var(--signal-failed);
+
+    --color-diff-added: var(--diff-added);
+    --color-diff-removed: var(--diff-removed);
+    --color-diff-insert: var(--diff-insert);
+    --color-diff-insert-gutter: var(--diff-insert-gutter);
+    --color-diff-delete: var(--diff-delete);
+    --color-diff-delete-gutter: var(--diff-delete-gutter);
+
+    --color-console: var(--console);
+    --color-console-raised: var(--console-raised);
+    --color-console-hover: var(--console-hover);
+    --color-console-control: var(--console-control);
+    --color-console-border: var(--console-border);
+    --color-console-foreground: var(--console-foreground);
+    --color-console-text: var(--console-text);
+    --color-console-muted: var(--console-muted);
+    --color-console-dim: var(--console-dim);
+    --color-console-faint: var(--console-faint);
+    --color-console-success: var(--console-success);
+    --color-console-danger: var(--console-danger);
+    --color-console-warning: var(--console-warning);
+    --color-console-link: var(--console-link);
+
+    --color-project-1: var(--project-1);
+    --color-project-2: var(--project-2);
+    --color-project-3: var(--project-3);
+    --color-project-4: var(--project-4);
+
+    --color-illustration-check: var(--illustration-check);
+    --color-illustration-check-foreground: var(--illustration-check-foreground);
+    --color-illustration-fail: var(--illustration-fail);
+    --color-illustration-fail-foreground: var(--illustration-fail-foreground);
+    --color-illustration-spark: var(--illustration-spark);
+}
+
+@layer base {
+    * {
+        @apply border-border outline-ring/50;
+    }
+
+    html {
+        @apply font-sans;
+        /* User text size (UserPreferencesProvider); 100% keeps the browser's own. */
+        font-size: calc(100% * var(--forge-font-scale, 1));
+    }
+
+    body {
+        @apply bg-background text-foreground;
+        font-size: 0.8125rem;
+        -webkit-font-smoothing: antialiased;
+    }
+
+    button, input, textarea, select {
+        font: inherit;
+    }
+
+    button:not(:disabled), [role="button"]:not(:disabled) {
+        cursor: pointer;
+    }
+
+    button:disabled {
+        cursor: not-allowed;
+    }
+}
+
+/* Orb avatars: the reference's colorful gradient treatment. */
+@utility bg-orb-workspace {
+    background: radial-gradient(at 15% 15%, #86e5ef 0, transparent 55%), radial-gradient(at 20% 90%, #ffb65d 0, transparent 65%), radial-gradient(at 100% 10%, #5f7fdc 0, transparent 55%), conic-gradient(from 80deg, #a4dcad, #9d7ace, #f1a3c0, #67b6d7, #a4dcad);
+    box-shadow: inset 0 0 0 1px oklch(0.9 0.03 260 / 40%);
+}
+
+@utility orb-agent-0 {
+    background: radial-gradient(at 18% 14%, #c7ffff 0, transparent 50%), conic-gradient(from 60deg, #f0b892, #e1a3e9, #7f8df5, #7ce7e0, #f0b892);
+}
+
+@utility orb-agent-1 {
+    background: radial-gradient(at 18% 14%, #fff5cc 0, transparent 50%), conic-gradient(from 30deg, #faaf93, #ff907b, #d593ed, #f2d694, #faaf93);
+}
+
+@utility orb-agent-2 {
+    background: radial-gradient(at 20% 8%, #e4cbff 0, transparent 40%), conic-gradient(from 20deg, #239de5, #e7a7e9, #9b62dd, #75c2ff, #239de5);
+}
+
+@utility orb-agent-3 {
+    background: radial-gradient(at 18% 14%, #c7ffff 0, transparent 50%), conic-gradient(from 60deg, #f0b892, #e1a3e9, #7f8df5, #7ce7e0, #f0b892);
+    filter: hue-rotate(50deg);
+}
+
+@utility orb-agent-4 {
+    background: radial-gradient(at 18% 14%, #c7ffff 0, transparent 50%), conic-gradient(from 60deg, #f0b892, #e1a3e9, #7f8df5, #7ce7e0, #f0b892);
+    filter: hue-rotate(130deg);
+}
+
+/* Dark scrollbars inside always-dark surfaces such as the log console. */
+@utility scrollbar-dark {
+    color-scheme: dark;
+    --scrollbar-thumb: oklch(0.51 0.012 260);
+    --scrollbar-thumb-hover: oklch(0.64 0.012 260);
+    --scrollbar-thumb-active: oklch(0.73 0.012 260);
+}
+
+/*
+ * Scrollbars in rounded floating panels such as the assistant: the thumb
+ * shows while the pointer is over the panel, and the track stops short of the
+ * header above and the rounded corner below. Like scrollbar-dark, it sets the
+ * variables the global scrollbar rules read, which a utility can't override.
+ */
+@utility scrollbar-panel {
+    &:not(:hover) {
+        --scrollbar-thumb: transparent;
+    }
+
+    @media (forced-colors: none) {
+        &::-webkit-scrollbar-track {
+            margin-block: 0.25rem calc(var(--radius-xl) + 0.125rem);
+        }
+    }
+}
+
+/*
+ * Running labels in the assistant (tool calls, reasoning): a soft band sweeps
+ * across the text in its own colour. Replaces the tw-shimmer plugin.
+ */
+@utility shimmer {
+    background-image: linear-gradient(
+        90deg,
+        currentColor 35%,
+        color-mix(in oklab, currentColor 30%, transparent) 50%,
+        currentColor 65%
+    );
+    background-size: 250% 100%;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer 2.2s linear infinite;
+}
+
+@keyframes shimmer {
+    from {
+        background-position: 100% 0;
+    }
+    to {
+        background-position: 0 0;
+    }
+}
+
+/* tw-animate-css reads Radix's height; Base UI panels expose their own. */
+@keyframes collapsible-down {
+    from {
+        height: 0;
+    }
+    to {
+        height: var(
+            --radix-collapsible-content-height,
+            var(--collapsible-panel-height, auto)
+        );
+    }
+}
+
+@keyframes collapsible-up {
+    from {
+        height: var(
+            --radix-collapsible-content-height,
+            var(--collapsible-panel-height, auto)
+        );
+    }
+    to {
+        height: 0;
+    }
+}
+
+/*
+ * Focus: a 2px cool-blue outline offset 3px. Unlayered on purpose so it
+ * wins over `outline-none` on shadcn primitives, exactly like the reference.
+ */
+:where(button, a, input, textarea, select, [tabindex="0"]) {
+    outline-offset: 3px;
+}
+
+:where(button, a, [tabindex="0"]):focus-visible {
+    outline: 2px solid var(--focus);
+}
+
+/* Thin rounded scrollbars; the OS supplies its own in forced-colors mode. */
+@media (forced-colors: none) {
+    * {
+        scrollbar-width: thin;
+        scrollbar-color: var(--scrollbar-thumb) transparent;
+    }
+
+    @supports selector(::-webkit-scrollbar) {
+        * {
+            scrollbar-width: auto;
+            scrollbar-color: auto;
+        }
+
+        *::-webkit-scrollbar {
+            width: var(--scrollbar-size);
+            height: var(--scrollbar-size);
+        }
+
+        *::-webkit-scrollbar-track,
+        *::-webkit-scrollbar-corner {
+            background: transparent;
+        }
+
+        *::-webkit-scrollbar-thumb {
+            min-height: 32px;
+            min-width: 32px;
+            border: 2px solid transparent;
+            border-radius: 999px;
+            background: var(--scrollbar-thumb);
+            background-clip: padding-box;
+        }
+
+        *::-webkit-scrollbar-thumb:hover {
+            background-color: var(--scrollbar-thumb-hover);
+        }
+
+        *::-webkit-scrollbar-thumb:active {
+            background-color: var(--scrollbar-thumb-active);
+        }
+
+        *::-webkit-scrollbar-button {
+            display: none;
+        }
+    }
+}
+
+/* Motion only communicates state; honor reduced motion everywhere. */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+/*
+ * User preferences, set on <html> by UserPreferencesProvider.
+ * data-forge-motion="reduce" turns motion off whatever the OS says.
+ */
+:root[data-forge-motion="reduce"] *,
+:root[data-forge-motion="reduce"] *::before,
+:root[data-forge-motion="reduce"] *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+}
+
+/* Compact density: every spacing step and list rows tighten. */
+:root[data-forge-density="compact"] {
+    --spacing: 0.21875rem;
+    --forge-row-height: 34px;
+}
+
+/* More contrast: darker secondary text and borders (lighter in dark mode). */
+:root[data-forge-contrast="more"] {
+    --muted-foreground: oklch(0.42 0.014 260);
+    --subtle: oklch(0.5 0.012 260);
+    --nav-foreground: oklch(0.32 0.012 260);
+    --border: oklch(0.82 0.006 260);
+    --input: oklch(0.8 0.006 260);
+}
+
+:root.dark[data-forge-contrast="more"] {
+    --muted-foreground: oklch(0.8 0.009 260);
+    --subtle: oklch(0.72 0.01 260);
+    --nav-foreground: oklch(0.82 0.009 260);
+    --border: oklch(0.42 0.008 260);
+    --input: oklch(0.44 0.008 260);
+}
+
+@media (prefers-contrast: more) {
+    :root[data-forge-contrast="system"] {
+        --muted-foreground: oklch(0.42 0.014 260);
+        --subtle: oklch(0.5 0.012 260);
+        --nav-foreground: oklch(0.32 0.012 260);
+        --border: oklch(0.82 0.006 260);
+        --input: oklch(0.8 0.006 260);
+    }
+
+    :root.dark[data-forge-contrast="system"] {
+        --muted-foreground: oklch(0.8 0.009 260);
+        --subtle: oklch(0.72 0.01 260);
+        --nav-foreground: oklch(0.82 0.009 260);
+        --border: oklch(0.42 0.008 260);
+        --input: oklch(0.44 0.008 260);
+    }
+}

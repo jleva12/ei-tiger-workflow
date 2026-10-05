@@ -56,6 +56,10 @@ export type BuilderUi = {
   kindTones?: Partial<Record<string, KindTone>>
   /** A step's card leads its second line with its kind ("HTTP request · 30 s timeout"). */
   kindLabels?: boolean
+  /** A word beside a step's name on its card, such as where a run starts. */
+  badgeOf?: (step: BaseStep) => string | null
+  /** What a read-only builder's settings say instead of "Changes apply as you make them". */
+  readOnlyHint?: string
   /** Below the settings: how later steps read it, and what it can read. */
   DataSection?: React.ComponentType<{ id: string; step: BaseStep }>
   /** What the empty canvas suggests. */

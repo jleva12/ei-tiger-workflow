@@ -38,6 +38,7 @@ import { cn } from "cn"
 import { Icon } from "@/components/forge/icon"
 import { resolveIcon } from "@/components/forge/icons"
 import { IssueMessages } from "@/features/builder/components/fields/field-issues"
+import { FieldsReadOnly } from "@/features/builder/components/fields/read-only"
 import { FieldDescription, FieldLabel } from "@/components/ui/field"
 import type { BuilderIssue } from "@/features/builder/lib/types"
 import {
@@ -390,6 +391,7 @@ export function ExpressionField({
   const labelId = React.useId()
   const messagesId = React.useId()
   // The editor reads these when it runs, not when it's made.
+  const readOnly = React.useContext(FieldsReadOnly)
   const latest = React.useRef({ onChange, scope, check, mode })
   React.useEffect(() => {
     latest.current = { onChange, scope, check, mode }
@@ -465,6 +467,8 @@ export function ExpressionField({
     }
 
     const extensions: Extension[] = [
+      EditorState.readOnly.of(readOnly),
+      EditorView.editable.of(!readOnly),
       history(),
       drawSelection(),
       bracketMatching(),
@@ -638,7 +642,7 @@ export function ExpressionField({
     }
     // The editor is made once per mode; later values arrive through the sync below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, multiline])
+  }, [mode, multiline, readOnly])
 
   // Follow the value when it changes from outside (undo, a rename, import).
   React.useEffect(() => {

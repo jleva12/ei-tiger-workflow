@@ -2,7 +2,7 @@ import type { Point } from "@/features/builder/lib/types"
 import { uid, type StepData } from "./model"
 
 /*
- * What an ADK workflow's and a chat agent's documents share about Forge's
+ * What a workflow's and a chat agent's documents share about Forge's
  * steps: the shape of a graph of them, and how a list setting read from
  * JSON is made to fit.
  */

@@ -53,8 +53,14 @@ const KEYS: [keys: string[], action: string][] = [
  * description, what's attached to it, what needs fixing, the canvas's
  * keys). Nodes are set up in their own dialog, opened from the canvas.
  */
-export function ChatAgentDetails() {
+/**
+ * The agent's details: its name and description, what's in it, and its
+ * issues. `children` go under the header: where it is between draft and
+ * published, and how to run it.
+ */
+export function ChatAgentDetails({ children }: { children?: React.ReactNode }) {
   const meta = useChatBuilder((s) => s.meta)
+  const readOnly = useChatBuilder((s) => s.readOnly)
   const nodes = useChatBuilder((s) => s.nodes)
   // Its agents (the chat agent, its sub-agents, saved agents); the rest are tools.
   const agents = nodes.filter(
@@ -78,14 +84,9 @@ export function ChatAgentDetails() {
           Google ADK chat agent · click a node to set it up
         </p>
       </header>
-      <Section className="gap-2">
-        <p className="flex items-start gap-2 text-xs/[1.5] text-muted-foreground">
-          <Icon icon="info" size={14} className="mt-0.5 shrink-0" />
-          Kept in this browser for now: agents aren&apos;t saved to the
-          organization, or run, until their backend is built.
-        </p>
-      </Section>
+      {children}
       <Section>
+        <fieldset disabled={readOnly} className="contents">
         <Field>
           <FieldLabel htmlFor={nameId}>Name</FieldLabel>
           <Input
@@ -109,6 +110,7 @@ export function ChatAgentDetails() {
             }
           />
         </Field>
+        </fieldset>
       </Section>
       <Section title="In it">
         <dl className="flex flex-col text-xs">
