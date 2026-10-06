@@ -178,7 +178,7 @@ def test_factory_defaults_to_openai_and_azure(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     emb = build_embedder(EmbeddingSettings())
     assert isinstance(emb, OpenAIEmbedder) and emb.model_id == "text-embedding-3-large@1024"
-    assert build_reranker(ModelSettings(_env_file=None)) is None  # no Voyage key needed by default
+    assert build_reranker(ModelSettings(_env_file=None).rerank) is None  # no Voyage key needed by default
 
     azure = build_embedder(
         EmbeddingSettings(

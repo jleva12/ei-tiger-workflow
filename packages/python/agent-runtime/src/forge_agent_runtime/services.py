@@ -38,9 +38,11 @@ class WorkflowRunner(Protocol):
         self, workflow_id: str, *, organization_id: str | None
     ) -> tuple[str, str, dict[str, Any]]:
         """
+        :param workflow_id: The workflow and which of its versions (``ag_x``,
+            its latest published; ``ag_x@3``; ``ag_x@draft``).
         :return: The workflow's name, what it does, and the JSON Schema of the
             input its start takes.
-        :raises LookupError: There's no such workflow.
+        :raises LookupError: There's no such workflow, or version.
         """
         ...
 
@@ -78,8 +80,16 @@ class KnowledgeBases(Protocol):
         limit: int,
     ) -> list[dict[str, Any]]:
         """
-        :return: The passages that best match the query, best first: each
-            ``{"document", "section", "text", "score"}``.
+        :return: The passages of these knowledge bases that best match the
+            query, ranked together, best first: each ``{"ref",
+            "knowledge_base", "knowledge_base_id", "document", "document_id",
+            "section", "location", "text", "score"}``. ``ref`` is what an
+            answer cites it by ("[KQM4821]"), the same in every search;
+            ``knowledge_base`` the name of the one it's from; ``location``
+            where in the document, in words ("page 4"); ``score`` how
+            relevant it is (higher is better). Empty when nothing is relevant
+            enough: the tool then says so, rather than handing the model the
+            nearest of what's there.
         :raises LookupError: The organization has no such knowledge base.
         """
         ...

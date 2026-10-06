@@ -14,6 +14,10 @@ dependencies = [
   "httpx>=0.27",                      # HTTP steps
   "sqlalchemy[asyncio]>=2.0",         # sessions in the admin MySQL: ADK's DatabaseSessionService (async: greenlet)
   "aiomysql>=0.2",
+  # LLM agents' tools and agents from the Agents page, built as the hosted runtime builds them
+  "forge-agent-runtime",
+  # The organization's MCP servers, connected with their credentials (the admin's, shared)
+  "forge-mcp-servers",
 ]
 
 # Registers the task with the Forge async worker.

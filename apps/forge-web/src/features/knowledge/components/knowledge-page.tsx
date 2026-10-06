@@ -22,6 +22,7 @@ import { Icon } from "@/components/forge/icon"
 import { RunStateIcon, StatusSymbol } from "@/components/forge/status"
 import { toneVars } from "@/components/forge/variants"
 import { ShellHeaderActions, useShellPage } from "@/components/forge/shell"
+import { usePageContext } from "@/features/assistant/lib/page-context"
 import { LayoutSwitch, SearchField } from "@/components/forge/toolbar"
 import { Button } from "@/components/ui/button"
 import {
@@ -135,6 +136,17 @@ export function KnowledgePage({
       label: base.data ? `${base.data.name} knowledge base` : "Knowledge base",
       sections: [],
     },
+  })
+  // For the assistant: whose knowledge base this is, and the document open
+  // in the viewer, which "this document" means.
+  usePageContext({
+    entities: [
+      { kind: "organization", id: organizationId, label: organization?.name },
+      { kind: "knowledge_base", id: knowledgeBaseId, label: base.data?.name },
+    ],
+    focus: search.document
+      ? { kind: "knowledge_document", id: search.document }
+      : undefined,
   })
 
   if (myOrganizations.isPending || (organization && base.isPending)) {

@@ -9,7 +9,13 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import type { IconProp } from "@/components/forge/icons"
-import type { KindGroup, KindInfo, StepOutput } from "@/features/builder/lib/types"
+// Types only: the Agents builder's model imports this one's values.
+import type { ChatConfigs } from "@/features/agents/lib/model"
+import type {
+  KindGroup,
+  KindInfo,
+  StepOutput,
+} from "@/features/builder/lib/types"
 import {
   outputsOf as stepOutputsOf,
   slugify,
@@ -39,6 +45,40 @@ export const AGENTS_ICON: IconProp = FlowSquareIcon
 
 export type ModelChoice = { provider: string; name: string }
 
+/**
+ * The tools an LLM agent may have, set up in its settings: the Agents
+ * builder's tool kinds, with their settings (`ChatConfigs`). An agent from
+ * the Agents page is used as a tool (`saved_agent`), a workflow too.
+ */
+export const LLM_TOOL_KINDS = [
+  "mcp",
+  "knowledge_base",
+  "http_tool",
+  "openapi",
+  "saved_agent",
+  "adk_workflow",
+] as const satisfies readonly (keyof ChatConfigs)[]
+
+export type LlmToolKind = (typeof LLM_TOOL_KINDS)[number]
+
+export const isLlmToolKind = (value: unknown): value is LlmToolKind =>
+  (LLM_TOOL_KINDS as readonly unknown[]).includes(value)
+
+/** One of an LLM agent's tools. */
+export type LlmTool<K extends LlmToolKind = LlmToolKind> = {
+  [Kind in K]: {
+    /** Made by the builder, unique among the agent's tools. */
+    id: string
+    kind: Kind
+    /** What it's called: an HTTP tool's name for the model. */
+    name: string
+    config: ChatConfigs[Kind]
+  }
+}[K]
+
+/** Which version of an agent from the Agents page: null for its latest published. */
+export type AgentVersion = number | "draft" | null
+
 /** What an LLM agent is set up with, as a node or as a sub-agent. */
 export type LlmSettings = {
   /** What it's for: what its parent and peers read when handing off to it. */
@@ -62,6 +102,8 @@ export type LlmSettings = {
   max_output_tokens: number | null
   /** The agents it may hand off to. */
   sub_agents: SubAgent[]
+  /** What it can call: MCP servers, knowledge bases, HTTP endpoints, APIs, agents, workflows. */
+  tools: LlmTool[]
 }
 
 /** A Sequential or Parallel agent: its sub-agents, in order. */
@@ -125,6 +167,19 @@ export type AgentConfigs = {
   llm: LlmSettings & {
     /** `single_turn`: it answers once; `task`: it may ask back until it's done. */
     mode: "single_turn" | "task"
+    /**
+     * `inline`: set up here, with the settings above; `agent`: an agent from
+     * the Agents page, used whole (its own instruction, model and tools).
+     */
+    source: "inline" | "agent"
+    /** The agent from the Agents page, by ID (`ca_…`), when its source is `agent`. */
+    agent: string
+    /** Which of its versions: a published one, its draft, or null for its latest published. */
+    version: AgentVersion
+    /** What it's sent: a template, `{{ }}` putting in the run's data; empty for what it's handed. */
+    message: string
+    /** The fields of its input schema, each a JSONata expression over the run's data. */
+    inputs: Record<string, string>
   }
   sequential: TeamSettings
   parallel: TeamSettings
@@ -132,6 +187,8 @@ export type AgentConfigs = {
   saved: {
     /** Another of the organization's agents, by ID. */
     agent: string
+    /** Which of its versions runs: a published one, its draft, or null for its latest published. */
+    version: AgentVersion
   }
   human_input: {
     /** What the person is asked; `{{ }}` puts in the run's data. */
@@ -199,6 +256,7 @@ const llmSettings = (): LlmSettings => ({
   disallow_transfer_to_peers: false,
   max_output_tokens: null,
   sub_agents: [],
+  tools: [],
 })
 
 export const AGENT_KINDS: { [K in AgentKind]: AgentKindInfo<K> } = {
@@ -224,6 +282,11 @@ export const AGENT_KINDS: { [K in AgentKind]: AgentKindInfo<K> } = {
     defaults: () => ({
       ...llmSettings(),
       mode: "single_turn",
+      source: "inline",
+      agent: "",
+      version: null,
+      message: "",
+      inputs: {},
     }),
   },
   sequential: {
@@ -262,7 +325,7 @@ export const AGENT_KINDS: { [K in AgentKind]: AgentKindInfo<K> } = {
     summary: "Runs another of the organization's workflows here, whole.",
     keywords: "saved nested reuse subgraph workflow compose other agent",
     idPrefix: "saved",
-    defaults: () => ({ agent: "" }),
+    defaults: () => ({ agent: "", version: null }),
   },
   approval: forgeKind("approval"),
   human_input: {

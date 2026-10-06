@@ -11,6 +11,14 @@ Agents: ADK's own, with their sub-agents built the same way inside them.
 - ``saved``: another of the organization's agents, built the same way and run
   here whole, with what the node before handed on as its input.
 
+An LLM agent's ``tools`` are the Agents builder's (an MCP server, a knowledge
+base, an HTTP tool, an OpenAPI spec, an agent from the Agents page, a
+workflow), each built the first time the agent asks the model
+(``graph.agent_tools.LazyToolset``). An ``llm`` node whose ``source`` is
+``agent`` is an agent from the Agents page instead, used whole
+(``graph.agent_tools.agent_node``): sent its ``message`` (what it's handed
+by default), its input schema's fields set from its ``inputs``.
+
 An LLM agent's instruction is a Forge template: its ``{{ }}`` parts are
 rendered from Forge's data each time it calls the model (an ADK instruction
 provider), so ADK's own ``{key}`` state injection doesn't apply and a ``{``
@@ -39,9 +47,16 @@ from google.adk.agents import (
 )
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.platform import time as platform_time
+from google.adk.workflow import BaseNode
 from google.genai import types
 from pydantic import PrivateAttr
 
+from forge_task_adk_workflows.graph.agent_tools import (
+    AgentSource,
+    LazyToolset,
+    agent_node,
+    failing_tools_first,
+)
 from forge_task_adk_workflows.graph.data import PRIVATE_STATE
 from forge_task_adk_workflows.graph.errors import AgentBuildError, RunFailed
 from forge_task_adk_workflows.graph.factories.base import (
@@ -55,6 +70,7 @@ from forge_task_adk_workflows.graph.factories.base import (
 )
 from forge_task_adk_workflows.graph.names import adk_name
 from forge_task_adk_workflows.graph.schemas import held_to, to_model
+from forge_task_adk_workflows.graph.uses import agent_ref
 from forge_task_adk_workflows.support.errors import StepFailed
 from forge_task_adk_workflows.support.expressions import plain
 
@@ -62,6 +78,8 @@ from forge_task_adk_workflows.support.expressions import plain
 # name one: ADK's own default, and the assistant's.
 DEFAULT_MODEL = "gemini-3.5-flash"
 SUB_AGENT_KINDS = frozenset({"llm", "sequential", "parallel", "loop_agent"})
+#: What an LLM agent's tools may be: the Agents builder's kinds.
+TOOL_KINDS = frozenset({"mcp", "knowledge_base", "http_tool", "openapi", "saved_agent", "adk_workflow"})
 # ADK would have a Workflow instead of a team agent, but a Workflow can't yet
 # be an LLM agent's sub-agent.
 _DEPRECATED = "[A-Za-z]+Agent is deprecated in favor of Workflow"
@@ -100,36 +118,68 @@ def _as_text(answer: str) -> str:
     return answer
 
 
-def llm(node: dict[str, Any], ctx: BuildContext) -> LlmAgent:
+def llm(node: dict[str, Any], ctx: BuildContext) -> BaseNode:
     config = config_of(node)
+    if config.get("source") == "agent":
+        return _from_agents(node, ctx)
     return _llm(
         node,
         where_of(node),
         label_of(node),
         ctx,
         mode=config.get("mode") or "single_turn",
+        step=text(node.get("id")),
+    )
+
+
+def _from_agents(node: dict[str, Any], ctx: BuildContext) -> BaseNode:
+    """An ``llm`` node that is an agent from the Agents page."""
+    config = config_of(node)
+    where = where_of(node)
+    agent = text(config.get("agent"))
+    if not agent:
+        raise AgentBuildError(f"{where}: choose the agent from the Agents page it uses.")
+    version = config.get("version")
+    if version is not None and version != "draft" and not (isinstance(version, int) and version > 0):
+        raise AgentBuildError(f"{where}: its version is a published one's number, draft, or none for the latest.")
+    inputs = config.get("inputs")
+    inputs = inputs if isinstance(inputs, dict) else {}
+    return agent_node(
+        name=adk_name(text(node.get("name"))),
+        label=label_of(node),
+        step=text(node.get("id")),
+        source=AgentSource(
+            ref=agent_ref(agent, version),
+            message=text(config.get("message")),
+            inputs={str(key): text(value) for key, value in inputs.items()},
+        ),
+        services=ctx.services,
+        data=ctx.data,
+        parse=answer_parser(config),
     )
 
 
 def sequential(node: dict[str, Any], ctx: BuildContext) -> BaseAgent:
-    return _team("sequential", node, where_of(node), label_of(node), ctx)
+    return _team("sequential", node, where_of(node), label_of(node), ctx, text(node.get("id")))
 
 
 def parallel(node: dict[str, Any], ctx: BuildContext) -> BaseAgent:
-    return _team("parallel", node, where_of(node), label_of(node), ctx)
+    return _team("parallel", node, where_of(node), label_of(node), ctx, text(node.get("id")))
 
 
 def loop_agent(node: dict[str, Any], ctx: BuildContext) -> BaseAgent:
-    return _team("loop_agent", node, where_of(node), label_of(node), ctx)
+    return _team("loop_agent", node, where_of(node), label_of(node), ctx, text(node.get("id")))
 
 
 def saved(node: dict[str, Any], ctx: BuildContext) -> Workflow:
     where = where_of(node)
-    agent_id = text(config_of(node).get("agent"))
+    config = config_of(node)
+    agent_id = text(config.get("agent"))
     if not agent_id:
         raise AgentBuildError(f"{where}: choose the agent it runs.")
     assert ctx.saved is not None
-    return ctx.saved(agent_id, adk_name(text(node.get("name"))), where)
+    # Which of its versions: ag_x (its latest published), ag_x@3, ag_x@draft.
+    return ctx.saved(agent_ref(agent_id, config.get("version")), adk_name(text(node.get("name"))), where)
 
 
 def _llm(
@@ -139,6 +189,7 @@ def _llm(
     ctx: BuildContext,
     *,
     mode: str | None,
+    step: str | None,
 ) -> LlmAgent:
     config = config_of(item)
     services = ctx.services
@@ -152,7 +203,8 @@ def _llm(
         "include_contents": config.get("include_contents") or "default",
         "disallow_transfer_to_parent": bool(config.get("disallow_transfer_to_parent")),
         "disallow_transfer_to_peers": bool(config.get("disallow_transfer_to_peers")),
-        "sub_agents": _sub_agents(config, where, label, ctx),
+        "sub_agents": _sub_agents(config, where, label, ctx, step),
+        "tools": _tools(config, where, ctx, step),
     }
     if mode:
         settings["mode"] = mode
@@ -165,11 +217,44 @@ def _llm(
     if config.get("max_output_tokens") is not None:
         settings["generate_content_config"] = types.GenerateContentConfig(max_output_tokens=config["max_output_tokens"])
     # The thinking level is the model callbacks' part.
-    if services.model_callbacks is not None:
-        callback = services.model_callbacks(config)
-        if callback is not None:
-            settings["before_model_callback"] = callback
+    callback = services.model_callbacks(config) if services.model_callbacks is not None else None
+    if settings["tools"]:
+        settings["before_model_callback"] = failing_tools_first(settings["tools"], callback)
+    elif callback is not None:
+        settings["before_model_callback"] = callback
     return ForgeLlmAgent(**settings)
+
+
+def _tools(config: dict[str, Any], where: str, ctx: BuildContext, step: str | None) -> list[LazyToolset]:
+    """An LLM agent's tools, each built when it's first used; checked here for what they name."""
+    tools: list[LazyToolset] = []
+    ids: set[str] = set()
+    for tool in items(config.get("tools")):
+        if not isinstance(tool, dict):
+            continue
+        kind, name = text(tool.get("kind")), text(tool.get("name")) or text(tool.get("id"))
+        at = f"{where}, tool '{name}'"
+        if kind not in TOOL_KINDS:
+            raise AgentBuildError(f"{at}: Forge has no kind of tool {kind!r}.")
+        tool_id = text(tool.get("id"))
+        if not tool_id or tool_id in ids:
+            raise AgentBuildError(f"{at}: every tool needs an ID of its own.")
+        ids.add(tool_id)
+        settings = config_of(tool)
+        if kind == "http_tool" and not adk_name(name):
+            raise AgentBuildError(f"{at}: the model calls it by its name, which needs a letter.")
+        needs = {
+            "saved_agent": ("agent", "choose the agent it calls"),
+            "adk_workflow": ("workflow", "choose the workflow it runs"),
+            "knowledge_base": ("knowledge_bases", "choose the knowledge bases it searches"),
+            "http_tool": ("url", "give the URL it calls"),
+        }.get(kind)
+        if needs is not None and not settings.get(needs[0]):
+            raise AgentBuildError(f"{at}: {needs[1]}.")
+        if kind == "mcp" and not (settings.get("server") or settings.get("url")):
+            raise AgentBuildError(f"{at}: choose one of the organization's MCP servers, or give its URL.")
+        tools.append(LazyToolset(tool, where=at, step=step, services=ctx.services))
+    return tools
 
 
 def _instruction(template: str, label: str, ctx: BuildContext) -> Callable[[ReadonlyContext], str]:
@@ -193,12 +278,14 @@ def _instruction(template: str, label: str, ctx: BuildContext) -> Callable[[Read
     return render
 
 
-def _team(kind: str, item: dict[str, Any], where: str, label: str, ctx: BuildContext) -> BaseAgent:
+def _team(
+    kind: str, item: dict[str, Any], where: str, label: str, ctx: BuildContext, step: str | None = None
+) -> BaseAgent:
     config = config_of(item)
     settings: dict[str, Any] = {
         "name": adk_name(text(item.get("name"))),
         "description": text(config.get("description")),
-        "sub_agents": _sub_agents(config, where, label, ctx),
+        "sub_agents": _sub_agents(config, where, label, ctx, step),
     }
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", _DEPRECATED)
@@ -230,7 +317,9 @@ def _parsers(item: dict[str, Any]) -> dict[str, Parse]:
     return found
 
 
-def _sub_agents(config: dict[str, Any], where: str, label: str, ctx: BuildContext) -> list[BaseAgent]:
+def _sub_agents(
+    config: dict[str, Any], where: str, label: str, ctx: BuildContext, step: str | None = None
+) -> list[BaseAgent]:
     agents: list[BaseAgent] = []
     for agent in items(config.get("sub_agents")):
         if not isinstance(agent, dict):
@@ -243,9 +332,9 @@ def _sub_agents(config: dict[str, Any], where: str, label: str, ctx: BuildContex
             raise AgentBuildError(f"{at}: Forge has no kind of sub-agent {kind!r}.")
         try:
             if kind == "llm":
-                agents.append(_llm(agent, at, inner, ctx, mode=None))
+                agents.append(_llm(agent, at, inner, ctx, mode=None, step=step))
             else:
-                agents.append(_team(kind, agent, at, inner, ctx))
+                agents.append(_team(kind, agent, at, inner, ctx, step))
         except AgentBuildError:
             raise
         except ValueError as error:

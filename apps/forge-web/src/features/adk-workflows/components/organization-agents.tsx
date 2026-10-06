@@ -117,7 +117,7 @@ const toRow = (
     errors,
     warnings: issues.length - errors,
     updated_at: record.updated_at,
-    updated_by: record.updated_by_name,
+    updated_by: record.updated_by_name ?? record.updated_by,
     doc,
   }
 }

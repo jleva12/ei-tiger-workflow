@@ -1,3 +1,4 @@
+import type { VersionChoice } from "@/features/builder/components/version-field"
 import * as React from "react"
 import type { StoreApi } from "zustand"
 
@@ -35,6 +36,8 @@ export type ChatLookups = {
   agents: Record<string, string>
   /** The organization's workflows, by ID. */
   workflows: Record<string, string>
+  /** Where each workflow is between draft and published, for its version picker. */
+  workflowVersions: Record<string, VersionChoice>
   /** The models agents may run on (`provider/model`), and the default as "". */
   models: Record<string, string>
   /** The organization's MCP servers, by ID. */

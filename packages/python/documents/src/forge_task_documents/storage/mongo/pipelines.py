@@ -18,7 +18,10 @@ MAX_NUM_CANDIDATES = 10_000  # Atlas limit
 
 def vector_filter(req: HybridSearchRequest) -> dict[str, Any]:
     """MQL pre-filter for $vectorSearch; fields must be 'filter' type in the index."""
-    clauses: list[dict[str, Any]] = [{"tenant_id": {"$eq": req.tenant_id}}]
+    tenants = req.tenant_ids
+    clauses: list[dict[str, Any]] = [
+        {"tenant_id": {"$eq": tenants[0]}} if len(tenants) == 1 else {"tenant_id": {"$in": list(tenants)}}
+    ]
     f = req.filters
     if f.doc_ids:
         clauses.append({"doc_id": {"$in": list(f.doc_ids)}})
@@ -33,7 +36,12 @@ def vector_filter(req: HybridSearchRequest) -> dict[str, Any]:
 
 def search_filters(req: HybridSearchRequest) -> list[dict[str, Any]]:
     """Atlas Search compound.filter clauses (non-scoring)."""
-    out: list[dict[str, Any]] = [{"equals": {"path": "tenant_id", "value": req.tenant_id}}]
+    tenants = req.tenant_ids
+    out: list[dict[str, Any]] = [
+        {"equals": {"path": "tenant_id", "value": tenants[0]}}
+        if len(tenants) == 1
+        else {"in": {"path": "tenant_id", "value": list(tenants)}}
+    ]
     f = req.filters
     if f.doc_ids:
         out.append({"in": {"path": "doc_id", "value": list(f.doc_ids)}})
@@ -57,6 +65,19 @@ def vector_stage(req: HybridSearchRequest, *, index: str, path: str = "embedding
             "filter": vector_filter(req),
         }
     }
+
+
+def vector_leg(req: HybridSearchRequest, *, index: str) -> list[dict[str, Any]]:
+    """The vector leg: nearest neighbours, then only those embedded with the
+    query's model. Vectors of another model (a knowledge base not re-indexed
+    since the model changed) aren't comparable, and the same dimensions would
+    otherwise rank them as if they were. A $match after $vectorSearch needs
+    no index change (a pre-filter would need embedding_model in the vector
+    index) and is allowed in $rankFusion's input pipelines."""
+    stages = [vector_stage(req, index=index)]
+    if req.embedding_model:
+        stages.append({"$match": {"embedding_model": req.embedding_model}})
+    return stages
 
 
 def text_stage(
@@ -105,7 +126,7 @@ def rank_fusion_pipeline(req: HybridSearchRequest, *, text_index: str, vector_in
             "$rankFusion": {
                 "input": {
                     "pipelines": {
-                        "vector": [vector_stage(req, index=vector_index)],
+                        "vector": vector_leg(req, index=vector_index),
                         "text": [text_stage(req, index=text_index), {"$limit": req.per_leg_limit}],
                     }
                 },
@@ -126,7 +147,7 @@ def single_leg_pipeline(
     req: HybridSearchRequest, *, leg: str, text_index: str, vector_index: str
 ) -> list[dict[str, Any]]:
     if leg == "vector":
-        head: list[dict[str, Any]] = [vector_stage(req, index=vector_index)]
+        head: list[dict[str, Any]] = vector_leg(req, index=vector_index)
         meta = "vectorSearchScore"
     elif leg == "text":
         head = [text_stage(req, index=text_index), {"$limit": req.per_leg_limit}]

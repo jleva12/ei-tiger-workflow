@@ -71,8 +71,11 @@ export type ChatConfigs = {
   }
   /** Another of the organization's agents, by ID, used whole. */
   saved_agent: { agent: string }
-  /** One of the organization's workflows, by ID, called as a tool. */
-  adk_workflow: { workflow: string }
+  /**
+   * One of the organization's workflows, by ID, called as a tool, at a
+   * version: a published one, its draft, or null for its latest published.
+   */
+  adk_workflow: { workflow: string; version: number | "draft" | null }
   memory: {
     /** on_demand: it looks things up when it decides to; every_turn: what's relevant comes with each message. */
     mode: "on_demand" | "every_turn"
@@ -301,7 +304,7 @@ export const CHAT_KINDS: { [K in ChatKind]: ChatKindInfo<K> } = {
       "One of the organization's workflows, as a tool: the agent runs it with its input and gets its result.",
     keywords: "adk workflow graph tool run process",
     idPrefix: "workflow",
-    defaults: () => ({ workflow: "" }),
+    defaults: () => ({ workflow: "", version: null }),
   },
 }
 

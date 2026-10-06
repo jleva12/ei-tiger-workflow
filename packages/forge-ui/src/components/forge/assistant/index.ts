@@ -22,11 +22,18 @@ export { adkToolkit } from "./adk-toolkit"
 export { citedRefs, remarkSourceRefs } from "./source-refs"
 export {
   MessageSources,
+  SearchLabel,
   SourcedMarkdownText,
+  type AssistantSearch,
   type AssistantSource,
   type AssistantSourceDocument,
   type AssistantSourcesConfig,
 } from "./sources"
+export {
+  knowledgeBaseSources,
+  type KnowledgePassage,
+  type KnowledgeSourcesOptions,
+} from "./knowledge-sources"
 export { AssistantCommandMenu, type AssistantCommand } from "./commands"
 export {
   AssistantSettingsContext,

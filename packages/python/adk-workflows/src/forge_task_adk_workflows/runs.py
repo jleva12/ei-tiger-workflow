@@ -75,10 +75,11 @@ from forge_task_adk_workflows.graph import (
     build_agent,
     pending_pauses,
 )
+from forge_task_adk_workflows.graph.agent_tools import AgentServices, ChildRuns, RunWorkflows
 from forge_task_adk_workflows.graph.data import ERROR_KEY
 from forge_task_adk_workflows.graph.factories.base import config_of, items, label_of, text
 from forge_task_adk_workflows.graph.names import FINISH_NODE, adk_name, body_name
-from forge_task_adk_workflows.graph.pauses import REQUEST_INPUT
+from forge_task_adk_workflows.graph.pauses import REQUEST_INPUT, TOOL_CONFIRMATION
 from forge_task_adk_workflows.models import RETRYABLE, UNANSWERED
 from forge_tasks.control import ControlSignal, JobControl
 from forge_tasks.errors import TaskError, TransientError
@@ -110,11 +111,24 @@ class RunPayload(BaseModel):
     tenant_id: str = Field(description="The organization the ADK workflow is the organization's")
     agent_id: str
     revision: int = 0
+    version: int | str | None = Field(
+        default=None, description='Which version of it runs: "draft", or a published version\'s number'
+    )
     name: str = ""
     document: dict[str, Any] = Field(description="The ADK workflow (forge.agent/v1) as it was when the run started")
     saved: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
-        description="The saved ADK workflows it runs, by ID, as they were when the run started",
+        description="The saved ADK workflows it runs (and calls as tools), by reference (ag_x, ag_x@3, ag_x@draft; "
+        "graph.uses.agent_ref), as they were when the run started",
+    )
+    chat_agents: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description="The agents from the Agents page its LLM agents are or call, by reference (ca_x, ca_x@3, "
+        "ca_x@draft; graph.uses.agent_ref), each with the saved agents it uses bundled, as they were when the run started",
+    )
+    knowledge_bases: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description="The organization's knowledge bases its LLM agents search, by ID: each one's name and description",
     )
     input: Any = None
     session_id: str = Field(
@@ -191,6 +205,9 @@ class AdkRun:
         """
         if self.state["finished"] is not None:
             return self._succeeded(self.state["finished"])
+        agents = self._agents()
+        if agents is not None:
+            self.services = self.services.but(agents=agents)
         try:
             graph = build_agent(self.payload.document, services=self.services, resolve=self.payload.saved.get)
         except AgentBuildError as error:
@@ -214,10 +231,33 @@ class AdkRun:
             return JobResult.failed(f"The run failed: {refused}"[:2000], outcome="failed", session_id=self.session_id)
         finally:
             await runner.close()
+            if agents is not None:
+                # What its tools opened (MCP sessions): a Workflow's runner doesn't close them.
+                await agents.close()
         self.state["finished"] = finished
         await self._save(f"The run {finished.get('outcome') or 'succeeded'}")
         await self._note(f"The run {finished.get('outcome') or 'succeeded'}")
         return self._succeeded(finished)
+
+    def _agents(self) -> AgentServices | None:
+        """What the run's LLM agents' tools use: the worker's, with what the run carries."""
+        agents: AgentServices | None = self.services.agents
+        if agents is None:
+            return None
+        children: ChildRuns | None = getattr(self.control, "children", None)
+        return agents.for_run(
+            organization_id=self.payload.tenant_id,
+            chat_agents=self.payload.chat_agents,
+            knowledge_bases=self.payload.knowledge_bases,
+            workflows=RunWorkflows(
+                self.payload.model_dump(mode="json"),
+                run_id=self.control.instance_id,
+                children=children,
+                wait=agents.workflow_wait,
+            )
+            if children is not None
+            else None,
+        )
 
     def _plugins(self) -> list[BasePlugin]:
         """What the run's App carries: the usage of its model and tool calls,
@@ -391,6 +431,8 @@ class AdkRun:
             "interrupt_id": pause.interrupt_id,
         }
         key = self._gate(pause)
+        if pause.kind == TOOL_CONFIRMATION:
+            return await self._confirm(pause, key, details)
         if pause.kind == "approval":
             decision = await self.control.approval(
                 key=key,
@@ -437,6 +479,38 @@ class AdkRun:
             raise RunFailed(f"{label} failed: its answer isn't a JSON object", step=step)
         await self._note(f"{label}: answered by {who or 'someone'}")
         return answer
+
+    async def _confirm(self, pause: Pause, key: str, details: dict[str, Any]) -> dict[str, Any]:
+        """
+        A tool a person confirms before it's called: an approval of the call
+        (the tool, and what the model would call it with), by the
+        organization's members.
+        """
+        found = self.steps.around(pause.path)
+        label, node = found if found else (str(pause.payload.get("agent") or "An agent"), None)
+        tool = str(pause.payload.get("tool") or "a tool")
+        decision = await self.control.approval(
+            key=key,
+            reason=pause.message,
+            details={
+                "kind": "approval",
+                # Whoever may run the workflow (agents:run) may let its agent call the tool.
+                "approvers": "org:member",
+                "expires_at": None,
+                **details,
+                "step": node.get("id") if node else details.get("step"),
+                "step_name": text(node.get("name")) if node else details.get("step_name"),
+                "tool": tool,
+                "args": pause.payload.get("args") or {},
+                "confirmation": True,
+            },
+            timeout_seconds=None,
+        )
+        who = decision.actor_name or decision.actor_id or ""
+        await self._note(
+            f"{label}: calling {tool} {'allowed' if decision.approved else 'refused'} by {who or 'no one'}"
+        )
+        return {"confirmed": decision.approved}
 
     def _gate(self, pause: Pause) -> str:
         # A run that started over asks its questions afresh.
@@ -530,6 +604,22 @@ class Steps:
         if node is None:
             return None
         return ", ".join([label_of(node), *where])
+
+    def around(self, path: str) -> tuple[str, dict[str, Any]] | None:
+        """
+        :param path: Where in the run something happened: a node's path, or
+            deeper (an agent inside an LLM node, a tool's call).
+        :return: The document's step it's in, and how the activity names it;
+            None outside every step.
+        """
+        segments = path.split("/")
+        for end in range(len(segments), 1, -1):
+            label = self.label("/".join(segments[:end]))
+            if label is not None:
+                node = self.by_name.get(segments[end - 1].partition("@")[0])
+                if node is not None:
+                    return label, node
+        return None
 
     def response_schema(self, node: dict[str, Any] | None) -> dict[str, Any] | None:
         """:return: What a Human input step's answer is held to, as its document has it."""

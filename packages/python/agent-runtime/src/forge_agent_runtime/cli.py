@@ -21,6 +21,8 @@
 - ``FORGE_AGENT_ALLOW_PRIVATE`` / ``_ALLOWED_HOSTS``: what HTTP tools may reach.
 - ``FORGE_AGENT_API_PREFIX`` (``--prefix``): where the run API is mounted; at
   the root by default here, as ``adk api_server`` serves it.
+- ``FORGE_AGENT_A2A`` (``--a2a``): Google's A2A protocol too, at ``/a2a``
+  (``forge-agent-runtime[a2a]``).
 
 Every other setting is :class:`~forge_agent_runtime.app.AgentServerSettings`'s.
 """
@@ -94,6 +96,8 @@ def serve(path: Path, settings: AgentServerSettings) -> int:
             f"Serving {doc.name} as appName {doc.id!r} at "
             f"http://{settings.host}:{settings.port}{settings.api_prefix}"
         )
+        if settings.a2a:
+            print(f"and over A2A at http://{settings.host}:{settings.port}/a2a")
     AgentServer(settings.model_copy(update={"prebuild": False})).with_agent(path).run()
     return 0
 
@@ -116,6 +120,7 @@ def new(args: argparse.Namespace) -> int:
             artifacts=args.artifacts,
             memory=args.memory,
             streaming=not args.no_streaming,
+            a2a=not args.no_a2a,
             api_key=args.api_key,
             cors_origins=args.cors_origin or [],
             code_owners=args.code_owner or [],
@@ -167,6 +172,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--sessions", help="memory, or a database URL")
     run.add_argument("--memory-atlas-uri")
     run.add_argument("--allow-private", action="store_true", default=None)
+    run.add_argument(
+        "--a2a", action="store_true", default=None, help="Serve over Google's A2A protocol too (/a2a)"
+    )
     make = commands.add_parser("new", help="Generate a standalone project (server and UI) for an agent.")
     make.add_argument("path", type=Path)
     make.add_argument("--out", type=Path, help="Where to write it; the agent's name by default")
@@ -192,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     make.add_argument("--no-streaming", action="store_true", help="Replies arrive whole, not streamed")
     make.add_argument("--api-only", action="store_true", help="The API alone, without the chat UI")
+    make.add_argument("--no-a2a", action="store_true", help="Without Google's A2A protocol (/a2a)")
     make.add_argument("--api-key", action="store_true", help="The API asks for a key (with --api-only)")
     make.add_argument(
         "--cors-origin", action="append", metavar="ORIGIN", help="A page elsewhere that may call the API"

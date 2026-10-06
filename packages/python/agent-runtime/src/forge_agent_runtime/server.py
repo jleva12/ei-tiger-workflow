@@ -16,6 +16,10 @@ talks to these routes as they are::
 
     app = FastAPI()
     app.include_router(create_router(executor), prefix="/agents")
+
+An app that decides per agent who may call it passes ``authorize``: it's
+called once the agent is found, before anything is built or run, and refuses
+by raising ``HTTPException``.
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, Protocol
 
 from fastapi import APIRouter, FastAPI, HTTPException, Path, Request, status
 from fastapi.params import Depends as DependsParam
@@ -38,6 +42,7 @@ from forge_agent_runtime.executor import (
     AgentNotFound,
     AgentRef,
     CamelModel,
+    ResolvedAgent,
     RunRequest,
     StateRefused,
     check_state,
@@ -53,6 +58,36 @@ SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 AppName = Annotated[str, Path(pattern=r"^[A-Za-z][A-Za-z0-9_-]*(@(draft|[0-9]+))?$", max_length=96)]
 UserId = Annotated[str, Path(min_length=1, max_length=255)]
 SessionId = Annotated[str, Path(pattern=r"^[A-Za-z0-9._:-]+$", max_length=128)]
+
+
+#: What a call does with an agent: read it (``agent``), its conversations
+#: (``sessions``), run a turn (``run``); over A2A, read its card (``card``) or
+#: send it a JSON-RPC request (``a2a``).
+CallAction = Literal["agent", "sessions", "run", "card", "a2a"]
+
+
+class AuthorizeCall(Protocol):
+    """
+    Decides whether a request may do something with an agent, once it's
+    found and before anything is built or run: refuses by raising
+    ``HTTPException`` (401, 403).
+    """
+
+    async def __call__(
+        self,
+        request: Request,
+        agent: ResolvedAgent,
+        *,
+        action: CallAction,
+        user_id: str | None,
+    ) -> None:
+        """
+        :param request: The request.
+        :param agent: The agent called.
+        :param action: What the call does.
+        :param user_id: Whose conversations it reads or adds to (ADK's
+            ``userId``), when it does.
+        """
 
 
 class SessionCreate(CamelModel):
@@ -95,11 +130,13 @@ def create_router(
     executor: AgentExecutor | Callable[[Request], AgentExecutor],
     *,
     dependencies: Sequence[DependsParam] = (),
+    authorize: AuthorizeCall | None = None,
 ) -> APIRouter:
     """
     :param executor: Runs the agents; or finds the executor for a request,
         for an app that makes it when it starts (``request.app.state``).
     :param dependencies: Run before every route, e.g. one that authenticates the caller.
+    :param authorize: Decides per agent whether a request may call it.
     :return: The routes.
     """
     router = APIRouter(dependencies=list(dependencies))
@@ -107,25 +144,30 @@ def create_router(
     def of(request: Request) -> AgentExecutor:
         return executor if isinstance(executor, AgentExecutor) else executor(request)
 
-    async def agent_of(request: Request, app_name: str):
+    async def agent_of(
+        request: Request, app_name: str, *, action: CallAction, user_id: str | None = None
+    ) -> ResolvedAgent:
         try:
-            return await of(request).resolve(app_name)
+            resolved = await of(request).resolve(app_name)
         except AgentNotFound as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
         except BuildError as exc:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT, f"The agent can't be built: {exc}"
             ) from exc
+        if authorize is not None:
+            await authorize(request, resolved, action=action, user_id=user_id)
+        return resolved
 
     @router.get("/apps/{app_name}")
     async def get_agent(request: Request, app_name: AppName) -> dict[str, Any]:
         """The agent: its name, version, and the state its chat may send."""
-        return dict(describe((await agent_of(request, app_name)).document))
+        return dict(describe((await agent_of(request, app_name, action="agent")).document))
 
     @router.get("/apps/{app_name}/users/{user_id}/sessions")
     async def list_sessions(request: Request, app_name: AppName, user_id: UserId) -> JSONResponse:
         """A person's conversations with the agent, most recently active first, without their events."""
-        agent = (await agent_of(request, app_name)).document.id
+        agent = (await agent_of(request, app_name, action="sessions", user_id=user_id)).document.id
         listed = await of(request).sessions.list_sessions(app_name=agent, user_id=user_id)
         newest = sorted(listed.sessions, key=lambda s: s.last_update_time, reverse=True)
         return JSONResponse([to_wire(session) for session in newest])
@@ -135,7 +177,7 @@ def create_router(
         request: Request, app_name: AppName, user_id: UserId, body: SessionCreate | None = None
     ) -> JSONResponse:
         """Start a conversation, optionally with some of the state the agent declares."""
-        resolved = await agent_of(request, app_name)
+        resolved = await agent_of(request, app_name, action="sessions", user_id=user_id)
         try:
             state = check_state(resolved.document, body.state if body else None)
         except StateRefused as exc:
@@ -153,7 +195,7 @@ def create_router(
         request: Request, app_name: AppName, user_id: UserId, session_id: SessionId
     ) -> JSONResponse:
         """A conversation with its events, which a chat replays to show it."""
-        agent = (await agent_of(request, app_name)).document.id
+        agent = (await agent_of(request, app_name, action="sessions", user_id=user_id)).document.id
         session = await of(request).sessions.get_session(
             app_name=agent, user_id=user_id, session_id=session_id
         )
@@ -168,7 +210,7 @@ def create_router(
         request: Request, app_name: AppName, user_id: UserId, session_id: SessionId
     ) -> None:
         """Delete a conversation and the files saved in it."""
-        agent = (await agent_of(request, app_name)).document.id
+        agent = (await agent_of(request, app_name, action="sessions", user_id=user_id)).document.id
         artifacts = of(request).artifacts
         for name in await artifacts.list_artifact_keys(
             app_name=agent, user_id=user_id, session_id=session_id
@@ -188,11 +230,15 @@ def create_router(
         Run a person's turn and stream the agent's events as Server-Sent Events.
         \f
         :raises HTTPException: 404 for an unknown agent or conversation; 422
-            for state the agent doesn't take, or an agent that can't be built.
+            for state the agent doesn't take, or an agent that can't be built;
+            whatever ``authorize`` raises.
         """
+        # Who may call it is decided before it's built: building connects
+        # to its MCP servers and fetches its specs.
+        resolved = await agent_of(request, body.app_name, action="run", user_id=body.user_id)
         try:
             executor_ = of(request)
-            runner, resolved = await executor_.runner(body.app_name)
+            runner, resolved = await executor_.runner(body.app_name, resolved=resolved)
             check_state(resolved.document, body.state_delta)
         except AgentNotFound as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
@@ -237,4 +283,12 @@ def create_app(executor: AgentExecutor, *, prefix: str = "", title: str = "Forge
     return app
 
 
-__all__ = ["SSE_HEADERS", "AgentRef", "create_app", "create_router", "error_event"]
+__all__ = [
+    "SSE_HEADERS",
+    "AgentRef",
+    "AuthorizeCall",
+    "CallAction",
+    "create_app",
+    "create_router",
+    "error_event",
+]

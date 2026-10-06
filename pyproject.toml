@@ -15,6 +15,7 @@ members = [
     "packages/python/documents",
     "packages/python/embeddings",
     "packages/python/jsonata",
+    "packages/python/mcp-servers",
     "packages/python/task-sdk",
 ]
 
@@ -24,6 +25,7 @@ forge-agent-runtime = { workspace = true }
 forge-common = { workspace = true }
 forge-embeddings = { workspace = true }
 forge-jsonata = { workspace = true }
+forge-mcp-servers = { workspace = true }
 forge-task-adk-workflows = { workspace = true }
 forge-task-documents = { workspace = true }
 forge-tasks = { workspace = true }

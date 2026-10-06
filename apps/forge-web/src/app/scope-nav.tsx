@@ -34,6 +34,7 @@ function OrganizationNav({ organizationId }: { organizationId: string }) {
     <OrganizationWorkspaceNav
       organizationId={organizationId}
       members={can("members:read")}
+      apiKeys={can("api_keys:manage")}
     />
   )
 }

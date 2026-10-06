@@ -54,9 +54,10 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "@/components/ui/toast"
 import { useMyOrganizations, type MyOrganization } from "@/lib/access"
-import { useOrganizationAgents } from "@/features/adk-workflows/lib/api"
-import { useOrganizationKnowledgeBases } from "@/features/knowledge/lib/api"
-import { useOrganizationMcpServers } from "@/features/mcp-servers/lib/api"
+import {
+  useOrganizationAgents,
+  versionChoices,
+} from "@/features/adk-workflows/lib/api"
 import { toApiError } from "@/lib/api/index"
 import {
   cacheChatAgent,
@@ -104,6 +105,7 @@ import {
   type ChatEdgeView,
   type ChatNodeView,
 } from "./chat-agent-store"
+import { useToolLookups } from "./tool-lookups"
 import { CHAT_AGENT_UI } from "./chat-agent-ui"
 
 const NOUNS = { doc: "agent", steps: "nodes" }
@@ -333,36 +335,18 @@ function OpenChatAgent({
 function useLookups(organizationId: string) {
   const api = useChatBuilderApi()
   const { agents } = useOrganizationChatAgents(organizationId)
-  const { agents: workflows, isSuccess: workflowsKnown } =
-    useOrganizationAgents(organizationId)
+  const {
+    agents: workflows,
+    records: workflowRecords,
+    isSuccess: workflowsKnown,
+  } = useOrganizationAgents(organizationId)
   const { models, defaultModel } = useAgentStepModels()
-  const mcpServers = useOrganizationMcpServers(organizationId)
-  const knowledgeBases = useOrganizationKnowledgeBases(organizationId)
+  const tools = useToolLookups(organizationId)
   React.useEffect(() => {
     const state = api.getState()
-    const found = knowledgeBases.data ?? []
-    state.setLookups({
-      knowledgeBases: Object.fromEntries(
-        found.map((kb) => [
-          kb.id,
-          {
-            name: kb.name,
-            description: kb.description,
-            documents: kb.documents,
-            ready: kb.ready,
-          },
-        ])
-      ),
-    })
-    // Unknown until they load (or when they can't be read).
-    state.setContext({
-      knowledgeBases: knowledgeBases.isSuccess
-        ? new Map(
-            found.map((kb) => [kb.id, { name: kb.name, ready: kb.ready }])
-          )
-        : undefined,
-    })
-  }, [api, knowledgeBases.data, knowledgeBases.isSuccess])
+    state.setLookups(tools.lookups)
+    state.setContext(tools.checks)
+  }, [api, tools])
   React.useEffect(() => {
     const names = Object.fromEntries(models.map((m) => [m.id, m.name]))
     const fallback = defaultModel ? names[defaultModel] : undefined
@@ -386,6 +370,7 @@ function useLookups(organizationId: string) {
     const state = api.getState()
     state.setLookups({
       workflows: Object.fromEntries(workflows.map((w) => [w.id, w.name])),
+      workflowVersions: versionChoices(workflowRecords),
     })
     // Unknown until they load: a pick isn't called deleted meanwhile.
     state.setContext({
@@ -393,38 +378,7 @@ function useLookups(organizationId: string) {
         ? new Map(workflows.map((w) => [w.id, { name: w.name }]))
         : undefined,
     })
-  }, [api, workflows, workflowsKnown])
-  React.useEffect(() => {
-    const state = api.getState()
-    const servers = mcpServers.data ?? []
-    state.setLookups({
-      mcpServers: Object.fromEntries(
-        servers.map((s) => [
-          s.id,
-          {
-            name: s.name,
-            url: s.url,
-            tools: s.checked_at ? s.tools.map((t) => t.name) : null,
-          },
-        ])
-      ),
-    })
-    // Unknown until they load (or when they can't be read).
-    state.setContext({
-      mcpServers: mcpServers.isSuccess
-        ? new Map(
-            servers.map((s) => [
-              s.id,
-              {
-                name: s.name,
-                connected: !s.auth.interactive || s.auth.connected === true,
-                tools: s.checked_at ? s.tools.map((t) => t.name) : null,
-              },
-            ])
-          )
-        : undefined,
-    })
-  }, [api, mcpServers.data, mcpServers.isSuccess])
+  }, [api, workflows, workflowRecords, workflowsKnown])
 }
 
 /** Keeping the chat agent's draft as it's built. */

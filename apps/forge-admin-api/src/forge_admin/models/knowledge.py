@@ -98,6 +98,8 @@ class KnowledgeDocument(AuditBase):
         has it.
     :ivar error: Why it failed.
     :ivar chunk_count: The chunks it was split into, once it succeeded.
+    :ivar embedding_model: What its chunks are embedded with, once it
+        succeeded (e.g. ``text-embedding-3-large@1024``); empty when unknown.
     :ivar finished_at: When it finished (UTC), once it has.
     """
 
@@ -126,4 +128,5 @@ class KnowledgeDocument(AuditBase):
     phase: Mapped[str] = mapped_column(ascii_string(16), default="QUEUED")
     error: Mapped[str] = mapped_column(String(1000), default="")
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    embedding_model: Mapped[str] = mapped_column(String(255), default="")
     finished_at: Mapped[datetime | None] = mapped_column(AUDIT_TIMESTAMP, nullable=True)

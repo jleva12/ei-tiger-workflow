@@ -114,3 +114,33 @@ def test_new_ids_are_unique_and_the_builders_shape() -> None:
     made = {new_agent_id() for _ in range(500)}
     assert len(made) == 500
     assert all(re.fullmatch(ID_PATTERN, agent_id) for agent_id in made)
+
+
+def test_a_document_saved_before_llm_agents_had_tools_is_filled_in() -> None:
+    document = example()
+    for node in document["nodes"]:
+        config = node["config"]
+        if node["kind"] == "llm":
+            for key in ("tools", "source", "agent", "version", "message", "inputs"):
+                config.pop(key, None)
+        for sub in config.get("sub_agents") or []:
+            sub["config"].pop("tools", None)
+    assert any(n["config"].get("sub_agents") for n in document["nodes"])
+    stored = check(document)
+    llm = next(n for n in stored["nodes"] if n["kind"] == "llm")
+    assert (
+        llm["config"]["source"],
+        llm["config"]["tools"],
+        llm["config"]["version"],
+    ) == (
+        "inline",
+        [],
+        None,
+    )
+    team = next(n for n in stored["nodes"] if n["config"].get("sub_agents"))
+    assert all(
+        "tools" in s["config"]
+        for s in team["config"]["sub_agents"]
+        if s["kind"] == "llm"
+    )
+    assert all("source" not in s["config"] for s in team["config"]["sub_agents"])

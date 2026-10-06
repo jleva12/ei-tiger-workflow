@@ -152,3 +152,30 @@ async def test_a_wait_ends_the_attempt_until_its_time(store: RunStore) -> None:
 
     assert waiting.value.when == START + timedelta(minutes=10)
     assert waiting.value.reason == "Delay waits"
+
+
+async def test_a_run_starts_child_runs_queued_with_a_job_each(store: RunStore) -> None:
+    queued: list[str] = []
+
+    async def queue(run_id: str) -> None:
+        queued.append(run_id)
+
+    run, _ = await claimed(store)
+    control = RunControl(run, store=store, owner="w1", queue=queue)
+    payload = {
+        "tenant_id": "org-1",
+        "agent_id": "ag_called00001",
+        "name": "Called",
+        "session_id": "child-session",
+        "run_as": "member-1",
+        "run_as_name": "Ada",
+        "document": {},
+    }
+
+    child = await control.children.start(payload)
+
+    assert queued == [child]
+    found = await control.children.get(child)
+    assert found is not None
+    assert (found["status"], found["agent_id"], found["requested_by"]) == ("queued", "ag_called00001", "member-1")
+    assert found["payload"]["session_id"] == "child-session"

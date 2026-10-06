@@ -3,6 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router"
 import { PlayIcon } from "@hugeicons/core-free-icons"
 import { useQueryClient } from "@tanstack/react-query"
 import { ReactFlowProvider, useReactFlow } from "@xyflow/react"
+import { PencilEdit02Icon } from "@hugeicons/core-free-icons"
 import { cn } from "cn"
 
 import { useBuilderAutosave } from "@/features/builder/components/autosave"
@@ -17,6 +18,11 @@ import { ImportDialog } from "@/features/builder/components/import-dialog"
 import { BuilderJson } from "@/features/builder/components/json-view"
 import { StepLibrary } from "@/features/builder/components/library"
 import { StepDialog } from "@/features/builder/components/step-dialog"
+import {
+  PublishDialog,
+  ReadOnlyBanner,
+  VersionChip,
+} from "@/features/builder/components/versions"
 import { BuilderUiContext } from "@/features/builder/components/ui"
 import {
   DETAILS_PANEL_ID,
@@ -64,7 +70,11 @@ import {
   cacheAgent,
   organizationAgents,
   saveAgent,
+  useAgentLifecycle,
+  useAgentVersion,
   useOrganizationAgents,
+  versionChoices,
+  type AgentDetail,
   type AgentRecord,
 } from "@/features/adk-workflows/lib/api"
 import {
@@ -76,6 +86,12 @@ import {
   type AgentDocument,
 } from "@/features/adk-workflows/lib/document"
 import { AGENTS_ICON } from "@/features/adk-workflows/lib/model"
+import { useToolLookups } from "@/features/agents/components/tool-lookups"
+import {
+  conflictCode,
+  publishProblems,
+  useOrganizationChatAgents,
+} from "@/features/agents/lib/api"
 import type { AdkRun } from "@/features/runs/lib/runs"
 import { AGENT_JSON_SCHEMA } from "@/features/adk-workflows/lib/schema"
 import { toApiError } from "@/lib/api/index"
@@ -84,6 +100,7 @@ import { usePageContext } from "@/features/assistant/lib/page-context"
 import { useAgentStepModels } from "@/features/steps/lib/models"
 import { AdkRunDialog, AdkRunsMenu } from "@/features/runs/components/adk-runs"
 import { AgentDetails } from "./agent-details"
+import { WorkflowRunInfo } from "./workflow-versions"
 import { agentFileName } from "./agent-files"
 import {
   AgentBuilderProvider,
@@ -92,6 +109,7 @@ import {
   useAgentBuilderApi,
   type AgentEdgeView,
   type AgentNodeView,
+  type ChatAgentChoice,
 } from "./agent-store"
 import { AGENT_UI } from "./agent-ui"
 
@@ -101,15 +119,19 @@ const NOUNS = { doc: "Workflow", steps: "nodes" }
  * An agent's builder, for the organization's members: the node library in
  * the sidebar, the canvas, the agent's details on the right, each node's
  * settings (and its sub-agents') in a dialog over the canvas, and the
- * agent's JSON a tab away. Changes are saved to the organization as
- * they're made (the builder kit's autosave).
+ * agent's JSON a tab away. The draft is saved to the organization as it's
+ * changed (the builder kit's autosave); a published version is read-only,
+ * and changing it means starting a new version.
  */
 export function AgentBuilderPage({
   organizationId,
   agentId,
+  version,
 }: {
   organizationId: string
   agentId: string
+  /** A published version to open read-only; the workflow as it is now when omitted. */
+  version?: number
 }) {
   const myOrganizations = useMyOrganizations()
   const organization = myOrganizations.data?.find(
@@ -123,11 +145,25 @@ export function AgentBuilderPage({
       refetchOnWindowFocus: false,
       retry: (count, error) => toApiError(error).status !== 404 && count < 2,
     })
+  const pinned = useAgentVersion(organizationId, agentId, version)
+  const can = useScopeAccess(organization ? `org:${organizationId}` : undefined)
+  const canManage = can("agents:manage")
   // What the builder opened. From then on it owns the document: a later
   // refetch, even a failed one, never closes it (and what's unsaved with it).
-  const [record, setRecord] = React.useState<AgentRecord>()
-  if (!record && agent.isFetchedAfterMount && agent.isSuccess)
-    setRecord(agent.data)
+  // Publishing, a new version or discarding a draft opens what they answer.
+  const [record, setRecord] = React.useState<AgentDetail>()
+  if (
+    !record &&
+    agent.isFetchedAfterMount &&
+    agent.isSuccess &&
+    (version === undefined || pinned.isSuccess)
+  ) {
+    setRecord(
+      pinned.data
+        ? { ...agent.data, document: pinned.data.document }
+        : agent.data
+    )
+  }
 
   useShellPage({
     header: {
@@ -155,7 +191,10 @@ export function AgentBuilderPage({
     ],
   })
 
-  if (myOrganizations.isPending || (organization && !record && !agent.error)) {
+  if (
+    myOrganizations.isPending ||
+    (organization && !record && !agent.error && !pinned.error)
+  ) {
     return (
       <div className="flex flex-col gap-3" aria-busy="true">
         <Skeleton className="h-8 w-64" />
@@ -214,7 +253,11 @@ export function AgentBuilderPage({
       <PageEmpty
         illustration="search"
         title="Workflow not found"
-        description="The organization has no workflow here: it may have been deleted, or the link is to another organization's."
+        description={
+          pinned.error
+            ? `The workflow has no version ${version}.`
+            : "The organization has no workflow here: it may have been deleted, or the link is to another organization's."
+        }
       >
         <Button
           variant="outline"
@@ -232,7 +275,21 @@ export function AgentBuilderPage({
       </PageEmpty>
     )
   }
-  return <OpenAgent organization={organization} record={record} />
+  // A published version, or the workflow for someone who can't change it, is read-only.
+  const readOnly = version !== undefined || !record.has_draft || !canManage
+  return (
+    <OpenAgent
+      key={`${version ?? (record.has_draft ? `draft${record.draft_version}` : `v${record.published_version}`)}:${readOnly}`}
+      organization={organization}
+      record={record}
+      viewing={version}
+      readOnly={readOnly}
+      canManage={canManage}
+      onRecord={(next) =>
+        setRecord((kept) => ({ versions: kept?.versions ?? [], ...next }))
+      }
+    />
+  )
 }
 
 /**
@@ -243,9 +300,17 @@ export function AgentBuilderPage({
 function OpenAgent({
   organization,
   record,
+  viewing,
+  readOnly,
+  canManage,
+  onRecord,
 }: {
   organization: MyOrganization
-  record: AgentRecord
+  record: AgentDetail
+  viewing: number | undefined
+  readOnly: boolean
+  canManage: boolean
+  onRecord: (record: AgentRecord) => void
 }) {
   const [doc] = React.useState(() =>
     storedAgent(record.document, organization.id)
@@ -253,13 +318,17 @@ function OpenAgent({
   return (
     <AgentBuilderProvider
       key={record.id}
-      initial={{ doc, context: { selfId: record.id } }}
+      initial={{ doc, context: { selfId: record.id }, readOnly }}
     >
       <BuilderUiContext.Provider value={AGENT_UI}>
         <ReactFlowProvider>
           <Builder
             organization={organization}
             record={record}
+            viewing={viewing}
+            readOnly={readOnly}
+            canManage={canManage}
+            onRecord={onRecord}
             needsLayout={doc.nodes.some((n) => !doc.layout[n.id])}
           />
         </ReactFlowProvider>
@@ -268,11 +337,48 @@ function OpenAgent({
   )
 }
 
-/** Names for the IDs nodes hold, what saved-agent nodes may pick, and what's checked against them. */
+/**
+ * Names for the IDs nodes hold, what saved-agent nodes and LLM agents (and
+ * their tools) may pick, and what's checked against them.
+ */
 function useLookups(organizationId: string) {
   const api = useAgentBuilderApi()
-  const { agents } = useOrganizationAgents(organizationId)
+  const { agents, records } = useOrganizationAgents(organizationId)
   const { models, defaultModel } = useAgentStepModels()
+  const chatAgents = useOrganizationChatAgents(organizationId)
+  const tools = useToolLookups(organizationId)
+  React.useEffect(() => {
+    const state = api.getState()
+    state.setLookups(tools.lookups)
+    state.setContext(tools.checks)
+  }, [api, tools])
+  React.useEffect(() => {
+    const state = api.getState()
+    const choices = Object.fromEntries(
+      chatAgents.records.map((r): [string, ChatAgentChoice] => {
+        const entry = r.document.nodes.find((n) => n.kind === "agent")
+        const input =
+          entry?.kind === "agent" ? entry.config.state_schema : undefined
+        return [
+          r.id,
+          {
+            name: r.document.name || r.id,
+            published: r.published_version,
+            hasDraft: r.has_draft,
+            draftVersion: r.draft_version,
+            input: input ?? {},
+          },
+        ]
+      })
+    )
+    state.setLookups({ chatAgents: choices })
+    // Unknown until they load: a pick isn't called deleted meanwhile.
+    state.setContext({
+      chatAgents: chatAgents.isSuccess
+        ? new Map(Object.entries(choices))
+        : undefined,
+    })
+  }, [api, chatAgents.records, chatAgents.isSuccess])
   React.useEffect(() => {
     const names = Object.fromEntries(models.map((m) => [m.id, m.name]))
     const fallback = defaultModel ? names[defaultModel] : undefined
@@ -284,6 +390,7 @@ function useLookups(organizationId: string) {
     const state = api.getState()
     state.setLookups({
       agents: Object.fromEntries(agents.map((a) => [a.id, a.name])),
+      workflowVersions: versionChoices(records),
     })
     state.setContext({
       selfId: state.meta.id,
@@ -291,7 +398,7 @@ function useLookups(organizationId: string) {
         agents.map((a) => [a.id, { name: a.name, uses: usesOf(a) }])
       ),
     })
-  }, [api, agents])
+  }, [api, agents, records])
 }
 
 /** Saving the agent to the organization as it's built. */
@@ -316,10 +423,18 @@ function useAgentAutosave(organizationId: string, record: AgentRecord) {
 function Builder({
   organization,
   record,
+  viewing,
+  readOnly,
+  canManage,
+  onRecord,
   needsLayout,
 }: {
   organization: MyOrganization
-  record: AgentRecord
+  record: AgentDetail
+  viewing: number | undefined
+  readOnly: boolean
+  canManage: boolean
+  onRecord: (record: AgentRecord) => void
   needsLayout: boolean
 }) {
   const api = useAgentBuilderApi()
@@ -331,6 +446,9 @@ function Builder({
   const details = useAgentBuilder((s) => s.details)
   const [importing, setImporting] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
+  const [publishing, setPublishing] = React.useState(false)
+  const [discarding, setDiscarding] = React.useState(false)
+  const [problems, setProblems] = React.useState<string[]>([])
   // The start's input schema while the run dialog is open.
   const [running, setRunning] = React.useState<Record<string, unknown>>()
   const [detailsWidth, setDetailsWidth] = useDetailsWidth(
@@ -344,6 +462,7 @@ function Builder({
   const drop = scoped.useDelete({
     meta: { errorTitle: "Couldn't delete the workflow" },
   })
+  const lifecycle = useAgentLifecycle(organization.id, record.id)
   useUndoKeys()
   useLookups(organization.id)
 
@@ -353,8 +472,66 @@ function Builder({
   const errors = useAgentBuilder(
     (s) => s.issues.filter((i) => i.level === "error").length
   )
-  // A run takes the workflow as it's saved: only once what's shown is.
-  const unsaved = saving.state.kind !== "saved"
+  // What's shown: a published version (viewed, or the latest with no draft), or the draft.
+  const shownVersion =
+    viewing ??
+    (record.has_draft ? undefined : (record.published_version ?? undefined))
+  const runVersion = shownVersion ?? "draft"
+  const openVersion = (version?: number) =>
+    void navigate({
+      to: "/organizations/$organizationId/agents/$agentId",
+      params: { organizationId: organization.id, agentId: record.id },
+      search: version ? { version } : {},
+    })
+  const failed = (title: string) => (caught: unknown) =>
+    toast.add({ title, description: toApiError(caught).message, type: "error" })
+  const publish = async () => {
+    setProblems([])
+    // Everything unsaved is saved first: what's published is what's on the canvas.
+    const revision = await saving.flush()
+    if (revision === null) {
+      setProblems([
+        "The latest changes aren't saved yet; publish once they are.",
+      ])
+      return
+    }
+    lifecycle.publish.mutate(revision, {
+      onSuccess: (published) => {
+        setPublishing(false)
+        toast.add({
+          title: `Published ${name} v${published.published_version}`,
+          description: `${published.id} now runs it.`,
+          type: "success",
+        })
+        onRecord(published)
+      },
+      onError: (caught) => {
+        const found = publishProblems(caught)
+        setProblems(found.length ? found : [toApiError(caught).message])
+      },
+    })
+  }
+  const newVersion = () =>
+    lifecycle.newVersion.mutate(viewing, {
+      onSuccess: (drafted) => {
+        if (viewing !== undefined) openVersion()
+        onRecord(drafted)
+      },
+      onError: (caught) =>
+        conflictCode(caught) === "DRAFT_EXISTS"
+          ? openVersion()
+          : failed("Couldn't start a new version")(caught),
+    })
+  const discard = () =>
+    lifecycle.discard.mutate(undefined, {
+      onSuccess: (kept) => {
+        setDiscarding(false)
+        onRecord(kept)
+      },
+      onError: failed("Couldn't discard the draft"),
+    })
+  // A run of the draft takes it as it's saved: only once what's shown is.
+  const unsaved = runVersion === "draft" && saving.state.kind !== "saved"
   const runBlocked = errors
     ? `Fix the ${errors === 1 ? "problem" : `${errors} problems`} first: it wouldn't build with ${errors === 1 ? "it" : "them"}.`
     : unsaved
@@ -421,9 +598,24 @@ function Builder({
       <StepLibrary organizationId={organization.id} />
 
       <ShellHeaderActions>
-        <SaveStatus saving={saving} organizationName={organization.name} />
+        <VersionChip record={record} viewing={viewing} />
+        {!readOnly && (
+          <SaveStatus saving={saving} organizationName={organization.name} />
+        )}
         <IssuesButton />
         <AdkRunsMenu organizationId={organization.id} agentId={record.id} />
+        {canManage && viewing === undefined && record.has_draft && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setProblems([])
+              setPublishing(true)
+            }}
+          >
+            Publish v{record.draft_version}
+          </Button>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -437,18 +629,59 @@ function Builder({
             <Icon icon="more" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
+            {(record.versions?.length ?? 0) > 0 && (
+              <>
+                {record.has_draft && viewing !== undefined && (
+                  <DropdownMenuItem onClick={() => openVersion()}>
+                    <Icon icon={PencilEdit02Icon} />
+                    Open the draft (v{record.draft_version})
+                  </DropdownMenuItem>
+                )}
+                {record.versions?.map((v) => (
+                  <DropdownMenuItem
+                    key={v.version}
+                    disabled={v.version === shownVersion}
+                    onClick={() =>
+                      openVersion(
+                        !record.has_draft &&
+                          v.version === record.published_version
+                          ? undefined
+                          : v.version
+                      )
+                    }
+                  >
+                    <Icon icon="clock" />
+                    Version {v.version}
+                    {v.version === record.published_version ? " (latest)" : ""}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+              </>
+            )}
             <DropdownMenuItem onClick={exportJson}>
               <Icon icon="download" />
               Export JSON
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={duplicate}>
-              <Icon icon="copy" />
-              Duplicate workflow
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setImporting(true)}>
-              <Icon icon="file" />
-              Replace from JSON…
-            </DropdownMenuItem>
+            {canManage && (
+              <DropdownMenuItem onClick={duplicate}>
+                <Icon icon="copy" />
+                Duplicate workflow
+              </DropdownMenuItem>
+            )}
+            {!readOnly && (
+              <DropdownMenuItem onClick={() => setImporting(true)}>
+                <Icon icon="file" />
+                Replace from JSON…
+              </DropdownMenuItem>
+            )}
+            {canManage &&
+              record.has_draft &&
+              record.published_version !== null && (
+                <DropdownMenuItem onClick={() => setDiscarding(true)}>
+                  <Icon icon="close" />
+                  Discard draft v{record.draft_version}…
+                </DropdownMenuItem>
+              )}
             <DropdownMenuItem
               onClick={() =>
                 downloadJson(AGENT_JSON_SCHEMA, "forge-agent.schema.json")
@@ -457,13 +690,17 @@ function Builder({
               <Icon icon="download" />
               Download the JSON Schema
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              variant="destructive"
-              onClick={() => setDeleting(true)}
-            >
-              Delete workflow…
-            </DropdownMenuItem>
+            {canManage && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => setDeleting(true)}
+                >
+                  Delete workflow…
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
         {canRun &&
@@ -494,6 +731,7 @@ function Builder({
           agentId={record.id}
           name={name}
           inputSchema={running ?? {}}
+          version={runVersion}
           onStarted={started}
         />
       )}
@@ -525,6 +763,17 @@ function Builder({
           inert={view === "json" || undefined}
         >
           <BuilderCanvas needsLayout={needsLayout} />
+          {readOnly && shownVersion !== undefined && (
+            <ReadOnlyBanner
+              version={shownVersion}
+              latest={record.published_version}
+              canManage={canManage}
+              hasDraft={record.has_draft}
+              pending={lifecycle.newVersion.isPending}
+              onNewVersion={newVersion}
+              onOpenCurrent={() => openVersion()}
+            />
+          )}
         </div>
         <aside
           id={DETAILS_PANEL_ID}
@@ -543,6 +792,7 @@ function Builder({
             className="@max-[900px]/shell:hidden"
           />
           <div className="min-h-0 flex-1 overflow-y-auto">
+            <WorkflowRunInfo record={record} viewing={viewing} />
             <AgentDetails />
           </div>
           {/* Kept clear for the assistant's launcher, which floats here. */}
@@ -598,14 +848,54 @@ function Builder({
         }}
       />
 
+      <PublishDialog
+        open={publishing}
+        onOpenChange={setPublishing}
+        record={record}
+        name={name}
+        noun="workflow"
+        errors={errors}
+        problems={problems}
+        pending={lifecycle.publish.isPending}
+        onPublish={() => void publish()}
+      />
+
+      <Dialog open={discarding} onOpenChange={setDiscarding}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discard draft v{record.draft_version}?</DialogTitle>
+            <DialogDescription>
+              Its changes are lost, and the workflow is version{" "}
+              {record.published_version} again. You can&apos;t undo this.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" />}>
+              Cancel
+            </DialogClose>
+            <Button
+              variant="destructive"
+              disabled={lifecycle.discard.isPending}
+              onClick={discard}
+            >
+              {lifecycle.discard.isPending && (
+                <Spinner data-icon="inline-start" />
+              )}
+              Discard draft
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={deleting} onOpenChange={setDeleting}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete {name}?</DialogTitle>
             <DialogDescription>
               It's removed for everyone in {organization.name}, with its nodes
-              and edges. Workflows that run it as a saved workflow will need another.
-              You can't undo this; export its JSON first to keep a copy.
+              and edges. Workflows that run it as a saved workflow will need
+              another. You can't undo this; export its JSON first to keep a
+              copy.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

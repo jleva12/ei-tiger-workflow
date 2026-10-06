@@ -5,6 +5,7 @@ import { ShellFooter } from "@/components/forge/shell/index"
 import { ConnectionDot } from "@/components/forge/status"
 import { toApiError } from "@/lib/api/index"
 import { api } from "@/lib/api-instance"
+import { useServiceInfo } from "@/lib/service-info"
 
 // The admin API's probes sit at its root, beside the /api/v1 prefix. Its
 // readiness probe also checks the database. VITE_API_URL may be relative
@@ -19,8 +20,6 @@ const READY_URL = import.meta.env.VITE_API_URL
 // How often to check the API while the app is open.
 const CHECK_EVERY = 30_000
 
-type ServiceInfo = { name: string; version: string }
-
 /** Whether the admin API, and its database, answer; and its version. */
 function useApiStatus() {
   const ready = useQuery({
@@ -31,12 +30,7 @@ function useApiStatus() {
     retry: false,
     meta: { silent: true },
   })
-  const info = useQuery({
-    queryKey: ["admin-api", "info"],
-    queryFn: ({ signal }) => api.get<ServiceInfo>("/info", { signal }),
-    staleTime: Infinity,
-    meta: { silent: true },
-  })
+  const info = useServiceInfo()
   if (ready.isPending) {
     return { online: false, label: "Checking the admin API…" }
   }

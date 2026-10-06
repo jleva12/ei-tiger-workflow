@@ -280,6 +280,18 @@ function settingsIssues(
   return out
 }
 
+/**
+ * What's missing or wrong in one tool's settings, wherever it is: a tool
+ * node on the canvas, or one of a workflow's LLM agent's tools. Each issue
+ * names the setting it's about.
+ */
+export function toolIssues(
+  tool: Pick<ChatStep, "kind" | "name" | "config">,
+  context: ChatAgentValidationContext
+): [code: string, level: IssueLevel, message: string, field?: string][] {
+  return settingsIssues(tool as ChatStep, context)
+}
+
 /** An MCP tool's issues with the organization's server it picks. */
 function mcpServerIssues(
   id: string,

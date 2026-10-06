@@ -8,15 +8,15 @@ import httpx2 as httpx
 import pytest
 from pydantic import BaseModel, Field
 
-from forge_admin.mcp_servers.auth import (
+from forge_mcp_servers.auth import (
     AuthContext,
     AuthMethod,
     AuthMethods,
     Credentials,
     NoFields,
 )
-from forge_admin.mcp_servers.registry import AUTH_METHODS
-from forge_admin.mcp_servers.secrets import SecretBox, SecretsError
+from forge_mcp_servers.registry import AUTH_METHODS
+from forge_mcp_servers.secrets import SecretBox, SecretsError
 
 KEY = "k" * 40
 

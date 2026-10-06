@@ -14,7 +14,8 @@ from functools import lru_cache
 from pathlib import Path
 
 from forge_common.logging import LoggingSettings
-from forge_embeddings.config import EmbeddingSettings
+from forge_embeddings.config import EmbeddingSettings, RerankSettings
+from forge_task_documents.retrieval.service import SearchConfig
 from pydantic import (
     AliasChoices,
     Field,
@@ -129,6 +130,8 @@ class Settings(BaseSettings):
     # worker's HYBRID_MONGO__URI / HYBRID_MONGO__DATABASE. Searching a
     # knowledge base (its search route, chat agents' knowledge base tools)
     # reads it; without mongo_uri, searching answers that it isn't set up.
+    # FORGE_VECTOR_STORE=spanner (with FORGE_VECTOR_SPANNER_DATABASE) reads
+    # the worker's Spanner database instead, as every reader and writer must.
     knowledge_database: str = Field(
         default="forge_knowledge", pattern=r"^[A-Za-z0-9_-]{1,63}$"
     )
@@ -137,6 +140,16 @@ class Settings(BaseSettings):
     # FORGE_ADMIN_KNOWLEDGE_EMBEDDING__API_KEY (else OPENAI_API_KEY),
     # __DOCUMENT_MODEL (text-embedding-3-large), __DIMENSIONS (1024).
     knowledge_embedding: EmbeddingSettings = EmbeddingSettings()
+    # How a search's candidates are reordered: the worker's HYBRID_RERANK__*,
+    # so chat agents and workflows find the same passages. "none" (the
+    # default) keeps the fused order; FORGE_ADMIN_KNOWLEDGE_RERANK__PROVIDER=
+    # voyage with __API_KEY (else a Voyage embedder's key) reranks them.
+    knowledge_rerank: RerankSettings = RerankSettings()
+    # How a search ranks and filters: the worker's HYBRID_DOCUMENTS__SEARCH__*,
+    # e.g. FORGE_ADMIN_KNOWLEDGE_SEARCH__MIN_SIMILARITY (0.2), the least
+    # relevance a passage needs (none: a question the documents don't answer
+    # still finds the nearest passages), or __MIN_RERANK_SCORE with a reranker.
+    knowledge_search: SearchConfig = SearchConfig()
 
     # The assistant: Google ADK agents (forge_admin.assistant). The models it may
     # run on: a model_provider.yaml, the file ADK workflows' LLM nodes read too, e.g.
@@ -171,11 +184,20 @@ class Settings(BaseSettings):
 
     # Organizations' chat agents, run by ID at {api_prefix}/runtime
     # (forge_agent_runtime's run API: run_sse and sessions). Public: anyone
-    # with an agent's ID can talk to it, spending its model and calling its
-    # tools; set false to ask for a Forge sign-in like every other route.
+    # with an agent's or workflow's ID can call it, spending its model and
+    # calling its tools; set false to ask for an organization's API key or a
+    # Forge sign-in, holding agents:run where it is.
     agent_runtime_public: bool = True
     # How many built chat agents the runtime keeps ready.
     agent_runtime_cache: int = Field(default=64, ge=1, le=4096)
+    # Where callers reach this API (https://forge.example.com), for the A2A
+    # cards of chat agents ({api_prefix}/runtime/a2a/{agent}), when that isn't
+    # where requests come to (behind a proxy). Unset, each request's own.
+    agent_runtime_url: str | None = Field(default=None, pattern=r"^https?://\S+$")
+    # The most seconds a caller of the workflow runtime may wait for a run to
+    # pause or end in one request ({api_prefix}/runtime/workflows, "wait"),
+    # and an A2A task follows its run before answering it's still working.
+    workflow_runtime_wait: float = Field(default=60.0, ge=0, le=300)
     # What chat agents' HTTP tools may reach besides the internet: private
     # networks (local development only), or these hosts.
     agent_tools_allow_private: bool = False

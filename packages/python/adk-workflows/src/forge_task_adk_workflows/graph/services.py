@@ -81,6 +81,10 @@ class RunServices:
     model_callbacks: ModelCallbacks | None = None
     #: Finds the organization's other agents, for saved-agent nodes.
     resolve: Resolve | None = None
+    #: What LLM agents' tools and agents from the Agents page use
+    #: (``graph.agent_tools.AgentServices``), the run's own; None where they
+    #: can't run (a build that only checks a document).
+    agents: Any = None
 
     @classmethod
     def of(cls, settings: AdkWorkflowsSettings, **services: Any) -> Self:

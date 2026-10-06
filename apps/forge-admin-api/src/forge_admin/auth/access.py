@@ -18,7 +18,12 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from forge_admin.auth.authorization import assignments_of, get_enforcer, group_subject
+from forge_admin.auth.authorization import (
+    assignments_of,
+    get_enforcer,
+    group_subject,
+    is_api_key_subject,
+)
 from forge_admin.models import Organization
 
 UUID_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -170,6 +175,11 @@ def set_caller(user: str | None, groups: Iterable[str]) -> None:
     _caller.set((user, tuple(groups)))
 
 
+def caller_subject() -> str | None:
+    """:return: Who's calling this request: a user, ``apikey:<id>``, or None."""
+    return _caller.get()[0]
+
+
 def groups_of_caller(user: str) -> tuple[str, ...]:
     """
     :param user: A user being authorized.
@@ -198,6 +208,23 @@ def current_user(request: Request) -> str:
 
 
 CurrentUser = Annotated[str, Depends(current_user)]
+
+
+def current_person(request: Request) -> str:
+    """
+    FastAPI dependency: the calling user's ID, for routes only people may
+    use (the users directory, the assistant, API keys themselves): an
+    organization's API key is refused, whatever its role.
+
+    :raises HTTPException: 401 when the request has no user; 403 for a key.
+    """
+    user = current_user(request)
+    if is_api_key_subject(user):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "API keys can't use this route")
+    return user
+
+
+CurrentPerson = Annotated[str, Depends(current_person)]
 
 
 def allows(

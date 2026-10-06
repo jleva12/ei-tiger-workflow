@@ -35,6 +35,9 @@ SUBJECT_PATTERN = r"^[A-Za-z0-9._@:+-]{1,255}$"
 # An external group's Casbin subject is its name after this prefix, e.g.
 # "group:Engineering", so no user or role can be one.
 GROUP_PREFIX = "group:"
+# An organization API key's Casbin subject is its ID after this prefix
+# (forge_admin.auth.api_keys), so no user can be one.
+API_KEY_SUBJECT_PREFIX = "apikey:"
 # An external group's name, as the directory spells it: printable ASCII,
 # spaces inside (e.g. "CN=Forge Admins,OU=Groups"), up to 200 characters.
 GROUP_NAME_PATTERN = r"^[!-~](?:[ -~]{0,198}[!-~])?$"
@@ -58,13 +61,19 @@ def group_subject(name: str) -> str:
 
 def is_reserved_subject(subject: str) -> bool:
     """
-    Whether a subject ID is one no user or service may have: a role key, or
-    an external group's subject. Roles, groups and subjects share Casbin's
-    namespace, so a user named like either would hold its grants.
+    Whether a subject ID is one no user or service may have: a role key, an
+    external group's subject, or an API key's. Roles, groups and subjects
+    share Casbin's namespace, so a user named like any of them would hold
+    its grants.
     """
     return bool(re.fullmatch(ROLE_KEY_PATTERN, subject)) or subject.startswith(
-        GROUP_PREFIX
+        (GROUP_PREFIX, API_KEY_SUBJECT_PREFIX)
     )
+
+
+def is_api_key_subject(subject: str | None) -> bool:
+    """:return: Whether the subject is an organization API key's."""
+    return bool(subject) and subject.startswith(API_KEY_SUBJECT_PREFIX)  # type: ignore[union-attr]
 
 
 def new_enforcer(adapter: Adapter | None = None) -> casbin.AsyncEnforcer:
@@ -132,6 +141,23 @@ async def granted_permissions(
         if role_key is not None:
             grants[role_key].append(permission)
     return grants
+
+
+async def role_grants(session: AsyncSession, role_key: str) -> list[tuple[str, str]]:
+    """
+    List what a role grants, as its p lines say: each ``(resource, action)``,
+    wildcards included, whether or not the permission is a known one.
+
+    :param session: The request's database session.
+    :param role_key: The role.
+    :return: Its grants, sorted.
+    """
+    rows = await session.execute(
+        select(CasbinRule.v1, CasbinRule.v2).where(
+            CasbinRule.ptype == "p", CasbinRule.v0 == role_key
+        )
+    )
+    return sorted((resource or "", action or "") for resource, action in rows)
 
 
 async def set_role_permissions(
@@ -219,7 +245,12 @@ async def delete_permission_rules(
 
 
 async def assignments_around(
-    session: AsyncSession, domain: str, *, above: bool, below: bool
+    session: AsyncSession,
+    domain: str,
+    *,
+    above: bool,
+    below: bool,
+    api_keys: bool = False,
 ) -> list[CasbinRule]:
     """
     List the role assignments made in a scope and, optionally, those that
@@ -230,6 +261,8 @@ async def assignments_around(
     :param domain: The scope's domain, ``org:<id>`` or ``site``.
     :param above: In an organization, include the site's assignments.
     :param below: On the site, include every organization's assignments.
+    :param api_keys: Include API keys' roles; they're no one's membership,
+        so by default they're left out.
     :return: The g lines, ordered by subject, role and domain pattern.
     """
     site = domain == "site"
@@ -240,12 +273,43 @@ async def assignments_around(
     matches = [CasbinRule.v2.in_(patterns)]
     if below and site:
         matches.append(CasbinRule.v2 != "*")
+    query = select(CasbinRule).where(CasbinRule.ptype == "g", or_(*matches))
+    if not api_keys:
+        query = query.where(CasbinRule.v0.not_like(f"{API_KEY_SUBJECT_PREFIX}%"))
     result = await session.scalars(
-        select(CasbinRule)
-        .where(CasbinRule.ptype == "g", or_(*matches))
-        .order_by(CasbinRule.v0, CasbinRule.v1, CasbinRule.v2)
+        query.order_by(CasbinRule.v0, CasbinRule.v1, CasbinRule.v2)
     )
     return list(result)
+
+
+async def roles_of_subjects(
+    session: AsyncSession, subjects: Sequence[str], pattern: str
+) -> dict[str, str]:
+    """
+    Look up the role each subject holds in one scope, in one query.
+
+    :param session: The request's database session.
+    :param subjects: The subjects, e.g. API keys'.
+    :param pattern: The scope's domain pattern, e.g. ``org:<id>*``.
+    :return: Each subject that holds a role there mapped to it (the first,
+        should one hold several).
+    """
+    if not subjects:
+        return {}
+    rows = await session.execute(
+        select(CasbinRule.v0, CasbinRule.v1)
+        .where(
+            CasbinRule.ptype == "g",
+            CasbinRule.v0.in_(subjects),
+            CasbinRule.v2 == pattern,
+        )
+        .order_by(CasbinRule.v0, CasbinRule.v1)
+    )
+    roles: dict[str, str] = {}
+    for subject, role in rows:
+        if subject is not None and role is not None:
+            roles.setdefault(subject, role)
+    return roles
 
 
 async def assignment_counts(

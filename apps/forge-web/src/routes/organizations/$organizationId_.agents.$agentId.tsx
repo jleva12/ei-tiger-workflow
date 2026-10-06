@@ -8,10 +8,23 @@ import { AgentBuilderPage } from "@/features/adk-workflows/components/agent-buil
  * place of the workspace's. Only the organization's members get in.
  */
 export const Route = createFileRoute("/organizations/$organizationId_/agents/$agentId")({
+  // A published version to open read-only: ?version=3.
+  validateSearch: (search: Record<string, unknown>): { version?: number } => {
+    const version = Number(search.version)
+    return Number.isInteger(version) && version > 0 ? { version } : {}
+  },
   component: AgentRoute,
 })
 
 function AgentRoute() {
   const { organizationId, agentId } = Route.useParams()
-  return <AgentBuilderPage key={agentId} organizationId={organizationId} agentId={agentId} />
+  const { version } = Route.useSearch()
+  return (
+    <AgentBuilderPage
+      key={`${agentId}@${version ?? ""}`}
+      organizationId={organizationId}
+      agentId={agentId}
+      version={version}
+    />
+  )
 }

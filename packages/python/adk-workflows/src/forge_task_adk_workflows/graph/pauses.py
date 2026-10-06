@@ -6,9 +6,11 @@ A node pauses the run by asking for input (ADK's ``RequestInput``): an
 Approval for a decision, Human input for an answer, a long Delay for the
 timer. Each asks with its payload's ``kind``; an approval's ``expires_at``
 and a delay's ``until`` say when the timer answers it (an approval then
-rejects, a delay wakes). The run resumes when the question is answered: a
-message with the function response (:meth:`Pause.answer`), sent to ADK's
-runner for the same session.
+rejects, a delay wakes). An LLM agent's tool that a person confirms pauses it
+too (ADK's ``adk_request_confirmation``): a ``tool_confirmation``, the tool
+and what the model would call it with in its payload. The run resumes when
+the question is answered: a message with the function response
+(:meth:`Pause.answer`), sent to ADK's runner for the same session.
 """
 
 from dataclasses import dataclass
@@ -20,6 +22,10 @@ from google.genai import types
 
 #: ADK's name for a node's question (``RequestInput``).
 REQUEST_INPUT = "adk_request_input"
+#: ADK's name for a tool's request to be confirmed.
+REQUEST_CONFIRMATION = "adk_request_confirmation"
+#: The kind of pause a tool's confirmation is.
+TOOL_CONFIRMATION = "tool_confirmation"
 
 #: The timer's answer to an approval that expired.
 EXPIRED = {"approved": False, "decided_by": "Forge", "expired": True}
@@ -39,6 +45,9 @@ class Pause:
     :ivar payload: The node's payload: the approvers and deadline of an
         approval, the time a delay ends.
     :ivar due: When the timer answers it; None when only a person does.
+    :ivar name: The function call it is: a question (``adk_request_input``),
+        or a tool's confirmation (``adk_request_confirmation``).
+    :ivar path: The node that asked: where in the run its event is.
     """
 
     invocation_id: str
@@ -47,6 +56,8 @@ class Pause:
     message: str
     payload: dict[str, Any]
     due: datetime | None
+    name: str = REQUEST_INPUT
+    path: str = ""
 
     def timer_answer(self) -> dict[str, Any]:
         """
@@ -68,9 +79,7 @@ class Pause:
             role="user",
             parts=[
                 types.Part(
-                    function_response=types.FunctionResponse(
-                        id=self.interrupt_id, name=REQUEST_INPUT, response=response
-                    )
+                    function_response=types.FunctionResponse(id=self.interrupt_id, name=self.name, response=response)
                 )
             ],
         )
@@ -88,9 +97,14 @@ def pending_pauses(session: Session) -> list[Pause]:
     for event in session.events:
         for response in event.get_function_responses():
             asked = waiting.get(response.id or "")
-            if response.name == REQUEST_INPUT and asked:
+            if response.name in (REQUEST_INPUT, REQUEST_CONFIRMATION) and asked:
                 order.remove(asked.pop(0))
         for call in event.get_function_calls():
+            if call.name == REQUEST_CONFIRMATION and call.id:
+                pause = _confirmation(event, call)
+                waiting.setdefault(call.id, []).append(pause)
+                order.append(pause)
+                continue
             if call.name != REQUEST_INPUT or not call.id:
                 continue
             args = call.args or {}
@@ -107,6 +121,28 @@ def pending_pauses(session: Session) -> list[Pause]:
             waiting.setdefault(call.id, []).append(pause)
             order.append(pause)
     return order
+
+
+def _confirmation(event: Any, call: types.FunctionCall) -> Pause:
+    """A tool's request to be confirmed, as a pause: the tool, and what it would be called with."""
+    args = call.args or {}
+    original = args.get("originalFunctionCall")
+    original = original if isinstance(original, dict) else {}
+    asked = args.get("toolConfirmation")
+    asked = asked if isinstance(asked, dict) else {}
+    tool = str(original.get("name") or "a tool")
+    arguments = original.get("args") if isinstance(original.get("args"), dict) else {}
+    info = getattr(event, "node_info", None)
+    return Pause(
+        invocation_id=event.invocation_id,
+        interrupt_id=str(call.id),
+        kind=TOOL_CONFIRMATION,
+        message=str(asked.get("hint") or "") or f"Allow {event.author or 'the agent'} to call {tool}?",
+        payload={"kind": TOOL_CONFIRMATION, "tool": tool, "args": arguments, "agent": event.author},
+        due=None,
+        name=REQUEST_CONFIRMATION,
+        path=str(getattr(info, "path", "") or ""),
+    )
 
 
 def due_pauses(session: Session, now: datetime) -> list[Pause]:

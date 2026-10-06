@@ -13,6 +13,7 @@ import hashlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from datetime import timedelta
+from functools import partial
 from typing import Any
 from uuid import uuid4
 
@@ -20,8 +21,9 @@ import pytest
 from casbin.persist.adapter import load_policy_line
 from casbin.persist.adapters.asyncio import AsyncAdapter
 from fastapi.testclient import TestClient
+from forge_task_documents.retrieval import citation_ref
 from httpx import Response
-from knowledge_fakes import FakeQueue, FakeSearch, FakeStore
+from knowledge_fakes import MODEL, FakeQueue, FakeSearch, FakeStore
 from pydantic import SecretStr
 from saq.job import Status
 from sqlalchemy import MetaData, event, func, select
@@ -429,6 +431,116 @@ def test_the_list_counts_each_knowledge_bases_documents(workspace: Workspace) ->
     assert (one["organization_id"], one["name"]) == (ORG, "Support")
 
 
+def finish_ingest(
+    workspace: Workspace, kb: str, document: dict[str, Any], model: str | None
+) -> None:
+    """Finish a document's ingest as the worker reports it: with the model its
+    chunks are embedded with (none, as a worker from before reported)."""
+    detail: dict[str, Any] = {"chunk_count": 2}
+    if model is not None:
+        detail["embedding_model"] = model
+    workspace.queue.finish(
+        document_job_key(kb, document["id"]), result={"status": "ok", "detail": detail}
+    )
+
+
+def test_documents_embedded_with_another_model_are_stale(workspace: Workspace) -> None:
+    kb = workspace.knowledge_base("Claims knowledge")
+    current = workspace.uploaded(kb, name="current.md")
+    old = workspace.uploaded(kb, name="old.md", body=b"o" * 9)
+    unknown = workspace.uploaded(kb, name="unknown.md", body=b"u" * 4)
+    workspace.uploaded(kb, name="waiting.md", body=b"w" * 3)
+    finish_ingest(workspace, kb, current, MODEL)
+    finish_ingest(workspace, kb, old, "text-embedding-3-small@1024")
+    finish_ingest(workspace, kb, unknown, None)
+
+    listed = workspace.call("GET", documents_of(kb), VIEWER).json()
+    models = {d["filename"]: d["embedding_model"] for d in listed}
+    assert models == {
+        "current.md": MODEL,
+        "old.md": "text-embedding-3-small@1024",
+        "unknown.md": "",
+        "waiting.md": "",
+    }
+    one = workspace.call("GET", f"{KBS}/{kb}", VIEWER).json()
+    # The other model's, and the one whose model is unknown; not one embedded
+    # with the model searches use, nor one still being ingested.
+    assert (one["ready"], one["stale"], one["embedding_model"]) == (3, 2, MODEL)
+    assert workspace.call("GET", KBS, VIEWER).json()[0]["stale"] == 2
+    # Without search there's no model to compare with.
+    workspace.state.knowledge_search = None
+    unset = workspace.call("GET", f"{KBS}/{kb}", VIEWER).json()
+    assert (unset["stale"], unset["embedding_model"]) == (0, None)
+
+
+def test_reindexing_ingests_the_stale_documents_again(workspace: Workspace) -> None:
+    kb = workspace.knowledge_base("Claims knowledge")
+    current = workspace.uploaded(kb, name="current.md")
+    old = workspace.uploaded(kb, name="old.md", body=b"o" * 9)
+    failed = workspace.uploaded(kb, name="failed.md", body=b"f" * 4)
+    workspace.uploaded(kb, name="waiting.md", body=b"w" * 3)
+    finish_ingest(workspace, kb, current, MODEL)
+    finish_ingest(workspace, kb, old, "text-embedding-3-small@1024")
+    workspace.queue.finish(
+        document_job_key(kb, failed["id"]),
+        result={"status": "failed", "error": "BadZipFile"},
+    )
+    workspace.names(kb)  # the jobs read back
+    workspace.queue.documents.clear()
+    path = f"{KBS}/{kb}/reindex"
+
+    assert workspace.call("POST", path, VIEWER).status_code == 403
+    done = workspace.call("POST", path, MEMBER)
+    assert (done.status_code, done.json()) == (202, {"submitted": 1})
+    # Ingested again with what the worker has now, even though the file didn't change.
+    assert [(d["document_id"], d["force"]) for d in workspace.queue.documents] == [
+        (old["id"], True)
+    ]
+    again = next(
+        d
+        for d in workspace.call("GET", documents_of(kb), VIEWER).json()
+        if d["id"] == old["id"]
+    )
+    # Its chunks are still searchable, as they were, until new ones replace them.
+    assert (again["phase"], again["chunk_count"]) == ("QUEUED", 2)
+    finish_ingest(workspace, kb, old, MODEL)
+    workspace.names(kb)
+    assert workspace.call("GET", f"{KBS}/{kb}", VIEWER).json()["stale"] == 0
+
+    # Every finished one (after the parsers or chunking changed), failed ones
+    # too, but not one still being ingested.
+    workspace.queue.documents.clear()
+    every = workspace.call("POST", path, MEMBER, {"stale_only": False})
+    assert (every.status_code, every.json()) == (202, {"submitted": 3})
+    submitted = {d["document_id"] for d in workspace.queue.documents}
+    assert submitted == {current["id"], old["id"], failed["id"]}
+
+
+def test_reindexing_needs_the_worker_and_for_stale_ones_search(
+    workspace: Workspace,
+) -> None:
+    kb = workspace.knowledge_base("Claims knowledge")
+    finish_ingest(workspace, kb, workspace.uploaded(kb), MODEL)
+    workspace.names(kb)
+    path = f"{KBS}/{kb}/reindex"
+    workspace.state.knowledge_search = None
+    unset = workspace.call("POST", path, MEMBER)
+    assert unset.status_code == 503 and "no document is stale" in unset.json()["detail"]
+    workspace.queue.refuse = True
+    down = workspace.call("POST", path, MEMBER, {"stale_only": False})
+    assert (down.status_code, down.json()["detail"]) == (
+        503,
+        "The async worker is unavailable after 0 of 1 documents; try again",
+    )
+    workspace.queue.refuse = False
+    up = workspace.call("POST", path, MEMBER, {"stale_only": False})
+    assert (up.status_code, up.json()) == (202, {"submitted": 1})
+    workspace.state.knowledge_queue = None
+    assert (
+        workspace.call("POST", path, MEMBER, {"stale_only": False}).status_code == 503
+    )
+
+
 def test_only_the_organizations_people_read_its_knowledge_bases(
     workspace: Workspace,
 ) -> None:
@@ -621,19 +733,24 @@ def test_a_search_answers_passages_with_their_documents_names(
         "hits": [
             {
                 "chunk_id": "c1",
+                # What an answer cites it by.
+                "ref": citation_ref("c1"),
                 "document_id": document["id"],
                 # Its name as uploaded, from its record.
                 "filename": "Refund runbook.md",
                 "section_path": ["Refunds", "Approval limits"],
+                "location": "",
                 "text": "A finance lead approves refunds over 500 USD.",
                 "score": 0.92,
             },
             {
                 "chunk_id": "c2",
+                "ref": citation_ref("c2"),
                 "document_id": gone,
                 # Its record is gone: its title.
                 "filename": "Old policy",
                 "section_path": [],
+                "location": "",
                 "text": "",
                 "score": 0.5,
             },
@@ -722,6 +839,113 @@ def test_a_search_needs_search_set_up_and_available(
         503,
         "Knowledge base search isn't set up: set FORGE_ADMIN_MONGO_URI",
     )
+
+
+def test_an_agent_searches_only_its_knowledge_bases_ranked_together(
+    workspace: Workspace,
+) -> None:
+    """A chat agent given "Member knowledge" and "Claims knowledge" searches
+    those two, in one ranking, and none of the organization's others; on
+    the documents task's search over what the worker would have embedded."""
+    from forge_embeddings.embedding import HashingEmbedder
+    from forge_embeddings.tokenizers import HeuristicTokenizer
+    from forge_task_documents.chunking import ChunkEngine
+    from forge_task_documents.enrichment import BreadcrumbEnricher, CompositeEnricher
+    from forge_task_documents.ingestion import IngestionPipeline
+    from forge_task_documents.models import SourceFile
+    from forge_task_documents.parsers import default_registry
+    from forge_task_documents.retrieval import KnowledgeBaseSearch
+    from forge_task_documents.storage.memory import InMemoryStorage
+
+    from forge_admin.knowledge.search import KnowledgeSearch
+    from forge_admin.knowledge.tools import OrganizationKnowledgeBases
+
+    members = workspace.knowledge_base("Member knowledge")
+    claims = workspace.knowledge_base("Claims knowledge")
+    vendors = workspace.knowledge_base("Vendor contracts")
+    files = {
+        members: {
+            "Member benefits.md": b"# Benefits\n\n## Gym\nMembers save 20 percent "
+            b"at partner gyms. Bring your member card to claim it.\n",
+        },
+        claims: {
+            "Appeals guide.md": b"# Appeals\n\n## Denied claims\nTo appeal a denied "
+            b"claim, file the appeal within 180 days of the denial.\n",
+            "Filing claims.md": b"# Filing\n\n## Filing a claim\nFile a claim within "
+            b"90 days. If the claim is denied, appeal the denied claim.\n",
+        },
+        # It would match too, but the agent wasn't given it.
+        vendors: {
+            "Vendor appeals.md": b"# Vendors\n\n## Appeals\nA vendor can appeal a "
+            b"denied claim for payment.\n",
+        },
+    }
+    storage = InMemoryStorage()
+    embedder = HashingEmbedder(dimensions=64)
+    pipeline = IngestionPipeline(
+        registry=default_registry(load_plugins=False),
+        chunker=ChunkEngine(HeuristicTokenizer()),
+        enricher=CompositeEnricher([BreadcrumbEnricher()]),
+        embedder=embedder,
+        storage=storage,
+    )
+    for knowledge_base_id, documents in files.items():
+        for name, body in documents.items():
+            row = workspace.uploaded(knowledge_base_id, name=name, body=body)
+            source = SourceFile(
+                tenant_id=knowledge_base_id, doc_id=row["id"], filename=name, data=body
+            )
+            workspace.client.portal.call(pipeline.ingest, source)  # type: ignore[union-attr]
+    tools = OrganizationKnowledgeBases(
+        workspace.sessions,
+        KnowledgeSearch(KnowledgeBaseSearch(storage, embedder=embedder)),
+    )
+
+    def passages(*knowledge_base_ids: str) -> list[dict[str, Any]]:
+        found: list[dict[str, Any]] = workspace.client.portal.call(  # type: ignore[union-attr]
+            partial(
+                tools.search,
+                list(knowledge_base_ids),
+                "appeal a denied claim",
+                organization_id=ORG,
+                limit=5,
+            )
+        )
+        return found
+
+    def search(*knowledge_base_ids: str) -> list[str]:
+        return [passage["document"] for passage in passages(*knowledge_base_ids)]
+
+    assert set(search(members)) == {"Member benefits.md"}
+    assert set(search(claims)) == {"Appeals guide.md", "Filing claims.md"}
+    both = search(members, claims)
+    # Both claims documents answer it, so they come first; the vendors'
+    # isn't searched at all.
+    assert set(both[:2]) == {"Appeals guide.md", "Filing claims.md"}
+    assert set(both) <= {"Member benefits.md", "Appeals guide.md", "Filing claims.md"}
+    # Each passage names the knowledge base it's from, so the agent can tell
+    # the members' from the claims'.
+    sources = {(p["knowledge_base"], p["document"]) for p in passages(members, claims)}
+    assert ("Claims knowledge", "Appeals guide.md") in sources
+    assert {kb for kb, _ in sources} <= {"Member knowledge", "Claims knowledge"}
+    first = passages(claims)[0]
+    assert list(first) == [
+        "ref",
+        "knowledge_base",
+        "knowledge_base_id",
+        "document",
+        "document_id",
+        "section",
+        "location",
+        "text",
+        "score",
+    ]
+    # What a chat UI cites and links it by.
+    assert (first["knowledge_base_id"], first["location"][:4]) == (claims, "line")
+    # Another organization's knowledge base isn't found.
+    theirs = workspace.knowledge_base("Theirs", organization_id=OTHER_ORG)
+    with pytest.raises(LookupError):
+        search(claims, theirs)
 
 
 # ------------------------------------------------------------- documents

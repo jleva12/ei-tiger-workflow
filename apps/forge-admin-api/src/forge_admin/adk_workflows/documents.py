@@ -19,6 +19,11 @@ Every save names the revision it was made from; a save from an older one
 is refused (:class:`AgentConflict`), so two people's changes never
 silently overwrite each other. Deleting keeps the record, marked deleted,
 out of every read; IDs are never reused.
+
+Agents are versioned as chat agents are
+(``forge_admin.adk_workflows.versioned_store``): a draft the builder edits,
+and published versions (``ag_x@3``) nothing changes. One saved before
+versions existed is a draft of version 1 until it's first published.
 """
 
 import json
@@ -30,15 +35,16 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from forge_admin.adk_workflows.document_store import (
-    DocumentStore,
     fill_added_settings,
     iso,
     load_validator,
     new_id,
     problems_in,
 )
+from forge_admin.adk_workflows.versioned_store import VersionedDocumentStore
 
 COLLECTION = "agents"
+VERSIONS = "agent_versions"
 FORMAT = "forge.agent/v1"
 # The builder's IDs and this module's: ag_ and lowercase letters and digits.
 ID_PATTERN = r"^ag_[a-z0-9]{6,40}$"
@@ -50,7 +56,27 @@ SCHEMA_PATH = Path(__file__).with_name("agent.schema.json")
 # document saved before them means by leaving them out. The schema requires
 # every setting, so they're filled in when such a document is saved again
 # (the web's document.ts fills them in when the builder opens one).
-ADDED_SETTINGS: dict[str, dict[str, Any]] = {}
+ADDED_SETTINGS: dict[str, dict[str, Any]] = {
+    # 2026-10-05: an LLM agent's tools, and an agent from the Agents page instead.
+    "llm": {
+        "tools": [],
+        "source": "inline",
+        "agent": "",
+        "version": None,
+        "message": "",
+        "inputs": {},
+    },
+    # 2026-10-05: which version of the workflow runs; null for its latest
+    # published (its current document while it has none).
+    "saved": {"version": None},
+}
+# The same for sub-agents, in a node's settings.
+ADDED_SUB_AGENT_SETTINGS: dict[str, dict[str, Any]] = {"llm": {"tools": []}}
+# The same for an LLM agent's tools, by their kind.
+ADDED_TOOL_SETTINGS: dict[str, dict[str, Any]] = {
+    # 2026-10-05: which version of the workflow it calls.
+    "adk_workflow": {"version": None},
+}
 
 
 class AgentError(Exception):
@@ -102,7 +128,9 @@ def with_added_settings(document: dict[str, Any]) -> dict[str, Any]:
     :param document: An agent document.
     :return: The document; the same object when nothing was missing.
     """
-    return fill_added_settings(document, ADDED_SETTINGS)
+    return fill_added_settings(
+        document, ADDED_SETTINGS, ADDED_SUB_AGENT_SETTINGS, ADDED_TOOL_SETTINGS
+    )
 
 
 def new_agent_id() -> str:
@@ -132,8 +160,10 @@ def checked_document(
     :return: The document, keys in the order given.
     :raises AgentError: When it's too large or isn't an agent.
     """
+    # An export's version isn't kept: the store knows which a document is.
+    kept = {key: value for key, value in document.items() if key != "version"}
     stored = {
-        **with_added_settings(document),
+        **with_added_settings(kept),
         "id": agent_id,
         "organization_id": organization_id,
         "created_at": iso(created_at),
@@ -165,18 +195,38 @@ def schema_problems(document: dict[str, Any]) -> list[str]:
     return problems_in(_validator(), document, whole="The agent")
 
 
-class AgentStore(DocumentStore):
+class AgentStore(VersionedDocumentStore):
     """
-    The agents collection. Records look like::
-
-        {"_id": "ag_…", "organization_id", "revision": 3, "document": {…},
-         "created_at", "created_by", "updated_at", "updated_by",
-         "updated_by_name", "deleted_at": None}
-
-    Reads never return deleted records. Every read and write is by organization:
-    an agent is found only through the organization it belongs to.
+    The agents and their published versions (``VersionedDocumentStore``):
+    ``agents``, and ``agent_versions`` (``ag_…@1``). Reads never return
+    deleted records. Every read and write is by organization, but the
+    runtime's (``find``): an agent is found only through the organization it
+    belongs to.
     """
 
     collection_name = COLLECTION
+    versions_name = VERSIONS
+    id_prefix = "ag_"
+    noun = "workflow"
     conflict = AgentConflict
     id_taken = AgentIdTaken
+
+    def checked(
+        self,
+        document: dict[str, Any],
+        *,
+        agent_id: str,
+        organization_id: str,
+        created_at: datetime,
+        updated_at: datetime,
+        max_bytes: int,
+    ) -> dict[str, Any]:
+        """:raises AgentError: It's too large, or isn't an agent."""
+        return checked_document(
+            document,
+            agent_id=agent_id,
+            organization_id=organization_id,
+            created_at=created_at,
+            updated_at=updated_at,
+            max_bytes=max_bytes,
+        )

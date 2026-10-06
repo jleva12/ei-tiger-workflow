@@ -129,6 +129,7 @@ class KnowledgeQueue:
         filename: str,
         media_type: str,
         uploaded_by: str,
+        force: bool = False,
     ) -> str:
         """
         Submit a stored file to be parsed, chunked and embedded.
@@ -139,6 +140,8 @@ class KnowledgeQueue:
         :param filename: Its name, whose extension picks the parser.
         :param media_type: Its media type, as uploaded.
         :param uploaded_by: Who uploaded it, kept with its chunks.
+        :param force: Ingest it again even when the worker has it as it is
+            (re-indexing: with the models, parsers and chunking it has now).
         :return: The job's key.
         :raises QueueError: The queue could not be reached.
         """
@@ -151,6 +154,8 @@ class KnowledgeQueue:
             "media_type": media_type or None,
             "metadata": {"uploaded_by": uploaded_by},
         }
+        if force:
+            payload["force"] = True
         await self._submit(key, "ingest", payload)
         return key
 

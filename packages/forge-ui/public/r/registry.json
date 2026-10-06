@@ -2534,6 +2534,11 @@
           "target": "@components/forge/assistant/index.ts"
         },
         {
+          "path": "src/components/forge/assistant/knowledge-sources.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/knowledge-sources.ts"
+        },
+        {
           "path": "src/components/forge/assistant/model-settings.ts",
           "type": "registry:component",
           "target": "@components/forge/assistant/model-settings.ts"

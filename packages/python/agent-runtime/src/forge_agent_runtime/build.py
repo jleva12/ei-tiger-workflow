@@ -32,6 +32,7 @@ from google.adk.tools.preload_memory_tool import preload_memory_tool
 from google.genai import types
 
 from forge_agent_runtime.document import (
+    DEFAULTS,
     HANDS_OFF,
     TOOLS,
     ChatAgentDocument,
@@ -41,6 +42,7 @@ from forge_agent_runtime.document import (
 )
 from forge_agent_runtime.models import model_selection
 from forge_agent_runtime.names import adk_name
+from forge_agent_runtime.refs import AgentRef
 from forge_agent_runtime.services import RuntimeServices
 from forge_agent_runtime.templating import instruction_provider
 from forge_agent_runtime.tools import (
@@ -79,24 +81,35 @@ def _operations(value: Any) -> list[str] | None:
     return sorted({form for name in names for form in (name, _snake(name))}) if names else None
 
 
+#: What a tool item may be outside a chat agent's canvas (a workflow's LLM agent's tools).
+TOOL_KINDS = frozenset(
+    {"saved_agent", "adk_workflow", "memory", "knowledge_base", "http_tool", "openapi", "mcp"}
+)
+
+
 class _Builder:
     def __init__(
         self,
-        doc: ChatAgentDocument,
+        doc: ChatAgentDocument | None,
         *,
         models: ProviderModels,
         services: RuntimeServices,
         http: httpx.AsyncClient,
         chain: tuple[str, ...] = (),
+        organization_id: str | None = None,
+        dependencies: Mapping[str, dict[str, Any]] | None = None,
     ) -> None:
         self.doc = doc
         self.models = models
         self.services = services
         self.http = http
+        self.organization_id = doc.organization_id if doc is not None else organization_id
+        self.dependencies = doc.dependencies if doc is not None else dict(dependencies or {})
         # The saved agents being built around this one: one using itself would never end.
-        self.chain = (*chain, doc.id)
+        self.chain = (*chain, doc.id) if doc is not None else chain
 
     async def agent(self, node: Node, *, handed_to: bool) -> LlmAgent:
+        assert self.doc is not None, "An agent is built from its document."
         config = node.config
         name = node.adk_name
         what = f"{node.name}'s instruction"
@@ -145,10 +158,10 @@ class _Builder:
 
     async def _resolve(self, agent_id: str, node: Node) -> ChatAgentDocument:
         # An exported agent carries what it uses; the hosted runtime finds the rest.
-        for key, raw in self.doc.dependencies.items():
+        for key, raw in self.dependencies.items():
             if key.split("@", 1)[0] == agent_id:
                 try:
-                    return parse_document({**raw, "dependencies": self.doc.dependencies})
+                    return parse_document({**raw, "dependencies": self.dependencies})
                 except DocumentError as exc:
                     raise BuildError(f"{node.name!r} uses {agent_id}, which can't be built: {exc}") from exc
         if self.services.resolve_agent is None:
@@ -156,9 +169,14 @@ class _Builder:
                 f"{node.name!r} uses the saved agent {agent_id}, which isn't in this agent's dependencies."
             )
         try:
-            return await self.services.resolve_agent(agent_id)
+            doc = await self.services.resolve_agent(agent_id)
         except LookupError as exc:
             raise BuildError(f"{node.name!r} uses {agent_id}: {exc}") from exc
+        # It runs with its own organization's MCP servers, knowledge bases and
+        # workflows: another organization's agent would hand this one theirs.
+        if self.organization_id is not None and doc.organization_id != self.organization_id:
+            raise BuildError(f"{node.name!r} uses {agent_id}, which isn't one of this organization's agents.")
+        return doc
 
     async def tool(self, node: Node) -> list[BaseTool | BaseToolset]:
         config = node.config
@@ -234,7 +252,7 @@ class _Builder:
                     f"{node.name!r} uses one of the organization's MCP servers, which only the hosted runtime has."
                 )
             try:
-                return await self.services.mcp_servers(config, organization_id=self.doc.organization_id)
+                return await self.services.mcp_servers(config, organization_id=self.organization_id)
             except LookupError as exc:
                 raise BuildError(f"{node.name!r}: {exc}") from exc
         try:
@@ -274,10 +292,12 @@ class _Builder:
                 f"{node.name!r} searches the organization's knowledge bases, which only the hosted runtime has."
             )
         try:
-            described = await searcher.describe(ids, organization_id=self.doc.organization_id)
+            described = await searcher.describe(ids, organization_id=self.organization_id)
         except LookupError as exc:
             raise BuildError(f"{node.name!r}: {exc}") from exc
         description = str(config.get("description") or "").strip() or _knowledge_description(described)
+        # Its own description or not, the model cites what it answers from.
+        description = f"{description} {CITE_PASSAGES}"
         try:
             max_results = int(config.get("max_results") or 5)
         except (TypeError, ValueError):
@@ -286,9 +306,10 @@ class _Builder:
             name=adk_name(node.name) or "search_knowledge_base",
             description=description,
             knowledge_base_ids=ids,
-            organization_id=self.doc.organization_id,
+            organization_id=self.organization_id,
             max_results=max(1, min(max_results, 20)),
             knowledge_bases=searcher,
+            knowledge_base_names=[name for name, _ in described],
         )
 
     async def workflow(self, node: Node) -> BaseToolset:
@@ -298,31 +319,111 @@ class _Builder:
         runner = self.services.workflows
         if runner is None:
             raise BuildError(f"{node.name!r} runs a workflow, which only the hosted runtime can.")
+        # Which of its versions: ag_x (its latest published), ag_x@3, ag_x@draft.
+        ref = str(AgentRef.of(workflow_id, node.config.get("version")))
         try:
-            name, description, schema = await runner.describe(
-                workflow_id, organization_id=self.doc.organization_id
-            )
+            name, description, schema = await runner.describe(ref, organization_id=self.organization_id)
         except LookupError as exc:
             raise BuildError(f"{node.name!r}: {exc}") from exc
         tool = WorkflowTool(
             name=adk_name(node.name) or adk_name(name) or "workflow",
             description=description or f"Runs the workflow {name}.",
-            workflow_id=workflow_id,
-            organization_id=self.doc.organization_id,
+            workflow_id=ref,
+            organization_id=self.organization_id,
             schema=schema,
             runner=runner,
         )
         return GuardedTools([tool], timeout_seconds=self.services.tool_timeout)
 
 
+#: How a knowledge base tool asks for citations: chat UIs draw "[KQM4821]"
+#: as a numbered source showing the passage (``@forge-ui`` ``sources``).
+CITE_PASSAGES = (
+    "Each passage has a ref: cite the passages an answer uses by their refs in square brackets "
+    "right after what they support, e.g. [KQM4821] or [KQM4821, BTR0042], and only refs this "
+    "tool returned."
+)
+
+
 def _knowledge_description(described: list[tuple[str, str]]) -> str:
     """:return: What a knowledge base tool says it does, from the knowledge bases it searches."""
     parts = [f"{name} ({about.strip()})" if about.strip() else name for name, about in described]
+    several = len(parts) > 1
     return (
-        f"Searches the knowledge base{'s' if len(parts) > 1 else ''} {'; '.join(parts)} for passages "
-        "that answer a question. Use it before answering from what these documents say, and cite "
-        "the document each fact comes from."
+        f"Searches the knowledge base{'s' if several else ''} {'; '.join(parts)} for passages "
+        "that answer a question. Use it before answering from what these documents say."
+        + (" Each passage names the knowledge base it's from." if several else "")
     )
+
+
+async def build_root_agent(
+    doc: ChatAgentDocument,
+    *,
+    models: ProviderModels,
+    services: RuntimeServices | None = None,
+    http: httpx.AsyncClient | None = None,
+) -> LlmAgent:
+    """
+    :return: The agent's entry ``LlmAgent``, with its tools and the agents it
+        hands off to: what :func:`build_app` makes the app's root, for running
+        it elsewhere (a workflow's step).
+    :raises BuildError: Something it uses can't be found or set up.
+    """
+    builder = _Builder(
+        doc, models=models, services=services or RuntimeServices(), http=http or httpx.AsyncClient()
+    )
+    try:
+        return await builder.agent(doc.entry, handed_to=False)
+    except MissingSetting as exc:
+        raise BuildError(str(exc)) from exc
+    except ValueError as exc:  # ADK refusing the tree it's given, e.g. a name used twice.
+        if isinstance(exc, BuildError):
+            raise
+        raise BuildError(str(exc)) from exc
+
+
+async def build_tools(
+    name: str,
+    kind: str,
+    config: Mapping[str, Any],
+    *,
+    models: ProviderModels,
+    services: RuntimeServices | None = None,
+    http: httpx.AsyncClient | None = None,
+    organization_id: str | None = None,
+    dependencies: Mapping[str, dict[str, Any]] | None = None,
+) -> list[BaseTool | BaseToolset]:
+    """
+    One tool, as a chat agent's tool node would be, for an agent built
+    elsewhere (a workflow's LLM agent): its kind's settings, with what they
+    lack at their defaults.
+
+    :param name: What the tool is called (an HTTP tool's name for the model).
+    :param kind: One of :data:`TOOL_KINDS`.
+    :param organization_id: Whose MCP servers, knowledge bases and workflows it may use.
+    :param dependencies: The saved agents it may use, by ``"<id>@<version>"``;
+        others are found with ``services.resolve_agent``.
+    :raises BuildError: It isn't a tool, or what it uses can't be found or set up.
+    """
+    if kind not in TOOL_KINDS:
+        raise BuildError(f"{name!r} ({kind}) can't be a tool.")
+    node = Node(id=adk_name(name) or kind, kind=kind, name=name, config={**DEFAULTS[kind], **config})  # type: ignore[arg-type]
+    builder = _Builder(
+        None,
+        models=models,
+        services=services or RuntimeServices(),
+        http=http or httpx.AsyncClient(),
+        organization_id=organization_id,
+        dependencies=dependencies,
+    )
+    try:
+        return await builder.tool(node)
+    except MissingSetting as exc:
+        raise BuildError(str(exc)) from exc
+    except ValueError as exc:
+        if isinstance(exc, BuildError):
+            raise
+        raise BuildError(f"{name!r}: {exc}") from exc
 
 
 async def build_app(
@@ -344,16 +445,7 @@ async def build_app(
     :return: The app, its root the entry agent.
     :raises BuildError: Something it uses can't be found or set up.
     """
-    services = services or RuntimeServices()
-    builder = _Builder(doc, models=models, services=services, http=http or httpx.AsyncClient())
-    try:
-        root = await builder.agent(doc.entry, handed_to=False)
-    except MissingSetting as exc:
-        raise BuildError(str(exc)) from exc
-    except ValueError as exc:  # ADK refusing the tree it's given, e.g. a name used twice.
-        if isinstance(exc, BuildError):
-            raise
-        raise BuildError(str(exc)) from exc
+    root = await build_root_agent(doc, models=models, services=services, http=http)
     return App(name=app_name or doc.id, root_agent=root, plugins=list(plugins))
 
 

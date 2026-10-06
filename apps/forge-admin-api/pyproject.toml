@@ -17,8 +17,8 @@ dependencies = [
     # logging with request ids (forge_common.logging).
     "forge-common[adk,adk-models,logging]",
     # Organizations' chat agents, run by ID (packages/python/agent-runtime):
-    # built from their documents and served over ADK's run API.
-    "forge-agent-runtime[server]",
+    # built from their documents and served over ADK's run API and A2A.
+    "forge-agent-runtime[server,a2a]",
     # ADK workflows are built as the async worker runs them, to check them
     # before a run; runs are kept by its run store, and a run's steps are
     # read from its ADK session (packages/python/adk-workflows).
@@ -33,8 +33,10 @@ dependencies = [
     "httpx2>=2.13.1",
     "jsonschema>=4.26",
     # Organizations' MCP servers: checking one lists its tools, and agents
-    # reach them through ADK's McpToolset, which takes 1.x or 2.x.
+    # reach them through ADK's McpToolset, which takes 1.x or 2.x. Their auth
+    # methods and credentials are shared with the worker (packages/python/mcp-servers).
     "mcp>=2.3.0,<3",
+    "forge-mcp-servers",
     "pycasbin>=2.8.0",
     "pydantic-settings>=2.15.0",
     "pyjwt>=2.10",

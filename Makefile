@@ -16,6 +16,7 @@ TASK_PACKAGES := $(addprefix packages/python/,task-sdk adk-workflows documents e
 # Python packages the apps share.
 COMMON_DIR := packages/python/common
 AGENT_RUNTIME_DIR := packages/python/agent-runtime
+MCP_SERVERS_DIR := packages/python/mcp-servers
 JSONATA_DIR := packages/python/jsonata
 # The Forge UI design system: its demo and the shadcn registry apps install from.
 FORGE_UI_DIR := packages/forge-ui
@@ -26,7 +27,7 @@ LOCAL_APPS := web admin async-worker
 .PHONY: admin admin-install admin-deps admin-migrate admin-check admin-test-mysql admin-fmt
 .PHONY: async-worker async-worker-install async-worker-deps async-worker-check async-worker-fmt async-worker-test-redis
 .PHONY: common-check common-fmt
-.PHONY: agent-runtime-check agent-runtime-fmt starter-wheels
+.PHONY: agent-runtime-check agent-runtime-fmt starter-wheels mcp-servers-check
 .PHONY: shared-deps infrastructure-check
 .PHONY: jsonata-check jsonata-fmt jsonata-test-re2
 .PHONY: forge-ui forge-ui-install forge-ui-check forge-ui-registry
@@ -67,6 +68,7 @@ help:
 	@echo "make common-check       Shared Python package (forge-common): lint, format check, types and unit tests"
 	@echo "make agent-runtime-check The chat agent runtime (forge-agent-runtime): lint, format check, types, tests and a package build"
 	@echo "make starter-wheels     The runtime's wheels standalone agent projects carry (into the runtime's dist/)"
+	@echo "make mcp-servers-check  Organizations' MCP servers (forge-mcp-servers, admin and worker): lint, format check, types and tests"
 	@echo "make common-fmt         Format and autofix the shared Python package sources"
 	@echo "make jsonata-check      Local JSONata engine: lint, format and full upstream compatibility suite"
 	@echo "make jsonata-fmt        Format and autofix the local JSONata engine"
@@ -95,6 +97,13 @@ env:
 	    perl -i -pe "s/^FORGE_ADMIN_SECRETS_KEY=.*/FORGE_ADMIN_SECRETS_KEY=$$secret/" $(ADMIN_DIR)/.env; \
 	  else $(call append,FORGE_ADMIN_SECRETS_KEY=$$secret,$(ADMIN_DIR)/.env); fi; \
 	  echo "Generated FORGE_ADMIN_SECRETS_KEY in $(ADMIN_DIR)/.env"; }
+	@# The worker connects to organizations' MCP servers with the same key.
+	@key=$$(sed -n 's/^FORGE_ADMIN_SECRETS_KEY=//p' $(ADMIN_DIR)/.env | tail -1); \
+	grep -Eq "^HYBRID_ADK_WORKFLOWS__SECRETS_KEY=$$key$$" $(ASYNC_WORKER_DIR)/.env || { \
+	  if grep -q '^HYBRID_ADK_WORKFLOWS__SECRETS_KEY=' $(ASYNC_WORKER_DIR)/.env; then \
+	    perl -i -pe "s/^HYBRID_ADK_WORKFLOWS__SECRETS_KEY=.*/HYBRID_ADK_WORKFLOWS__SECRETS_KEY=$$key/" $(ASYNC_WORKER_DIR)/.env; \
+	  else $(call append,HYBRID_ADK_WORKFLOWS__SECRETS_KEY=$$key,$(ASYNC_WORKER_DIR)/.env); fi; \
+	  echo "Copied FORGE_ADMIN_SECRETS_KEY into $(ASYNC_WORKER_DIR)/.env"; }
 
 install: web-install python-install forge-ui-install
 
@@ -157,7 +166,7 @@ restart: env
 docker-build: env
 	$(COMPOSE) build $(SERVICES)
 
-check: infrastructure-check web-check web-test web-build admin-check async-worker-check common-check agent-runtime-check jsonata-check forge-ui-check
+check: infrastructure-check web-check web-test web-build admin-check async-worker-check common-check agent-runtime-check mcp-servers-check jsonata-check forge-ui-check
 
 web-install:
 	cd $(WEB_DIR) && $(NPM) ci
@@ -263,6 +272,9 @@ common-check:
 agent-runtime-check:
 	cd $(AGENT_RUNTIME_DIR) && $(UV) run ruff check . && $(UV) run ruff format --check . && $(UV) run mypy src tests && $(UV) run pytest
 	$(UV) build --package forge-agent-runtime -o $(AGENT_RUNTIME_DIR)/dist
+
+mcp-servers-check:
+	cd $(MCP_SERVERS_DIR) && $(UV) run ruff check . && $(UV) run ruff format --check . && $(UV) run mypy src && $(UV) run pytest
 
 starter-wheels:
 	for package in forge-agent-runtime forge-common forge-jsonata; do \

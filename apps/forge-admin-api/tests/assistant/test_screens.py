@@ -29,7 +29,7 @@ from scripted_llm import (
     sse_events,
 )
 
-from forge_admin.assistant import forge, language_models
+from forge_admin.assistant import forge, knowledge_tools, language_models
 from forge_admin.assistant.page_context import PAGE_CONTEXT, PageContext
 from forge_admin.assistant.screens import (
     STICKY,
@@ -74,7 +74,7 @@ def bundled(settings: Settings) -> Screens:
 def test_the_bundled_screens_name_only_what_exists(settings: Settings) -> None:
     # Loading checks every toolset and tool it names against the real ones.
     screens = bundled(settings)
-    assert set(screens.toolsets) == {"access", "administration"}
+    assert set(screens.toolsets) == {"access", "administration", "knowledge"}
     names = [screen.name for screen in screens.config.screens]
     # The catch-all organization screen comes after every other organization screen.
     organization = names.index("organization")
@@ -102,7 +102,32 @@ def test_the_bundled_screens_match_the_organization_workspace(
 
     assert [screen.name for screen in resolved.screens] == screens
     assert ("all" if resolved.toolsets["access"] is None else "some") == access
-    assert set(resolved.toolsets) == {"access"}
+    # Asking what the documents say works everywhere; retrying and
+    # re-indexing them only on the knowledge base pages.
+    assert set(resolved.toolsets) == {"access", "knowledge"}
+    assert resolved.toolsets["knowledge"] == set(knowledge_tools.READ_TOOLS)
+    assert len(resolved.prompts) <= 6
+
+
+KNOWLEDGE_BASE = "/organizations/$organizationId_/knowledge/$knowledgeBaseId"
+
+
+@pytest.mark.parametrize(
+    ("where", "screens"),
+    [
+        (page(route=KNOWLEDGE_BASE), ["knowledge-base"]),
+        (page("knowledge"), ["organization-knowledge", "organization"]),
+    ],
+)
+def test_the_knowledge_base_pages_have_every_knowledge_tool(
+    settings: Settings, where: dict, screens: list[str]
+) -> None:
+    resolved = bundled(settings).resolve(context(where))
+
+    assert [screen.name for screen in resolved.screens] == screens
+    # Every tool, retrying and re-indexing too.
+    assert resolved.toolsets["knowledge"] is None
+    assert any("knowledge base" in prompt.title.lower() for prompt in resolved.prompts)
     assert len(resolved.prompts) <= 6
 
 

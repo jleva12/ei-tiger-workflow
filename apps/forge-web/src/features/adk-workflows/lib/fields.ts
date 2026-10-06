@@ -51,11 +51,29 @@ function instructions(step: AgentStep): ExpressionSetting[] {
   return out
 }
 
+/** The setting key of an input of an agent from the Agents page, by its field. */
+export const agentInput = (field: string) => `inputs.${field}`
+
 /** The node's settings that hold expressions or templates. */
 export function agentExpressionSettings(step: AgentStep): ExpressionSetting[] {
   if (isForgeKind(step.kind)) return expressionSettings(step as StepData)
   if (step.kind === "human_input") {
     return [template("message", "What they're asked", step.config.message)]
+  }
+  if (step.kind === "llm" && step.config.source === "agent") {
+    // An agent from the Agents page: what it's sent, and its input fields.
+    return [
+      template("message", "Its message", step.config.message),
+      ...Object.entries(step.config.inputs).map(
+        ([field, text]): ExpressionSetting => ({
+          key: agentInput(field),
+          label: `Its input ${field}`,
+          mode: "expression",
+          text,
+          check: {},
+        })
+      ),
+    ]
   }
   return instructions(step)
 }

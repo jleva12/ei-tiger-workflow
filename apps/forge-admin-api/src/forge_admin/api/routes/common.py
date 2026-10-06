@@ -8,9 +8,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge_admin.auth.access import UUID_PATTERN
+from forge_admin.auth.api_keys import key_id_of
 from forge_admin.db.audit import UtcDateTime
 from forge_admin.db.session import get_session
-from forge_admin.models import Organization, User
+from forge_admin.models import ApiKey, Organization, User
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 Name = Annotated[
@@ -84,7 +85,14 @@ async def commit_or_conflict(session: AsyncSession, detail: str) -> None:
 
 
 async def name_of(session: AsyncSession, user: str) -> str:
-    """:return: A user's name, or their email, or their ID when unknown."""
+    """
+    :return: A user's name, or their email, or their ID when unknown; for an
+        organization's API key (``apikey:<id>``), "API key" and its name.
+    """
+    key_id = key_id_of(user)
+    if key_id is not None:
+        key = await session.get(ApiKey, key_id)
+        return f"API key {key.name}" if key is not None else "Deleted API key"
     person = await session.get(User, user)
     if person is None:
         return user

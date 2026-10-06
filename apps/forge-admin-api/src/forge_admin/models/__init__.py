@@ -4,6 +4,7 @@ Define each model on forge_admin.db.base.AuditBase in a module of this package a
 import that module here, so Alembic autogenerate sees every table.
 """
 
+from forge_admin.models.api_keys import ApiKey
 from forge_admin.models.authorization import (
     CasbinRule,
     Permission,
@@ -20,6 +21,7 @@ from forge_admin.models.mcp_servers import McpOAuthFlow, McpServer
 from forge_admin.models.users import User
 
 __all__ = [
+    "ApiKey",
     "CasbinRule",
     "KnowledgeBase",
     "KnowledgeCollection",

@@ -50,6 +50,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge_admin.adk_workflows.documents import ID_PATTERN
 from forge_admin.adk_workflows.queue import Embedding
+from forge_admin.adk_workflows.resources import RunResources
 from forge_admin.adk_workflows.runs import (
     APP_NAME,
     AdkRunError,
@@ -57,6 +58,11 @@ from forge_admin.adk_workflows.runs import (
     prepare_run,
     queue_run,
     start_adk_run,
+)
+from forge_admin.adk_workflows.versions import (
+    WorkflowNotFound,
+    resolve_workflow,
+    workflow_finder,
 )
 from forge_admin.api.routes.adk_workflows import (
     NOT_FOUND,
@@ -101,6 +107,10 @@ class AdkRunCreate(BaseModel):
 
     #: What the run starts with: it must fit the start's input schema.
     input: Any = None
+    #: Which version runs: a published one's number, or "draft"; null for
+    #: what the builder shows: its draft when it has one, else its latest
+    #: published.
+    version: Annotated[int, Field(ge=1)] | Literal["draft"] | None = None
 
 
 class DecisionCreate(BaseModel):
@@ -169,6 +179,9 @@ class AdkRun(BaseModel):
     agent_name: str
     #: The ADK workflow's revision it runs, whatever is saved afterwards.
     revision: int
+    #: Which version ran: a published one's number, or "draft"; null for
+    #: runs from before workflows had versions.
+    version: int | Literal["draft"] | None = None
     #: Its ADK session, where its steps are read from.
     session_id: str
     status: RunStatus
@@ -253,6 +266,9 @@ class AdkRunStep(BaseModel):
     #: Its first event and the one that finished it, ISO 8601 in UTC.
     started_at: str | None = None
     finished_at: str | None = None
+    #: The tools its LLM agents called: ``{"id", "agent", "name", "args",
+    #: "status", "response", "at"}``.
+    calls: list[dict[str, Any]] = []
 
 
 class AdkRunSteps(BaseModel):
@@ -303,6 +319,14 @@ def _failure(run: dict[str, Any]) -> RunFailure | None:
     )
 
 
+def version_of(stored: Any) -> int | str | None:
+    """:return: A run's version as the API answers it: a number, "draft", or null."""
+    if stored is None or stored == "draft":
+        return stored
+    text = str(stored)
+    return int(text) if text.isdigit() else None
+
+
 def _summary(run: dict[str, Any]) -> dict[str, Any]:
     started, finished = run.get("started_at"), run.get("finished_at")
     duration = (
@@ -316,6 +340,7 @@ def _summary(run: dict[str, Any]) -> dict[str, Any]:
         "agent_id": run["agent_id"],
         "agent_name": run["agent_name"],
         "revision": run["revision"],
+        "version": version_of(run.get("version")),
         "session_id": run["session_id"],
         "status": run["status"],
         "attempt": run["attempt"],
@@ -481,12 +506,13 @@ async def run_adk_workflow(
     enforcer: Enforcer,
 ) -> AdkRun:
     """
-    Run an ADK workflow, as it's saved now (with the saved ADK workflows it
-    runs), as the caller: the run, queued for a worker.
+    Run an ADK workflow, at the version named (its draft, by default, when it
+    has one; else its latest published), with the saved ADK workflows it
+    runs, as the caller: the run, queued for a worker.
     \f
     :param organization_id: The organization.
     :param agent_id: The ADK workflow.
-    :param body: The input.
+    :param body: The input, and which version.
     :return: The run.
     :raises HTTPException: 403 without agents:run in the organization; 404 when
         the organization has no such ADK workflow; 422 for input that doesn't
@@ -496,15 +522,33 @@ async def run_adk_workflow(
     await authorize(session, enforcer, user, RUN, Scope(Level.ORG, organization_id))
     store = agent_store(request)
     queue = run_queue(request)
-
-    async def find(wanted: str) -> dict[str, Any] | None:
-        return await store.get(organization_id, wanted)
+    find = workflow_finder(store, organization_id)
 
     try:
-        record = await find(agent_id)
-        if record is None:
+        current = await store.get(organization_id, agent_id)
+        if current is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
-        saved = await prepare_run(record, body.input, find)
+        # Unnamed, what the builder shows: the draft, else the latest published.
+        version = body.version or ("draft" if current.get("has_draft") else None)
+        try:
+            resolved = await resolve_workflow(
+                store,
+                f"{agent_id}@{version}" if version else agent_id,
+                organization_id=organization_id,
+            )
+        except WorkflowNotFound as error:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from None
+        record = resolved.run_record
+        prepared = await prepare_run(
+            record,
+            body.input,
+            find,
+            RunResources(
+                organization_id,
+                chat_agents=getattr(request.app.state, "chat_agents", None),
+                sessions=request.app.state.sessionmaker,
+            ),
+        )
     except AdkRunError as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from None
     except PyMongoError as error:
@@ -516,17 +560,18 @@ async def run_adk_workflow(
             run_store(request),
             queue,
             record,
-            saved=saved,
+            prepared=prepared,
             input=body.input,
             run_as=user,
             run_as_name=run_as_name,
             trigger={"type": "manual", "by": user},
+            version=resolved.version,
         )
     logger.info(
-        "%s ran ADK workflow %s at revision %s in organization %s: run %s",
+        "%s ran ADK workflow %s (version %s) in organization %s: run %s",
         user,
         agent_id,
-        record["revision"],
+        resolved.version,
         organization_id,
         run["id"],
     )

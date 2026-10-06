@@ -107,6 +107,21 @@ async def test_saved_agents_come_from_the_dependencies_or_the_resolver(example, 
         await build(doc, models, web, resolve_agent=resolve_loop)
 
 
+async def test_a_saved_agent_must_be_the_same_organizations(example, models, web):
+    theirs = without(copy.deepcopy(example), "memory", "orders", "help", "billing", "billing_api")
+    theirs.update(id="ca_theirs", name="Theirs", organization_id="another-organization")
+    doc = without(example, "help")
+    doc["nodes"].append(saved_node("ca_theirs"))
+    doc["edges"].append({"id": "s", "source": "agent", "source_output": "agents", "target": "saved"})
+
+    async def resolve(agent_id: str):
+        return parse_document(theirs)
+
+    # It would run with the other organization's MCP servers and knowledge bases.
+    with pytest.raises(BuildError, match="isn't one of this organization's agents"):
+        await build(doc, models, web, resolve_agent=resolve)
+
+
 async def test_workflows_and_organization_mcp_servers_need_the_hosted_runtime(example, models, web):
     doc = copy.deepcopy(example)
     doc["nodes"].append(
@@ -162,7 +177,19 @@ class KnowledgeBases:
 
     async def search(self, knowledge_base_ids, query, *, organization_id, limit):
         self.searches.append((list(knowledge_base_ids), query, organization_id, limit))
-        return [{"document": "Leave policy.pdf", "section": "Annual leave", "text": "25 days.", "score": 0.9}]
+        return [
+            {
+                "ref": "HRL0025",
+                "knowledge_base": "HR policies",
+                "knowledge_base_id": "kb_hr",
+                "document": "Leave policy.pdf",
+                "document_id": "doc_leave",
+                "section": "Annual leave",
+                "location": "page 2",
+                "text": "25 days.",
+                "score": 0.9,
+            }
+        ]
 
 
 def knowledge_node(**config: Any) -> dict[str, Any]:
@@ -190,11 +217,17 @@ async def test_a_knowledge_base_tool_searches_the_organizations_knowledge_bases(
     assert tool.name == "policies"
     # Without a description of its own, it says what it searches.
     assert "HR policies (Leave, benefits and expenses.); IT runbooks" in tool.description
+    assert "Each passage names the knowledge base it's from." in tool.description
+    # It asks for citations by ref, which chat UIs draw as numbered sources.
+    assert "[KQM4821]" in tool.description
     declaration: Any = tool._get_declaration()
     assert declaration.parameters_json_schema["required"] == ["query"]
 
     answer = await tool.run_async(args={"query": "How many days of leave?"}, tool_context=None)  # type: ignore[arg-type]
     assert answer["passages"][0]["text"] == "25 days."
+    assert answer["passages"][0]["knowledge_base"] == "HR policies"
+    # What it searched, by name, for the chat UI's card of the call.
+    assert answer["searched"] == ["HR policies", "IT runbooks"]
     assert knowledge.searches == [
         (["kb_hr", "kb_it"], "How many days of leave?", doc.get("organization_id"), 3)
     ]
@@ -213,4 +246,62 @@ async def test_a_knowledge_base_tool_names_a_knowledge_base_the_organization_has
 
     doc["nodes"][-1]["config"]["knowledge_bases"] = ["kb_hr"]
     root = (await build(doc, models, web, knowledge_bases=KnowledgeBases())).root_agent
-    assert root.tools[-1].items[0].description == "Company policies."
+    # Its own description, still asking for citations by ref.
+    from forge_agent_runtime.build import CITE_PASSAGES
+
+    assert root.tools[-1].items[0].description == f"Company policies. {CITE_PASSAGES}"
+
+
+async def test_one_tool_builds_on_its_own_for_an_agent_built_elsewhere(example, models, web):
+    from forge_agent_runtime.build import build_root_agent, build_tools
+
+    http = await build_tools(
+        "Look up order",
+        "http_tool",
+        {"url": "https://api.example.com/orders/{order_id}", "parameters": {"type": "object"}},
+        models=models,
+        http=web(),
+    )
+    assert isinstance(http[0], GuardedTools) and isinstance(http[0].items[0], HttpTool)
+    assert http[0].items[0].name == "look_up_order"
+
+    knowledge = KnowledgeBases()
+    found = await build_tools(
+        "Policies",
+        "knowledge_base",
+        {"knowledge_bases": ["kb_hr"]},
+        models=models,
+        services=RuntimeServices(knowledge_bases=knowledge),
+        organization_id="org_1",
+    )
+    tool: Any = found[0]
+    await tool.items[0].run_async(args={"query": "Leave?"}, tool_context=None)
+    assert knowledge.searches[0][2] == "org_1"
+
+    refunds = without(copy.deepcopy(example), "memory", "orders", "help", "billing", "billing_api")
+    refunds.update(id="ca_refunds", name="Refunds")
+    agent = await build_tools(
+        "Refunds",
+        "saved_agent",
+        {"agent": "ca_refunds"},
+        models=models,
+        dependencies={"ca_refunds@2": refunds},
+    )
+    assert isinstance(agent[0], AgentTool)
+
+    with pytest.raises(BuildError, match="can't be a tool"):
+        await build_tools("Helper", "sub_agent", {}, models=models)
+    with pytest.raises(BuildError, match="ORDERS_TOKEN"):
+        await build_tools(
+            "Orders",
+            "http_tool",
+            {
+                "url": "https://api.example.com/",
+                "headers": [{"id": "h", "name": "A", "value": "${ORDERS_TOKEN}"}],
+            },
+            models=models,
+            services=RuntimeServices(environment={}),
+        )
+
+    root = await build_root_agent(parse_document(without(example, "help")), models=models, http=web())
+    assert isinstance(root, LlmAgent) and root.name == "support_assistant"

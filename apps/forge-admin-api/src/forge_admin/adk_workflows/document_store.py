@@ -78,7 +78,10 @@ def problems_in(
 
 
 def fill_added_settings(
-    document: dict[str, Any], added: Mapping[str, Mapping[str, Any]]
+    document: dict[str, Any],
+    added: Mapping[str, Mapping[str, Any]],
+    sub_added: Mapping[str, Mapping[str, Any]] | None = None,
+    tool_added: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """
     A document with the settings its nodes' kinds gained since it was saved.
@@ -88,27 +91,51 @@ def fill_added_settings(
         ``config``.
     :param added: By kind, the settings it gained and what a document saved
         before them means by leaving them out.
+    :param sub_added: The same for sub-agents (a node's ``sub_agents``, and
+        theirs), by their kind; None when they gained none.
+    :param tool_added: The same for an LLM agent's tools (its ``tools``),
+        by their kind; None when they gained none.
     :return: The document; the same object when nothing was missing.
     """
     nodes = document.get("nodes")
     if not isinstance(nodes, list):
         return document
-    filled = []
-    for node in nodes:
-        config = node.get("config") if isinstance(node, dict) else None
-        kind = node.get("kind") if isinstance(node, dict) else None
-        if not isinstance(config, dict) or not isinstance(kind, str):
-            filled.append(node)
-            continue
-        missing = {
-            key: copy.deepcopy(value)
-            for key, value in added.get(kind, {}).items()
-            if key not in config
-        }
-        filled.append({**node, "config": {**config, **missing}} if missing else node)
+    filled = [_filled(node, added, sub_added, tool_added) for node in nodes]
     if all(a is b for a, b in zip(filled, nodes, strict=True)):
         return document
     return {**document, "nodes": filled}
+
+
+def _filled(
+    item: Any,
+    added: Mapping[str, Mapping[str, Any]],
+    sub_added: Mapping[str, Mapping[str, Any]] | None,
+    tool_added: Mapping[str, Mapping[str, Any]] | None = None,
+) -> Any:
+    """
+    :return: A node, sub-agent or tool with what its kind gained; itself
+        when it lacks nothing.
+    """
+    config = item.get("config") if isinstance(item, dict) else None
+    kind = item.get("kind") if isinstance(item, dict) else None
+    if not isinstance(config, dict) or not isinstance(kind, str):
+        return item
+    missing = {
+        key: copy.deepcopy(value)
+        for key, value in added.get(kind, {}).items()
+        if key not in config
+    }
+    subs = config.get("sub_agents")
+    if sub_added and isinstance(subs, list):
+        inner = [_filled(sub, sub_added, sub_added, tool_added) for sub in subs]
+        if any(a is not b for a, b in zip(inner, subs, strict=True)):
+            missing["sub_agents"] = inner
+    tools = config.get("tools")
+    if tool_added and isinstance(tools, list):
+        filled = [_filled(tool, tool_added, None) for tool in tools]
+        if any(a is not b for a, b in zip(filled, tools, strict=True)):
+            missing["tools"] = filled
+    return {**item, "config": {**config, **missing}} if missing else item
 
 
 class DocumentStore:

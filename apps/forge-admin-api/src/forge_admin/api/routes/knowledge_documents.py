@@ -155,6 +155,9 @@ class DocumentRead(Audited):
     error: str
     # The chunks it was split into, once it succeeded.
     chunk_count: int
+    # What its chunks are embedded with, once it succeeded; empty when
+    # unknown (ingested before models were recorded).
+    embedding_model: str
     finished_at: UtcDateTime | None
 
 
@@ -216,6 +219,7 @@ def _apply(row: KnowledgeDocument, result: Outcome) -> None:
     row.error = result.error
     if result.phase == "SUCCEEDED":
         row.chunk_count = int((result.detail or {}).get("chunk_count") or 0)
+        row.embedding_model = str((result.detail or {}).get("embedding_model") or "")
     if result.finished and row.finished_at is None:
         row.finished_at = datetime.now(UTC).replace(tzinfo=None)
 

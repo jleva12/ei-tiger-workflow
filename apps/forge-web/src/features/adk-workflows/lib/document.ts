@@ -1,5 +1,10 @@
+import { readSettings as readChatSettings } from "@/features/agents/lib/document"
 import type { ImportResult } from "@/features/builder/components/import-dialog"
-import { edgeId, type BuilderGraph, type Point } from "@/features/builder/lib/types"
+import {
+  edgeId,
+  type BuilderGraph,
+  type Point,
+} from "@/features/builder/lib/types"
 import { readList } from "@/features/steps/lib/document"
 import {
   DELAY_UNITS,
@@ -10,6 +15,7 @@ import {
 import {
   AGENT_KINDS,
   isAgentKind,
+  isLlmToolKind,
   isSubAgentKind,
   newNode,
   NODE_ID_PATTERN,
@@ -19,8 +25,10 @@ import {
   type AgentConfigs,
   type AgentKind,
   type AgentStep,
+  type LlmTool,
   type SubAgent,
 } from "./model"
+import { TOOL_ID, TOOL_KINDS } from "./tools"
 
 /*
  * An agent as JSON: the ADK graph the admin API builds, and where the
@@ -193,7 +201,7 @@ const ENUMS: Record<string, readonly string[]> = {
 // Settings that take one of a few values that depend on the kind: an LLM
 // agent's mode isn't a merge's.
 const KIND_ENUMS: Record<string, Record<string, readonly string[]>> = {
-  llm: { mode: ["single_turn", "task"] },
+  llm: { mode: ["single_turn", "task"], source: ["inline", "agent"] },
   merge: { mode: ["all", "any"] },
   http: { method: HTTP_METHODS },
   delay: { unit: DELAY_UNITS.map((u) => u.value) },
@@ -262,6 +270,29 @@ function readSettings(
       }
     } else if (key === "sub_agents") {
       config[key] = readSubAgents(value, path, notes, depth + 1)
+    } else if (key === "tools") {
+      config[key] = readTools(value, path, notes)
+    } else if (key === "version") {
+      if (
+        value === null ||
+        value === "draft" ||
+        (typeof value === "number" && Number.isInteger(value) && value > 0)
+      )
+        config[key] = value
+      else {
+        notes.push(`${path} should be a version's number, "draft", or null.`)
+        config[key] = fallback
+      }
+    } else if (key === "inputs") {
+      if (
+        isRecord(value) &&
+        Object.values(value).every((v) => typeof v === "string")
+      )
+        config[key] = value
+      else {
+        notes.push(`${path} should be an object of expressions.`)
+        config[key] = fallback
+      }
     } else if (LISTS.has(key)) {
       config[key] = readList(key, value, path, notes) ?? fallback
     } else if (key === "model") {
@@ -286,6 +317,45 @@ function readSettings(
       notes.push(`${at}.${key} isn't a setting; dropped.`)
   }
   return config
+}
+
+/** An LLM agent's tools: each a kind the Agents builder has, with its settings. */
+function readTools(value: unknown, path: string, notes: string[]): LlmTool[] {
+  if (!Array.isArray(value)) {
+    notes.push(`${path} should be a list.`)
+    return []
+  }
+  const ids = new Set<string>()
+  return value.flatMap((item, index) => {
+    const at = `${path}[${index}]`
+    if (!isRecord(item)) {
+      notes.push(`${at} isn't an object; dropped.`)
+      return []
+    }
+    if (!isLlmToolKind(item.kind)) {
+      notes.push(
+        `${at}.kind "${String(item.kind)}" isn't a tool Forge knows; dropped.`
+      )
+      return []
+    }
+    let id =
+      typeof item.id === "string" && TOOL_ID.test(item.id)
+        ? item.id
+        : uid("tool")
+    if (ids.has(id)) id = uid("tool")
+    ids.add(id)
+    const name =
+      typeof item.name === "string" && item.name.trim()
+        ? item.name
+        : TOOL_KINDS[item.kind].label
+    const config = readChatSettings(
+      item.kind,
+      item.config,
+      `${at}.config`,
+      notes
+    )
+    return [{ id, kind: item.kind, name, config } as LlmTool]
+  })
 }
 
 // Deeper than this, sub-agents are dropped: a document can't nest forever.

@@ -1,14 +1,13 @@
 """Organizations' MCP servers: remote (streamable HTTP) MCP servers their
 agents use as toolsets.
 
-- :mod:`.auth`: the protocol auth methods follow, and their registry's type.
-- :mod:`.methods`, :mod:`.oauth`: the methods there are (none, API key,
-  bearer token, OAuth sign-in, OAuth client credentials).
-- :mod:`.registry`: :data:`~.registry.AUTH_METHODS`, where a new one is added.
-- :mod:`.secrets`: credentials encrypted at rest.
-- :mod:`.client`: listing a server's tools.
-- :mod:`.service`: what the API does with a server through its method.
-- :mod:`.toolset`: a server as an ADK ``McpToolset``, for agents.
+What's done with a server (its auth methods, credentials encrypted at rest,
+listing its tools, connecting it) is ``forge_mcp_servers``
+(``packages/python/mcp-servers``), which the async worker shares; a new auth
+method is added to its ``registry``. Here:
+
+- :mod:`.toolset`: the servers as this API keeps them (its models), and a
+  server as an ADK ``McpToolset`` for the hosted runtime's agents.
 
 Routes: ``forge_admin.api.routes.mcp_servers``; tables:
 ``forge_admin.models.mcp_servers``.

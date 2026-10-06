@@ -3,14 +3,17 @@ import * as React from "react"
 import {
   AssistantProvider,
   AssistantThread,
+  knowledgeBaseSources,
   useAdkAssistant,
 } from "@/components/forge/assistant/index"
 import { Icon } from "@/components/forge/icon"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { apiAuthHeaders } from "@/lib/api-instance"
 import { useMe } from "@/lib/users"
 import { RUNTIME_URL, type ChatAgentRecord } from "@/features/agents/lib/api"
 import { declaredState } from "@/features/agents/lib/input"
+import { knowledgeDocumentHref } from "@/features/knowledge/lib/sources"
 import type { DataType } from "@/features/steps/lib/types"
 
 /**
@@ -93,6 +96,7 @@ export function ChatAgentTestPanel({
             key={`${appName}:${userId}`}
             appName={appName}
             userId={userId}
+            organizationId={record.organization_id}
             name={record.document.name}
             state={() => stateDelta(fields, latest.current)}
           />
@@ -109,22 +113,38 @@ export function ChatAgentTestPanel({
 function TestChat({
   appName,
   userId,
+  organizationId,
   name,
   state,
 }: {
   appName: string
   userId: string
+  organizationId: string
   name: string
   state: () => Record<string, unknown>
 }) {
+  // Its knowledge base tools' passages, cited in its answers; each opens in
+  // its knowledge base's document viewer, in the agent's organization.
+  const sources = React.useMemo(
+    () =>
+      knowledgeBaseSources({
+        documentHref: (passage) =>
+          knowledgeDocumentHref(passage, organizationId),
+      }),
+    [organizationId]
+  )
   const { runtime, artifacts } = useAdkAssistant({
     adk: { url: RUNTIME_URL!, appName, userId },
+    // Who's testing: needed when the runtime isn't public, and their turns
+    // are theirs when it is.
+    headers: apiAuthHeaders,
     runState: state,
   })
   return (
     <AssistantProvider
       runtime={runtime}
       artifacts={artifacts}
+      sources={sources}
       title={name || "Agent"}
       welcome={{
         title: `Talk to ${name || "the agent"}`,

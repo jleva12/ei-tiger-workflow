@@ -14,7 +14,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from forge_admin.mcp_servers.client import Listing, McpConnectionError, list_tools
+from forge_mcp_servers.client import Listing, McpConnectionError, list_tools
 
 
 class RequireKey(BaseHTTPMiddleware):

@@ -10,6 +10,7 @@ from forge_common.logging import configure_logging
 from forge_admin.api.routes import (
     adk_workflow_runs,
     adk_workflows,
+    api_keys,
     assistant,
     authz,
     chat_agents,
@@ -40,6 +41,7 @@ ROUTERS = [
     knowledge_documents.router,
     knowledge_collections.router,
     mcp_servers.router,
+    api_keys.router,
     members.router,
     roles.router,
     permissions.router,

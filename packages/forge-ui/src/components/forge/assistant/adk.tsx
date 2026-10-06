@@ -38,6 +38,7 @@ import type { IconProp } from "@/components/forge/icons"
 import { CountBadge } from "@/components/forge/status"
 
 import { useAssistantSettings, type ApprovalView } from "./assistant-context"
+import { SearchLabel, type AssistantSearch } from "./sources"
 import { extendedThinkingLevels } from "./model-settings"
 import {
   ModelSelectorRoot,
@@ -582,13 +583,35 @@ export const AdkDelegation: ToolCallMessagePartComponent = ({
 /**
  * `ToolFallback` for ADK: a call gated by a confirmation shows its trigger,
  * arguments and result but no approval controls, since
- * `AdkConfirmationUI` owns the decision. Other calls render as usual.
+ * `AdkConfirmationUI` owns the decision. A search (the sources config's
+ * `searchOf`) says what it searched and found. Other calls render as usual.
  */
+/** The search a finished tool call made, as the sources config reads it. */
+function useToolSearch(
+  toolName: string,
+  result: unknown
+): AssistantSearch | undefined {
+  const searchOf = useAssistantSettings().sources?.searchOf
+  return React.useMemo(() => {
+    if (!searchOf || result === undefined) return undefined
+    try {
+      return searchOf(toolName, result)
+    } catch {
+      return undefined // a result the config can't read is just a tool call
+    }
+  }, [searchOf, toolName, result])
+}
+
 export const AdkToolFallback: ToolCallMessagePartComponent = (props) => {
-  if (!props.approval) return <ToolFallback {...props} />
+  const search = useToolSearch(props.toolName, props.result)
+  if (!props.approval && !search) return <ToolFallback {...props} />
   return (
     <ToolFallback.Root>
-      <ToolFallback.Trigger toolName={props.toolName} status={props.status} />
+      <ToolFallback.Trigger
+        toolName={props.toolName}
+        status={props.status}
+        label={search && <SearchLabel search={search} />}
+      />
       <ToolFallback.Content>
         <ToolFallback.Error status={props.status} />
         <ToolFallback.Args argsText={props.argsText} />

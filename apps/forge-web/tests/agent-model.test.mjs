@@ -23,6 +23,8 @@ const { resolveExpression } = await load("/src/features/steps/lib/expressions.ts
 const { typeLabel } = await load("/src/features/steps/lib/types.ts")
 const { AGENT_ADAPTER } = await load("/src/features/adk-workflows/lib/adapter.ts")
 const { createBuilderStore, documentOf } = await load("/src/features/builder/components/store.ts")
+const tools = await load("/src/features/adk-workflows/lib/tools.ts")
+const { AGENT_JSON_SCHEMA } = await load("/src/features/adk-workflows/lib/schema.ts")
 await server.close()
 
 const ORG = "org-1"
@@ -447,5 +449,109 @@ test("the builder store edits an agent: new names, copies, and a sub-agent edit 
     assert.equal(documentOf(s()).edges.some((e) => e.source_output === "bug"), false)
   } finally {
     Date.now = now
+  }
+})
+
+
+test("an LLM agent's tools are the Agents builder's, and go to a document and back", () => {
+  const http = { ...tools.newTool("http_tool", []), id: "tool_http", name: "Look up order" }
+  http.config.url = "https://api.example.com/orders/{id}"
+  const kb = { ...tools.newTool("knowledge_base", []), id: "tool_kb" }
+  kb.config.knowledge_bases = ["kb_hr"]
+  const sub = { ...model.newSubAgent("llm", []), id: "drafter" }
+  sub.config.instruction = "Draft."
+  sub.config.tools = [{ ...tools.newTool("mcp", []), id: "tool_docs", config: { ...tools.toolDefaults("mcp"), server: "srv_docs" } }]
+  const doc = agent(
+    [
+      ["start", "start", "Start"],
+      ["a", "llm", "Helper", { instruction: "Help.", tools: [http, kb], sub_agents: [sub] }],
+    ],
+    [["start", "next", "a"]]
+  )
+  const read = parseAgent(JSON.stringify(doc), { organizationId: ORG })
+  assert.deepEqual(read.notes, [])
+  const node = read.doc.nodes.find((n) => n.id === "a")
+  assert.deepEqual(node.config.tools.map((x) => [x.id, x.kind]), [["tool_http", "http_tool"], ["tool_kb", "knowledge_base"]])
+  assert.equal(node.config.sub_agents[0].config.tools[0].config.server, "srv_docs")
+  assert.deepEqual(tools.toolsAt(toGraph(doc).steps[1].data, ["drafter"]).map((x) => x.id), ["tool_docs"])
+  // A tool kind it doesn't know is dropped, saying so.
+  const odd = structuredClone(doc)
+  odd.nodes[1].config.tools.push({ id: "tool_x", kind: "calculator", name: "Sums", config: {} })
+  assert.match(parseAgent(JSON.stringify(odd), { organizationId: ORG }).notes.join(" "), /calculator.*isn't a tool/)
+})
+
+test("tools are checked as the Agents builder checks them, each issue under its tool", () => {
+  const empty = { ...tools.newTool("http_tool", []), id: "tool_http", name: "Look up order" }
+  const kb = { ...tools.newTool("knowledge_base", []), id: "tool_kb", name: "look up order" }
+  kb.config.knowledge_bases = ["kb_gone"]
+  const sub = { ...model.newSubAgent("llm", []), id: "drafter" }
+  sub.config.instruction = "Draft."
+  sub.config.tools = [{ ...tools.newTool("mcp", []), id: "tool_docs" }]
+  const doc = agent(
+    [
+      ["start", "start", "Start"],
+      ["a", "llm", "Helper", { instruction: "Help.", tools: [empty, kb], sub_agents: [sub] }],
+    ],
+    [["start", "next", "a"]]
+  )
+  const context = { knowledgeBases: new Map([["kb_hr", { name: "HR", ready: 3 }]]) }
+  const found = Object.fromEntries(validateAgent(toGraph(doc), context).map((i) => [i.id, i.field]))
+  assert.equal(found["a:tool-tool_http-url"], "tools.tool_http.url")
+  assert.equal(found["a:tool-tool_http-same-name"], "tools.tool_http.name")
+  assert.equal(found["a:tool-tool_kb-same-name"], "tools.tool_kb.name")
+  assert.ok(Object.values(found).includes("tools.tool_kb.knowledge_bases"))
+  // A sub-agent's tools are under its settings.
+  assert.equal(found["a:drafter-tool-tool_docs-url"], "agents.drafter.tools.tool_docs.url")
+})
+
+test("an LLM node can be an agent from the Agents page, checked against it", () => {
+  const node = (config) =>
+    agent(
+      [
+        ["start", "start", "Start"],
+        ["a", "llm", "Support", { source: "agent", ...config }],
+      ],
+      [["start", "next", "a"]]
+    )
+  const chatAgents = new Map([
+    [
+      "ca_support",
+      {
+        name: "Support",
+        published: 2,
+        hasDraft: false,
+        input: { type: "object", required: ["tier"], properties: { tier: { type: "string" } } },
+      },
+    ],
+  ])
+  // Its own instruction and tools: the node's aren't asked for.
+  assert.deepEqual(issuesOf(node({ agent: "ca_support", inputs: { tier: "input.tier" } }), { chatAgents }), [])
+  assert.deepEqual(issuesOf(node({ agent: "" }), { chatAgents }), ["a:agent"])
+  assert.deepEqual(issuesOf(node({ agent: "ca_gone" }), { chatAgents }), ["a:agent"])
+  const fields = (config) =>
+    Object.fromEntries(validateAgent(toGraph(node(config)), { chatAgents }).map((i) => [i.id, i.field]))
+  assert.deepEqual(fields({ agent: "ca_support", version: 3, inputs: { tier: "'pro'" } }), { "a:version": "version" })
+  assert.deepEqual(fields({ agent: "ca_support", version: "draft", inputs: { tier: "'pro'" } }), { "a:version": "version" })
+  assert.deepEqual(fields({ agent: "ca_support" }), { "a:input-tier": "inputs.tier" })
+  // Its message and inputs read the run's data.
+  const bad = fields({ agent: "ca_support", message: "{{ nothing.here }}", inputs: { tier: "input.tier" } })
+  assert.ok(Object.values(bad).includes("message"))
+  // It reads back as it was written.
+  const doc = node({ agent: "ca_support", version: 2, message: "Hi", inputs: { tier: "'pro'" } })
+  const read = parseAgent(JSON.stringify(doc), { organizationId: ORG })
+  assert.deepEqual(read.notes, [])
+  const config = read.doc.nodes[1].config
+  assert.deepEqual([config.source, config.agent, config.version, config.inputs], ["agent", "ca_support", 2, { tier: "'pro'" }])
+})
+
+test("the JSON Schema knows an LLM agent's settings and its tools'", () => {
+  const llm = AGENT_JSON_SCHEMA.$defs.config_llm
+  assert.deepEqual(Object.keys(llm.properties).sort(), Object.keys(model.AGENT_KINDS.llm.defaults()).sort())
+  const sub = AGENT_JSON_SCHEMA.$defs.sub_config_llm
+  assert.deepEqual(Object.keys(sub.properties).sort(), Object.keys(model.subAgentDefaults("llm")).sort())
+  assert.deepEqual(AGENT_JSON_SCHEMA.$defs.tool.properties.kind.enum, [...model.LLM_TOOL_KINDS])
+  for (const kind of model.LLM_TOOL_KINDS) {
+    const config = AGENT_JSON_SCHEMA.$defs[`tool_config_${kind}`]
+    assert.deepEqual(Object.keys(config.properties).sort(), Object.keys(tools.toolDefaults(kind)).sort(), kind)
   }
 })

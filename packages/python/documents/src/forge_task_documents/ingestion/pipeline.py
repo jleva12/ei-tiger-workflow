@@ -72,6 +72,7 @@ class IngestionPipeline:
                 skipped=True,
                 reason="unchanged",
                 chunk_count=existing.chunk_count if existing else 0,
+                embedding_model=existing.embedding_model if existing else None,
             )
 
         identity: dict[str, object] = {
@@ -157,6 +158,7 @@ class IngestionPipeline:
             doc_id=doc_id,
             status=IngestStatus.READY,
             chunk_count=len(chunks),
+            embedding_model=self.embedder.model_id,
             embedded=embedded,
             reused_embeddings=reused,
             deleted_stale=stats.deleted,
@@ -181,7 +183,19 @@ class IngestionPipeline:
             and existing.chunker_version == self.chunker.version
             and existing.embedding_model == self.embedder.model_id
             and existing.metadata == source.metadata  # tags etc. are copied onto chunks
+            and self._same_parser(existing, source)
         )
+
+    def _same_parser(self, existing: DocumentRecord, source: SourceFile) -> bool:
+        """Whether the parser that would read it now read it last: a new
+        parser, or a new version of it, reads it again. A converting parser
+        records itself first ("office+pptx")."""
+        try:
+            parser = self.registry.resolve(source)
+        except Exception:  # unsupported now: the run says so
+            return False
+        recorded = ((existing.parser_name or "").split("+")[0], (existing.parser_version or "").split("+")[0])
+        return recorded == (parser.name, parser.version)
 
     def _propagate_metadata(self, chunks: Iterable[Chunk], metadata: dict[str, object]) -> None:
         carried = {k: metadata[k] for k in self.config.propagate_metadata if k in metadata}

@@ -66,6 +66,7 @@ RUN_FIELDS = {
     "agent_id",
     "agent_name",
     "revision",
+    "version",
     "session_id",
     "status",
     "attempt",
@@ -392,6 +393,7 @@ def test_a_run_starts_queued_with_its_job_as_its_adk_workflow_is_saved(
         "agent_name": "Outer",
     }
     assert (run["revision"], run["status"], run["attempt"]) == (2, "queued", 1)
+    assert run["version"] == "draft"
     assert run["requested_by"] == {"id": MEMBER, "name": "Mia Member"}
     assert run["created_at"] == run["updated_at"] == "2026-10-01T12:00:00+00:00"
     for empty in ("resubmit_of", "started_at", "finished_at", "duration_ms"):
@@ -406,9 +408,13 @@ def test_a_run_starts_queued_with_its_job_as_its_adk_workflow_is_saved(
         "tenant_id": ORG,
         "agent_id": OUTER,
         "revision": 2,
+        # Never published: its draft.
+        "version": "draft",
         "name": "Outer",
         "document": running(OUTER, SHIP, "Outer"),
         "saved": {SHIP: SHIPPING},
+        "chat_agents": {},
+        "knowledge_bases": {},
         "input": {"n": 1},
         "session_id": run["session_id"],
         "run_as": MEMBER,

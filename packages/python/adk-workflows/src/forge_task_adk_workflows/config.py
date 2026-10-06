@@ -47,7 +47,26 @@ class AdkWorkflowsSettings(BaseModel):
     # answer, to its end or its next pause) before it fails.
     run_timeout: float = Field(default=3600.0, gt=0)
 
-    @field_validator("session_database_url", "google_api_key", "model_provider_config", "default_model", mode="before")
+    # LLM agents' tools (the Agents builder's: MCP servers, knowledge bases,
+    # HTTP tools, OpenAPI specs, agents, workflows). The key the organization's
+    # MCP servers' credentials are encrypted with: the admin API's
+    # FORGE_ADMIN_SECRETS_KEY (make env copies it). Unset, a tool using one of
+    # them fails its step saying so.
+    secrets_key: SecretStr | None = None
+    # Seconds an MCP server's authorization server has to answer.
+    mcp_timeout: float = Field(default=15.0, gt=0)
+    # Seconds a workflow an LLM agent calls as a tool is waited for before
+    # the tool answers where it got to.
+    workflow_tool_wait: float = Field(default=120.0, gt=0)
+
+    @field_validator(
+        "session_database_url",
+        "google_api_key",
+        "model_provider_config",
+        "default_model",
+        "secrets_key",
+        mode="before",
+    )
     @classmethod
     def _blank_is_unset(cls, value: object) -> object:
         return None if value == "" else value

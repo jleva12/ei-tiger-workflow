@@ -20,6 +20,7 @@ import {
   useSuggestedPrompts,
 } from "@/features/assistant/lib/assistant-capabilities"
 import { useForgeAgent } from "@/features/assistant/lib/forge-agent"
+import { assistantSources } from "@/features/knowledge/lib/sources"
 import { useMe } from "@/lib/users"
 
 const TITLE = "Forge assistant"
@@ -102,12 +103,13 @@ function AssistantWindow({
       runtime={runtime}
       artifacts={artifacts}
       agents={agents}
+      sources={assistantSources}
       {...modelSection}
       title={TITLE}
       welcome={{
         title: "How can I help?",
         description: connected
-          ? "Ask about your organizations, their workflows and agents, or have it help you build one. It sees the page you're on in Forge."
+          ? "Ask about your organizations, their workflows and agents, or what their knowledge bases' documents say. It sees the page you're on in Forge."
           : "No agent is connected yet; send a message to see how to connect one.",
       }}
       composerContext={

@@ -1,11 +1,10 @@
 import * as React from "react"
-import { createPortal } from "react-dom"
 import { LockIcon } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import { IssueMessages } from "@/features/builder/components/fields/field-issues"
 import { useFieldIssues } from "@/features/builder/components/fields/field-issues-context"
-import { DIALOG_CARD, useCompanion } from "@/features/builder/components/utils"
+import { useCompanionCard } from "@/features/builder/components/settings-companion"
+import { SettingsCompanion } from "@/features/builder/components/settings-dialog"
 import { JsonSchemaBuilder } from "@/features/json/components/json-schema-builder"
 import {
   buildJsonSchema,
@@ -42,11 +41,8 @@ export function InputSchemaField({
   onChange: (schema: Record<string, unknown>) => void
 }) {
   const { issues, key: field } = useFieldIssues("state_schema")
-  const companion = useCompanion()
   const key = React.useId()
-  const titleId = React.useId()
-  const descriptionId = React.useId()
-  const open = companion?.open === key
+  const editor = useCompanionCard(key)
   const [draft, setDraft] = React.useState<SchemaDraft>(emptyDraft)
   const [warnings, setWarnings] = React.useState<string[]>([])
   const { fields, required } = declaredState(schema)
@@ -61,21 +57,8 @@ export function InputSchemaField({
         : { draft: emptyDraft(), warnings: [] }
     setDraft(parsed.draft)
     setWarnings(parsed.warnings)
-    companion?.show(key)
+    editor.show()
   }
-
-  // Focus follows the editor: into it as it opens, back to its button as it closes.
-  const button = React.useRef<HTMLButtonElement>(null)
-  const panel = React.useRef<HTMLFormElement>(null)
-  const wasOpen = React.useRef(false)
-  React.useEffect(() => {
-    if (open) panel.current?.focus()
-    else if (wasOpen.current) button.current?.focus()
-    wasOpen.current = open
-  }, [open])
-  // Gone while its editor is open (its node's settings changed): the editor goes too.
-  const release = companion?.release
-  React.useEffect(() => () => release?.(key), [release, key])
 
   return (
     <div
@@ -89,11 +72,11 @@ export function InputSchemaField({
           Input schema
         </span>
         <Button
-          ref={button}
           type="button"
           variant="outline"
           size="xs"
-          aria-expanded={open}
+          aria-expanded={editor.open}
+          disabled={!editor.canOpen}
           onClick={edit}
         >
           <Icon icon="code" data-icon="inline-start" />
@@ -133,20 +116,28 @@ export function InputSchemaField({
       )}
       <IssueMessages issues={issues} />
 
-      {open &&
-        companion.slot &&
-        createPortal(
+      {/* Gone while open (its node's settings changed), it closes too. */}
+      <SettingsCompanion
+        id={key}
+        title="Input schema"
+        description={
+          <>
+            What a chat sends to run this agent: ADK&apos;s run request. Its
+            fields and the model picker&apos;s state are always sent; declare
+            the other state your chat sends in{" "}
+            <code className="font-mono text-[0.9em]">stateDelta</code>.
+            Instructions read them as{" "}
+            <code className="font-mono text-[0.9em]">
+              {"{{ request.userId }}"}
+            </code>{" "}
+            and{" "}
+            <code className="font-mono text-[0.9em]">{"{{ state.name }}"}</code>
+            .
+          </>
+        }
+        closeLabel="Close without saving"
+        render={
           <form
-            ref={panel}
-            tabIndex={-1}
-            aria-labelledby={titleId}
-            aria-describedby={descriptionId}
-            className={cn(
-              DIALOG_CARD,
-              "w-[47.5rem] min-w-[28rem] shrink [view-transition-name:step-companion]",
-              // Too narrow for two: it covers the settings.
-              "max-[1080px]:absolute max-[1080px]:inset-0 max-[1080px]:w-auto max-[1080px]:min-w-0"
-            )}
             onSubmit={(event) => {
               event.preventDefault()
               // Empty and open is the same as undeclared.
@@ -155,115 +146,74 @@ export function InputSchemaField({
                   ? buildJsonSchema(draft)
                   : {}
               )
-              companion.hide()
+              editor.hide()
             }}
-          >
-            <header className="flex items-start gap-3 border-b px-5 pt-4 pb-3.5">
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <h2
-                  id={titleId}
-                  className="truncate text-sm leading-snug font-medium text-foreground"
-                >
-                  Input schema
-                </h2>
-                <p
-                  id={descriptionId}
-                  className="max-w-[36rem] text-xs/[1.6] text-muted-foreground"
-                >
-                  What a chat sends to run this agent: ADK&apos;s run request.
-                  Its fields and the model picker&apos;s state are always sent;
-                  declare the other state your chat sends in{" "}
-                  <code className="font-mono text-[0.9em]">stateDelta</code>.
-                  Instructions read them as{" "}
-                  <code className="font-mono text-[0.9em]">
-                    {"{{ request.userId }}"}
-                  </code>{" "}
-                  and{" "}
-                  <code className="font-mono text-[0.9em]">
-                    {"{{ state.name }}"}
-                  </code>
-                  .
-                </p>
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Close without saving"
-                onClick={() => companion.hide()}
-                className="-mt-0.5 -mr-1.5 text-muted-foreground"
-              >
-                <Icon icon="close" />
-              </Button>
-            </header>
-            <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain px-5 py-4">
-              <FixedFields
-                title="Request"
-                description="The run request's own fields. Every chat sends them."
-                root="request"
-                fields={REQUEST_FIELDS}
-              />
-              <FixedFields
-                title="stateDelta"
-                description="The state sent with each message. The model picker always sends these two."
-                root="state"
-                fields={FIXED_STATE_FIELDS}
-              />
-              {warnings.length > 0 && (
-                <p className="flex items-start gap-2 text-xs/[1.6] text-tone-amber-foreground">
-                  <Icon icon="warning" size={14} className="mt-0.5 shrink-0" />
-                  <span>
-                    Some of it can&apos;t be edited here and is left out when
-                    you save: {warnings.join("; ")}.
-                  </span>
-                </p>
-              )}
-              {problems.length > 0 && (
-                <ul className="flex flex-col gap-1">
-                  {problems.map((problem) => (
-                    <li
-                      key={problem}
-                      className="flex items-start gap-2 text-xs/[1.6] text-destructive"
-                    >
-                      <Icon
-                        icon="warning"
-                        size={14}
-                        className="mt-0.5 shrink-0"
-                      />
-                      <span>{problem}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <JsonSchemaBuilder
-                value={draft}
-                onChange={setDraft}
-                subject={SUBJECT}
-                title="Your state"
-                description="The other state your chat sends in stateDelta, each with its type and whether it's always there. Instructions complete and check against these."
-              />
-            </div>
-            <footer className="flex items-center gap-2 border-t px-5 py-3">
-              <span className="flex items-center gap-1.5 text-2xs text-subtle max-[600px]:hidden">
-                <Icon icon="code" size={14} />
-                Nothing changes until you save
-              </span>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="ml-auto"
-                onClick={() => companion.hide()}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" size="sm">
-                Save input
-              </Button>
-            </footer>
-          </form>,
-          companion.slot
+          />
+        }
+        bodyClassName="flex flex-col gap-5 px-5 py-4"
+        footer={
+          <>
+            <span className="flex items-center gap-1.5 text-2xs text-subtle max-[600px]:hidden">
+              <Icon icon="code" size={14} />
+              Nothing changes until you save
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="ml-auto"
+              onClick={() => editor.hide()}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" size="sm">
+              Save input
+            </Button>
+          </>
+        }
+      >
+        <FixedFields
+          title="Request"
+          description="The run request's own fields. Every chat sends them."
+          root="request"
+          fields={REQUEST_FIELDS}
+        />
+        <FixedFields
+          title="stateDelta"
+          description="The state sent with each message. The model picker always sends these two."
+          root="state"
+          fields={FIXED_STATE_FIELDS}
+        />
+        {warnings.length > 0 && (
+          <p className="flex items-start gap-2 text-xs/[1.6] text-tone-amber-foreground">
+            <Icon icon="warning" size={14} className="mt-0.5 shrink-0" />
+            <span>
+              Some of it can&apos;t be edited here and is left out when you
+              save: {warnings.join("; ")}.
+            </span>
+          </p>
         )}
+        {problems.length > 0 && (
+          <ul className="flex flex-col gap-1">
+            {problems.map((problem) => (
+              <li
+                key={problem}
+                className="flex items-start gap-2 text-xs/[1.6] text-destructive"
+              >
+                <Icon icon="warning" size={14} className="mt-0.5 shrink-0" />
+                <span>{problem}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <JsonSchemaBuilder
+          value={draft}
+          onChange={setDraft}
+          subject={SUBJECT}
+          title="Your state"
+          description="The other state your chat sends in stateDelta, each with its type and whether it's always there. Instructions complete and check against these."
+        />
+      </SettingsCompanion>
     </div>
   )
 }

@@ -120,7 +120,7 @@ class AdkRunJobs:
         if run is None:
             log.info("run %s isn't to be run now", run_id)
             return {"run_id": run_id, "outcome": "skipped"}
-        control = RunControl(run, store=self.store, owner=owner)
+        control = RunControl(run, store=self.store, owner=owner, queue=self.queue.run_adk)
         try:
             outcome = await self._carry_on(run, control, job)
         except LostLease:

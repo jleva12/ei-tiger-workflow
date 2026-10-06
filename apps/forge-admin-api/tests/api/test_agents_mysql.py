@@ -148,7 +148,8 @@ def test_a_member_makes_an_agent_the_whole_organization_reads(
         assert listed.status_code == 200
         assert [a["id"] for a in listed.json()] == [made["id"]]
         read = reader.get(f"{organizations.agents}/{made['id']}")
-        assert read.json() == made
+        # With its published versions: none yet.
+        assert read.json() == {**made, "versions": []}
 
     stored = organizations.stored(made["id"])
     assert stored is not None
@@ -308,3 +309,170 @@ def test_deleting_the_organization_removes_its_agents(
         == 204
     )
     assert organizations.stored(made["id"]) is None
+
+
+# ------------------------------------------------------------ versions
+
+
+def minimal(name: str, *nodes: dict[str, Any]) -> dict[str, Any]:
+    """A workflow of a start, the nodes given, and an end, one after the other."""
+    chain = [
+        {
+            "id": "start",
+            "kind": "start",
+            "name": "Start",
+            "config": {"input_schema": {}},
+            "outputs": ["next"],
+        },
+        *nodes,
+        {
+            "id": "done",
+            "kind": "end",
+            "name": "Done",
+            "config": {"outcome": "succeeded", "result": ""},
+            "outputs": [],
+        },
+    ]
+    return {
+        "format": "forge.agent/v1",
+        "id": "ag_placeholder",
+        "name": name,
+        "nodes": chain,
+        "edges": [
+            {
+                "id": f"{a['id']}->{b['id']}",
+                "source": a["id"],
+                "source_output": "next",
+                "target": b["id"],
+            }
+            for a, b in zip(chain, chain[1:], strict=False)
+        ],
+    }
+
+
+def runs_saved(agent_id: str, version: Any = None) -> dict[str, Any]:
+    return {
+        "id": "inner",
+        "kind": "saved",
+        "name": "Inner",
+        "config": {"agent": agent_id, "version": version},
+        "outputs": ["next"],
+    }
+
+
+def test_a_workflow_is_a_draft_until_published_and_versions_never_change(
+    organizations: Organizations,
+) -> None:
+    member = organizations.member
+    made = member.post(organizations.agents, json={"document": minimal("One")}).json()
+    assert (made["status"], made["draft_version"], made["published_version"]) == (
+        "draft",
+        1,
+        None,
+    )
+    one = f"{organizations.agents}/{made['id']}"
+    published = member.post(f"{one}/publish", json={"revision": made["revision"]})
+    assert published.status_code == 200, published.json()
+    published = published.json()
+    assert (published["status"], published["published_version"]) == ("published", 1)
+    # A published version can't change: a new version can.
+    refused = member.put(
+        f"{one}/draft",
+        json={"document": minimal("Two"), "revision": published["revision"]},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "NO_DRAFT"
+    started = member.post(f"{one}/versions", json={}).json()
+    assert (started["status"], started["draft_version"]) == ("published+draft", 2)
+    saved = member.put(
+        f"{one}/draft",
+        json={"document": minimal("Two"), "revision": started["revision"]},
+    ).json()
+    assert saved["document"]["name"] == "Two"
+    assert member.get(f"{one}/versions/1").json()["document"]["name"] == "One"
+    assert (
+        member.post(f"{one}/publish", json={"revision": saved["revision"]}).status_code
+        == 200
+    )
+    detail = member.get(one).json()
+    assert [v["version"] for v in detail["versions"]] == [2, 1]
+    # A new version from the first, then discarded: back to the latest.
+    member.post(f"{one}/versions", json={"from_version": 1})
+    back = member.delete(f"{one}/draft").json()
+    assert (back["has_draft"], back["document"]["name"]) == (False, "Two")
+
+
+def test_a_workflow_saved_before_versions_is_a_draft_of_version_1(
+    organizations: Organizations,
+) -> None:
+    made = create(organizations)
+    # As a workflow was kept before versions.
+    organizations.mongo[organizations.database]["agents"].update_one(
+        {"_id": made["id"]},
+        {
+            "$unset": {
+                "has_draft": "",
+                "draft_version": "",
+                "published_version": "",
+                "published_at": "",
+            }
+        },
+    )
+    one = f"{organizations.agents}/{made['id']}"
+    read = organizations.viewer.get(one).json()
+    assert (read["status"], read["has_draft"], read["draft_version"]) == (
+        "draft",
+        True,
+        1,
+    )
+    saved = organizations.member.put(
+        f"{one}/draft",
+        json={"document": minimal("Plain"), "revision": read["revision"]},
+    )
+    assert saved.status_code == 200, saved.json()
+    assert organizations.stored(made["id"])["has_draft"] is True  # type: ignore[index]
+    published = organizations.member.post(
+        f"{one}/publish", json={"revision": saved.json()["revision"]}
+    )
+    assert published.json()["published_version"] == 1
+
+
+def test_a_published_version_runs_only_published_workflows(
+    organizations: Organizations,
+) -> None:
+    member = organizations.member
+    inner = member.post(
+        organizations.agents, json={"document": minimal("Inner")}
+    ).json()
+    outer = member.post(
+        organizations.agents,
+        json={"document": minimal("Outer", runs_saved(inner["id"]))},
+    ).json()
+    outer_url = f"{organizations.agents}/{outer['id']}"
+    refused = member.post(f"{outer_url}/publish", json={"revision": outer["revision"]})
+    assert refused.status_code == 422
+    assert "hasn't been published" in refused.json()["detail"]["problems"][0]
+    member.post(
+        f"{organizations.agents}/{inner['id']}/publish",
+        json={"revision": inner["revision"]},
+    )
+    assert (
+        member.post(
+            f"{outer_url}/publish", json={"revision": outer["revision"]}
+        ).status_code
+        == 200
+    )
+    # Never a draft.
+    started = member.post(f"{outer_url}/versions", json={}).json()
+    drafted = member.put(
+        f"{outer_url}/draft",
+        json={
+            "document": minimal("Outer", runs_saved(inner["id"], "draft")),
+            "revision": started["revision"],
+        },
+    ).json()
+    refused = member.post(
+        f"{outer_url}/publish", json={"revision": drafted["revision"]}
+    )
+    assert refused.status_code == 422
+    assert "draft" in refused.json()["detail"]["problems"][0]

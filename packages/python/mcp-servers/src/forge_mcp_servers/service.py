@@ -2,17 +2,18 @@
 check it, and connect it, through its auth method.
 
 Methods change the server's row (its grant, what a check found) and leave
-committing to the caller.
+committing to the caller. A row is anything with a server's fields
+(:class:`ServerRow`): the admin API's ``McpServer``, or
+:class:`~forge_mcp_servers.store.StoredServer`.
 """
 
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 import httpx2 as httpx
 
-from forge_admin.db.audit import utc_now
-from forge_admin.mcp_servers.auth import (
+from forge_mcp_servers.auth import (
     AuthContext,
     AuthError,
     AuthMethod,
@@ -22,12 +23,38 @@ from forge_admin.mcp_servers.auth import (
     InteractiveAuthMethod,
     NotConnected,
 )
-from forge_admin.mcp_servers.client import Listing, McpConnectionError, list_tools
-from forge_admin.mcp_servers.registry import AUTH_METHODS
-from forge_admin.mcp_servers.secrets import SecretBox, SecretsError
-from forge_admin.models import McpServer
+from forge_mcp_servers.client import Listing, McpConnectionError, list_tools
+from forge_mcp_servers.registry import AUTH_METHODS
+from forge_mcp_servers.secrets import SecretBox, SecretsError
 
 Lister = Callable[..., Awaitable[Listing]]
+
+
+class ServerRow(Protocol):
+    """A server as it's kept: where it is, how it's signed in to, and what a check found."""
+
+    id: str
+    organization_id: str
+    url: str
+    #: Sent as they are: ``[{"name": …, "value": …}]``.
+    headers: list[dict[str, str]]
+    timeout_seconds: float
+    auth_kind: str
+    auth_settings: dict[str, Any]
+    #: Ciphertext, or None for none.
+    auth_secrets: str | None
+    auth_grant: str | None
+    status: str
+    last_error: str | None
+    tools: list[dict[str, Any]]
+    server_info: dict[str, Any] | None
+    checked_at: datetime | None
+
+
+def utc_now() -> datetime:
+    """:return: The time now in UTC, without a timezone, as MySQL keeps it."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
 
 #: What a check finds.
 UNCHECKED, OK, ERROR, NEEDS_AUTH = "unchecked", "ok", "error", "needs_auth"
@@ -62,25 +89,25 @@ class McpServers:
         """:return: A client for an auth method's requests; close it after."""
         return httpx.AsyncClient(timeout=self.timeout, transport=self.transport)
 
-    def method(self, server: McpServer) -> AuthMethod[Any, Any]:
+    def method(self, server: ServerRow) -> AuthMethod[Any, Any]:
         return self.methods.get(server.auth_kind)
 
-    def secrets(self, server: McpServer) -> dict[str, Any]:
+    def secrets(self, server: ServerRow) -> dict[str, Any]:
         """:raises SecretsError: They can't be decrypted."""
         return self.box.open(server.auth_secrets)
 
-    def grant(self, server: McpServer) -> dict[str, Any]:
+    def grant(self, server: ServerRow) -> dict[str, Any]:
         """:return: The grant; empty when it can't be decrypted."""
         try:
             return self.box.open(server.auth_grant)
         except SecretsError:
             return {}
 
-    def set_grant(self, server: McpServer, grant: dict[str, Any] | None) -> None:
+    def set_grant(self, server: ServerRow, grant: dict[str, Any] | None) -> None:
         server.auth_grant = self.box.seal(grant)
 
     def context(
-        self, server: McpServer, http: httpx.AsyncClient
+        self, server: ServerRow, http: httpx.AsyncClient
     ) -> AuthContext[Any, Any]:
         """
         :raises SecretsError: Its secrets can't be decrypted.
@@ -95,13 +122,13 @@ class McpServers:
             http=http,
         )
 
-    def connection(self, server: McpServer) -> Connection | None:
+    def connection(self, server: ServerRow) -> Connection | None:
         try:
             return self.method(server).connection(self.grant(server))
         except ValueError:
             return None
 
-    async def headers(self, server: McpServer) -> dict[str, str]:
+    async def headers(self, server: ServerRow) -> dict[str, str]:
         """
         What to send the server: its own headers, then its auth method's.
         A grant the method renewed is kept on the row.
@@ -121,7 +148,7 @@ class McpServers:
             self.set_grant(server, credentials.grant)
         return headers | credentials.headers
 
-    async def check(self, server: McpServer) -> None:
+    async def check(self, server: ServerRow) -> None:
         """
         Connect to the server and list its tools, keeping what was found on
         its row: ``ok`` with the tools, ``needs_auth`` when it has to be
@@ -148,7 +175,7 @@ class McpServers:
         server.tools = listing.tools
         server.server_info = listing.server_info
 
-    def interactive(self, server: McpServer) -> InteractiveAuthMethod[Any, Any]:
+    def interactive(self, server: ServerRow) -> InteractiveAuthMethod[Any, Any]:
         """:raises ValueError: Its method isn't one a person connects."""
         method = self.method(server)
         if not isinstance(method, InteractiveAuthMethod):
@@ -156,7 +183,7 @@ class McpServers:
         return method
 
     async def begin(
-        self, server: McpServer, *, redirect_uri: str, state: str
+        self, server: ServerRow, *, redirect_uri: str, state: str
     ) -> Authorization:
         """
         :raises ValueError: Its method isn't one a person connects.
@@ -172,7 +199,7 @@ class McpServers:
 
     async def complete(
         self,
-        server: McpServer,
+        server: ServerRow,
         *,
         pending: dict[str, Any],
         code: str,

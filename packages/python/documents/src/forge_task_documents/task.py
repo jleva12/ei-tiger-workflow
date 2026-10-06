@@ -34,7 +34,7 @@ from forge_task_documents.parsers import (
     TesseractOcr,
     default_registry,
 )
-from forge_task_documents.retrieval import HybridSearchService
+from forge_task_documents.retrieval import HybridSearchService, KnowledgeBaseSearch
 from forge_tasks.errors import TaskError
 from forge_tasks.runner import ok, skipped
 from forge_tasks.settings import load_section
@@ -243,14 +243,16 @@ def _search_service(
     )
 
 
-def build_search(ctx: TaskContext, settings: DocumentsSettings | None = None) -> HybridSearchService:
-    """The documents' hybrid search on its own, over the same storage and
+def build_knowledge_search(ctx: TaskContext, settings: DocumentsSettings | None = None) -> KnowledgeBaseSearch:
+    """The knowledge bases' search on its own, over the same storage and
     models as the documents task (``HYBRID_DOCUMENTS__*``): what another task
-    searches a team's documents with (a workflow's Search knowledge step)."""
+    searches an organization's knowledge bases with (a workflow's agents)."""
     s = settings or load_section(TASK_NAME, DocumentsSettings)
     models = model_clients(ctx)
     storage = ctx.extras.get("documents.storage") or _STORAGE[selected_backend(s.storage_backend)](ctx, s)
-    return _search_service(storage, models.embedder(s.embedding_profile), models.reranker, IdentifierExtractor(), s)
+    return KnowledgeBaseSearch(
+        storage, embedder=models.embedder(s.embedding_profile), reranker=models.reranker, config=s.search
+    )
 
 
 class DocumentsTaskFactory:

@@ -63,6 +63,7 @@ from forge_task_adk_workflows.graph.names import (
 )
 from forge_task_adk_workflows.graph.schemas import is_model, problems
 from forge_task_adk_workflows.graph.services import ModelCallbacks, Resolve, RunServices
+from forge_task_adk_workflows.graph.uses import bare_id
 
 KINDS = frozenset(FACTORIES)
 # The ways out of the steps that branch, when they're fixed.
@@ -163,7 +164,31 @@ def _routed(node: dict[str, Any]) -> bool:
 
 def _pauses(node: dict[str, Any]) -> bool:
     kind = node.get("kind")
-    return kind in PAUSING or (kind == "llm" and config_of(node).get("mode") == "task")
+    if kind in PAUSING:
+        return True
+    if kind != "llm":
+        return False
+    config = config_of(node)
+    # An agent asking back, an agent from the Agents page (its tools may ask
+    # a person), or a tool a person confirms.
+    return (
+        config.get("mode") == "task"
+        or config.get("source") == "agent"
+        or any(_confirms(tool) for tool in _tools_within(config))
+    )
+
+
+def _tools_within(config: dict[str, Any]) -> list[Any]:
+    """:return: An LLM agent's tools, and its sub-agents'."""
+    found = list(items(config.get("tools")))
+    for sub in items(config.get("sub_agents")):
+        if isinstance(sub, dict):
+            found.extend(_tools_within(config_of(sub)))
+    return found
+
+
+def _confirms(tool: Any) -> bool:
+    return isinstance(tool, dict) and bool(config_of(tool).get("confirm"))
 
 
 class _Agent:
@@ -361,30 +386,32 @@ class _Agent:
         except ValueError as error:
             raise AgentBuildError(f"{where_of(node)}: ADK refuses it: {error}") from None
 
-    def _saved_agent(self, agent_id: str, name: str, where: str) -> Workflow:
+    def _saved_agent(self, ref: str, name: str, where: str) -> Workflow:
+        # A version of it running another of itself is still itself running itself.
+        agent_id = bare_id(ref)
         if agent_id in self.within:
             cycle = " → ".join([*self.within[self.within.index(agent_id) :], agent_id])
             raise AgentBuildError(f"{where}: agent {agent_id} would run itself: {cycle}.")
-        found = self._saved.get((agent_id, name))
+        found = self._saved.get((ref, name))
         if found is not None:
             return found
         if self.services.resolve is None:
-            raise AgentBuildError(f"{where}: it runs agent {agent_id}, and there's no way to find it here.")
-        document = self.services.resolve(agent_id)
+            raise AgentBuildError(f"{where}: it runs agent {ref}, and there's no way to find it here.")
+        document = self.services.resolve(ref)
         if not isinstance(document, dict):
-            raise AgentBuildError(f"{where}: the organization has no agent {agent_id}.")
+            raise AgentBuildError(f"{where}: the organization has no agent {ref}.")
         try:
             inner = _Agent(
                 document,
                 self.services,
                 within=(*self.within, agent_id),
                 top=False,
-                input_misfit=f"{where}: its input doesn't fit agent {agent_id}'s start",
+                input_misfit=f"{where}: its input doesn't fit agent {ref}'s start",
             )
             graph = inner.graph(name)
         except AgentBuildError as error:
-            raise AgentBuildError(f"{where}: agent {agent_id} can't be built. {error}") from None
-        self._saved[(agent_id, name)] = graph
+            raise AgentBuildError(f"{where}: agent {ref} can't be built. {error}") from None
+        self._saved[(ref, name)] = graph
         return graph
 
     # ------------------------------------------------------------------ checks

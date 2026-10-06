@@ -23,18 +23,27 @@ export function FieldIssuesProvider({
   )
 }
 
-/** The fields inside hold settings under `prefix` (a sub-agent's: `agents.<id>.`). */
+/**
+ * The fields inside hold settings under `prefix` (a sub-agent's:
+ * `agents.<id>.`), inside the prefix around it; `whole`: `prefix` is
+ * their whole prefix (a card opened from inside a sub-agent's settings).
+ */
 export function FieldIssuesPrefix({
   prefix,
+  whole = false,
   children,
 }: {
   prefix: string
+  whole?: boolean
   children: React.ReactNode
 }) {
   const outer = React.useContext(FieldIssuesContext)
   const value = React.useMemo(
-    () => ({ issues: outer.issues, prefix: outer.prefix + prefix }),
-    [outer, prefix]
+    () => ({
+      issues: outer.issues,
+      prefix: whole ? prefix : outer.prefix + prefix,
+    }),
+    [outer, prefix, whole]
   )
   return (
     <FieldIssuesContext.Provider value={value}>

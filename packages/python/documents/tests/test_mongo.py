@@ -3,6 +3,9 @@ aggregation pipelines ($rankFusion rules), hit mapping and client-side fusion.""
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from forge_task_documents.models import ChunkKind, HybridSearchRequest, SearchFilters
 from forge_task_documents.storage.mongo import MongoStorage, search_index_definition, vector_index_definition
 from forge_task_documents.storage.mongo import pipelines as P
@@ -14,7 +17,7 @@ ALLOWED_IN_FUSION = {"$search", "$vectorSearch", "$match", "$sort", "$skip", "$l
 
 def req(**kw) -> HybridSearchRequest:
     base = dict(
-        tenant_id="t1",
+        tenant_ids=["t1"],
         text="refund approval limit",
         vector=[0.1, 0.2, 0.3],
         limit=20,
@@ -56,6 +59,32 @@ def test_tenant_filter_is_on_both_legs_always():
     assert {"in": {"path": "doc_id", "value": ["a"]}} in ts["filter"]
     only_tenant = P.vector_stage(req(), index="vi")["$vectorSearch"]["filter"]
     assert only_tenant == {"tenant_id": {"$eq": "t1"}}
+
+
+def test_only_vectors_of_the_querys_model_are_compared():
+    r = req(embedding_model="text-embedding-3-large@1024")
+    model = {"$match": {"embedding_model": "text-embedding-3-large@1024"}}
+    fused = P.rank_fusion_pipeline(r, text_index="ti", vector_index="vi")[0]["$rankFusion"]["input"]["pipelines"]
+    assert list(fused["vector"][0]) == ["$vectorSearch"] and fused["vector"][1] == model
+    assert fused["text"][1] == {"$limit": 40}  # words are words, whatever the model
+    alone = P.single_leg_pipeline(r, leg="vector", text_index="ti", vector_index="vi")
+    assert alone[1] == model
+    # No model named (a request built by hand): nothing to guard on.
+    assert len(P.vector_leg(req(), index="vi")) == 1
+
+
+def test_several_tenants_are_searched_together_and_only_they():
+    r = req(tenant_ids=["members", "claims"], filters=SearchFilters(doc_ids=["a"]))
+    clauses = P.vector_stage(r, index="vi")["$vectorSearch"]["filter"]["$and"]
+    assert {"tenant_id": {"$in": ["members", "claims"]}} in clauses and {"doc_id": {"$in": ["a"]}} in clauses
+    ts = P.text_stage(r, index="ti")["$search"]["compound"]
+    assert ts["filter"][0] == {"in": {"path": "tenant_id", "value": ["members", "claims"]}}
+    # One pipeline: both tenants' candidates are fused into one ranking.
+    legs = P.rank_fusion_pipeline(r, text_index="ti", vector_index="vi")[0]["$rankFusion"]["input"]["pipelines"]
+    assert legs["vector"][0]["$vectorSearch"]["filter"]["$and"][0] == {"tenant_id": {"$in": ["members", "claims"]}}
+    # A search is always scoped: no tenants is not "every tenant".
+    with pytest.raises(ValidationError):
+        req(tenant_ids=[])
 
 
 def test_text_stage_clauses():

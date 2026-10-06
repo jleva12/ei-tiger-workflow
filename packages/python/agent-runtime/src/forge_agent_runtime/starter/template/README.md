@@ -118,4 +118,24 @@ curl -N -X POST localhost:8000/api/run_sse -H 'content-type: application/json'@@
 ```
 
 `GET /api/agent` says which agent it runs and the state it takes.
+@@if a2a@@
+
+### A2A
+
+Other agents call it over [Google's A2A protocol](https://a2a-protocol.org): its card is at
+`/.well-known/agent-card.json`, and JSON-RPC at `/a2a` takes A2A 1.0 (`SendMessage`,
+`SendStreamingMessage`, `GetTask`, `CancelTask`, …) and 0.3 (`message/send`, `message/stream`,
+`tasks/get`, …). Each A2A conversation (`contextId`) is a conversation of the run API's too.
+
+```sh
+curl localhost:8000/.well-known/agent-card.json
+curl -X POST localhost:8000/a2a -H 'content-type: application/json' -H 'A2A-Version: 1.0'@@CURL_AUTH@@ -d '{
+  "jsonrpc": "2.0", "id": 1, "method": "SendMessage",
+  "params": {"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "Hello"}]}}
+}'
+```
+
+The state the agent takes goes in the message's `metadata.state`. Set `FORGE_AGENT_PUBLIC_URL`
+to the address callers reach it at when that isn't the one requests come to (behind a proxy).
+@@end@@
 @@NOTES@@

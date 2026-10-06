@@ -13,10 +13,23 @@ import { toast } from "@/components/ui/toast"
 import { api } from "@/lib/api-instance"
 import { formatDateTime, formatDuration } from "@/lib/format"
 import { isTimestamp, parseTimestamp } from "@/lib/timestamps"
-import { IDLE_POLL_MS, isLiveRun, isOpenRun, OPEN_POLL_MS, runsPollMs } from "@/features/runs/lib/display"
+import {
+  IDLE_POLL_MS,
+  isLiveRun,
+  isOpenRun,
+  OPEN_POLL_MS,
+  runsPollMs,
+} from "@/features/runs/lib/display"
 import { agentPath } from "@/features/adk-workflows/lib/api"
-import { AGENT_FORMAT, type AgentDocument } from "@/features/adk-workflows/lib/document"
-import { AGENT_KINDS, isAgentKind, type AgentKind } from "@/features/adk-workflows/lib/model"
+import {
+  AGENT_FORMAT,
+  type AgentDocument,
+} from "@/features/adk-workflows/lib/document"
+import {
+  AGENT_KINDS,
+  isAgentKind,
+  type AgentKind,
+} from "@/features/adk-workflows/lib/model"
 
 /*
  * Running an organization's workflows. The admin API keeps each run
@@ -69,6 +82,10 @@ export type AdkPauseDetails = {
   step_name?: string
   workflow_name?: string
   message?: string
+  /** An LLM agent's tool a person allows before it's called: the tool, and what it would send. */
+  confirmation?: boolean
+  tool?: string
+  args?: Record<string, unknown>
 } & Record<string, unknown>
 
 /** What a paused run waits at: an approval or a question. */
@@ -89,7 +106,8 @@ export type AdkRunPause = {
  * question was declined; `error`: a bug), or the hiccup it's retried after
  * (`transient`; `interrupted`: its worker went).
  */
-export type AdkRunFailureCategory = "failed" | "error" | "transient" | "interrupted"
+export type AdkRunFailureCategory =
+  "failed" | "error" | "transient" | "interrupted"
 
 export type AdkRunFailure = {
   message: string
@@ -107,6 +125,8 @@ export type AdkRun = {
   agent_id: string
   agent_name: string
   revision: number
+  /** Which version ran: a published one, or "draft"; null for runs from before versions. */
+  version: number | "draft" | null
   /** Its ADK session, where its steps are read from. */
   session_id: string
   status: AdkRunStatus
@@ -245,7 +265,8 @@ export const FAILURE_CATEGORIES: Record<
 }
 
 export const failureCategory = (category: string) =>
-  FAILURE_CATEGORIES[category as AdkRunFailureCategory] ?? FAILURE_CATEGORIES.error
+  FAILURE_CATEGORIES[category as AdkRunFailureCategory] ??
+  FAILURE_CATEGORIES.error
 
 const EVENT_TITLES: Record<string, string> = {
   created: "Started",
@@ -332,6 +353,22 @@ export type AdkRunStep = {
   error: unknown
   started_at: string | null
   finished_at: string | null
+  /** The tools its LLM agents called, in order; absent from older APIs. */
+  calls?: AdkToolCall[]
+}
+
+/** A tool an LLM agent in a step called, and what it answered. */
+export type AdkToolCall = {
+  id: string
+  /** The agent that called it (its ADK name). */
+  agent: string | null
+  name: string
+  args: unknown
+  /** done, failed (an error, or a person refused it), waiting (to be allowed) or running. */
+  status: "done" | "failed" | "waiting" | "running"
+  /** What it answered; a long answer as `{truncated}`. */
+  response: unknown
+  at: string | null
 }
 
 /** A run's steps, read from its ADK session. */
@@ -499,9 +536,12 @@ const runPath = (organizationId: string, runId: string) =>
  */
 export const adkRunKeys = {
   all: (organizationId: string) => ["adk-runs", organizationId] as const,
-  list: (organizationId: string, filters: { agentId?: string; limit?: number }) =>
-    [...adkRunKeys.all(organizationId), "list", filters] as const,
-  pages: (organizationId: string) => [...adkRunKeys.all(organizationId), "pages"] as const,
+  list: (
+    organizationId: string,
+    filters: { agentId?: string; limit?: number }
+  ) => [...adkRunKeys.all(organizationId), "list", filters] as const,
+  pages: (organizationId: string) =>
+    [...adkRunKeys.all(organizationId), "pages"] as const,
   detail: (organizationId: string, runId: string) =>
     [...adkRunKeys.all(organizationId), "run", runId] as const,
   steps: (organizationId: string, runId: string) =>
@@ -690,11 +730,19 @@ type MutationMeta = { meta?: { silent?: boolean; errorTitle?: string } }
  * later. Errors are the caller's to show: the run dialog shows them by the
  * input.
  */
-export function useRunAdkWorkflow(organizationId: string, agentId: string) {
+export function useRunAdkWorkflow(
+  organizationId: string,
+  agentId: string,
+  /** Which version runs: a published one, or the draft; the builder's when omitted. */
+  version?: number | "draft"
+) {
   const client = useQueryClient()
   return useMutation({
     mutationFn: (input: unknown) =>
-      api.post<AdkRun>(`${agentPath(organizationId, agentId)}/runs`, { input }),
+      api.post<AdkRun>(`${agentPath(organizationId, agentId)}/runs`, {
+        input,
+        ...(version !== undefined ? { version } : {}),
+      }),
     meta: { silent: true },
     onSuccess: (run) => void refreshAdkRuns(client, organizationId, run.id),
   })
@@ -774,7 +822,8 @@ export function useAnswerAdkRun(
 export function useRetryAdkRun(organizationId: string, runId: string) {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: () => api.post<AdkRun>(`${runPath(organizationId, runId)}/retry`),
+    mutationFn: () =>
+      api.post<AdkRun>(`${runPath(organizationId, runId)}/retry`),
     meta: { errorTitle: "Couldn't retry the run" },
     onSuccess: async (run) => {
       await refreshAdkRuns(client, organizationId, runId)
@@ -794,7 +843,8 @@ export function useRetryAdkRun(organizationId: string, runId: string) {
 export function useResubmitAdkRun(organizationId: string, runId: string) {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: () => api.post<AdkRun>(`${runPath(organizationId, runId)}/resubmit`),
+    mutationFn: () =>
+      api.post<AdkRun>(`${runPath(organizationId, runId)}/resubmit`),
     meta: { errorTitle: "Couldn't resubmit the run" },
     onSuccess: async (run) => {
       await refreshAdkRuns(client, organizationId, run.id)
@@ -815,11 +865,40 @@ export function useAbandonAdkRun(
 ) {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: () => api.post<AdkRun>(`${runPath(organizationId, runId)}/abandon`),
+    mutationFn: () =>
+      api.post<AdkRun>(`${runPath(organizationId, runId)}/abandon`),
     meta: { errorTitle: "Couldn't abandon the run", ...meta },
     onSuccess: async () => {
       await refreshAdkRuns(client, organizationId, runId)
       toast.add({ title: "Abandoned.", type: "success" })
     },
   })
+}
+
+/** Which version a run ran, as its page names it: "v3", "Draft · revision 17". */
+export function versionLabel(
+  run: Pick<AdkRun, "version" | "revision">
+): string {
+  if (typeof run.version === "number") return `v${run.version}`
+  if (run.version === "draft") return `Draft · revision ${run.revision}`
+  return `Revision ${run.revision}`
+}
+
+/** How a run came to be, from its trigger: by hand, over the API or A2A, from an agent or a workflow. */
+export function triggerLabel(
+  trigger: Record<string, unknown> | null | undefined
+): string | undefined {
+  if (!trigger) return undefined
+  switch (trigger.type) {
+    case "runtime":
+      return trigger.protocol === "a2a" ? "Over A2A" : "Over the API"
+    case "chat_agent":
+      return "By a chat agent"
+    case "workflow":
+      return "By another workflow"
+    case "manual":
+      return "From the console"
+    default:
+      return undefined
+  }
 }

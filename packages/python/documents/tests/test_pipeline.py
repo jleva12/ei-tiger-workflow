@@ -38,7 +38,7 @@ async def test_ingest_all_formats(loaded, storage):
 
 
 async def test_exact_identifier_search(loaded, search_service):
-    resp = await search_service.search(SearchQuery(tenant_id="t1", text="SKU10042", rerank=False))
+    resp = await search_service.search(SearchQuery(tenant_ids=["t1"], text="SKU10042", rerank=False))
     top = resp.hits[0].chunk
     assert "SKU10042" in top.text and top.kind is ChunkKind.TABLE
     assert resp.hits[0].ranks.get("text") == 1
@@ -46,7 +46,7 @@ async def test_exact_identifier_search(loaded, search_service):
 
 async def test_semantic_ish_search_and_rerank(loaded, search_service):
     resp = await search_service.search(
-        SearchQuery(tenant_id="t1", text="who approves a refund above the limit", top_k=3)
+        SearchQuery(tenant_ids=["t1"], text="who approves a refund above the limit", top_k=3)
     )
     assert len(resp.hits) == 3
     assert all(h.rerank_score is not None for h in resp.hits)
@@ -54,22 +54,61 @@ async def test_semantic_ish_search_and_rerank(loaded, search_service):
     assert set(resp.timings_ms) >= {"embed_ms", "search_ms", "rerank_ms", "total_ms"}
 
 
+async def test_hits_carry_their_similarity_and_irrelevant_ones_are_left_out(loaded, storage, embedder):
+    from forge_task_documents.retrieval import HybridSearchService, SearchConfig
+
+    service = HybridSearchService(search=storage.search, chunks=storage.chunks, embedder=embedder)
+    answer = await service.search(SearchQuery(tenant_ids=["t1"], text="who approves a refund above the limit"))
+    assert answer.hits and all(h.similarity is not None for h in answer.hits)
+    assert "relevance_ms" in answer.timings_ms
+    off_topic = SearchQuery(tenant_ids=["t1"], text="weather forecast tomorrow")
+    # Nothing near enough, and nothing sharing a word: nothing found.
+    assert (await service.search(off_topic)).hits == []
+    # Without a floor, the nearest neighbours come back, however far.
+    unfloored = HybridSearchService(
+        search=storage.search, chunks=storage.chunks, embedder=embedder, config=SearchConfig(min_similarity=None)
+    )
+    assert (await unfloored.search(off_topic)).hits
+
+
+async def test_a_reranker_floor_decides_when_set(loaded, storage, embedder):
+    from forge_embeddings.embedding import OverlapReranker
+    from forge_task_documents.retrieval import HybridSearchService, SearchConfig
+
+    service = HybridSearchService(
+        search=storage.search,
+        chunks=storage.chunks,
+        embedder=embedder,
+        reranker=OverlapReranker(),
+        config=SearchConfig(min_rerank_score=0.99),
+    )
+    # Every word of it in one passage: only those pass.
+    found = await service.search(SearchQuery(tenant_ids=["t1"], text="refund approval limit"))
+    assert found.hits and all(h.rerank_score is not None and h.rerank_score >= 0.99 for h in found.hits)
+    # An exact identifier passes whatever its score.
+    exact = await service.search(SearchQuery(tenant_ids=["t1"], text="price of SKU10042 in the catalogue"))
+    sku = next(h for h in exact.hits if "SKU10042" in h.chunk.text)
+    assert sku.rerank_score is not None and sku.rerank_score < 0.99
+
+
 async def test_diagram_is_searchable(loaded, search_service):
     resp = await search_service.search(
-        SearchQuery(tenant_id="t1", text="what happens after validate order is approved", rerank=False)
+        SearchQuery(tenant_ids=["t1"], text="what happens after validate order is approved", rerank=False)
     )
     assert resp.hits[0].chunk.source_type == "visio"
 
 
 async def test_pdf_and_slide_hits_cite_their_page(loaded, search_service):
     pdf = await search_service.search(
-        SearchQuery(tenant_id="t1", text="reconcile batch", filters=SearchFilters(source_types=["pdf"]), rerank=False)
+        SearchQuery(
+            tenant_ids=["t1"], text="reconcile batch", filters=SearchFilters(source_types=["pdf"]), rerank=False
+        )
     )
     code = next(h.chunk for h in pdf.hits if "def reconcile" in h.chunk.text)
     assert code.location.page == 2 and code.section_path == ["Settlement"]
     deck = await search_service.search(
         SearchQuery(
-            tenant_id="t1", text="refunds per quarter", filters=SearchFilters(source_types=["pptx"]), rerank=False
+            tenant_ids=["t1"], text="refunds per quarter", filters=SearchFilters(source_types=["pptx"]), rerank=False
         )
     )
     chart = next(h.chunk for h in deck.hits if "Refunds per quarter" in h.chunk.text)
@@ -78,20 +117,20 @@ async def test_pdf_and_slide_hits_cite_their_page(loaded, search_service):
 
 async def test_filters_and_tenant_isolation(loaded, search_service):
     resp = await search_service.search(
-        SearchQuery(tenant_id="t1", text="refund", filters=SearchFilters(source_types=["markdown"]), rerank=False)
+        SearchQuery(tenant_ids=["t1"], text="refund", filters=SearchFilters(source_types=["markdown"]), rerank=False)
     )
     assert resp.hits and {h.chunk.source_type for h in resp.hits} == {"markdown"}
     tagged = await search_service.search(
-        SearchQuery(tenant_id="t1", text="refund", filters=SearchFilters(tags=["kb"]), rerank=False)
+        SearchQuery(tenant_ids=["t1"], text="refund", filters=SearchFilters(tags=["kb"]), rerank=False)
     )
     assert tagged.hits and all("kb" in h.chunk.metadata["tags"] for h in tagged.hits)
-    assert (await search_service.search(SearchQuery(tenant_id="other", text="refund"))).hits == []
+    assert (await search_service.search(SearchQuery(tenant_ids=["other"], text="refund"))).hits == []
 
 
 async def test_section_expansion(loaded, search_service):
     resp = await search_service.search(
         SearchQuery(
-            tenant_id="t1",
+            tenant_ids=["t1"],
             text="settlement batch ledger",
             filters=SearchFilters(source_types=["docx"]),
             expand_sections=True,
@@ -104,9 +143,38 @@ async def test_section_expansion(loaded, search_service):
 
 
 async def test_reingest_unchanged_is_skipped(pipeline, files):
-    await pipeline.ingest(source("runbook.md", files["runbook.md"]))
+    first = await pipeline.ingest(source("runbook.md", files["runbook.md"]))
+    assert first.embedding_model == "hashing-v1@256"  # what its chunks are embedded with
     again = await pipeline.ingest(source("runbook.md", files["runbook.md"]))
-    assert again.skipped and again.reason == "unchanged"
+    assert again.skipped and again.reason == "unchanged" and again.embedding_model == "hashing-v1@256"
+
+
+async def test_a_new_parser_version_reads_it_again(pipeline, files):
+    await pipeline.ingest(source("runbook.md", files["runbook.md"]))
+    parser = pipeline.registry.resolve(source("runbook.md", b""))
+    parser.version = parser.version + ".1"
+    again = await pipeline.ingest(source("runbook.md", files["runbook.md"]))
+    assert not again.skipped and again.status is IngestStatus.READY
+
+
+async def test_vectors_of_another_model_are_not_compared(pipeline, storage, files):
+    """Same dimensions, another model (the configured one changed before the
+    knowledge base was re-indexed): the vector leg leaves its chunks out, and
+    only their words find them."""
+    from forge_embeddings.embedding import HashingEmbedder
+    from forge_task_documents.retrieval import HybridSearchService
+
+    await pipeline.ingest(source("runbook.md", files["runbook.md"]))
+
+    class Other(HashingEmbedder):
+        def __init__(self) -> None:
+            super().__init__(dimensions=256)
+            self.model_id = "other-model@256"
+
+    other = HybridSearchService(search=storage.search, chunks=storage.chunks, embedder=Other())
+    query = SearchQuery(tenant_ids=["t1"], text="refund approval", rerank=False)
+    assert (await other.search(query)).hits  # the words still find them ...
+    assert all("vector" not in h.ranks for h in (await other.search(query)).hits)  # ... the vectors don't
 
 
 async def test_force_reingest_reuses_every_embedding(pipeline, embedder, files):
@@ -259,7 +327,7 @@ async def test_runtime_in_memory(files, tmp_path):
         JobSpec(task_type="documents", kind="ingest", payload={"tenant_id": "t1", "doc_id": "p", "uri": str(path)})
     )
     assert res.status.value == "ok"
-    resp = await rt.documents.search.search(SearchQuery(tenant_id="t1", text="who works in Oslo"))
+    resp = await rt.documents.search.search(SearchQuery(tenant_ids=["t1"], text="who works in Oslo"))
     assert "Oslo" in resp.hits[0].chunk.text
     await rt.close()
 
@@ -282,7 +350,7 @@ async def test_mermaid_diagram_is_searchable(pipeline, search_service):
     result = await pipeline.ingest(source("order-flow.mmd", fixtures.make_mermaid()))
     assert result.status is IngestStatus.READY and result.chunk_count > 0
     resp = await search_service.search(
-        SearchQuery(tenant_id="t1", text="what happens when an order isn't valid", rerank=False)
+        SearchQuery(tenant_ids=["t1"], text="what happens when an order isn't valid", rerank=False)
     )
     top = resp.hits[0].chunk
     assert top.source_type == "mermaid" and "[Valid?] --no--> [Reject order]" in top.text

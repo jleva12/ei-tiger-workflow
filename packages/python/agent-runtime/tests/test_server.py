@@ -19,7 +19,7 @@ from forge_agent_runtime.executor import (
     FileAgentSource,
     RunRequest,
 )
-from forge_agent_runtime.server import create_app
+from forge_agent_runtime.server import create_app, create_router
 from forge_agent_runtime.services import RuntimeServices
 from tests.conftest import EXAMPLE, call, text, without
 
@@ -229,3 +229,43 @@ def test_the_cli_validates_an_export(capsys, tmp_path, example):
     )
     assert cli(["validate", str(broken)]) == 1
     assert "isn't an agent" in capsys.readouterr().out
+
+
+def test_authorize_decides_each_call_before_the_agent_is_built(agent_file, models, web):
+    from fastapi import FastAPI, HTTPException
+
+    seen: list[tuple[str, str, str | None]] = []
+    built: list[str] = []
+
+    class Watching:
+        def plugins(self, agent):
+            built.append(agent.document.id)
+            return ()
+
+        def invocation(self, agent, request):
+            return contextlib.nullcontext()
+
+    async def authorize(request, agent, *, action, user_id):
+        seen.append((agent.document.id, action, user_id))
+        if user_id == "mallory":
+            raise HTTPException(403, "Not yours")
+
+    executor = AgentExecutor(FileAgentSource(agent_file), models=models, http=web(), observer=Watching())
+    app = FastAPI()
+    app.include_router(create_router(executor, authorize=authorize))
+    with TestClient(app) as client:
+        assert client.get(f"/apps/{AGENT}").status_code == 200
+        assert client.get(f"/apps/{AGENT}/users/ada/sessions").status_code == 200
+        refused = client.post(
+            "/run_sse",
+            json={
+                "appName": AGENT,
+                "userId": "mallory",
+                "sessionId": "s1",
+                "newMessage": {"role": "user", "parts": [{"text": "hi"}]},
+            },
+        )
+        assert refused.status_code == 403
+    assert seen == [(AGENT, "agent", None), (AGENT, "sessions", "ada"), (AGENT, "run", "mallory")]
+    # Refused before anything was built.
+    assert built == []

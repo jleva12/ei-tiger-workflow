@@ -26,6 +26,8 @@ export type PageEntityKind =
   | "user"
   | "role"
   | "adk_run"
+  | "knowledge_base"
+  | "knowledge_document"
 
 /** A record on screen. */
 export type PageEntity = {

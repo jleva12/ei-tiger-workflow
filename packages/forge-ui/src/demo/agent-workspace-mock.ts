@@ -3,17 +3,15 @@ import type {
   AdkStreamCallback,
 } from "@assistant-ui/react-google-adk"
 
-import type {
-  AssistantSource,
-  AssistantSourcesConfig,
-} from "@/components/forge/assistant"
-import { toolResult, type Plan } from "@/components/forge/agent-workspace"
+import { knowledgeBaseSources } from "@/components/forge/assistant"
+import type { Plan } from "@/components/forge/agent-workspace"
 
 /*
  * A scripted agent for the agent workspace demo, speaking ADK's event
  * protocol like the chat API's agent: it keeps a plan and notes in session
  * state (`set_plan`, `update_plan_step`, `add_note`), uses the calculator,
- * and cites the passages a document search returns. No backend, no model.
+ * and cites the passages a Forge knowledge base search returns. No backend,
+ * no model.
  */
 
 const AGENT = "assistant"
@@ -236,43 +234,63 @@ async function* planLaunch(run: Run): AsyncGenerator<AdkEvent> {
   )
 }
 
-/** Passages a document search found; the answer cites them by ref. */
-const PASSAGES = [
-  {
-    ref: "S1",
-    title: "Refund policy.md",
-    team: "Support",
-    section: "Eligibility",
-    text: "Customers can request a full refund within 30 days of purchase.",
-  },
-  {
-    ref: "S2",
-    title: "Refund policy.md",
-    team: "Support",
-    section: "Annual plans",
-    text: "Annual plans are refunded pro rata after the first 30 days.",
-  },
-  {
-    ref: "S3",
-    title: "Billing FAQ",
-    team: "Finance",
-    section: "Processing",
-    text: "Refunds reach the original payment method in 5–10 business days.",
-  },
-]
+/**
+ * What a Forge knowledge base tool answers (forge_agent_runtime's
+ * KnowledgeBaseTool): the knowledge bases it searched, and the passages it
+ * found, which the answer cites by ref.
+ */
+const SEARCH = {
+  searched: ["Support policies", "Finance FAQ"],
+  passages: [
+    {
+      ref: "RFD0030",
+      knowledge_base: "Support policies",
+      knowledge_base_id: "kb-support",
+      document: "Refund policy.pdf",
+      document_id: "doc-refunds",
+      section: "Refunds > Eligibility",
+      location: "page 2",
+      text: "Customers can request a full refund within 30 days of purchase.",
+      score: 0.71,
+    },
+    {
+      ref: "ANP0412",
+      knowledge_base: "Support policies",
+      knowledge_base_id: "kb-support",
+      document: "Refund policy.pdf",
+      document_id: "doc-refunds",
+      section: "Refunds > Annual plans",
+      location: "page 3",
+      text: "Annual plans are refunded pro rata after the first 30 days.",
+      score: 0.64,
+    },
+    {
+      ref: "BFQ0510",
+      knowledge_base: "Finance FAQ",
+      knowledge_base_id: "kb-finance",
+      document: "Billing FAQ.docx",
+      document_id: "doc-billing",
+      section: "Processing",
+      location: "",
+      text: "Refunds reach the original payment method in 5–10 business days.",
+      score: 0.58,
+    },
+  ],
+}
 
 async function* refundPolicy(run: Run): AsyncGenerator<AdkEvent> {
   yield* tool(
     run,
-    "search_docs",
+    "search_policies",
     { query: "refund policy" },
-    { passages: PASSAGES },
+    // In the envelope every Forge tool answers in.
+    { status: "success", payload: SEARCH },
     undefined,
     700
   )
   yield* reply(
     run,
-    "Any purchase can be refunded in full within 30 days [S1]. After that, annual plans are refunded for the unused months [S2]. Either way the money reaches the original payment method in 5–10 business days [S3].",
+    "Any purchase can be refunded in full within 30 days [RFD0030]. After that, annual plans are refunded for the unused months [ANP0412]. Either way the money reaches the original payment method in 5–10 business days [BFQ0510].",
     "Search the policy documents, then answer only from what they say, citing each passage."
   )
 }
@@ -310,21 +328,5 @@ export const workspaceMockStream: AdkStreamCallback = async (
   return fallback(run)
 }
 
-/** How answers cite the demo's document search. */
-export const workspaceSources: AssistantSourcesConfig = {
-  fromToolCall: (toolName, result) => {
-    if (toolName !== "search_docs") return []
-    // As a value, JSON text or wrapped in { result }, as ADK delivers it.
-    const { passages = [] } = toolResult<{ passages: typeof PASSAGES }>(result)
-    return passages.map((passage): AssistantSource => ({
-      ref: passage.ref,
-      document: {
-        key: passage.title,
-        title: passage.title,
-        subtitle: passage.team,
-      },
-      location: passage.section,
-      excerpt: passage.text,
-    }))
-  },
-}
+/** How answers cite the demo's knowledge base search, as Forge's do. */
+export const workspaceSources = knowledgeBaseSources()

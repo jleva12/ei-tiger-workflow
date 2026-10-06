@@ -25,10 +25,13 @@ target_metadata = Base.metadata
 # Tables autogenerate leaves alone, which it would otherwise drop: those Google
 # ADK creates and migrates itself (the assistant's conversations), and the ADK
 # workflow runs', which the run store describes (0005adk_run_store creates
-# them as it does), and what organizations used, which the usage store
-# describes (0009usage).
+# them as it does), what organizations used, which the usage store describes
+# (0009usage), and chat agents' A2A tasks, which a2a-sdk describes (0010a2a).
 OTHER_TABLES = (
-    ADK_TABLES | set(run_store.metadata.tables) | set(usage_store.metadata.tables)
+    ADK_TABLES
+    | set(run_store.metadata.tables)
+    | set(usage_store.metadata.tables)
+    | {"a2a_tasks"}
 )
 
 

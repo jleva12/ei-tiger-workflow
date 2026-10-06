@@ -23,8 +23,7 @@ import { stepDetail, stepSummary } from "./step-lines"
 
 /** What a node shows under its name: one fact about how it's set up. */
 function detailOf(step: AgentStep, lookups: AgentLookups): string {
-  if (isForgeKind(step.kind))
-    return stepDetail(step as StepData)
+  if (isForgeKind(step.kind)) return stepDetail(step as StepData)
   switch (step.kind) {
     case "start": {
       const { names } = inputFields(step.config.input_schema)
@@ -33,10 +32,27 @@ function detailOf(step: AgentStep, lookups: AgentLookups): string {
         : "Takes any input"
     }
     case "llm": {
-      const handsOff = step.config.sub_agents.length
-      return handsOff
-        ? `${modelLine(step.config, lookups)} · hands off to ${handsOff}`
-        : modelLine(step.config, lookups)
+      const config = step.config
+      if (config.source === "agent") {
+        if (!config.agent) return "An agent from the Agents page: none picked"
+        const name = lookups.chatAgents[config.agent]?.name ?? "A deleted agent"
+        const version =
+          config.version === null
+            ? "latest"
+            : config.version === "draft"
+              ? "its draft"
+              : `v${config.version}`
+        return `${name} · ${version}`
+      }
+      const tools = config.tools.length
+      const handsOff = config.sub_agents.length
+      return [
+        modelLine(config, lookups),
+        tools && plural(tools, "tool"),
+        handsOff && `hands off to ${handsOff}`,
+      ]
+        .filter(Boolean)
+        .join(" · ")
     }
     case "sequential":
     case "parallel":
@@ -66,8 +82,7 @@ function detailOf(step: AgentStep, lookups: AgentLookups): string {
 
 /** A node's line on its card: what it does. */
 function summaryOf(step: AgentStep): NodeSummary | null {
-  if (isForgeKind(step.kind))
-    return stepSummary(step as StepData)
+  if (isForgeKind(step.kind)) return stepSummary(step as StepData)
   switch (step.kind) {
     case "start": {
       const { names, required } = inputFields(step.config.input_schema)

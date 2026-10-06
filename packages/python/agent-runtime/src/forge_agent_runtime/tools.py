@@ -244,9 +244,12 @@ class KnowledgeBaseTool(BaseTool):
         organization_id: str | None,
         max_results: int,
         knowledge_bases: KnowledgeBases,
+        knowledge_base_names: list[str] | None = None,
     ) -> None:
         super().__init__(name=name, description=description)
         self.knowledge_base_ids = knowledge_base_ids
+        # What its results say it searched (a chat UI's card for the call).
+        self.knowledge_base_names = knowledge_base_names or list(knowledge_base_ids)
         self.organization_id = organization_id
         self.max_results = max_results
         self.knowledge_bases = knowledge_bases
@@ -275,8 +278,12 @@ class KnowledgeBaseTool(BaseTool):
             self.knowledge_base_ids, query, organization_id=self.organization_id, limit=self.max_results
         )
         if not passages:
-            return {"passages": [], "note": "Nothing in the knowledge base matches; don't make up an answer."}
-        return {"passages": passages}
+            return {
+                "searched": self.knowledge_base_names,
+                "passages": [],
+                "note": "Nothing in the knowledge base matches; don't make up an answer.",
+            }
+        return {"searched": self.knowledge_base_names, "passages": passages}
 
 
 async def _always(args: dict[str, Any], tool_context: ToolContext) -> bool:

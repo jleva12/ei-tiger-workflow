@@ -58,6 +58,11 @@ class StarterOptions(BaseModel):
     streaming: bool = Field(
         default=True, description="Replies stream as the model writes them; false: they arrive whole"
     )
+    a2a: bool = Field(
+        default=True,
+        description="Google's A2A protocol too, beside ADK's run API: JSON-RPC at /a2a (A2A 1.0 and 0.3), "
+        "the card at /.well-known/agent-card.json, for other agents to call it",
+    )
     api_key: bool = Field(
         default=False,
         description="The API asks for a key (Authorization: Bearer); with the API alone only, "
@@ -134,6 +139,7 @@ class StarterOptions(BaseModel):
         """forge-agent-runtime's extras the choices need."""
         return [
             "server",
+            *(["a2a"] if self.a2a else []),
             *(["sessions-postgres"] if self.sessions == "postgresql" else []),
             *(["sessions-mysql"] if self.sessions == "mysql" else []),
             *(["artifacts-s3"] if self.artifacts == "s3" else []),

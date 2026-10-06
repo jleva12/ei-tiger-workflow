@@ -74,6 +74,10 @@ runs = sa.Table(
     sa.Column("agent_id", sa.String(64), nullable=False),
     sa.Column("agent_name", sa.String(255), nullable=False),
     sa.Column("revision", sa.Integer, nullable=False),
+    # Which version of the workflow ran: "draft", or a published version's
+    # number; null for runs from before workflows had versions
+    # (forge-admin's 0012adk_run_versions).
+    sa.Column("version", sa.String(16), nullable=True),
     sa.Column("session_id", sa.String(128), nullable=False),
     sa.Column("status", sa.String(16), nullable=False),
     sa.Column("attempt", sa.Integer, nullable=False),
@@ -316,11 +320,16 @@ class RunStore:
         requested_by: Actor,
         resubmit_of: str | None = None,
         run_id: str | None = None,
+        version: str | None = None,
     ) -> dict[str, Any]:
-        """:return: A new run, queued: the caller queues its job."""
+        """
+        :param version: Which version of the workflow it runs: "draft" or a
+            number; None when unknown.
+        :return: A new run, queued: the caller queues its job.
+        """
         now = self._now()
         run_id = run_id or new_id()
-        values = {
+        values: dict[str, Any] = {
             "id": run_id,
             "organization_id": organization_id,
             "agent_id": agent_id,
@@ -337,6 +346,9 @@ class RunStore:
             "created_at": now,
             "updated_at": now,
         }
+        # Only when known, so a store older than the column still takes runs.
+        if version is not None:
+            values["version"] = version[:16]
         message = f"Resubmitted from run {resubmit_of[:8]}" if resubmit_of else "Started"
         async with self.engine.begin() as conn:
             await conn.execute(sa.insert(runs).values(values))
@@ -443,6 +455,7 @@ class RunStore:
             payload=run["payload"],
             requested_by=actor,
             resubmit_of=run_id,
+            version=run.get("version"),
         )
 
     async def abandon(self, run_id: str, *, actor: Actor, organization_id: str | None = None) -> dict[str, Any]:

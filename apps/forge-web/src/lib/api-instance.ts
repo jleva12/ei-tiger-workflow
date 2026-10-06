@@ -7,6 +7,14 @@ import {fromCasbin, type AccessLoader} from "@/lib/user-access"
 // administrator. Without it the admin API sees no user and answers 401.
 const devToken: string | undefined = import.meta.env.VITE_API_TOKEN
 
+/**
+ * The headers that say who's signed in, for calls made outside `api`: the
+ * runtime's chat (ADK's run API), which answers only signed-in callers when
+ * it isn't public, and attributes their calls when it is.
+ */
+export const apiAuthHeaders = (): Record<string, string> =>
+    devToken ? {Authorization: `Bearer ${devToken}`} : {}
+
 export const api = createApiClient({
     baseURL: import.meta.env.VITE_API_URL,
     retry: false, // TanStack Query retries; two layers would multiply attempts

@@ -121,7 +121,13 @@
         "disallow_transfer_to_peers": false,
         "max_output_tokens": null,
         "sub_agents": [],
-        "mode": "single_turn"
+        "mode": "single_turn",
+        "tools": [],
+        "source": "inline",
+        "agent": "",
+        "version": null,
+        "message": "",
+        "inputs": {}
       },
       "outputs": [
         "next"
@@ -160,7 +166,13 @@
         "disallow_transfer_to_peers": false,
         "max_output_tokens": null,
         "sub_agents": [],
-        "mode": "single_turn"
+        "mode": "single_turn",
+        "tools": [],
+        "source": "inline",
+        "agent": "",
+        "version": null,
+        "message": "",
+        "inputs": {}
       },
       "outputs": [
         "next"
@@ -224,7 +236,8 @@
               "disallow_transfer_to_parent": false,
               "disallow_transfer_to_peers": false,
               "max_output_tokens": null,
-              "sub_agents": []
+              "sub_agents": [],
+              "tools": []
             }
           },
           {
@@ -244,7 +257,8 @@
               "disallow_transfer_to_parent": false,
               "disallow_transfer_to_peers": false,
               "max_output_tokens": null,
-              "sub_agents": []
+              "sub_agents": [],
+              "tools": []
             }
           }
         ]
@@ -385,7 +399,13 @@
         "disallow_transfer_to_peers": false,
         "max_output_tokens": null,
         "sub_agents": [],
-        "mode": "single_turn"
+        "mode": "single_turn",
+        "tools": [],
+        "source": "inline",
+        "agent": "",
+        "version": null,
+        "message": "",
+        "inputs": {}
       },
       "outputs": [
         "next"
@@ -441,7 +461,8 @@
               "disallow_transfer_to_parent": false,
               "disallow_transfer_to_peers": false,
               "max_output_tokens": null,
-              "sub_agents": []
+              "sub_agents": [],
+              "tools": []
             }
           },
           {
@@ -461,7 +482,8 @@
               "disallow_transfer_to_parent": false,
               "disallow_transfer_to_peers": false,
               "max_output_tokens": null,
-              "sub_agents": []
+              "sub_agents": [],
+              "tools": []
             }
           }
         ],
@@ -515,7 +537,8 @@
               "disallow_transfer_to_parent": false,
               "disallow_transfer_to_peers": false,
               "max_output_tokens": null,
-              "sub_agents": []
+              "sub_agents": [],
+              "tools": []
             }
           },
           {
@@ -535,7 +558,8 @@
               "disallow_transfer_to_parent": false,
               "disallow_transfer_to_peers": false,
               "max_output_tokens": null,
-              "sub_agents": []
+              "sub_agents": [],
+              "tools": []
             }
           }
         ]

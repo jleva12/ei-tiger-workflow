@@ -5,7 +5,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from forge_admin.mcp_servers.auth import (
+from forge_mcp_servers.auth import (
     HEADER_NAME_PATTERN,
     AuthContext,
     AuthMethod,

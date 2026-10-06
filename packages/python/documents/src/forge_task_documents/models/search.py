@@ -17,7 +17,9 @@ class SearchFilters(BaseModel):
 class HybridSearchRequest(BaseModel):
     """What the service hands a SearchBackend. Everything is already computed."""
 
-    tenant_id: str
+    # The tenants searched, together: one ranking over all their chunks, and
+    # nothing outside them. Never empty, so a search is always scoped.
+    tenant_ids: list[str] = Field(min_length=1)
     text: str
     vector: list[float]
     embedding_model: str | None = None
@@ -33,8 +35,11 @@ class HybridSearchRequest(BaseModel):
 
 class SearchHit(BaseModel):
     chunk: Chunk
-    score: float  # fused (RRF) score
+    score: float  # fused (RRF) score: its rank, not its relevance
     rerank_score: float | None = None
+    # Its relevance by meaning: the cosine of its vector and the question's,
+    # when it's embedded with the question's model.
+    similarity: float | None = None
     ranks: dict[str, int] = Field(default_factory=dict)  # leg name -> 1-based rank
     details: dict[str, Any] | None = None
     expanded_text: str | None = None  # full section text when expansion is on
@@ -43,7 +48,9 @@ class SearchHit(BaseModel):
 class SearchQuery(BaseModel):
     """Public search input (what your API receives)."""
 
-    tenant_id: str
+    # One tenant, or several searched as one: e.g. the knowledge bases an
+    # agent was given. Only these are searched.
+    tenant_ids: list[str] = Field(min_length=1)
     text: str = Field(min_length=1)
     filters: SearchFilters = Field(default_factory=SearchFilters)
     top_k: int = Field(default=8, ge=1, le=100)

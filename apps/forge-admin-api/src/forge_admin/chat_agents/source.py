@@ -12,9 +12,8 @@ are and what they may use here:
   started on the async worker and waited for.
 """
 
-import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from forge_agent_runtime import (
@@ -30,7 +29,8 @@ from forge_agent_runtime import (
 from forge_common.adk.models import ProviderModels
 from forge_common.adk.usage import price_from
 from forge_common.model_provider import load_model_provider_config
-from forge_task_adk_workflows.run_store import OPEN, RunStore
+from forge_mcp_servers.service import McpServers
+from forge_task_adk_workflows.run_store import RunStore
 from forge_task_adk_workflows.usage_store import UsageStore
 from google.adk.artifacts import InMemoryArtifactService
 from google.adk.sessions import DatabaseSessionService
@@ -41,18 +41,25 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from forge_admin import env_files
 from forge_admin.adk_workflows.documents import AgentStore
 from forge_admin.adk_workflows.queue import Embedding
+from forge_admin.adk_workflows.resources import RunResources
 from forge_admin.adk_workflows.runs import (
     AdkRunError,
     prepare_run,
+    settle,
     start_adk_run,
     start_schema,
+)
+from forge_admin.adk_workflows.versions import (
+    ResolvedWorkflow,
+    WorkflowGone,
+    resolve_workflow,
+    workflow_finder,
 )
 from forge_admin.assistant.language_models import gemini_config
 from forge_admin.chat_agents.store import ChatAgentStore
 from forge_admin.config import Settings
 from forge_admin.knowledge.search import KnowledgeSearch
 from forge_admin.knowledge.tools import OrganizationKnowledgeBases
-from forge_admin.mcp_servers.service import McpServers
 from forge_admin.mcp_servers.toolset import mcp_toolset
 from forge_admin.overview.recording import AgentUsage
 
@@ -60,7 +67,6 @@ logger = logging.getLogger(__name__)
 
 #: How long a chat agent waits for a workflow it called, in seconds.
 WORKFLOW_WAIT = 120.0
-_POLL = 0.5
 
 
 class MongoAgentSource:
@@ -135,27 +141,37 @@ class OrganizationWorkflows:
     """
 
     def __init__(
-        self, agents: AgentStore, runs: RunStore, queue: Embedding | None
+        self,
+        agents: AgentStore,
+        runs: RunStore,
+        queue: Embedding | None,
+        resources: Callable[[str], RunResources] | None = None,
     ) -> None:
         self.agents = agents
         self.runs = runs
         self.queue = queue
+        #: What a workflow's LLM agents use from its organization, by organization.
+        self.resources = resources
 
-    async def _record(
-        self, workflow_id: str, organization_id: str | None
-    ) -> dict[str, Any]:
+    async def _resolved(
+        self, ref: str, organization_id: str | None
+    ) -> ResolvedWorkflow:
+        """:param ref: ``ag_x`` (its latest published), ``ag_x@3``, ``ag_x@draft``."""
         if organization_id is None:
             raise LookupError("The agent belongs to no organization.")
-        record = await self.agents.get(organization_id, workflow_id)
-        if record is None:
-            raise LookupError(f"The organization has no workflow {workflow_id}.")
-        return record
+        try:
+            return await resolve_workflow(
+                self.agents, ref, organization_id=organization_id
+            )
+        except WorkflowGone:
+            raise LookupError(
+                f"The organization has no workflow {ref.partition('@')[0]}."
+            ) from None
 
     async def describe(
         self, workflow_id: str, *, organization_id: str | None
     ) -> tuple[str, str, dict[str, Any]]:
-        record = await self._record(workflow_id, organization_id)
-        document = record["document"]
+        document = (await self._resolved(workflow_id, organization_id)).document
         return (
             str(document.get("name") or workflow_id),
             str(document.get("description") or ""),
@@ -174,13 +190,14 @@ class OrganizationWorkflows:
             raise RuntimeError(
                 "Workflows can't run: the async worker's queue isn't set up."
             )
-        record = await self._record(workflow_id, organization_id)
-
-        async def find(other: str) -> dict[str, Any] | None:
-            return await self.agents.get(record["organization_id"], other)
-
+        resolved = await self._resolved(workflow_id, organization_id)
+        record = resolved.run_record
+        find = workflow_finder(self.agents, record["organization_id"])
+        resources = (
+            self.resources(record["organization_id"]) if self.resources else None
+        )
         try:
-            saved = await prepare_run(record, workflow_input, find)
+            prepared = await prepare_run(record, workflow_input, find, resources)
         except AdkRunError as error:
             raise ValueError(str(error)) from error
         agent = context.agent_name
@@ -188,7 +205,7 @@ class OrganizationWorkflows:
             self.runs,
             self.queue,
             record,
-            saved=saved,
+            prepared=prepared,
             input=workflow_input,
             run_as=f"chat-agent:{context.session.app_name}",
             run_as_name=f"Chat agent {agent}",
@@ -197,18 +214,10 @@ class OrganizationWorkflows:
                 "agent_id": context.session.app_name,
                 "user": context.user_id,
             },
+            version=resolved.version,
         )
-        deadline = asyncio.get_running_loop().time() + WORKFLOW_WAIT
-        while True:
-            current = await self.runs.get(run["id"])
-            status = current["status"] if current else "missing"
-            if (
-                status not in OPEN
-                or status == "paused"
-                or asyncio.get_running_loop().time() > deadline
-            ):
-                break
-            await asyncio.sleep(_POLL)
+        current = await settle(self.runs, run["id"], wait=WORKFLOW_WAIT)
+        status = current["status"] if current else "missing"
         answer: dict[str, Any] = {"run_id": run["id"], "status": status}
         if current is not None:
             if current.get("result") is not None:
@@ -254,7 +263,14 @@ def create_executor(
         mcp_servers=OrganizationMcpServers(mcp_servers, sessions)
         if mcp_servers is not None
         else None,
-        workflows=OrganizationWorkflows(agents, runs, queue)
+        workflows=OrganizationWorkflows(
+            agents,
+            runs,
+            queue,
+            lambda organization: RunResources(
+                organization, chat_agents=store, sessions=sessions
+            ),
+        )
         if agents is not None
         else None,
         knowledge_bases=OrganizationKnowledgeBases(sessions, knowledge_search),

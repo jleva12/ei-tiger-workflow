@@ -99,6 +99,7 @@ export const CHAT_AGENT_ADAPTER: BuilderAdapter<
   lookups: () => ({
     agents: {},
     workflows: {},
+    workflowVersions: {},
     models: {},
     mcpServers: {},
     knowledgeBases: {},

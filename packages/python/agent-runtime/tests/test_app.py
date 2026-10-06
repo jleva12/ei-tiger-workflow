@@ -149,3 +149,70 @@ def test_an_agent_that_cant_be_built_stops_the_app_as_it_starts(tmp_path, exampl
     server = AgentServer(settings()).with_agent(path).with_models(models).with_services(environment={})
     with pytest.raises(BuildError, match="ORDERS_TOKEN"), TestClient(server.build()):
         pass
+
+
+def a2a_send(client: TestClient, words: str, context: str, **headers: str) -> Any:
+    return client.post(
+        "/a2a",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "SendMessage",
+            "params": {
+                "message": {
+                    "messageId": f"m-{context}",
+                    "role": "ROLE_USER",
+                    "parts": [{"text": words}],
+                    "contextId": context,
+                }
+            },
+        },
+        headers={"A2A-Version": "1.0", **headers},
+    )
+
+
+def test_a2a_serves_the_agent_beside_the_run_api(tmp_path, agent_file, web_dir, models, llm):
+    server = (
+        AgentServer(settings())
+        .with_agent(agent_file)
+        .with_models(models)
+        .with_sessions(f"sqlite:///{tmp_path / 'sessions.db'}")
+        .with_web(web_dir)
+        .with_a2a(public_url="https://agent.example.com")
+    )
+    llm.turns = [[text("Hello over A2A.")]]
+    with TestClient(server.build()) as client:
+        card = client.get("/.well-known/agent-card.json").json()
+        assert card["name"] == "Support assistant"
+        assert card["url"] == "https://agent.example.com/a2a"
+        assert "securitySchemes" not in card
+
+        task = a2a_send(client, "hi", "c1").json()["result"]["task"]
+        assert task["artifacts"][0]["parts"][0]["text"] == "Hello over A2A."
+        # Kept with the conversations: the same session the run API would show.
+        listed = client.get(f"/api/apps/{AGENT}/users/A2A_USER_c1/sessions").json()
+        assert [s["id"] for s in listed] == ["c1"]
+    assert "A2A tasks sqlite+aiosqlite" in server._kept()
+
+
+def test_a2a_asks_for_the_api_key_but_shows_its_card(agent_file, models, llm):
+    server = AgentServer(settings()).with_agent(agent_file).with_models(models).with_api_keys("k1").with_a2a()
+    llm.turns = [[text("Hi.")]]
+    with TestClient(server.build()) as client:
+        card = client.get("/a2a/.well-known/agent-card.json").json()
+        assert set(card["securitySchemes"]) == {"bearer", "apiKey"}
+        assert a2a_send(client, "hi", "c2").status_code == 401
+        sent = a2a_send(client, "hi", "c2", authorization="Bearer k1").json()
+        assert sent["result"]["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
+        # Callers with a key are known, so they may list their tasks.
+        listed = client.post(
+            "/a2a",
+            json={"jsonrpc": "2.0", "id": 2, "method": "ListTasks", "params": {}},
+            headers={"A2A-Version": "1.0", "X-API-Key": "k1"},
+        ).json()
+        assert [t["contextId"] for t in listed["result"]["tasks"]] == ["c2"]
+
+
+def test_a2a_is_off_unless_asked(agent_file, models):
+    with TestClient(AgentServer(settings()).with_agent(agent_file).with_models(models).build()) as client:
+        assert client.get("/.well-known/agent-card.json").status_code == 404

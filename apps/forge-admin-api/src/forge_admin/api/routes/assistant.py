@@ -50,7 +50,7 @@ from forge_admin.assistant.person_api import CALLER_BASE_URL
 from forge_admin.assistant.runtime import AgentRuntime
 from forge_admin.assistant.screens import STICKY, page_of
 from forge_admin.assistant.wire import sse, to_wire
-from forge_admin.auth.access import CurrentUser
+from forge_admin.auth.access import CurrentPerson
 from forge_admin.overview.recording import assistant_attribution
 
 logger = logging.getLogger(__name__)
@@ -220,7 +220,7 @@ async def _person(runtime: AgentRuntime, user: str) -> dict[str, Any] | None:
 
 
 def conversations(
-    app_name: AppName, user_id: UserId, user: CurrentUser, runtime: Runtime
+    app_name: AppName, user_id: UserId, user: CurrentPerson, runtime: Runtime
 ) -> Conversations:
     """
     FastAPI dependency: the conversations a session or artifact route acts on.
@@ -288,7 +288,7 @@ async def capabilities(
 
 @router.get(MODELS)
 async def list_models(
-    app_name: AppName, user: CurrentUser, runtime: Runtime
+    app_name: AppName, user: CurrentPerson, runtime: Runtime
 ) -> AgentModels:
     """
     The models the agent's conversations may run on, its default first, as
@@ -524,7 +524,7 @@ async def _refuse(author: str, reason: str) -> AsyncIterator[str]:
     responses={200: {"content": {"text/event-stream": {}}}},
 )
 async def run_sse(
-    body: RunRequest, user: CurrentUser, runtime: Runtime, request: Request
+    body: RunRequest, user: CurrentPerson, runtime: Runtime, request: Request
 ) -> StreamingResponse:
     """
     Run the caller's turn in a conversation and stream the agent's events as

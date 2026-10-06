@@ -682,13 +682,29 @@
       "type": "object",
       "description": "One of the organization's workflows, as a tool: the agent runs it with its input and gets its result.",
       "required": [
-        "workflow"
+        "workflow",
+        "version"
       ],
       "additionalProperties": false,
       "properties": {
         "workflow": {
           "type": "string",
           "description": "One of the organization's workflows, by ID, called as a tool."
+        },
+        "version": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "const": "draft"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Which of its versions runs: a published one, its draft, or null for its latest published (as each run starts)."
         }
       }
     }

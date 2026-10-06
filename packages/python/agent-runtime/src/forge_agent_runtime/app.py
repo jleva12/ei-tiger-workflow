@@ -23,6 +23,9 @@ The app serves:
   the agent named by ``appName``;
 - ``{api_prefix}/agent``: the agent it serves (its ID, name, version and the
   state it takes), which a UI reads instead of hard-coding them;
+- with :meth:`AgentServer.with_a2a`, Google's A2A protocol (:mod:`.a2a`):
+  JSON-RPC at ``/a2a`` (A2A 1.0 and 0.3), and the agent card at
+  ``/.well-known/agent-card.json``, where A2A clients look for it;
 - ``/healthz``;
 - the built UI at ``/``, a single-page app: paths it doesn't have answer its
   ``index.html``.
@@ -70,6 +73,7 @@ from forge_agent_runtime.executor import (
 from forge_agent_runtime.services import RuntimeServices
 
 if TYPE_CHECKING:
+    from a2a.server.tasks import TaskStore
     from fastapi import FastAPI
     from fastapi.params import Depends
     from google.adk.artifacts import BaseArtifactService
@@ -233,6 +237,14 @@ class AgentServerSettings(BaseSettings):
     web_dir: Path | None = None
     #: Origins a browser may call the API from; none (the default) when the UI is served here.
     cors_origins: list[str] = []
+    #: Serve the agents over Google's A2A protocol too (forge-agent-runtime[a2a]): JSON-RPC
+    #: at /a2a, the card at /.well-known/agent-card.json.
+    a2a: bool = False
+    #: Where A2A tasks are kept: memory, or a database URL; the conversations' database by default.
+    a2a_tasks: str | None = None
+    #: The server's public address (https://agent.example.com), which A2A cards give
+    #: callers; the address each request came to by default.
+    public_url: str | None = None
     #: The app's title (its OpenAPI page); the agent's name by default.
     title: str | None = None
     host: str = "127.0.0.1"
@@ -309,6 +321,7 @@ class AgentServer:
         self._routes: list[Any] = []
         self._lifespans: list[Lifespan] = []
         self._middleware: list[tuple[type, dict[str, Any]]] = []
+        self._a2a_tasks: TaskStore | None = None
         self._executor: AgentExecutor | None = None
         self._app: FastAPI | None = None
 
@@ -432,6 +445,34 @@ class AgentServer:
         self.settings = self.settings.model_copy(update={"web_dir": Path(directory)})
         return self
 
+    def with_a2a(
+        self,
+        enabled: bool = True,
+        *,
+        tasks: str | TaskStore | None = None,
+        public_url: str | None = None,
+    ) -> Self:
+        """
+        Serve the agent over Google's A2A protocol too (``forge-agent-runtime[a2a]``),
+        beside ADK's run API: JSON-RPC at ``/a2a`` (A2A 1.0 and 0.3), its card at
+        ``/.well-known/agent-card.json``. The API's keys and ``with_auth`` guard it too;
+        the card stays open, as callers read it to learn how to sign in.
+
+        :param tasks: Where A2A tasks are kept: ``memory``, a database URL, or a
+            task store; the conversations' database by default.
+        :param public_url: The server's public address, which the card gives;
+            the address each request came to by default.
+        """
+        update: dict[str, Any] = {"a2a": enabled}
+        if isinstance(tasks, str):
+            update["a2a_tasks"] = tasks
+        elif tasks is not None:
+            self._a2a_tasks = tasks
+        if public_url is not None:
+            update["public_url"] = public_url
+        self.settings = self.settings.model_copy(update=update)
+        return self
+
     def with_cors(self, *origins: str) -> Self:
         """Origins a browser may call the API from, when the UI is served elsewhere."""
         self.settings = self.settings.model_copy(
@@ -535,9 +576,24 @@ class AgentServer:
             else "in memory"
         )
         replies = {None: "as each request asks", True: "streamed", False: "whole"}[settings.streaming]
-        return f"conversations {sessions}; files {artifacts}; memory {memory}; replies {replies}" + (
+        a2a = ""
+        if settings.a2a:
+            tasks = settings.a2a_tasks or self._a2a_tasks_url()
+            a2a = "; A2A tasks " + (
+                type(self._a2a_tasks).__name__
+                if self._a2a_tasks is not None
+                else "in memory"
+                if tasks == "memory"
+                else _shown(database_url(tasks))
+            )
+        return f"conversations {sessions}; files {artifacts}; memory {memory}; replies {replies}{a2a}" + (
             "; API keys asked for" if settings.api_keys else ""
         )
+
+    def _a2a_tasks_url(self) -> str:
+        """Where A2A tasks are kept unless told: the conversations' database, when they're in one."""
+        sessions = self.settings.sessions
+        return "memory" if self._sessions is not None or sessions == "memory" else sessions
 
     def agent(self) -> ChatAgentDocument | None:
         """The agent it serves, when it serves one (a file or a document); None for a folder."""
@@ -561,15 +617,20 @@ class AgentServer:
         executor = self.executor
         served = self.agent()
         prefix = settings.api_prefix.rstrip("/")
+        tasks = self._a2a_store() if settings.a2a else None
 
         @asynccontextmanager
         async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             async with contextlib.AsyncExitStack() as stack:
                 # The executor closes last: what the app's own lifespans use stays up until they stop.
                 stack.push_async_callback(executor.close)
+                if tasks is not None and self._a2a_tasks is None and hasattr(tasks, "engine"):
+                    stack.push_async_callback(tasks.engine.dispose)
                 if settings.prebuild and served is not None:
                     await executor.runner(str(AgentRef(served.id)))
                     log.info("Serving %s (%s) at %s/run_sse", served.name, served.id, prefix or "/")
+                    if tasks is not None:
+                        log.info("and over A2A at /a2a, its card at /.well-known/agent-card.json")
                 log.info("Keeping %s", self._kept())
                 for each in self._lifespans:
                     await stack.enter_async_context(each(app))
@@ -594,6 +655,24 @@ class AgentServer:
 
         app.include_router(agent_routes, prefix=prefix)
         app.include_router(create_router(executor, dependencies=auth), prefix=prefix)
+        if tasks is not None:
+            from forge_agent_runtime.a2a import api_key_security, create_a2a_router, known_caller
+
+            app.include_router(
+                create_a2a_router(
+                    executor,
+                    path="/a2a",
+                    agent=served.id if served is not None else None,
+                    tasks=tasks,
+                    dependencies=auth,
+                    card_dependencies=(),
+                    # A caller with a key is known; a with_auth dependency can say who (request.state.user_id).
+                    caller=(lambda request: "api-key") if settings.api_keys else known_caller,
+                    security=api_key_security() if settings.api_keys else None,
+                    base_url=settings.public_url,
+                ),
+                tags=["A2A"],
+            )
 
         @app.get("/healthz", include_in_schema=False)
         async def healthz() -> dict[str, str]:
@@ -622,6 +701,16 @@ class AgentServer:
                 log.warning("No built UI at %s (npm run build in web/); serving the API only", web)
         self._app = app
         return app
+
+    def _a2a_store(self) -> TaskStore:
+        """:raises ImportError: Without the a2a extra, saying how to install it."""
+        try:
+            from forge_agent_runtime.a2a import task_store
+        except ImportError as error:
+            raise ImportError("A2A needs a2a-sdk: pip install 'forge-agent-runtime[a2a]'") from error
+        if self._a2a_tasks is not None:
+            return self._a2a_tasks
+        return task_store(self.settings.a2a_tasks or self._a2a_tasks_url())
 
     def run(self, import_string: str = "main:app") -> None:
         """

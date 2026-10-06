@@ -34,7 +34,7 @@ from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-from forge_admin.mcp_servers.auth import (
+from forge_mcp_servers.auth import (
     AuthContext,
     AuthError,
     AuthMethod,
@@ -282,7 +282,10 @@ async def _token_request(
         data["client_id"] = client["client_id"]
     try:
         response = await http.post(
-            token_endpoint, data=data, auth=auth, headers={"Accept": "application/json"}
+            token_endpoint,
+            data=data,
+            auth=auth,  # type: ignore[arg-type]  # None: no client authentication
+            headers={"Accept": "application/json"},
         )
     except httpx.HTTPError as error:
         raise AuthError(

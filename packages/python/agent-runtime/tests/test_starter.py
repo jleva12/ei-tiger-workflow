@@ -66,7 +66,7 @@ def test_a_published_version_becomes_a_whole_project(example):
     compile(main, "main.py", "exec")
     assert '.with_agent(HERE / "agent/support-assistant.chat-agent.json")' in main
     assert "version 3" in main
-    assert '"forge-agent-runtime[server]>=0.1.4,<0.2"' in text(project, "pyproject.toml")
+    assert '"forge-agent-runtime[server,a2a]>=0.1.4,<0.2"' in text(project, "pyproject.toml")
     assert "[tool.uv.sources]" not in text(project, "pyproject.toml")
 
     agent = json.loads(text(project, "agent/support-assistant.chat-agent.json"))
@@ -181,7 +181,8 @@ def test_every_choice_shapes_the_project(example):
 
     pyproject = text(project, "pyproject.toml")
     assert (
-        '"forge-agent-runtime[server,sessions-postgres,artifacts-s3,memory-atlas]>=0.1.0,<0.2"' in pyproject
+        '"forge-agent-runtime[server,a2a,sessions-postgres,artifacts-s3,memory-atlas]>=0.1.0,<0.2"'
+        in pyproject
     )
 
     import yaml
@@ -222,7 +223,7 @@ def test_sqlite_and_a_folder_keep_things_in_data(example):
     assert "compose.yaml" not in project.files
     assert "VOLUME /app/data" in text(project, "Dockerfile")
     assert "FROM node" in text(project, "Dockerfile")
-    assert '"forge-agent-runtime[server]>=0.1.0,<0.2"' in text(project, "pyproject.toml")
+    assert '"forge-agent-runtime[server,a2a]>=0.1.0,<0.2"' in text(project, "pyproject.toml")
 
 
 def test_the_defaults_keep_everything_in_memory_with_the_ui(example):
@@ -235,6 +236,25 @@ def test_the_defaults_keep_everything_in_memory_with_the_ui(example):
     assert text(project, ".github/CODEOWNERS").splitlines()[-1] == "# /agent/ @your-org/agent-owners"
     assert "compose.yaml" not in project.files and "VOLUME" not in text(project, "Dockerfile")
     assert "web/src/agent.tsx" in project.files
+
+
+def test_a2a_comes_along_unless_left_out(example):
+    from forge_agent_runtime.starter import StarterOptions
+
+    project = generate_project(stated(example), runtime=PyPI("0.1.0"))
+    assert "\t.with_a2a()\n" in text(project, "main.py")
+    readme = text(project, "README.md")
+    assert "### A2A" in readme and "@@" not in readme
+    assert "curl localhost:8000/.well-known/agent-card.json" in readme
+    assert "Google's A2A (`/a2a`, 1.0 and 0.3)" in readme
+    assert "/.well-known/agent-card.json" in text(project, "AGENTS.md")
+    assert "# FORGE_AGENT_PUBLIC_URL=" in text(project, ".env.example")
+
+    without = generate_project(stated(example), runtime=PyPI("0.1.0"), options=StarterOptions(a2a=False))
+    assert "\t# .with_a2a()\n" in text(without, "main.py")
+    assert "### A2A" not in text(without, "README.md")
+    assert '"forge-agent-runtime[server]>=0.1.0,<0.2"' in text(without, "pyproject.toml")
+    assert "FORGE_AGENT_PUBLIC_URL" not in text(without, ".env.example")
 
 
 def test_options_refuse_what_cant_work():
@@ -282,3 +302,5 @@ def test_the_cli_takes_the_choices(tmp_path, capsys):
     assert not (out / "web").exists() and (out / "compose.yaml").is_file()
     assert cli(["new", str(EXAMPLE), "--out", str(tmp_path / "ui"), "--api-key"]) == 1
     assert "can't keep an API key secret" in capsys.readouterr().err
+    assert cli(["new", str(EXAMPLE), "--out", str(tmp_path / "plain"), "--no-a2a"]) == 0
+    assert "# .with_a2a()" in (tmp_path / "plain" / "main.py").read_text()

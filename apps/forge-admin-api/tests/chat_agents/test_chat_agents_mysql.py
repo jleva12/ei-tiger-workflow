@@ -186,6 +186,81 @@ def talk(org: Org, app: str, text: str, user: str = "ada") -> str:
     return got[-1]["content"]["parts"][0]["text"]
 
 
+def a2a(org: Org, app: str, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    """One A2A JSON-RPC call to an agent, as any caller of the public runtime would."""
+    response = org.outsider.post(
+        f"{RUNTIME}/a2a/{app}",
+        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+        headers={"A2A-Version": "1.0"} if method[0].isupper() else {},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_a_published_agent_answers_over_a2a_too(org: Org) -> None:
+    agent = create(org)["id"]
+    org.member.post(f"{org.agents}/{agent}/publish", json={"revision": 1})
+
+    card = org.outsider.get(f"{RUNTIME}/a2a/{agent}/.well-known/agent-card.json")
+    assert card.status_code == 200, card.text
+    assert card.json()["name"] == "Support assistant"
+    assert card.json()["url"].endswith(f"{RUNTIME}/a2a/{agent}")
+
+    org.llm.turns = [[types.Part(text="Hello over A2A.")]]
+    context = uuid4().hex
+    sent = a2a(
+        org,
+        agent,
+        "SendMessage",
+        {
+            "message": {
+                "messageId": "m1",
+                "role": "ROLE_USER",
+                "parts": [{"text": "Hi"}],
+                "contextId": context,
+            }
+        },
+    )
+    task = sent["result"]["task"]
+    assert task["status"]["state"] == "TASK_STATE_COMPLETED", task
+    assert task["artifacts"][0]["parts"][0]["text"] == "Hello over A2A."
+    # Kept in MySQL: found again, and only through its own agent.
+    found = a2a(org, agent, "GetTask", {"id": task["id"]})["result"]
+    assert found["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert "error" in a2a(org, f"{agent}@1", "ListTasks", {})
+
+    # A2A 0.3 on the same URL, and the run API's conversation is the same one.
+    org.llm.turns = [[types.Part(text="Still here.")]]
+    old = a2a(
+        org,
+        f"{agent}@1",
+        "message/send",
+        {
+            "message": {
+                "kind": "message",
+                "messageId": "m2",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "Again"}],
+                "contextId": context,
+            }
+        },
+    )
+    assert old["result"]["status"]["state"] == "completed"
+    session = org.outsider.get(
+        f"{RUNTIME}/apps/{agent}/users/A2A_USER_{context}/sessions/{context}"
+    ).json()
+    said = [
+        part["text"]
+        for event in session["events"]
+        for part in event["content"]["parts"]
+        if "text" in part
+    ]
+    assert said == ["Hi", "Hello over A2A.", "Again", "Still here."]
+
+    missing = org.outsider.get(f"{RUNTIME}/a2a/ca_nobody/.well-known/agent-card.json")
+    assert missing.status_code == 404
+
+
 def test_a_draft_is_saved_then_published_as_a_version_nothing_changes(org: Org) -> None:
     made = create(org)
     agent = made["id"]
@@ -376,7 +451,7 @@ def test_a_version_and_the_draft_become_standalone_projects(org: Org) -> None:
         )
         assert (exported["id"], exported["version"]) == (agent, 1)
         assert (
-            "forge-agent-runtime[server]>=0.1.0"
+            "forge-agent-runtime[server,a2a]>=0.1.0"
             in archive.read("shop-helper/pyproject.toml").decode()
         )
 

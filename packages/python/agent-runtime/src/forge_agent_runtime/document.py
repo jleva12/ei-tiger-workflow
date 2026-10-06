@@ -68,7 +68,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "include_contents": "default",
     },
     "saved_agent": {"agent": ""},
-    "adk_workflow": {"workflow": ""},
+    "adk_workflow": {"workflow": "", "version": None},
     "memory": {"mode": "on_demand"},
     "knowledge_base": {"knowledge_bases": [], "description": "", "max_results": 5},
     "http_tool": {

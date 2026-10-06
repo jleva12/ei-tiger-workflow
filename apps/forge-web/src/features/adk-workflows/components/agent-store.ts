@@ -1,3 +1,9 @@
+import type { VersionChoice } from "@/features/builder/components/version-field"
+import type {
+  KnowledgeBaseLookup,
+  McpServerLookup,
+} from "@/features/agents/components/chat-agent-store"
+import type { ChatAgentLookup } from "@/features/adk-workflows/lib/validate"
 import * as React from "react"
 import type { StoreApi } from "zustand"
 
@@ -32,10 +38,23 @@ export type AgentEdgeView = FlowEdge
 
 /** Names for the IDs nodes hold, to show them by name. */
 export type AgentLookups = {
-  /** The organization's agents, by ID. */
+  /** The organization's agents (its workflows), by ID. */
   agents: Record<string, string>
+  /** Where each workflow is between draft and published, for its version picker. */
+  workflowVersions: Record<string, VersionChoice>
   /** The models LLM agents may run on (`provider/model`), and the default as "". */
   models: Record<string, string>
+  /** The organization's agents from the Agents page, by ID: what an LLM node may be or call. */
+  chatAgents: Record<string, ChatAgentChoice>
+  /** The organization's MCP servers and knowledge bases, for LLM agents' tools. */
+  mcpServers: Record<string, McpServerLookup>
+  knowledgeBases: Record<string, KnowledgeBaseLookup>
+}
+
+/** An agent from the Agents page, as an LLM node picks it. */
+export type ChatAgentChoice = ChatAgentLookup & {
+  /** The version its draft will be published as; null without a draft. */
+  draftVersion: number | null
 }
 
 export type AgentBuilderState = BuilderState<
@@ -46,7 +65,12 @@ export type AgentBuilderState = BuilderState<
   AgentLookups
 >
 
-type AgentBuilderInit = { doc: AgentDocument; context: AgentValidationContext }
+type AgentBuilderInit = {
+  doc: AgentDocument
+  context: AgentValidationContext
+  /** A published version (or a workflow the person can't change): shown, never changed. */
+  readOnly?: boolean
+}
 
 export function AgentBuilderProvider({
   initial,

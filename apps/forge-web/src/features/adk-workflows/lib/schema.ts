@@ -1,14 +1,17 @@
+import { CONFIGS as CHAT_CONFIGS } from "@/features/agents/lib/schema"
 import { THINKING_LEVELS } from "@/features/steps/lib/model"
 import { CONFIGS as STEP_CONFIGS } from "@/features/steps/lib/schema"
 import { AGENT_FORMAT } from "./document"
 import {
   AGENT_KINDS,
   FORGE_KINDS,
+  LLM_TOOL_KINDS,
   SUB_AGENT_ID,
   SUB_AGENT_KINDS,
   type AgentKind,
   type SubAgentKind,
 } from "./model"
+import { TOOL_ID, TOOL_KINDS } from "./tools"
 
 /*
  * The agent format as a JSON Schema (draft 2020-12): what the admin API
@@ -68,6 +71,12 @@ const LLM_SETTINGS = {
     description: "Null: the model's limit.",
   },
   sub_agents: subAgents("The agents it may hand off to."),
+  tools: {
+    type: "array",
+    items: { $ref: "#/$defs/tool" },
+    description:
+      "What it can call: the Agents builder's tools (an MCP server, a knowledge base, an HTTP endpoint, an OpenAPI spec, an agent, a workflow), each with that builder's settings.",
+  },
 }
 
 const TEAM = {
@@ -97,6 +106,36 @@ const CONFIGS: Record<AgentKind, Record<string, unknown>> = {
       description:
         "single_turn: it answers once. task: it may ask back until its task is done.",
     },
+    source: {
+      ...oneOf("inline", "agent"),
+      description:
+        "inline: set up here, with these settings. agent: an agent from the Agents page, used whole (its own instruction, model and tools); the settings above other than output_schema don't apply.",
+    },
+    agent: {
+      ...text,
+      description:
+        "The agent from the Agents page (ca_…), when source is agent.",
+    },
+    version: {
+      oneOf: [
+        { type: "integer", minimum: 1 },
+        { const: "draft" },
+        { type: "null" },
+      ],
+      description:
+        "Which of its versions runs: a published one, its draft, or null for its latest published (as each run starts).",
+    },
+    message: {
+      ...text,
+      description:
+        "What it's sent: a template, where {{ }} puts in the run's data; empty sends what the node is handed.",
+    },
+    inputs: {
+      type: "object",
+      additionalProperties: text,
+      description:
+        "The fields of its input schema (state_schema), each a JSONata expression over the run's data.",
+    },
   },
   sequential: TEAM,
   parallel: TEAM,
@@ -106,6 +145,15 @@ const CONFIGS: Record<AgentKind, Record<string, unknown>> = {
       ...text,
       description:
         "Another of the organization's agents, by ID: run here whole.",
+    },
+    version: {
+      oneOf: [
+        { type: "integer", minimum: 1 },
+        { const: "draft" },
+        { type: "null" },
+      ],
+      description:
+        "Which of its versions runs: a published one, its draft, or null for its latest published (as each run starts).",
     },
   },
   // Forge's workflow steps: as a forge.workflow/v1 workflow's.
@@ -157,6 +205,12 @@ export const AGENT_JSON_SCHEMA = {
     name: text,
     description: text,
     organization_id: text,
+    version: {
+      type: "integer",
+      minimum: 1,
+      description:
+        "Which published version this is; a draft has none (an export of one carries it).",
+    },
     nodes: { type: "array", items: { $ref: "#/$defs/node" } },
     edges: { type: "array", items: { $ref: "#/$defs/edge" } },
     layout: {
@@ -224,6 +278,31 @@ export const AGENT_JSON_SCHEMA = {
         },
       })),
     },
+    tool: {
+      type: "object",
+      required: ["id", "kind", "name", "config"],
+      additionalProperties: false,
+      properties: {
+        id: {
+          type: "string",
+          pattern: TOOL_ID.source,
+          description: "Made by the builder, unique among its agent's tools.",
+        },
+        kind: { enum: LLM_TOOL_KINDS },
+        name: {
+          ...text,
+          description:
+            "What it's called: an HTTP tool's or knowledge base's name for the model, as a Python identifier.",
+        },
+        config: { type: "object" },
+      },
+      allOf: LLM_TOOL_KINDS.map((kind) => ({
+        if: { properties: { kind: { const: kind } } },
+        then: {
+          properties: { config: { $ref: `#/$defs/tool_config_${kind}` } },
+        },
+      })),
+    },
     edge: {
       type: "object",
       required: ["id", "source", "source_output", "target"],
@@ -242,6 +321,12 @@ export const AGENT_JSON_SCHEMA = {
       kinds.map((kind) => [
         `config_${kind}`,
         settings(CONFIGS[kind], AGENT_KINDS[kind].summary),
+      ])
+    ),
+    ...Object.fromEntries(
+      LLM_TOOL_KINDS.map((kind) => [
+        `tool_config_${kind}`,
+        settings(CHAT_CONFIGS[kind], `A tool: ${TOOL_KINDS[kind].summary}`),
       ])
     ),
     ...Object.fromEntries(

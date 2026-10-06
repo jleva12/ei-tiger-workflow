@@ -336,7 +336,7 @@ def test_a_cycle_adk_refuses_is_refused_as_the_agents() -> None:
 
 
 def saved_node(agent_id: str, name: str = "Check the number") -> dict[str, Any]:
-    return node("check", "saved", name, {"agent": agent_id})
+    return node("check", "saved", name, {"agent": agent_id, "version": None})
 
 
 # Adds one: run inside another agent.

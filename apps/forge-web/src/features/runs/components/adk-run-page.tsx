@@ -31,7 +31,10 @@ import {
   WaitingNotice,
 } from "@/components/forge/task-page"
 import { CopyButton, JsonView } from "@/features/json/components/json-view"
-import { ApprovalPanel, HumanInputPanel } from "@/features/runs/components/pause-panels"
+import {
+  ApprovalPanel,
+  HumanInputPanel,
+} from "@/features/runs/components/pause-panels"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -72,6 +75,7 @@ import {
   stepNameOf,
   stepStatusOf,
   stepTiming,
+  triggerLabel,
   useAbandonAdkRun,
   useAdkRun,
   useAdkRunSteps,
@@ -79,11 +83,14 @@ import {
   useDecideAdkRun,
   useResubmitAdkRun,
   useRetryAdkRun,
+  versionLabel,
   type AdkRunDetail,
   type AdkRunPause,
   type AdkRunStep,
   type AdkRunTab,
+  type AdkToolCall,
 } from "@/features/runs/lib/runs"
+import type { ChipTone } from "@/components/forge/variants"
 import { formatDateTime, formatDuration, formatRelative } from "@/lib/format"
 import { WORKSPACE_VIEWS } from "@/features/organizations/lib/organization-workspace"
 import { usePageContext } from "@/features/assistant/lib/page-context"
@@ -173,14 +180,21 @@ function StatusNotice({
 }) {
   if (run.status === "paused" && run.pause)
     return (
-      <AdkPausePanel organizationId={organizationId} runId={run.id} pause={run.pause} />
+      <AdkPausePanel
+        organizationId={organizationId}
+        runId={run.id}
+        pause={run.pause}
+      />
     )
   if (run.status === "waiting" && run.waiting_until) {
     return (
-      <WaitingNotice title={`Carries on ${formatRelative(run.waiting_until)}`} state="Waiting">
-        {run.waiting_reason ? `${sentence(run.waiting_reason)}. ` : ""}It carries on by
-        itself at {formatDateTime(run.waiting_until)}. No worker is busy with it
-        meanwhile.
+      <WaitingNotice
+        title={`Carries on ${formatRelative(run.waiting_until)}`}
+        state="Waiting"
+      >
+        {run.waiting_reason ? `${sentence(run.waiting_reason)}. ` : ""}It
+        carries on by itself at {formatDateTime(run.waiting_until)}. No worker
+        is busy with it meanwhile.
       </WaitingNotice>
     )
   }
@@ -188,7 +202,11 @@ function StatusNotice({
   if (error && isLiveRun(run)) {
     const category = failureCategory(error.category)
     return (
-      <WaitingNotice icon="refresh" title="Running again after a hiccup" state={category.label}>
+      <WaitingNotice
+        icon="refresh"
+        title="Running again after a hiccup"
+        state={category.label}
+      >
         The last one: {sentence(error.message)}. {category.description}
       </WaitingNotice>
     )
@@ -204,13 +222,18 @@ function StatusNotice({
     const category = failureCategory(error.category)
     return (
       <ErrorCallout
-        title={run.status === "failed" ? "The run failed" : "The run was abandoned after failing"}
+        title={
+          run.status === "failed"
+            ? "The run failed"
+            : "The run was abandoned after failing"
+        }
         className="mb-[34px]"
       >
         <span className="flex flex-col gap-1">
           <span>{error.message}</span>
           <span>
-            <strong className="font-medium">{category.label}.</strong> {category.description}
+            <strong className="font-medium">{category.label}.</strong>{" "}
+            {category.description}
           </span>
         </span>
       </ErrorCallout>
@@ -251,12 +274,16 @@ function AdkRunOverview({
     <SubmissionLayout
       aside={
         <AsideSection title="Timing">
-          <AsideFact label="Started">{formatDateTime(run.created_at)}</AsideFact>
+          <AsideFact label="Started">
+            {formatDateTime(run.created_at)}
+          </AsideFact>
           <AsideFact label="Picked up">
             {run.started_at ? formatDateTime(run.started_at) : "Not yet"}
           </AsideFact>
           {run.finished_at && (
-            <AsideFact label="Ended">{formatDateTime(run.finished_at)}</AsideFact>
+            <AsideFact label="Ended">
+              {formatDateTime(run.finished_at)}
+            </AsideFact>
           )}
           <AsideFact label="Duration">
             {run.duration_ms === null ? "—" : formatDuration(run.duration_ms)}
@@ -268,7 +295,9 @@ function AdkRunOverview({
       <StatusNotice organizationId={organizationId} run={run} />
       <PageSection
         title="What it was given"
-        meta={<CopyButton value={json(run.input)} label="Copy input" size="xs" />}
+        meta={
+          <CopyButton value={json(run.input)} label="Copy input" size="xs" />
+        }
         description="The input its start received."
       >
         <JsonView value={run.input ?? null} className="max-h-[28rem]" />
@@ -278,7 +307,11 @@ function AdkRunOverview({
           title="What it handed on"
           meta={
             hasResult ? (
-              <CopyButton value={json(run.result)} label="Copy result" size="xs" />
+              <CopyButton
+                value={json(run.result)}
+                label="Copy result"
+                size="xs"
+              />
             ) : undefined
           }
           description="Its End's result."
@@ -298,10 +331,11 @@ function AdkRunOverview({
             <code>{run.id}</code>
           </RecordRow>
           <RecordRow label="Workflow">
-            {run.agent_name || run.agent_id} · revision {run.revision}
+            {run.agent_name || run.agent_id} · {versionLabel(run).toLowerCase()}
           </RecordRow>
           <RecordRow label="Run by">
             {run.requested_by.name || run.requested_by.id || "Unknown"}
+            {triggerLabel(run.trigger) ? ` · ${triggerLabel(run.trigger)}` : ""}
           </RecordRow>
           {run.resubmit_of && (
             <RecordRow label="Resubmitted from">
@@ -318,7 +352,9 @@ function AdkRunOverview({
           <RecordRow label="ADK session">
             <code>{run.session_id}</code>
           </RecordRow>
-          <RecordRow label="Last updated">{formatDateTime(run.updated_at)}</RecordRow>
+          <RecordRow label="Last updated">
+            {formatDateTime(run.updated_at)}
+          </RecordRow>
         </RecordList>
       </PageSection>
     </SubmissionLayout>
@@ -341,7 +377,9 @@ function StepValue({
 }) {
   return (
     <Disclosure summary={summary} defaultOpen={defaultOpen} className="mt-1">
-      <pre>{typeof value === "string" ? value : JSON.stringify(value, null, 2)}</pre>
+      <pre>
+        {typeof value === "string" ? value : JSON.stringify(value, null, 2)}
+      </pre>
     </Disclosure>
   )
 }
@@ -392,11 +430,17 @@ function Step({
             failed ? "text-destructive" : "text-muted-foreground"
           )}
         >
-          <Icon icon={failed ? "failed" : "warning"} size={14} className="mt-[0.2rem] shrink-0" />
+          <Icon
+            icon={failed ? "failed" : "warning"}
+            size={14}
+            className="mt-[0.2rem] shrink-0"
+          />
           <span>
             {failed ? error.message : `Took its Error way: ${error.message}`}
             {error.code && (
-              <code className="ml-1.5 text-xs text-muted-foreground">{error.code}</code>
+              <code className="ml-1.5 text-xs text-muted-foreground">
+                {error.code}
+              </code>
             )}
           </span>
         </p>
@@ -404,6 +448,7 @@ function Step({
       {error?.more !== undefined && error.more !== null && (
         <StepValue summary="Error details" value={error.more} />
       )}
+      {step.calls && step.calls.length > 0 && <ToolCalls calls={step.calls} />}
       {hasOutput && (
         <StepValue
           summary="Output"
@@ -416,6 +461,59 @@ function Step({
   )
 }
 
+const CALL_STATUS: Record<
+  AdkToolCall["status"],
+  { label: string; tone: ChipTone }
+> = {
+  done: { label: "Answered", tone: "success" },
+  failed: { label: "Failed", tone: "danger" },
+  waiting: { label: "Waits to be allowed", tone: "notice" },
+  running: { label: "Calling", tone: "neutral" },
+}
+
+/** The tools a step's agents called: each one's name, who called it, and what went back and forth. */
+function ToolCalls({ calls }: { calls: AdkToolCall[] }) {
+  return (
+    <div className="mt-1 flex flex-col gap-1.5">
+      <span className="text-xs font-medium text-muted-foreground">
+        {calls.length === 1 ? "1 tool call" : `${calls.length} tool calls`}
+      </span>
+      {calls.map((call) => {
+        const shown = CALL_STATUS[call.status]
+        return (
+          <div
+            key={call.id}
+            className="flex flex-col gap-1 rounded-(--radius-control) border px-2.5 py-1.5"
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <code className="min-w-0 truncate font-mono text-xs text-foreground">
+                {call.name}
+              </code>
+              {call.agent && (
+                <span className="min-w-0 truncate text-2xs text-muted-foreground">
+                  by {call.agent}
+                </span>
+              )}
+              <Chip tone={shown.tone} className="ml-auto shrink-0">
+                {shown.label}
+              </Chip>
+            </div>
+            <Disclosure summary="What it was sent, and answered">
+              <pre>
+                {JSON.stringify(
+                  { sent: call.args, answered: call.response },
+                  null,
+                  2
+                )}
+              </pre>
+            </Disclosure>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 /**
  * The Steps tab: every node of the workflow, in order, as the run went
  * through it (done, failed, waiting or not reached), with what each handed
@@ -423,7 +521,13 @@ function Step({
  * them, as on Overview. The nodes' kinds come from the workflow the run
  * started with (else as it's saved now, else as the run says).
  */
-function AdkRunSteps({ organizationId, run }: { organizationId: string; run: AdkRunDetail }) {
+function AdkRunSteps({
+  organizationId,
+  run,
+}: {
+  organizationId: string
+  run: AdkRunDetail
+}) {
   const steps = useAdkRunSteps(organizationId, run)
   const snapshot = runDocumentOf(run.document)
   const saved = organizationAgents
@@ -438,7 +542,11 @@ function AdkRunSteps({ organizationId, run }: { organizationId: string; run: Adk
       <ErrorCallout
         title={failureTitle(steps.error, "Couldn't load the run's steps")}
         action={
-          <Button variant="outline" size="sm" onClick={() => void steps.refetch()}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void steps.refetch()}
+          >
             Retry
           </Button>
         }
@@ -464,14 +572,19 @@ function AdkRunSteps({ organizationId, run }: { organizationId: string; run: Adk
     body = (
       <>
         <p className="mb-2 max-w-[75ch] text-[0.8125rem] text-muted-foreground">
-          Every node of the workflow, in order, and how far the run got with each:
-          what it handed on (in a loop, its last item&apos;s), or why it failed. What
-          runs inside a node, a team&apos;s sub-agents or a saved workflow&apos;s steps,
-          counts as that node.
+          Every node of the workflow, in order, and how far the run got with
+          each: what it handed on (in a loop, its last item&apos;s), or why it
+          failed. What runs inside a node, a team&apos;s sub-agents or a saved
+          workflow&apos;s steps, counts as that node.
         </p>
         <ExecutionPlan aria-label="Steps" className="max-w-[75ch]">
           {list.map((step, index) => (
-            <Step key={`${step.id}-${index}`} step={step} index={index} doc={doc} />
+            <Step
+              key={`${step.id}-${index}`}
+              step={step}
+              index={index}
+              doc={doc}
+            />
           ))}
         </ExecutionPlan>
       </>
@@ -481,7 +594,11 @@ function AdkRunSteps({ organizationId, run }: { organizationId: string; run: Adk
   return (
     <div className={BODY}>
       {run.status === "paused" && run.pause && (
-        <AdkPausePanel organizationId={organizationId} runId={run.id} pause={run.pause} />
+        <AdkPausePanel
+          organizationId={organizationId}
+          runId={run.id}
+          pause={run.pause}
+        />
       )}
       {body}
     </div>
@@ -502,7 +619,9 @@ function AdkRunActivity({ run }: { run: AdkRunDetail }) {
   return (
     <div className={BODY}>
       {events.length === 0 ? (
-        <PanelEmpty illustration="activity">Nothing is recorded yet.</PanelEmpty>
+        <PanelEmpty illustration="activity">
+          Nothing is recorded yet.
+        </PanelEmpty>
       ) : (
         <>
           <p className="mb-6 text-[0.8125rem] text-muted-foreground">
@@ -545,7 +664,9 @@ function AbandonDialog({
   runId: string
 }) {
   // The dialog shows the failure itself.
-  const abandon = useAbandonAdkRun(organizationId, runId, { meta: { silent: true } })
+  const abandon = useAbandonAdkRun(organizationId, runId, {
+    meta: { silent: true },
+  })
   return (
     <Dialog
       open={open}
@@ -559,21 +680,29 @@ function AbandonDialog({
         <DialogHeader>
           <DialogTitle>Abandon this run?</DialogTitle>
           <DialogDescription>
-            It stops for good: it never carries on, and nobody can retry it. You can
-            still resubmit it, which runs it again as a new run.
+            It stops for good: it never carries on, and nobody can retry it. You
+            can still resubmit it, which runs it again as a new run.
           </DialogDescription>
         </DialogHeader>
         {abandon.error && (
-          <ErrorCallout title="Couldn't abandon the run">{abandon.error.message}</ErrorCallout>
+          <ErrorCallout title="Couldn't abandon the run">
+            {abandon.error.message}
+          </ErrorCallout>
         )}
         <DialogFooter>
-          <DialogClose render={<Button variant="outline" disabled={abandon.isPending} />}>
+          <DialogClose
+            render={<Button variant="outline" disabled={abandon.isPending} />}
+          >
             Keep it
           </DialogClose>
           <Button
             variant="destructive"
             disabled={abandon.isPending}
-            onClick={() => abandon.mutate(undefined, { onSuccess: () => onOpenChange(false) })}
+            onClick={() =>
+              abandon.mutate(undefined, {
+                onSuccess: () => onOpenChange(false),
+              })
+            }
           >
             {abandon.isPending && <Spinner data-icon="inline-start" />}
             Abandon run
@@ -619,7 +748,11 @@ function RunActions({
                 variant="outline"
                 size="sm"
                 disabled={busy}
-                onClick={() => resubmit.mutate(undefined, { onSuccess: (next) => onOpenRun(next.id) })}
+                onClick={() =>
+                  resubmit.mutate(undefined, {
+                    onSuccess: (next) => onOpenRun(next.id),
+                  })
+                }
               />
             }
           >
@@ -638,7 +771,13 @@ function RunActions({
       {canManage && actions.retry && (
         <Tooltip>
           <TooltipTrigger
-            render={<Button size="sm" disabled={busy} onClick={() => retry.mutate()} />}
+            render={
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => retry.mutate()}
+              />
+            }
           >
             {retry.isPending ? (
               <Spinner data-icon="inline-start" />
@@ -653,7 +792,12 @@ function RunActions({
         </Tooltip>
       )}
       {canManage && actions.abandon && (
-        <Button variant="destructive" size="sm" disabled={busy} onClick={() => setAbandoning(true)}>
+        <Button
+          variant="destructive"
+          size="sm"
+          disabled={busy}
+          onClick={() => setAbandoning(true)}
+        >
           <Icon icon="stop" data-icon="inline-start" />
           Abandon
         </Button>
@@ -736,7 +880,9 @@ export function AdkRunPage({
       {
         kind: "adk_run",
         id: runId,
-        label: run ? `${reference}: ${run.agent_name || run.agent_id}` : reference,
+        label: run
+          ? `${reference}: ${run.agent_name || run.agent_id}`
+          : reference,
         detail: shown?.label,
       },
     ],
@@ -763,7 +909,11 @@ export function AdkRunPage({
         <ErrorCallout
           title={failureTitle(detail.error, "Couldn't load the workflow run")}
           action={
-            <Button variant="outline" size="sm" onClick={() => void detail.refetch()}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void detail.refetch()}
+            >
               Retry
             </Button>
           }
@@ -787,7 +937,11 @@ export function AdkRunPage({
     <FullBleed>
       <TaskPage>
         <TaskPageHeader>
-          <TaskPageEyebrow onBack={onBack} backLabel="All workflow runs" reference={reference} />
+          <TaskPageEyebrow
+            onBack={onBack}
+            backLabel="All workflow runs"
+            reference={reference}
+          />
           <TaskTitleRow
             title={run.agent_name || run.agent_id}
             meta={
@@ -795,11 +949,15 @@ export function AdkRunPage({
                 <StatusBadge status={shown.status} size="lg">
                   {shown.label}
                 </StatusBadge>
-                <TaskMeta icon={section.icon}>Revision {run.revision}</TaskMeta>
+                <TaskMeta icon={section.icon}>{versionLabel(run)}</TaskMeta>
                 <TaskMeta icon="refresh">
-                  {run.attempt === 1 ? "First attempt" : `Attempt ${run.attempt}`}
+                  {run.attempt === 1
+                    ? "First attempt"
+                    : `Attempt ${run.attempt}`}
                 </TaskMeta>
-                <TaskMeta icon="clock">Updated {formatRelative(run.updated_at)}</TaskMeta>
+                <TaskMeta icon="clock">
+                  Updated {formatRelative(run.updated_at)}
+                </TaskMeta>
               </>
             }
             actions={
@@ -824,7 +982,11 @@ export function AdkRunPage({
               <TaskTabsTrigger value="overview" icon="task">
                 Overview
               </TaskTabsTrigger>
-              <TaskTabsTrigger value="steps" icon={LeftToRightListNumberIcon} live={live}>
+              <TaskTabsTrigger
+                value="steps"
+                icon={LeftToRightListNumberIcon}
+                live={live}
+              >
                 Steps
               </TaskTabsTrigger>
               <TaskTabsTrigger value="activity" icon="activity">
@@ -834,7 +996,11 @@ export function AdkRunPage({
             {live && <LiveLabel>Live</LiveLabel>}
           </TaskTabBar>
           <TabsContent value="overview">
-            <AdkRunOverview organizationId={organization.id} run={run} onOpenRun={onOpenRun} />
+            <AdkRunOverview
+              organizationId={organization.id}
+              run={run}
+              onOpenRun={onOpenRun}
+            />
           </TabsContent>
           <TabsContent value="steps">
             <AdkRunSteps organizationId={organization.id} run={run} />

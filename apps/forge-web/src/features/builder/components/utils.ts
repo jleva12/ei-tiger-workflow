@@ -60,7 +60,7 @@ export function withViewTransition(change: () => void, after?: () => void) {
 /** The details panel beside the canvas, for the toggle that shows and hides it. */
 export const DETAILS_PANEL_ID = "builder-details"
 
-/** A card in the step dialog: the step's settings, or the panel beside them. */
+/** A card in a settings dialog (settings-dialog.tsx): the settings, or a card beside them. */
 export const DIALOG_CARD =
   "pointer-events-auto flex min-h-0 flex-col overflow-hidden rounded-(--radius-dialog) bg-popover text-popover-foreground shadow-xl ring-1 ring-foreground/5 outline-none dark:ring-foreground/10"
 
@@ -69,27 +69,6 @@ export const SETTINGS_POPUP =
   "pointer-events-none fixed inset-3 z-50 flex justify-center gap-3 outline-none " +
   // Closing, they hold their faded end until removed rather than snap back.
   "duration-150 ease-out data-open:animate-in data-open:fade-in-0 data-open:slide-in-from-bottom-2 data-closed:animate-out data-closed:fade-out-0 data-closed:slide-out-to-bottom-1 data-closed:fill-mode-forwards"
-
-/** A settings dialog's card (settings-dialog.tsx), at its width. */
-export const SETTINGS_CARD = `${DIALOG_CARD} w-[clamp(34rem,34vw,52rem)] max-w-full shrink-0`
-
-/**
- * The panel beside a step's settings, where a setting opens a larger
- * editor (a schema's fields). One at a time; the step dialog owns it.
- */
-export type Companion = {
-  /** Where the open editor renders. */
-  slot: HTMLElement | null
-  /** Which setting's editor is open. */
-  open: string | null
-  show: (key: string) => void
-  hide: () => void
-  /** Let go of it without motion, when its setting goes away. */
-  release: (key: string) => void
-}
-
-export const CompanionContext = React.createContext<Companion | null>(null)
-export const useCompanion = () => React.useContext(CompanionContext)
 
 /** What Tidy up needs from the canvas: each step's size and where its ways in and out sit. */
 export function measureFlow(flow: {

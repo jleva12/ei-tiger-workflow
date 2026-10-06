@@ -145,6 +145,10 @@ class FakeStore:
         pass
 
 
+#: The model the fake search embeds questions with.
+MODEL = "text-embedding-3-large@1024"
+
+
 @dataclass
 class FakeSearch:
     """Answers every search with the same passages (or raises), recording
@@ -153,6 +157,7 @@ class FakeSearch:
     passages: list[Passage] = field(default_factory=list)
     error: SearchError | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
+    model_id: str = MODEL
 
     async def search(
         self,

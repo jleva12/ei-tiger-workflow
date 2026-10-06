@@ -44,6 +44,15 @@ Consistency: per-document fencing token (`run_seq`), tombstoned deletes, stale-c
 
 Jobs: `documents.ingest {tenant_id, doc_id, uri}`, `documents.delete {tenant_id, doc_id}`.
 
+**Knowledge bases.** In Forge a knowledge base is a tenant. A search names
+its tenants (`SearchQuery.tenant_ids`, never empty) and runs once over all of
+them, so an agent given "Member knowledge" and "Claims knowledge" gets one
+ranking of those two and nothing else. `retrieval.KnowledgeBaseSearch` is the
+one search the admin API (chat agents, the search route) and ADK workflows'
+agents both use: the worker builds it with `build_knowledge_search(ctx)`, and
+a service outside the worker opens the same store with
+`storage.open_storage(...)` (it follows `FORGE_VECTOR_STORE`).
+
 **Agent search.** In Forge, agents search the documents through the code graph MCP server ([apps/forge-codegraph-mcp](../../../../apps/forge-codegraph-mcp/README.md#document-search)), which ports `HybridSearchService`'s search to Go over this MongoDB, as the same read-only user as commit search, for the teams (tenants) the admin API says each caller may read, all at once. A change to the search here (`storage/mongo/pipelines.py`, `forge_embeddings/identifiers.py`, the chunk fields or the `chunks_text` / `chunks_vector` indexes) belongs there too.
 
 ## MongoDB schema
@@ -64,6 +73,7 @@ pdfplumber parser rejects as having no text),
 ```sh
 forge-async-worker docs ingest --tenant t1 docs/*
 forge-async-worker docs search --tenant t1 "refund approval limit"
+forge-async-worker docs search --tenant t1 --tenant t2 "refund approval limit"   # both, ranked as one
 forge-async-worker docs chunks path/to/file.xlsx   # preview chunking, no DB
 ```
 

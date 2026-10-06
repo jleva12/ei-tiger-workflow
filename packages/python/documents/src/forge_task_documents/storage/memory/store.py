@@ -191,7 +191,7 @@ class InMemorySearchBackend:
         f = req.filters
         out = []
         for c, _ in self._chunks.rows.values():
-            if c.tenant_id != req.tenant_id:
+            if c.tenant_id not in req.tenant_ids:
                 continue
             if f.doc_ids and c.doc_id not in f.doc_ids:
                 continue
@@ -223,7 +223,12 @@ class InMemorySearchBackend:
         return ranked[: req.per_leg_limit]
 
     def _knn(self, docs: list[Chunk], req: HybridSearchRequest) -> list[tuple[Chunk, float]]:
-        scored = [(d, cosine(req.vector, d.embedding)) for d in docs if d.embedding]
+        scored = [
+            (d, cosine(req.vector, d.embedding))
+            for d in docs
+            # Only vectors of the query's model compare with it.
+            if d.embedding and (not req.embedding_model or d.embedding_model == req.embedding_model)
+        ]
         scored.sort(key=lambda x: -x[1])
         return scored[: req.per_leg_limit]
 

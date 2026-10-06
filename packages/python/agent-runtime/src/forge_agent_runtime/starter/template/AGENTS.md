@@ -114,6 +114,13 @@ docker build -t @@SLUG@@ .
 - The run API is ADK's, under `/api`: `POST /api/run_sse` (Server-Sent Events) and
   `/api/apps/{agent}/users/{user}/sessions`. `GET /api/agent` describes the agent;
   `GET /healthz` is the health check.
+@@if a2a@@
+- `.with_a2a()` serves the agent over Google's A2A protocol too: JSON-RPC at `/a2a` (A2A 1.0
+  and 0.3 on the same URL) and the agent card at `/.well-known/agent-card.json`, made from
+  the agent's name, description and the agents it hands off to. A2A conversations
+  (`contextId`) are the run API's sessions; its tasks are kept with them. The API's keys and
+  `with_auth` guard `/a2a` too; the card stays open.
+@@end@@
 - Add your own endpoints with `.with_routes(router)` (a FastAPI `APIRouter`), startup and
   shutdown with `.with_lifespan(...)`, and auth with `.with_auth(Depends(...))`, which
   guards the run API.

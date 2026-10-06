@@ -1,7 +1,9 @@
 # forge-agent-runtime
 
 Runs Forge chat agents on Google ADK. Build an agent in Forge's Agents
-builder, export its JSON (`forge.chat_agent/v1`), and run it:
+builder, export its JSON (`forge.chat_agent/v1`), and run it over ADK's run
+API (for chat UIs) and [Google's A2A protocol](https://a2a-protocol.org) (for
+other agents):
 
 - **on its own**, with `forge-agent serve agent.json`;
 - **as a project of its own**: a server and a chat UI, made by the builder's
@@ -13,7 +15,8 @@ Forge's hosted runtime is this package too: it reads agents from its database
 instead of files.
 
 ```sh
-pip install 'forge-agent-runtime[server]'
+pip install 'forge-agent-runtime[server]'        # ADK's run API
+pip install 'forge-agent-runtime[server,a2a]'    # and A2A
 ```
 
 ## Serve an agent
@@ -48,6 +51,7 @@ curl -N -X POST localhost:8000/run_sse -H 'content-type: application/json' -d '{
 
 `forge-agent serve ./agents/` serves every agent in a folder. When it holds
 several versions of an agent, `ca_x` runs the newest, and `ca_x@3` pins one.
+`--a2a` serves them over A2A too (below).
 
 Settings are flags or `FORGE_AGENT_*` variables:
 
@@ -61,6 +65,46 @@ Settings are flags or `FORGE_AGENT_*` variables:
 | `FORGE_AGENT_API_KEYS` | Keys the API asks for (`["k1","k2"]`): callers send `Authorization: Bearer <key>` or `X-API-Key` |
 | `FORGE_AGENT_ALLOW_PRIVATE`, `FORGE_AGENT_ALLOWED_HOSTS` | What HTTP tools may reach. Private networks are refused by default. |
 | `FORGE_AGENT_API_PREFIX` | Mount the run API under a path (`--prefix`; none by default, `/api` in `AgentServer`) |
+| `FORGE_AGENT_A2A` | `true` serves Google's A2A protocol too, at `/a2a` (`--a2a`; the `a2a` extra) |
+| `FORGE_AGENT_A2A_TASKS` | Where A2A tasks are kept: `memory`, or a database URL; the conversations' database by default |
+| `FORGE_AGENT_PUBLIC_URL` | The address A2A cards give callers (`https://agent.example.com`); the one each request came to by default |
+
+## Over A2A
+
+With the `a2a` extra, every agent is an A2A agent too
+([`forge_agent_runtime.a2a`](src/forge_agent_runtime/a2a.py), on `a2a-sdk` 1.x):
+
+| Route | |
+|---|---|
+| `GET /a2a/{app}/.well-known/agent-card.json` | Its agent card: name, description, version, skills (it, and the agents it hands off to), where to call it, how to sign in |
+| `POST /a2a/{app}` | JSON-RPC: A2A 1.0 (`SendMessage`, `SendStreamingMessage`, `GetTask`, `ListTasks`, `CancelTask`, `SubscribeToTask`) and 0.3 (`message/send`, `message/stream`, `tasks/get`, `tasks/cancel`, `tasks/resubscribe`) on the same URL |
+
+`{app}` is the run API's `appName` (`ca_x`, `ca_x@3`, `ca_x@draft`). A server of
+one agent (`AgentServer`) serves it at `/a2a` itself, and its card at
+`/.well-known/agent-card.json`, where A2A clients look first.
+
+```sh
+curl localhost:8000/.well-known/agent-card.json
+curl -X POST localhost:8000/a2a -H 'content-type: application/json' -H 'A2A-Version: 1.0' -d '{
+  "jsonrpc": "2.0", "id": 1, "method": "SendMessage",
+  "params": {"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "Where is my order?"}],
+             "metadata": {"state": {"customer_tier": "pro"}}}}
+}'
+```
+
+- A turn runs as a chat turn does: the same agent, its input checked, `{{ request.* }}`
+  filled in, usage recorded. The state the agent's input schema declares goes in the
+  message's `metadata.state` (as a chat sends `stateDelta`); anything else is rejected.
+- An A2A conversation (`contextId`, at most 36 characters) is the agent's ADK session of
+  that ID, so the run API sees it too. Its user is the caller when the server knows who's
+  calling (an API key, a sign-in setting `request.state.user_id`), and `A2A_USER_<contextId>`
+  otherwise, as ADK's own A2A server names them.
+- Each message is a task: completed with the reply as its artifact, failed saying why, or
+  `input-required` on a tool that asks for confirmation. Tasks are kept per agent and
+  caller (`task_store`: memory or a database); listing them needs a caller the server
+  knows, since on an open server it would show everyone's. Push notifications aren't
+  offered.
+- The API's keys and `with_auth` guard `/a2a` too; the card stays open, and says how to sign in.
 
 ## Start a project
 
@@ -93,6 +137,7 @@ support-assistant/
 | Long-term memory | `--memory memory\|atlas` | In memory, or MongoDB Atlas searched by meaning |
 | Replies | `--no-streaming` | Whole, rather than streamed as the model writes them |
 | Interface | `--api-only` | The API alone, without the chat UI |
+| A2A | `--no-a2a` | Without Google's A2A protocol (on by default: `/a2a` and its card) |
 | Access | `--api-key`, `--cors-origin URL` | A key the API asks for (API only); pages elsewhere that may call it |
 | Owners | `--code-owner @org/team` | `.github/CODEOWNERS` |
 
@@ -126,6 +171,7 @@ server = (
     .with_memory(env("MONGODB_URI"))         # MongoDB Atlas
     .with_streaming(False)                   # replies arrive whole
     .with_web(HERE / "web" / "dist")         # the built UI, served at /
+    .with_a2a()                              # Google's A2A too: /a2a and its card
     # .with_auth(Depends(verify_token))      # guards the run API only
     # .with_routes(my_router)
 )
@@ -147,6 +193,7 @@ if __name__ == "__main__":
 | `with_auth(*dependencies)`, `with_api_keys(*keys)` | FastAPI dependencies on the run API; keys it asks for (for servers calling it, not pages) |
 | `with_routes`, `with_lifespan`, `with_middleware`, `with_cors` | The rest of your app |
 | `with_web(dir)` | A built single-page app, served at `/` (every unknown path gets its `index.html`) |
+| `with_a2a(tasks=…, public_url=…)` | Google's A2A protocol too: `/a2a`, its card at `/.well-known/agent-card.json` (the `a2a` extra) |
 
 It serves `GET /api/agent` (the agent's ID, name, version and input schema,
 which the generated UI reads), the run API under `/api`, and `GET /healthz`.
@@ -188,12 +235,31 @@ executor = AgentExecutor(
 )
 app = FastAPI()
 app.include_router(create_router(executor, dependencies=[Depends(your_auth)]), prefix="/agents")
+# And over A2A: POST /agents/a2a/{app}, its card at /agents/a2a/{app}/.well-known/agent-card.json
+from forge_agent_runtime.a2a import create_a2a_router, task_store
+app.include_router(create_a2a_router(executor, path="/a2a", tasks=task_store("sqlite:///tasks.db")), prefix="/agents")
 ```
 
 You can also run turns directly, with `async for event in executor.run(RunRequest(...))`,
 or use `build_app(document, models=…)` to get the ADK `App` for your own
 `Runner`. An `AgentSource` is anything with
 `async get(AgentRef) -> ResolvedAgent`, so agents can come from your own store.
+
+To decide per agent who may call it, pass `authorize=` to both routers: an
+`AuthorizeCall`, `async (request, agent, *, action, user_id) -> None`, called
+once the agent is found and before anything is built or run, for each
+action (`agent`, `sessions`, `run`, `card`, `a2a`; `user_id` is ADK's
+`userId` when the call reads or adds to someone's conversations). It refuses
+by raising `HTTPException`. The hosted runtime uses it to allow only callers
+with `agents:run` in the agent's organization, into their own conversations.
+
+Other kinds of agent can share the A2A router's URLs, by their names'
+prefix: pass `services=[A2aService(prefix, find, card, executor)]` (the
+hosted runtime serves its workflows, `ag_…`, so). `AgentRef` (`ca_x`,
+`ca_x@3`, `ca_x@draft`; `forge_agent_runtime.refs`) names workflows the same
+way, and a workflow tool's `version` picks which of its versions it calls.
+A saved agent from another organization never builds: it would bring that
+organization's MCP servers and knowledge bases with it.
 
 ## What runs where
 

@@ -13,6 +13,7 @@ and answer its questions on the run's page (``runs.AdkRun``).
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -22,6 +23,7 @@ from pydantic_settings import SettingsError
 
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
 from forge_task_adk_workflows.graph import RunServices
+from forge_task_adk_workflows.graph.agent_tools import AgentServices, DocumentsSearch, WorkerMcpServers
 from forge_task_adk_workflows.models import NOT_SET_UP, NoModels, load_models
 from forge_task_adk_workflows.runs import APP_NAME, AdkRun, RunPayload
 from forge_tasks.control import LocalJobControl, current_control
@@ -116,6 +118,11 @@ class AdkWorkflowsTask:
     async def close(self) -> None:
         if self.services.http is not None:
             await self.services.http.aclose()
+        agents = self.services.agents
+        store = getattr(getattr(agents, "runtime", None), "mcp_servers", None)
+        engine = getattr(getattr(store, "store", None), "engine", None)
+        if engine is not None:
+            await engine.dispose()
         close = getattr(self.sessions, "close", None)
         if close is not None:
             await close()
@@ -134,7 +141,68 @@ def build_services(settings: AdkWorkflowsSettings) -> RunServices:
         log.error("adk_workflows: %s", unavailable)
     if models is None:
         models = NoModels(reason=unavailable or NOT_SET_UP)
-    return RunServices.of(settings, http=httpx.AsyncClient(timeout=30, follow_redirects=False), model=models)
+    http = httpx.AsyncClient(timeout=30, follow_redirects=False)
+    return RunServices.of(settings, http=http, model=models, agents=build_agent_services(settings, models, http))
+
+
+def build_agent_services(
+    settings: AdkWorkflowsSettings, models: Any, http: httpx.AsyncClient, *, search: Any = None
+) -> AgentServices:
+    """
+    What LLM agents' tools use on this worker: its models, ``${NAME}`` from
+    its environment, where HTTP tools may go (its HTTP steps' rules), the
+    organization's MCP servers in the admin MySQL (with the admin's secrets
+    key), and knowledge base search when given.
+    """
+    import os
+
+    from forge_agent_runtime import RuntimeServices
+
+    servers: Any = None
+    store: Any = None
+    unavailable = None
+    if settings.session_database_url is None:
+        unavailable = "the organization's MCP servers can't be used: the worker has no admin database"
+    elif settings.secrets_key is None:
+        unavailable = (
+            "the organization's MCP servers can't be used on this worker: set "
+            "HYBRID_ADK_WORKFLOWS__SECRETS_KEY to the admin API's FORGE_ADMIN_SECRETS_KEY"
+        )
+    else:
+        from forge_mcp_servers import McpServers, SecretBox, SqlServerStore
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        try:
+            servers = McpServers(SecretBox(settings.secrets_key.get_secret_value()), timeout=settings.mcp_timeout)
+            store = SqlServerStore(create_async_engine(settings.session_database_url.get_secret_value()))
+        except ValueError as error:
+            servers, unavailable = None, f"the organization's MCP servers can't be used on this worker: {error}"
+    if unavailable:
+        log.warning("adk_workflows: %s", unavailable)
+    runtime = RuntimeServices(
+        environment=os.environ,
+        allow_private=settings.http_allow_private,
+        allowed_hosts=tuple(settings.http_allowed_hosts),
+        max_response_bytes=settings.http_max_response_bytes,
+        model_timeout=settings.model_timeout,
+        mcp_servers=WorkerMcpServers(servers, store, unavailable=unavailable),
+    )
+    return AgentServices(
+        models=models, runtime=runtime, http=http, search=search, workflow_wait=settings.workflow_tool_wait
+    )
+
+
+def knowledge_search(ctx: TaskContext) -> Any:
+    """:return: The documents task's search, when this worker has it set up; None otherwise."""
+    try:
+        from forge_task_documents.task import build_knowledge_search
+    except ImportError:
+        return None
+    try:
+        return DocumentsSearch(build_knowledge_search(ctx))
+    except Exception as error:  # Its settings, Mongo's URI, an embedding model it can't make.
+        log.warning("adk_workflows: knowledge bases can't be searched on this worker: %s", error)
+        return None
 
 
 def build_sessions(settings: AdkWorkflowsSettings) -> tuple[BaseSessionService | None, str | None]:
@@ -161,6 +229,8 @@ class AdkWorkflowsTaskFactory:
     def build(self, ctx: TaskContext) -> AdkWorkflowsTask:
         settings: AdkWorkflowsSettings = ctx.options or AdkWorkflowsSettings()
         services: RunServices = ctx.extras.get(SERVICES) or build_services(settings)
+        if services.agents is not None and services.agents.search is None and SERVICES not in ctx.extras:
+            services = services.but(agents=replace(services.agents, search=knowledge_search(ctx)))
         if isinstance(services.model, NoModels):
             log.warning("adk_workflows: %s", services.model.reason)
         unavailable = None

@@ -10,7 +10,8 @@
 # specific screens first: their prompts come first, and at most six are
 # suggested.
 #
-# Toolsets (assistant/forge.py registers them): access and administration. Each
+# Toolsets (assistant/forge.py registers them): access, administration and
+# knowledge. Each
 # is held by a specialist agent of the same name, which the supervisor is
 # offered on the screens that name its toolset. `- name` with `tools` gives the specialist only
 # those tools, by the names the model sees. Instructions go to the supervisor
@@ -25,6 +26,15 @@ everywhere:
   toolsets:
     - name: access
       tools: [get_my_access, list_my_memberships, list_available_roles]
+    # Asking what the organization's documents say works from any page; an
+    # organization's ID comes from the page or list_my_memberships.
+    - name: knowledge
+      tools:
+        - list_knowledge_bases
+        - get_knowledge_base
+        - list_knowledge_documents
+        - get_knowledge_document
+        - search_knowledge_bases
   prompts:
     - title: Why was that refused?
       label: and who can give me access
@@ -58,6 +68,51 @@ screens:
         label: this organization's members?
         prompt: Who can give or remove roles in this organization?
 
+  # -- Knowledge bases ---------------------------------------------------------
+
+  - name: knowledge-base
+    title: Knowledge base
+    when:
+      route: /organizations/$organizationId_/knowledge/$knowledgeBaseId
+    toolsets: [knowledge]
+    instructions: |
+      The person is on one of their organization's knowledge bases: the
+      organization is the page's organizationId parameter and the knowledge
+      base its knowledgeBaseId (also the knowledge_base on the page). A
+      document search parameter is the document open in its viewer, by its
+      ID. "This knowledge base" is this one: search it, unless they name
+      others.
+    prompts:
+      - title: Ask this knowledge base
+        label: a question
+        prompt: I have a question about what this knowledge base's documents say. Ask me what it is, then answer from them with citations.
+      - title: What's in it
+        label: and what is it for?
+        prompt: Summarize what this knowledge base holds and how many of its documents are searchable.
+      - title: Which documents failed
+        label: and why?
+        prompt: Which of this knowledge base's documents failed to ingest, and why? Offer to retry them.
+      - title: Is it up to date?
+        label: stale documents
+        prompt: Are any of this knowledge base's documents stale? If so, explain what that means and offer to re-index them.
+
+  - name: organization-knowledge
+    title: Knowledge bases
+    when:
+      route: /organizations/$organizationId
+      search: {view: knowledge}
+    toolsets: [knowledge]
+    instructions: |
+      The person is looking at their organization's knowledge bases (the
+      page's organizationId parameter is the organization).
+    prompts:
+      - title: Ask our documents
+        label: a question
+        prompt: I have a question about what our knowledge bases' documents say. Ask me what it is, then answer from them with citations.
+      - title: Our knowledge bases
+        label: at a glance
+        prompt: List this organization's knowledge bases, what each holds and how many of their documents are searchable.
+
   # -- The rest of the organization's workspace ---------------------------------
 
   - name: organization
@@ -68,10 +123,11 @@ screens:
       The person is in their organization's workspace: its ADK workflows (the
       page without a view; an agentRun search parameter is one run's page, by
       the run's ID, with its steps, its activity and what it waits for; the
-      page names it as an adk_run), its agents (view chat-agents) and its
-      members (view config). No specialist reads or changes ADK workflows,
-      their runs or agents yet: say so, and point the person to the page that
-      has them.
+      page names it as an adk_run), its agents (view chat-agents), its
+      knowledge bases (view knowledge) and its members (view config). No
+      specialist reads or changes ADK workflows, their runs or agents yet:
+      say so, and point the person to the page that has them. The knowledge
+      specialist reads and searches the organization's knowledge bases.
 
   # -- Administration ----------------------------------------------------------
 

@@ -57,6 +57,7 @@ class IngestResult(BaseModel):
     skipped: bool = False
     reason: str | None = None
     chunk_count: int = 0
+    embedding_model: str | None = None  # what its chunks are embedded with
     embedded: int = 0
     reused_embeddings: int = 0
     deleted_stale: int = 0

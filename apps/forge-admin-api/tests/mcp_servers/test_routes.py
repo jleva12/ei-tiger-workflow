@@ -16,8 +16,11 @@ from typing import Any
 import pytest
 from casbin.persist.adapter import load_policy_line
 from casbin.persist.adapters.asyncio import AsyncAdapter
-from fake_oauth import MCP, FakeOAuth
 from fastapi.testclient import TestClient
+from forge_mcp_servers.client import Listing, McpConnectionError
+from forge_mcp_servers.secrets import SecretBox
+from forge_mcp_servers.service import McpServers
+from forge_mcp_servers.testing import MCP, FakeOAuth
 from google.adk.tools.mcp_tool import McpToolset
 from pydantic import SecretStr
 from sqlalchemy import MetaData, select
@@ -35,9 +38,6 @@ from forge_admin.auth.tokens import mint_subject_token
 from forge_admin.config import Settings
 from forge_admin.db.base import Base
 from forge_admin.db.session import get_session
-from forge_admin.mcp_servers.client import Listing, McpConnectionError
-from forge_admin.mcp_servers.secrets import SecretBox
-from forge_admin.mcp_servers.service import McpServers
 from forge_admin.mcp_servers.toolset import McpServerGone, mcp_toolset
 from forge_admin.models import McpOAuthFlow, McpServer, Organization, User
 

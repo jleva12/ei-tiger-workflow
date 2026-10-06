@@ -346,6 +346,7 @@ function GroupLinker({
 
   return (
     <SettingsCompanion
+      size="narrow"
       title="Link to company groups"
       description={
         <>

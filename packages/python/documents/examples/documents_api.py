@@ -149,4 +149,4 @@ class SearchBody(BaseModel):
 @app.post("/search")
 async def search(body: SearchBody, tenant: Tenant, rt: RT) -> SearchResponse:
     # tenant comes from auth, never from the request body
-    return await rt.documents.search.search(SearchQuery(tenant_id=tenant, **body.model_dump()))
+    return await rt.documents.search.search(SearchQuery(tenant_ids=[tenant], **body.model_dump()))

@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from forge_embeddings.config import EmbeddingSettings, ModelSettings
+from forge_embeddings.config import EmbeddingSettings, ModelSettings, RerankSettings
 from forge_embeddings.tokenizers import HeuristicTokenizer
 
 if TYPE_CHECKING:
@@ -125,8 +125,8 @@ def build_embedder(e: EmbeddingSettings, tokenizer: Tokenizer | None = None) -> 
     )
 
 
-def build_reranker(settings: ModelSettings) -> Reranker | None:
-    r = settings.rerank
+def build_reranker(r: RerankSettings, embedding: EmbeddingSettings | None = None) -> Reranker | None:
+    """:param embedding: The embedder's settings: a Voyage embedder's key is the Voyage reranker's fallback."""
     if r.provider == "none":
         return None
     if r.provider == "overlap":
@@ -136,7 +136,7 @@ def build_reranker(settings: ModelSettings) -> Reranker | None:
     from forge_embeddings.embedding import VoyageReranker
 
     _require_voyage("HYBRID_RERANK__PROVIDER")
-    key = r.api_key or (settings.embedding.api_key if settings.embedding.provider == "voyage" else None)
+    key = r.api_key or (embedding.api_key if embedding is not None and embedding.provider == "voyage" else None)
     return VoyageReranker(api_key=key.get_secret_value() if key else None, model=r.model)
 
 
@@ -170,7 +170,7 @@ def build_models(settings: ModelSettings) -> ModelClients:
     return ModelClients(
         tokenizer=tokenizer,
         embedders=embedders,
-        reranker=build_reranker(settings),
+        reranker=build_reranker(settings.rerank, settings.embedding),
         llm_factory=llm_factory,
         llm_model_id=settings.llm.model,
     )

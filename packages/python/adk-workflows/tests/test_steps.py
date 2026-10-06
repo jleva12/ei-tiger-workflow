@@ -169,6 +169,7 @@ def test_a_paused_run_shows_what_ran_and_the_step_that_waits(tmp_path: Path) -> 
         "error": None,
         "started_at": None,
         "finished_at": None,
+        "calls": [],
     }
 
     async def approve() -> None:

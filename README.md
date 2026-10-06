@@ -8,9 +8,10 @@ engine. People draw an ADK workflow on a canvas: LLM agents and teams of
 them, other saved ADK workflows, human approvals and questions, HTTP calls,
 data transforms, delays, branches and loops. They run it from the console
 and watch each run step by step. An agent is one Google ADK chat agent with
-its tools and the sub-agents it hands off to; for now the console keeps
-agents in the browser, and nothing runs them yet. An AI assistant on every
-page helps with access and administration.
+its tools and the sub-agents it hands off to, published in numbered versions
+and served by the admin API over ADK's run API and Google's A2A protocol, or
+generated as a project of its own. An AI assistant on every page helps with
+access and administration.
 
 Deployable applications live under `apps/`, shared libraries under
 `packages/`. The web console owns its `package.json` and `node_modules`. The
@@ -58,12 +59,20 @@ the **assistant** (the AI helper on every page).
   every request. People and other systems call the API with bearer tokens.
 - **ADK workflow builder.** Nodes: Start; LLM agents, sequential, parallel
   and loop agents, and saved ADK workflows; human input and approvals; HTTP,
-  Transform and Delay; If / Switch / Match, Loop, Merge and End. Every
+  Transform and Delay; If / Switch / Match, Loop, Merge and End. An LLM agent
+  is either set up in its node, with the Agents builder's tools (the
+  organization's MCP servers, knowledge bases, HTTP tools, OpenAPI specs,
+  agents and workflows), its sub-agents too; or it is an agent from the
+  Agents page, used whole at the version picked, sent a message and its input
+  fields. A tool a person confirms pauses the run until they allow it on the
+  run's page, where each step lists the tools its agents called. Every
   expression is [JSONata](packages/python/jsonata/README.md). ADK workflows are
   saved as `forge.agent/v1` JSON documents in MongoDB, one per ADK workflow,
   with revision checks so concurrent edits never silently overwrite each
   other.
-- **Runs.** The admin API checks a run's input and builds the document, then
+- **Runs.** The admin API checks a run's input and builds the document, takes
+  along what its LLM agents use (the agents from the Agents page at their
+  version, the knowledge bases' names), then
   starts the run in the run store (two tables in the admin MySQL) and queues
   it on the async worker's `adk_workflows` queue on Redis. The worker's ADK
   workflows task runs it on Google ADK's graph engine, its state an ADK
@@ -73,8 +82,22 @@ the **assistant** (the AI helper on every page).
   and lets a run that waits (an approval, a person's answer, a long delay)
   give up its worker until it's answered.
 - **Agents.** A builder for one Google ADK chat agent (`forge.chat_agent/v1`):
-  its instructions and model, its tools and the agents it hands off to. The
-  console keeps them in the browser for now; the API and a runtime come later.
+  its instructions and model, its tools and the agents it hands off to. Drafts
+  are published as versions that never change (MongoDB). The hosted runtime
+  (`/api/v1/runtime`, [forge-agent-runtime](packages/python/agent-runtime/README.md))
+  runs `ca_x`, `ca_x@3` or `ca_x@draft` over ADK's run API (`run_sse`, for chat
+  UIs) and Google's A2A protocol (`/runtime/a2a/{agent}`: JSON-RPC, A2A 1.0
+  and 0.3, and each agent's card, for other agents), both public unless
+  `FORGE_ADMIN_AGENT_RUNTIME_PUBLIC=false`. **Generate standalone agent**
+  downloads the agent as a project of its own that speaks both too.
+- **Outside apps.** Workflows are published as versions too, and outside apps
+  run them by reference (`ag_x`, `ag_x@3`, `ag_x@draft`) over REST
+  (`/api/v1/runtime/workflows/{ref}/runs`: start, wait, answer what a run
+  waits at) or A2A (a task is a run; its pauses are `input-required`). Each
+  organization makes **API keys** (Settings → API keys), each holding one of
+  its roles (API caller by default), sent as `Authorization: Bearer fk_…`;
+  when the runtime isn't public, calls need one (or a sign-in) with
+  `agents:run` where the agent or workflow is.
 - **AI assistant.** A Google ADK agent served by the admin API (`/api/v1/agents`),
   on Gemini by default or the models of the shared model-provider YAML. It
   acts as the signed-in person, within their permissions: it explains their

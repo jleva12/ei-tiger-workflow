@@ -42,6 +42,7 @@ export function AdkRunDialog({
   agentId,
   name,
   inputSchema,
+  version,
   onStarted,
 }: {
   open: boolean
@@ -51,10 +52,12 @@ export function AdkRunDialog({
   name: string
   /** The start's input schema; `{}` declares none. */
   inputSchema: Record<string, unknown>
+  /** Which version runs: a published one, or the draft. */
+  version?: number | "draft"
   onStarted: (run: AdkRun) => void
 }) {
   // Here rather than in the builder: its state changes redraw only the dialog.
-  const run = useRunAdkWorkflow(organizationId, agentId)
+  const run = useRunAdkWorkflow(organizationId, agentId, version)
   return (
     <RunDialog
       open={open}
@@ -63,7 +66,11 @@ export function AdkRunDialog({
       words={{
         description: (
           <>
-            {name || "The workflow"} runs as it&apos;s saved now, as you.
+            {name || "The workflow"} runs{" "}
+            {version === "draft" || version === undefined
+              ? "as its draft is saved now"
+              : `as version ${version}`}
+            , as you.
             Follow it under Runs, or on its own page.
           </>
         ),

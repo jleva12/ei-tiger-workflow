@@ -6,10 +6,14 @@ import { cn } from "cn"
 import { AssistantCapabilitiesButton } from "@/features/assistant/components/assistant-capabilities"
 import { AssistantModalButton } from "@/components/assistant-ui/elements/assistant-modal.aui"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
-import { AssistantMark, AssistantModal } from "@/components/forge/assistant/index"
+import {
+  AssistantMark,
+  AssistantModal,
+} from "@/components/forge/assistant/index"
 import { Icon } from "@/components/forge/icon"
 import { PageContextChip } from "@/features/assistant/components/page-context-chip"
 import { useAssistantLauncher } from "@/features/assistant/lib/assistant-launcher"
+import { assistantSources } from "@/features/knowledge/lib/sources"
 import {
   openAssistantWindow,
   showConversation,
@@ -100,6 +104,7 @@ function AssistantPanel({
       runtime={runtime}
       artifacts={artifacts}
       agents={agents}
+      sources={assistantSources}
       {...modelSection}
       title={TITLE}
       open={open}
@@ -114,7 +119,7 @@ function AssistantPanel({
       welcome={{
         title: "How can I help?",
         description: connected
-          ? "Ask about your organizations, their workflows and agents, or have it help you build one."
+          ? "Ask about your organizations, their workflows and agents, or what their knowledge bases' documents say."
           : "No agent is connected yet; send a message to see how to connect one.",
       }}
       composerContext={

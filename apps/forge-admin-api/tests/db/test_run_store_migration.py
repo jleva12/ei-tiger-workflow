@@ -54,7 +54,10 @@ def test_on_mysql_it_makes_the_run_stores_tables() -> None:
     dialect = mysql.dialect()
     expected = set()
     for table in metadata.sorted_tables:
-        expected |= statements(str(CreateTable(table).compile(dialect=dialect)))
+        made_then = str(CreateTable(table).compile(dialect=dialect))
+        for column in LATER:
+            made_then = re.sub(rf"\n\t{column} [^\n]*", "", made_then)
+        expected |= statements(made_then)
         for index in table.indexes:
             expected |= statements(str(CreateIndex(index).compile(dialect=dialect)))
     made = statements(output.getvalue())
@@ -63,6 +66,10 @@ def test_on_mysql_it_makes_the_run_stores_tables() -> None:
     assert any("created_at DATETIME(6) NOT NULL" in line for line in made)
     assert any("payload JSON NOT NULL" in line for line in made)
     assert any("ON DELETE CASCADE" in line for line in made)
+
+
+#: The run store's columns later migrations added (0012adk_run_versions).
+LATER = ("version",)
 
 
 # ------------------------------------------------------------------ SQLite
@@ -155,7 +162,7 @@ def test_on_sqlite_it_round_trips(connection: sa.Connection) -> None:
     for table in metadata.sorted_tables:
         columns = inspector.get_columns(table.name)
         assert [(c["name"], c["nullable"]) for c in columns] == [
-            (c.name, c.nullable) for c in table.columns
+            (c.name, c.nullable) for c in table.columns if c.name not in LATER
         ]
         assert inspector.get_pk_constraint(table.name)["constrained_columns"] == ["id"]
         assert {

@@ -2,6 +2,7 @@ import {
   AiBrain01Icon,
   BookOpen01Icon,
   FlowSquareIcon,
+  Key01Icon,
   McpServerIcon,
 } from "@hugeicons/core-free-icons"
 
@@ -18,10 +19,10 @@ import type { AdkRunTab } from "@/features/runs/lib/runs"
  * and the API, from before they were called that), Agents (its chat
  * agents, each opening its builder at
  * /organizations/$organizationId/chat-agents/$chatAgentId), MCP servers
- * (the remote MCP servers its agents use as tools, each opening in a dialog)
- * and Members (who
- * holds which role in it; its admins change them). Overview is the
- * default, so it has no `view` in the URL.
+ * (the remote MCP servers its agents use as tools, each opening in a dialog),
+ * Members (who holds which role in it; its admins change them) and API keys
+ * (what outside apps send to call its agents and workflows). Overview is
+ * the default, so it has no `view` in the URL.
  */
 export const WORKSPACE_VIEWS = {
   // What the organization's workflows, agents and assistant did and used.
@@ -33,6 +34,7 @@ export const WORKSPACE_VIEWS = {
   // /organizations/$organizationId/knowledge/$knowledgeBaseId.
   knowledge: { label: "Knowledge bases", icon: BookOpen01Icon },
   config: { label: "Members", icon: "team" },
+  "api-keys": { label: "API keys", icon: Key01Icon },
 } as const satisfies Record<string, { label: string; icon: IconProp }>
 
 export type WorkspaceView = keyof typeof WORKSPACE_VIEWS
@@ -45,7 +47,7 @@ export type WorkspaceView = keyof typeof WORKSPACE_VIEWS
 export const WORKSPACE_SECTIONS: { title: string; views: WorkspaceView[] }[] = [
   { title: "Workflows and agents", views: ["agents", "chat-agents"] },
   { title: "Integrations", views: ["mcp-servers", "knowledge"] },
-  { title: "Settings", views: ["config"] },
+  { title: "Settings", views: ["config", "api-keys"] },
 ]
 
 /** The page the workspace opens on, which its URL leaves out. */

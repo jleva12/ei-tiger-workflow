@@ -1,12 +1,12 @@
 [project]
 name = "forge-agent-runtime"
 version = "0.1.0"
-description = "Runs Forge chat agents (forge.chat_agent/v1) on Google ADK: build one from its JSON, serve it over ADK's run API, or embed it in your own app"
+description = "Runs Forge chat agents (forge.chat_agent/v1) on Google ADK: build one from its JSON, serve it over ADK's run API and Google's A2A protocol, or embed it in your own app"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [{ name = "Joseph Leva" }]
-keywords = ["google-adk", "agents", "llm", "chat", "forge"]
+keywords = ["google-adk", "agents", "llm", "chat", "a2a", "forge"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Framework :: FastAPI",
@@ -31,6 +31,9 @@ dependencies = [
 [project.optional-dependencies]
 # forge_agent_runtime.server and the forge-agent CLI's serve: ADK's run API over FastAPI
 server = ["fastapi>=0.115", "uvicorn>=0.30", "aiosqlite>=0.20", "sqlalchemy[asyncio]>=2.0"]
+# forge_agent_runtime.a2a: agents over Google's A2A protocol (JSON-RPC, 1.0 and 0.3), tasks
+# in memory or the conversations' database
+a2a = ["forge-agent-runtime[server]", "a2a-sdk[http-server]>=1.2,<2"]
 # Long-term memory in MongoDB Atlas (forge_common.adk.memory)
 memory-atlas = ["forge-common[adk-memory]"]
 # Files agents make and people send, in S3 or anything that speaks it (forge_common.adk.artifacts)
@@ -47,7 +50,7 @@ requires = ["uv_build>=0.11.17,<0.12.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = ["forge-agent-runtime[server]"]
+dev = ["forge-agent-runtime[server,a2a]"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

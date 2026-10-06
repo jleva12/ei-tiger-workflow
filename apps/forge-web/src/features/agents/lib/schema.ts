@@ -58,7 +58,8 @@ const LLM = {
   },
 }
 
-const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
+/** Each kind's settings: a workflow's LLM agents' tools take them too. */
+export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
   agent: {
     ...LLM,
     state_schema: jsonSchema(
@@ -90,6 +91,15 @@ const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
       ...text,
       description:
         "One of the organization's workflows, by ID, called as a tool.",
+    },
+    version: {
+      oneOf: [
+        { type: "integer", minimum: 1 },
+        { const: "draft" },
+        { type: "null" },
+      ],
+      description:
+        "Which of its versions runs: a published one, its draft, or null for its latest published (as each run starts).",
     },
   },
   memory: {

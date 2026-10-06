@@ -85,5 +85,12 @@ export const AGENT_ADAPTER: BuilderAdapter<
     meaningsFor(graph, edgeId, { outputsOf, toneOf, loopBodies }),
   loopBodies,
   toneOf,
-  lookups: () => ({ agents: {}, models: {} }),
+  lookups: () => ({
+    agents: {},
+    models: {},
+    chatAgents: {},
+    workflowVersions: {},
+    mcpServers: {},
+    knowledgeBases: {},
+  }),
 }

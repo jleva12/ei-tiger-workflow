@@ -4,7 +4,7 @@ in the run's ADK session, read from the session's events.
 
 One entry per node of the document, in the document's order::
 
-    {"id", "name", "kind", "status", "output", "error", "started_at", "finished_at"}
+    {"id", "name", "kind", "status", "output", "error", "started_at", "finished_at", "calls"}
 
 - ``status``:
   - ``done``: it handed on its output (``error`` too when it took its Error
@@ -19,6 +19,11 @@ One entry per node of the document, in the document's order::
   (``data.py``): an LLM agent's answer as its output schema makes it, If /
   Switch / Match's ``{"branch"}``, a loop's ``{count, results}``, a saved
   agent's result. A step run more than once (in a loop's body) shows its last.
+- ``calls``: the tools its LLM agents called (theirs, and those of the agent
+  from the Agents page it is): ``{"id", "agent", "name", "args", "status",
+  "response", "at"}``, ``status`` ``done``, ``failed`` (the tool answered an
+  error, or a person refused it), ``waiting`` (for a person to confirm it) or
+  ``running``; a long response cut short.
 - ``started_at`` / ``finished_at``: when a step before it handed on to it (the
   last to, before its first event), else its first event; and the event that
   finished it. ISO 8601 in UTC; None when there's none. ADK records a step only
@@ -36,8 +41,9 @@ ADK records nothing for a node that hands on nothing and changes no state, so
 such a step is taken as done when a step only it leads to ran.
 """
 
+import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -48,7 +54,7 @@ from forge_task_adk_workflows.graph.data import INPUT_NODE, StepInfo, _record, a
 from forge_task_adk_workflows.graph.factories.agents import answer_parser
 from forge_task_adk_workflows.graph.factories.base import config_of, items, text
 from forge_task_adk_workflows.graph.names import adk_name, body_name
-from forge_task_adk_workflows.graph.pauses import REQUEST_INPUT, pending_pauses
+from forge_task_adk_workflows.graph.pauses import REQUEST_CONFIRMATION, REQUEST_INPUT, pending_pauses
 
 DONE = "done"
 FAILED = "failed"
@@ -57,6 +63,8 @@ RUNNING = "running"
 NOT_REACHED = "not_reached"
 #: Every status a step can have.
 STATUSES = (DONE, FAILED, WAITING, RUNNING, NOT_REACHED)
+#: The most of a tool's response a step shows, as JSON text.
+MAX_RESPONSE = 4000
 
 
 @dataclass
@@ -70,6 +78,9 @@ class _Seen:
     handed_on: bool = False
     failed_at: float | None = None
     waiting: bool = False
+    calls: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: The calls a person is still to confirm: ADK answers each "it needs confirming" meanwhile.
+    confirming: set[str] = field(default_factory=set)
 
     def saw(self, when: float) -> None:
         if self.started is None or when < self.started:
@@ -124,9 +135,10 @@ def run_steps(session: Session | None, document: dict[str, Any]) -> list[dict[st
                 seen[step].failed_at = when
                 seen[step].error = {"message": event.error_message or event.error_code, "code": event.error_code}
         for call in event.get_function_calls():
-            if call.name == REQUEST_INPUT and call.id in asked:
+            if call.name in (REQUEST_INPUT, REQUEST_CONFIRMATION) and call.id in asked:
                 for step, _ in _steps_on(path, infos, loops):
                     seen[step].waiting = True
+        _calls(event, _steps_on(path, infos, loops), seen, asked)
         for target in event.node_info.output_for or [path]:
             chain = _steps_on(target, infos, loops)
             if not chain or not chain[-1][1]:
@@ -155,9 +167,56 @@ def run_steps(session: Session | None, document: dict[str, Any]) -> list[dict[st
             "error": seen[node["id"]].error,
             "started_at": _iso(seen[node["id"]].started),
             "finished_at": _iso(seen[node["id"]].finished) if seen[node["id"]].handed_on else None,
+            "calls": list(seen[node["id"]].calls.values()),
         }
         for node in nodes
     ]
+
+
+def _calls(event: Event, chain: list[tuple[str, bool]], seen: Mapping[str, _Seen], asked: set[str]) -> None:
+    # The tools an LLM agent called in a step, and what each answered: ADK's
+    # own calls (hand-offs, questions) aren't tools.
+    if not chain:
+        return
+    step = seen[chain[-1][0]]
+    calls = step.calls
+    for call in event.get_function_calls():
+        if call.name == REQUEST_CONFIRMATION:
+            original = (call.args or {}).get("originalFunctionCall")
+            called = calls.get(str(original.get("id"))) if isinstance(original, dict) else None
+            if called is not None and call.id in asked:
+                called["status"] = WAITING
+                step.confirming.add(called["id"])
+            continue
+        if not call.id or not call.name or call.name.startswith("adk_") or call.name == "transfer_to_agent":
+            continue
+        calls[call.id] = {
+            "id": call.id,
+            "agent": event.author,
+            "name": call.name,
+            "args": as_data(call.args or {}),
+            "status": RUNNING,
+            "response": None,
+            "at": _iso(event.timestamp),
+        }
+    for response in event.get_function_responses():
+        called = calls.get(response.id or "")
+        if called is None or called["id"] in step.confirming:
+            continue
+        answered = as_data(response.response)
+        called["status"] = FAILED if _is_error(answered) else DONE
+        called["response"] = _shortened(answered)
+
+
+def _is_error(response: Any) -> bool:
+    return isinstance(response, dict) and (
+        "error" in response or response.get("status") == "error" or response.get("ok") is False
+    )
+
+
+def _shortened(value: Any) -> Any:
+    text_ = json.dumps(value, ensure_ascii=False, default=str)
+    return value if len(text_) <= MAX_RESPONSE else {"truncated": text_[:MAX_RESPONSE]}
 
 
 def _finished(event: Event, info: StepInfo) -> dict[str, Any] | None:

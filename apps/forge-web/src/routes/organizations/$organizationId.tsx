@@ -12,6 +12,7 @@ import {
 import { OrganizationAgents } from "@/features/adk-workflows/components/organization-agents"
 import { OrganizationChatAgents } from "@/features/agents/components/organization-chat-agents"
 import { OrganizationMcpServers } from "@/features/mcp-servers/components/organization-mcp-servers"
+import { OrganizationApiKeys } from "@/features/api-keys/components/organization-api-keys"
 import { OrganizationKnowledgeBases } from "@/features/knowledge/components/organization-knowledge-bases"
 import { OrganizationMembers } from "@/features/admin/components/organization-members"
 import { PrimaryAction } from "@/components/forge/app-shell"
@@ -97,6 +98,7 @@ function OrganizationWorkspacePage() {
   // Those who manage its runs (its admins) retry, resubmit and abandon them.
   const canManageRuns = can("agents:manage_runs")
   const canReadMembers = can("members:read")
+  const canManageKeys = can("api_keys:manage")
   const [assigning, setAssigning] = React.useState(false)
 
   useShellPage({
@@ -172,6 +174,7 @@ function OrganizationWorkspacePage() {
         organizationId={organizationId}
         view={view}
         members={canReadMembers}
+        apiKeys={canManageKeys}
       />
       {view === "overview" ? (
         <>
@@ -219,6 +222,19 @@ function OrganizationWorkspacePage() {
               onAssigningChange={setAssigning}
             />
           </>
+        )
+      ) : view === "api-keys" ? (
+        !canManageKeys ? (
+          <PageEmpty
+            illustration="locked"
+            title="You can't manage this organization's API keys"
+            description={`Ask one of ${organization.name}'s admins for a key, or for the API keys permission.`}
+          />
+        ) : (
+          <OrganizationApiKeys
+            organizationId={organizationId}
+            organizationName={organization.name}
+          />
         )
       ) : view === "mcp-servers" ? (
         <OrganizationMcpServers

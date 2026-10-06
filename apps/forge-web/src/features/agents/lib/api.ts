@@ -185,7 +185,7 @@ export function exportChatAgentVersion(
 /**
  * What a standalone project is made of (forge-agent-runtime's StarterOptions):
  * where it keeps conversations, files and memories, how it replies, whether it
- * has the chat UI, who may call it, and who owns it.
+ * has the chat UI, whether it speaks A2A too, who may call it, and who owns it.
  */
 export type StarterOptions = {
   interface: "ui" | "api"
@@ -193,6 +193,8 @@ export type StarterOptions = {
   artifacts: "memory" | "folder" | "s3"
   memory: "memory" | "atlas"
   streaming: boolean
+  /** Google's A2A protocol beside ADK's run API: /a2a and its agent card. */
+  a2a: boolean
   api_key: boolean
   cors_origins: string[]
   code_owners: string[]
@@ -204,6 +206,7 @@ export const DEFAULT_STARTER_OPTIONS: StarterOptions = {
   artifacts: "memory",
   memory: "memory",
   streaming: true,
+  a2a: true,
   api_key: false,
   cors_origins: [],
   code_owners: [],
@@ -473,7 +476,5 @@ export function forgetLocalChatAgents(organizationId: string) {
   }
 }
 
-/** The runtime's base URL: the chat UI's `adk.url` for a chat agent. */
-export const RUNTIME_URL: string | undefined = import.meta.env.VITE_API_URL
-  ? `${String(import.meta.env.VITE_API_URL).replace(/\/+$/, "")}/runtime`
-  : undefined
+// Where the hosted runtime is: shared with the workflows' (lib/runtime).
+export { a2aCardAddress, runtimeAddress, RUNTIME_URL } from "@/lib/runtime"

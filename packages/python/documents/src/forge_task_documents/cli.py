@@ -2,6 +2,7 @@
 
 forge-async-worker docs ingest --tenant t1 docs/*.docx
 forge-async-worker docs search --tenant t1 "refund approval limit"
+forge-async-worker docs search --tenant t1 --tenant t2 "refund approval limit"   # both, ranked together
 forge-async-worker docs chunks path/to/file.xlsx          # preview chunking, no DB
 """
 
@@ -27,7 +28,7 @@ def add_commands(parser: argparse.ArgumentParser) -> None:
     di.add_argument("--force", action="store_true")
     di.add_argument("paths", nargs="+", type=Path)
     ds = docs.add_parser("search")
-    ds.add_argument("--tenant", required=True)
+    ds.add_argument("--tenant", required=True, action="append", help="repeat to search several tenants together")
     ds.add_argument("--top-k", type=int, default=8)
     ds.add_argument("text")
     dc = docs.add_parser("chunks")
@@ -59,7 +60,7 @@ async def run_command(args: argparse.Namespace, rt: Any) -> None:
     elif args.action == "search":
         from forge_task_documents.models import SearchQuery
 
-        resp = await rt.documents.search.search(SearchQuery(tenant_id=args.tenant, text=args.text, top_k=args.top_k))
+        resp = await rt.documents.search.search(SearchQuery(tenant_ids=args.tenant, text=args.text, top_k=args.top_k))
         for i, h in enumerate(resp.hits, 1):
             print(f"{i}. [{h.chunk.kind}] {h.chunk.title} > {h.chunk.section_text}  rrf={h.score:.4f}")
             print("   " + h.chunk.text[:200].replace("\n", " | "))

@@ -9,11 +9,11 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx2 as httpx
 import pytest
-from fake_oauth import ISSUER, MCP, FakeOAuth
 
-from forge_admin.mcp_servers.auth import AuthContext, AuthError, NotConnected
-from forge_admin.mcp_servers.oauth import discover
-from forge_admin.mcp_servers.registry import AUTH_METHODS
+from forge_mcp_servers.auth import AuthContext, AuthError, NotConnected
+from forge_mcp_servers.oauth import discover
+from forge_mcp_servers.registry import AUTH_METHODS
+from forge_mcp_servers.testing import ISSUER, MCP, FakeOAuth
 
 REDIRECT = "http://localhost:5190/oauth/mcp/callback"
 

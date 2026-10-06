@@ -18,7 +18,7 @@ address to send them to, :meth:`~InteractiveAuthMethod.complete` the grant
 from where they come back.
 
 To support another method, subclass one of them and register an instance in
-:data:`forge_admin.mcp_servers.registry.AUTH_METHODS`; the API and the web
+:data:`forge_mcp_servers.registry.AUTH_METHODS`; the API and the web
 console's form pick it up from there.
 """
 

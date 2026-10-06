@@ -18,6 +18,7 @@ from forge_admin.auth.authorization import (
     SUBJECT_PATTERN,
     assignments_around,
     find_assignment,
+    is_api_key_subject,
     is_reserved_subject,
 )
 from forge_admin.models import CasbinRule, Role
@@ -35,6 +36,8 @@ SubjectPath = Annotated[
     str, Path(pattern=SUBJECT_PATTERN, description="User or service ID")
 ]
 RolePath = Annotated[str, Path(pattern=ROLE_KEY_PATTERN, examples=["org:member"])]
+
+API_KEY_SUBJECT = "That's an API key: change its role under the organization's API keys"
 
 
 class MemberRead(Audited):
@@ -70,6 +73,7 @@ async def list_members(
     List the roles assigned in this scope. With ``above`` and ``below``, also
     those that apply to it from the scopes above, and those assigned inside
     it: everything active there. Each assignment names the scope it was made in.
+    API keys' roles aren't memberships and aren't listed (see API keys).
     \f
     :param scope: The scope.
     :param user: The caller.
@@ -118,6 +122,8 @@ async def assign_role(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"{role} is assigned at {record.level} scopes, not {target.level}",
         )
+    if is_api_key_subject(subject_id):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, API_KEY_SUBJECT)
     # Roles, groups and subjects share Casbin's namespace: a subject named
     # like a role would make that role inherit the assigned one, and one
     # named like a group would hold its linked permissions.
@@ -155,6 +161,8 @@ async def revoke_role(
     :param session: The request's database session.
     :param enforcer: The Casbin enforcer.
     """
+    if is_api_key_subject(subject_id):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, API_KEY_SUBJECT)
     domain = await authorize(
         session, enforcer, user, "members:update", Scope.parse(scope)
     )

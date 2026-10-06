@@ -54,11 +54,13 @@ class OrganizationKnowledgeBases:
         limit: int,
     ) -> list[dict[str, Any]]:
         """
-        :return: The passages that best match the query, best first.
+        :return: The passages of these knowledge bases, and only these, that
+            best match the query, ranked together, best first: each naming
+            the knowledge base and the document it's from.
         :raises LookupError: The organization has no such knowledge base.
         :raises RuntimeError: Searching isn't set up.
         """
-        await self._find(knowledge_base_ids, organization_id)
+        found = await self._find(knowledge_base_ids, organization_id)
         if self._search is None:
             raise RuntimeError(
                 "Knowledge base search isn't set up on this server (FORGE_ADMIN_MONGO_URI)."
@@ -78,12 +80,10 @@ class OrganizationKnowledgeBases:
                 )
             }
         return [
-            {
-                "document": names.get(passage.document_id, passage.title),
-                "section": " > ".join(passage.section_path),
-                "text": passage.text,
-                "score": round(passage.score, 4),
-            }
+            passage.for_agent(
+                knowledge_base=found[passage.knowledge_base_id].name,
+                document=names[passage.document_id],
+            )
             # A document removed since its chunks were found is left out.
             for passage in passages
             if passage.document_id in names

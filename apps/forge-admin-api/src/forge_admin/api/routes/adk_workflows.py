@@ -11,6 +11,13 @@ A save names the revision it was made from and answers 409 when someone
 saved the agent since; the web console then offers their version or saving
 over it.
 
+An agent has versions, as chat agents do (``adk_workflows.versioned_store``):
+the draft the builder saves (``PUT …/draft``), publishing it as a version
+nothing changes (once it can be published: ``runs.check_publishable``),
+starting the next version from a published one, discarding a draft, and
+reading a published version. One saved before versions existed is a draft
+of version 1 until it's first published.
+
 These are the organization's agents, not the assistant's (``assistant.py``).
 """
 
@@ -21,16 +28,17 @@ from fastapi import APIRouter, HTTPException, Path, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo.errors import PyMongoError
 
-from forge_admin.adk_workflows.document_store import now
 from forge_admin.adk_workflows.documents import (
     ID_PATTERN,
     AgentConflict,
     AgentError,
     AgentIdTaken,
     AgentStore,
-    checked_document,
-    new_agent_id,
 )
+from forge_admin.adk_workflows.resources import RunResources
+from forge_admin.adk_workflows.runs import check_publishable
+from forge_admin.adk_workflows.versioned_store import VersionState, status_of
+from forge_admin.adk_workflows.versions import workflow_finder
 from forge_admin.api.routes.common import NodeId, Session, name_of
 from forge_admin.auth.access import CurrentUser, Enforcer, Level, Scope, authorize
 from forge_admin.db.audit import UtcDateTime
@@ -50,23 +58,55 @@ UNAVAILABLE = "The agents' database isn't answering; try again shortly"
 ID_ATTEMPTS = 3
 
 AgentId = Annotated[str, Path(pattern=ID_PATTERN)]
+VersionNumber = Annotated[int, Path(ge=1)]
 
 
 class AgentRead(BaseModel):
-    """An organization's agent: its document and who saved it when."""
+    """
+    An organization's agent: the document the builder shows, where it is
+    between draft and published, and who saved it when.
+    """
 
     id: str
     organization_id: str
-    #: Goes up by one with every save; a save names the one it was made from.
+    #: Goes up by one with every change; a save names the one it was made from.
     revision: int
-    #: The forge.agent/v1 document.
+    #: The forge.agent/v1 document: its draft, or its latest published
+    #: version when it has no draft.
     document: dict[str, Any]
+    #: draft (never published), published, or published+draft.
+    status: str
+    has_draft: bool
+    #: The version the draft will be published as; null without a draft.
+    draft_version: int | None
+    #: The latest published version, which ``ag_…`` runs; null before the first.
+    published_version: int | None
+    published_at: UtcDateTime | None
     created_at: UtcDateTime
     created_by: str
     updated_at: UtcDateTime
     updated_by: str
     #: Who saved it last, by name as they were then.
-    updated_by_name: str
+    updated_by_name: str | None
+
+
+class VersionRead(BaseModel):
+    """One published version."""
+
+    version: int
+    published_at: UtcDateTime
+    published_by: str
+    published_by_name: str | None
+
+
+class AgentDetail(AgentRead):
+    #: Its published versions, newest first.
+    versions: list[VersionRead]
+
+
+class VersionDetail(VersionRead):
+    #: The version's document, ``version`` set.
+    document: dict[str, Any]
 
 
 class AgentCreate(BaseModel):
@@ -79,13 +119,27 @@ class AgentCreate(BaseModel):
 
 
 class AgentUpdate(BaseModel):
-    """The next version of an agent."""
+    """The agent's draft, as next saved."""
 
     model_config = ConfigDict(extra="forbid")
 
     document: dict[str, Any]
-    #: The revision this version was made from.
+    #: The revision this save was made from.
     revision: int = Field(ge=1)
+
+
+class Publish(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: The draft's revision being published: one saved since is refused.
+    revision: int = Field(ge=1)
+
+
+class NewVersion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    #: The published version to start from; the latest when omitted.
+    from_version: int | None = Field(default=None, ge=1)
 
 
 def agent_store(request: Request) -> AgentStore:
@@ -104,18 +158,26 @@ def agent_store(request: Request) -> AgentStore:
 
 
 def _read(record: dict[str, Any]) -> AgentRead:
-    return AgentRead.model_validate({**record, "id": record["_id"]})
+    return AgentRead.model_validate(
+        {
+            **record,
+            "id": record["_id"],
+            "status": status_of(record),
+            "has_draft": bool(record.get("has_draft")),
+        }
+    )
 
 
-def _checked(
-    request: Request, document: dict[str, Any], **fields: Any
-) -> dict[str, Any]:
-    try:
-        return checked_document(
-            document, max_bytes=request.app.state.settings.agents_max_bytes, **fields
-        )
-    except AgentError as error:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from None
+def _state(error: VersionState) -> HTTPException:
+    return HTTPException(
+        status.HTTP_409_CONFLICT, {"code": error.code, "msg": str(error)}
+    )
+
+
+def _found(record: dict[str, Any] | None) -> dict[str, Any]:
+    if record is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+    return record
 
 
 def _unavailable(error: PyMongoError) -> HTTPException:
@@ -181,41 +243,25 @@ async def create_agent(
     """
     await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
     store = agent_store(request)
-    made = now()
     name = await name_of(session, user)
-
-    def record_for(agent_id: str) -> dict[str, Any]:
-        document = _checked(
-            request,
-            body.document,
-            agent_id=agent_id,
-            organization_id=organization_id,
-            created_at=made,
-            updated_at=made,
-        )
-        return {
-            "_id": agent_id,
-            "organization_id": organization_id,
-            "revision": 1,
-            "document": document,
-            "created_at": made,
-            "created_by": user,
-            "updated_at": made,
-            "updated_by": user,
-            "updated_by_name": name,
-            "deleted_at": None,
-        }
-
     # Ten random characters rarely meet an ID in use; when they do, another.
-    record = record_for(new_agent_id())
     for attempt in range(1, ID_ATTEMPTS + 1):
         try:
-            await store.create(record)
+            record = await store.create_agent(
+                organization_id,
+                body.document,
+                by=user,
+                by_name=name,
+                max_bytes=request.app.state.settings.agents_max_bytes,
+            )
             break
         except AgentIdTaken:
             if attempt == ID_ATTEMPTS:
                 raise
-            record = record_for(new_agent_id())
+        except AgentError as error:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)
+            ) from None
         except PyMongoError as error:
             raise _unavailable(error) from None
     logger.info(
@@ -235,9 +281,9 @@ async def get_agent(
     user: CurrentUser,
     session: Session,
     enforcer: Enforcer,
-) -> AgentRead:
+) -> AgentDetail:
     """
-    Read one of the organization's agents.
+    Read one of the organization's agents, with its published versions.
     \f
     :param organization_id: The organization.
     :param agent_id: The agent.
@@ -255,15 +301,17 @@ async def get_agent(
     )
     store = agent_store(request)
     try:
-        record = await store.get(organization_id, agent_id)
+        record = _found(await store.get(organization_id, agent_id))
+        versions = await store.versions(organization_id, agent_id)
     except PyMongoError as error:
         raise _unavailable(error) from None
-    if record is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
-    return _read(record)
+    return AgentDetail.model_validate(
+        {**_read(record).model_dump(), "versions": versions}
+    )
 
 
-@router.put("/organizations/{organization_id}/agents/{agent_id}")
+@router.put("/organizations/{organization_id}/agents/{agent_id}/draft")
+@router.put("/organizations/{organization_id}/agents/{agent_id}", deprecated=True)
 async def save_agent(
     organization_id: NodeId,
     agent_id: AgentId,
@@ -274,7 +322,8 @@ async def save_agent(
     enforcer: Enforcer,
 ) -> AgentRead:
     """
-    Save the next version of an agent, made from the revision named.
+    Save the agent's draft, made from the revision named. (``PUT …/{agent_id}``
+    is the same, for consoles from before versions.)
     \f
     :param organization_id: The organization.
     :param agent_id: The agent.
@@ -286,43 +335,179 @@ async def save_agent(
     :return: The agent, at its next revision.
     :raises HTTPException: 403 without agents:manage in the organization; 404
         when the organization has no such agent; 409 when it was saved since that
-        revision; 422 for a document that isn't an agent; 503 when MongoDB
-        isn't set up or isn't answering.
+        revision, or it's published with no draft (``NO_DRAFT``); 422 for a
+        document that isn't an agent; 503 when MongoDB isn't set up or isn't
+        answering.
+    """
+    await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
+    store = agent_store(request)
+    name = await name_of(session, user)
+    try:
+        record = await store.save_draft(
+            organization_id,
+            agent_id,
+            body.revision,
+            body.document,
+            by=user,
+            by_name=name,
+            max_bytes=request.app.state.settings.agents_max_bytes,
+        )
+    except AgentConflict:
+        raise HTTPException(status.HTTP_409_CONFLICT, CONFLICT) from None
+    except VersionState as error:
+        raise _state(error) from None
+    except AgentError as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from None
+    except PyMongoError as error:
+        raise _unavailable(error) from None
+    return _read(_found(record))
+
+
+@router.post("/organizations/{organization_id}/agents/{agent_id}/publish")
+async def publish_agent(
+    organization_id: NodeId,
+    agent_id: AgentId,
+    body: Publish,
+    request: Request,
+    user: CurrentUser,
+    session: Session,
+    enforcer: Enforcer,
+) -> AgentRead:
+    """
+    Publish the draft as its version, once it can be: it has a start, builds,
+    and runs only what doesn't change (other workflows' and agents'
+    published versions). It never changes afterwards.
+    \f
+    :raises HTTPException: 403 without agents:manage; 404; 409 when saved
+        since, or there's no draft (``NO_DRAFT``); 422 with why it can't be
+        published yet (``{"msg", "problems"}``).
     """
     await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
     store = agent_store(request)
     try:
-        current = await store.get(organization_id, agent_id)
+        current = _found(await store.get(organization_id, agent_id))
+        if current.get("has_draft"):
+            problems = await check_publishable(
+                current["document"],
+                workflow_finder(store, organization_id),
+                RunResources(
+                    organization_id,
+                    chat_agents=getattr(request.app.state, "chat_agents", None),
+                    sessions=request.app.state.sessionmaker,
+                ),
+            )
+            if problems:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    {"msg": "It can't be published yet", "problems": problems},
+                )
+        name = await name_of(session, user)
+        record = await store.publish(
+            organization_id, agent_id, body.revision, by=user, by_name=name
+        )
+    except AgentConflict:
+        raise HTTPException(status.HTTP_409_CONFLICT, CONFLICT) from None
+    except VersionState as error:
+        raise _state(error) from None
     except PyMongoError as error:
         raise _unavailable(error) from None
-    if current is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
-    if current["revision"] != body.revision:
-        raise HTTPException(status.HTTP_409_CONFLICT, CONFLICT)
-    saved_at = now()
-    document = _checked(
-        request,
-        body.document,
-        agent_id=agent_id,
-        organization_id=organization_id,
-        created_at=current["created_at"],
-        updated_at=saved_at,
+    record = _found(record)
+    logger.info(
+        "%s published agent %s version %s",
+        user,
+        agent_id,
+        record["published_version"],
     )
-    changes = {
-        "document": document,
-        "updated_at": saved_at,
-        "updated_by": user,
-        "updated_by_name": await name_of(session, user),
-    }
+    return _read(record)
+
+
+@router.post("/organizations/{organization_id}/agents/{agent_id}/versions")
+async def start_version(
+    organization_id: NodeId,
+    agent_id: AgentId,
+    body: NewVersion,
+    request: Request,
+    user: CurrentUser,
+    session: Session,
+    enforcer: Enforcer,
+) -> AgentRead:
+    """
+    Start the next version: a draft copied from a published version (the
+    latest by default).
+    \f
+    :raises HTTPException: 404 (or no such version); 409 ``DRAFT_EXISTS`` or
+        ``NOT_PUBLISHED``.
+    """
+    await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
+    name = await name_of(session, user)
     try:
-        saved = await store.replace(organization_id, agent_id, body.revision, changes)
+        record = await agent_store(request).start_version(
+            organization_id,
+            agent_id,
+            from_version=body.from_version,
+            by=user,
+            by_name=name,
+        )
+    except VersionState as error:
+        raise _state(error) from None
     except AgentConflict:
         raise HTTPException(status.HTTP_409_CONFLICT, CONFLICT) from None
     except PyMongoError as error:
         raise _unavailable(error) from None
-    if saved is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
-    return _read(saved)
+    return _read(_found(record))
+
+
+@router.delete("/organizations/{organization_id}/agents/{agent_id}/draft")
+async def discard_draft(
+    organization_id: NodeId,
+    agent_id: AgentId,
+    request: Request,
+    user: CurrentUser,
+    session: Session,
+    enforcer: Enforcer,
+) -> AgentRead:
+    """
+    Discard the draft: the agent is its latest published version again.
+    \f
+    :raises HTTPException: 404; 409 ``NO_DRAFT``, or ``NOT_PUBLISHED`` (delete
+        the agent instead).
+    """
+    await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
+    name = await name_of(session, user)
+    try:
+        record = await agent_store(request).discard_draft(
+            organization_id, agent_id, by=user, by_name=name
+        )
+    except VersionState as error:
+        raise _state(error) from None
+    except AgentConflict:
+        raise HTTPException(status.HTTP_409_CONFLICT, CONFLICT) from None
+    except PyMongoError as error:
+        raise _unavailable(error) from None
+    return _read(_found(record))
+
+
+@router.get("/organizations/{organization_id}/agents/{agent_id}/versions/{version}")
+async def get_version(
+    organization_id: NodeId,
+    agent_id: AgentId,
+    version: VersionNumber,
+    request: Request,
+    user: CurrentUser,
+    session: Session,
+    enforcer: Enforcer,
+) -> VersionDetail:
+    """One published version, its document included."""
+    await authorize(
+        session, enforcer, user, "organizations:read", Scope(Level.ORG, organization_id)
+    )
+    try:
+        found = await agent_store(request).version(organization_id, agent_id, version)
+    except PyMongoError as error:
+        raise _unavailable(error) from None
+    if found is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "The agent has no such version")
+    return VersionDetail.model_validate(found)
 
 
 @router.delete(

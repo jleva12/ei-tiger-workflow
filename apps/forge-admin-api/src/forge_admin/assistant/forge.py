@@ -29,7 +29,13 @@ from google.adk.models import BaseLlm
 from google.adk.models.llm_request import LlmRequest
 from pydantic import Field
 
-from forge_admin.assistant import access_tools, admin_tools, language_models, screens
+from forge_admin.assistant import (
+    access_tools,
+    admin_tools,
+    knowledge_tools,
+    language_models,
+    screens,
+)
 from forge_admin.assistant.page_context import describe_page
 from forge_admin.assistant.person import PERSON, describe_person
 from forge_admin.assistant.screens import AssistantToolset, Screens
@@ -47,7 +53,8 @@ models and other systems, and a person approves the steps that need one.
 
 What Forge is made of:
 - A hierarchy: the site, then organizations. The work happens in \
-organizations: their ADK workflows and their runs, and their agents.
+organizations: their ADK workflows and their runs, their agents, and their \
+knowledge bases, named sets of documents their agents search.
 - Role-based access: a role is assigned in a scope, the site or an \
 organization; a site role applies in every organization too. Permissions are \
 keyed resource:action.
@@ -55,10 +62,13 @@ keyed resource:action.
 How you write to the person:
 - Plainly and briefly, in the second person and short sentences. Use Forge's \
 words: organization, scope, role, permission, member, ADK workflow, agent, \
-step, run, approval.
+step, run, approval, knowledge base, document.
 - In Markdown: short paragraphs, lists, and fenced code blocks that name their \
 language.
 - Never invent records, people, numbers or links.
+- Say what a document says in its own terms: its parties, names and roles \
+("the husband must...", "the vendor shall..."), never as if it were about \
+the person you're talking to, even when you answer them in the second person.
 """
 
 # The supervisor's part: `supervisor_instruction` adds the screen and context.
@@ -82,7 +92,9 @@ approval before a change. Don't ask them to approve it again.
 - Answer from what the specialist reports; it's what happened. Say something \
 changed only when it says so; when it couldn't do something, say why and what \
 the person can do. Keep its links and IDs exactly as it wrote them, next to \
-the facts they support.
+the facts they support, and its citations too: the refs in square brackets \
+right after each fact ("... within 180 days [KQM4821]."), which become \
+numbered sources.
 - Answer on your own only about Forge in general, and about what you and \
 your specialists can do. For what none of them reaches, say so and tell the \
 person where in Forge to look.
@@ -114,8 +126,9 @@ The person and their page:
 it, the page they're on as they send each message.
 - When they say this, here, it or the current one, they mean what's in \
 focus, or else the innermost record on screen, by its ID: an \
-organization's for its members, ADK workflows and agents; a user's, role's \
-or permission's on its administration page.
+organization's for its members, ADK workflows, agents and knowledge bases; \
+a knowledge base's on its page, and the knowledge_document open in its \
+viewer; a user's, role's or permission's on its administration page.
 - The page can change between messages: earlier messages may be about an \
 earlier page.
 - The page says where they are, not what they may do: every tool still acts \
@@ -390,6 +403,25 @@ def toolsets(settings: Settings, app: FastAPI | None = None) -> list[AssistantTo
                 "Administration: organizations, the roles "
                 "and permissions Forge grants, and its users; reads, creates and "
                 "edits them, never deletes."
+            ),
+        ),
+        AssistantToolset(
+            name="knowledge",
+            title="Knowledge bases",
+            description=(
+                "Lists an organization's knowledge bases and their documents, says "
+                "how each document's ingestion went, answers questions from the "
+                "documents with cited passages, and retries or re-indexes "
+                "ingestion where you may. Changes ask you first."
+            ),
+            toolset=knowledge_tools.toolset(app) if app is not None else None,
+            instruction=knowledge_tools.INSTRUCTION,
+            tools=knowledge_tools.TOOL_NAMES,
+            delegate=(
+                "Knowledge bases: an organization's knowledge bases and their "
+                "documents; answering questions from what the documents say, with "
+                "the passages cited by ref; which documents are searchable, failed "
+                "or stale, and retrying or re-indexing them."
             ),
         ),
     ]

@@ -16,6 +16,7 @@ import {
   usePageContextApi,
   type PageContext,
 } from "@/features/assistant/lib/page-context"
+import { apiAuthHeaders } from "@/lib/api-instance"
 import { useUserPreferences } from "@/lib/user-preferences"
 import { useWorkspaceScopeApi } from "@/app/workspace-scope"
 
@@ -53,9 +54,6 @@ export const ADK_APP: string = import.meta.env.VITE_ADK_APP || "forge"
  */
 export const FORGE_AGENT_SERVER =
   API_URL !== undefined && !import.meta.env.VITE_ADK_URL
-// The same local development token the admin API gets, so the agent can
-// call Forge (e.g. its workflow tools) as the signed-in user.
-const API_TOKEN: string | undefined = import.meta.env.VITE_API_TOKEN
 
 const NOT_CONNECTED =
   "The Forge agent isn't connected yet. Set `VITE_API_URL` (the admin API, " +
@@ -72,8 +70,9 @@ const notConnected: AdkStreamCallback = async function* () {
   }
 }
 
-const authHeaders = (): Record<string, string> =>
-  API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}
+// The same sign-in the admin API gets, so the agent can call Forge (e.g.
+// its workflow tools) as the signed-in user.
+const authHeaders = apiAuthHeaders
 
 /** What the person is looking at, read when it's needed. */
 export type CurrentPage = {

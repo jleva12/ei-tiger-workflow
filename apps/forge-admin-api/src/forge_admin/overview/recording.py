@@ -22,6 +22,8 @@ from forge_common.adk.usage import Attribution, PriceOf, UsagePlugin
 from forge_task_adk_workflows.usage_store import UsageStore
 from google.adk.plugins.base_plugin import BasePlugin
 
+from forge_admin.auth.access import caller_subject
+
 #: The assistant's subject ID: there's one.
 ASSISTANT = "assistant"
 
@@ -56,7 +58,9 @@ class AgentUsage:
             attribution,
             version=str(agent.version) if agent.version is not None else None,
             session_id=request.session_id,
-            user_id=request.user_id,
+            # Who called, when the runtime knows (an API key, a person):
+            # otherwise whoever the caller says the conversation is with.
+            user_id=caller_subject() or request.user_id,
         )
 
 

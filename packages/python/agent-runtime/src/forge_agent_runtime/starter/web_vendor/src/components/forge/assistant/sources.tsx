@@ -48,10 +48,29 @@ export type AssistantSource = {
   excerpt?: string
 }
 
-/** How answers cite what the agent's tools found. */
+/** What a search call looked through and found, for its card. */
+export type AssistantSearch = {
+  /** What it searched, by name, e.g. the knowledge bases. */
+  searched: string[]
+  /** The passages it found; none when nothing was relevant enough. */
+  found: number
+  /** The documents they're from. */
+  documents: number
+}
+
+/**
+ * How answers cite what the agent's tools found. Make it once (at module
+ * scope or in `useMemo`): each message's sources are read once per config.
+ */
 export type AssistantSourcesConfig = {
   /** The sources in a finished tool call's result; [] for other tools. */
   fromToolCall: (toolName: string, result: unknown) => AssistantSource[]
+  /**
+   * The search a finished tool call made, which its card says in place of
+   * "Used tool: <name>" ("Searched Claims knowledge · 5 passages in 3
+   * documents"); undefined for calls that aren't searches.
+   */
+  searchOf?: (toolName: string, result: unknown) => AssistantSearch | undefined
 }
 
 /* -------------------------------------------------------------------------- */
@@ -308,6 +327,39 @@ function DocumentRow({
 
 const plural = (count: number, one: string) =>
   `${count} ${one}${count === 1 ? "" : "s"}`
+
+/* -------------------------------------------------------------------------- */
+/* Search calls                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A search call's card label: what it searched and what it found, e.g.
+ * "Searched **Member knowledge** and **Claims knowledge** · 5 passages in 3
+ * documents", or "· nothing relevant" when it found nothing to answer from.
+ */
+export function SearchLabel({ search }: { search: AssistantSearch }) {
+  const [first, second, ...rest] = search.searched
+  return (
+    <>
+      Searched {first ? <b>{first}</b> : "the knowledge base"}
+      {second &&
+        (rest.length ? (
+          <> and {rest.length + 1} more</>
+        ) : (
+          <>
+            {" "}
+            and <b>{second}</b>
+          </>
+        ))}
+      <span className="text-subtle">
+        {" · "}
+        {search.found
+          ? `${plural(search.found, "passage")} in ${plural(search.documents, "document")}`
+          : "nothing relevant"}
+      </span>
+    </>
+  )
+}
 
 /**
  * The documents under an answer: the ones it cites, numbered as in the text,

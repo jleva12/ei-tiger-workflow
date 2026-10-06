@@ -6,18 +6,23 @@ from contextlib import asynccontextmanager
 from importlib.metadata import version
 
 from fastapi import APIRouter, Depends, FastAPI
+from forge_agent_runtime.a2a import task_store
 from forge_common.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
+from forge_mcp_servers.secrets import SecretBox
+from forge_mcp_servers.service import McpServers
 from forge_task_adk_workflows.run_store import RunStore
 from forge_task_adk_workflows.usage_store import UsageStore
 from google.adk.sessions import DatabaseSessionService
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 
+from forge_admin.adk_workflows import runtime as workflow_runtime
 from forge_admin.adk_workflows.documents import AgentStore
 from forge_admin.adk_workflows.queue import Embedding
 from forge_admin.api.routes import health, info
 from forge_admin.assistant.runtime import AgentRuntime
 from forge_admin.auth.authorization import create_enforcer
+from forge_admin.auth.runtime_access import runtime_dependencies
 from forge_admin.auth.security import authenticate
 from forge_admin.chat_agents import runtime as chat_agent_runtime
 from forge_admin.chat_agents.source import create_executor
@@ -27,8 +32,6 @@ from forge_admin.db.session import create_engine, create_sessionmaker
 from forge_admin.knowledge.queue import KnowledgeQueue
 from forge_admin.knowledge.search import KnowledgeSearch
 from forge_admin.knowledge.storage import DocumentStore
-from forge_admin.mcp_servers.secrets import SecretBox
-from forge_admin.mcp_servers.service import McpServers
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +159,10 @@ class ApiServer:
                 if app.state.chat_agents is not None
                 else None
             )
+        # Chat agents' A2A tasks, in this database (a2a_tasks, 0010a2a). Tests
+        # set their own.
+        if getattr(app.state, "a2a_tasks", None) is None:
+            app.state.a2a_tasks = task_store(engine)
         # ADK workflow runs' sessions, which the async worker's ADK workflows
         # task keeps in this database too: a run's steps are read from them.
         # Tests set their own.
@@ -209,12 +216,27 @@ class ApiServer:
             )
         for router in self.public_routers:
             app.include_router(router)
-        # Chat agents' runtime: public unless the settings say otherwise.
+        # The runtime, over ADK's run API and A2A: public unless the settings
+        # say otherwise, and then an API key or a sign-in with agents:run in
+        # the organization called (forge_admin.auth.runtime_access).
+        runtime = runtime_dependencies(self.settings)
         app.include_router(
             chat_agent_runtime.router,
             prefix=f"{self.settings.api_prefix}/runtime",
-            dependencies=[] if self.settings.agent_runtime_public else protected,
+            dependencies=runtime,
             tags=["chat agent runtime"],
+        )
+        app.include_router(
+            chat_agent_runtime.a2a_router(self.settings),
+            prefix=f"{self.settings.api_prefix}/runtime",
+            dependencies=runtime,
+            tags=["chat agent runtime: A2A"],
+        )
+        # The workflows, over REST (their A2A is beside the chat agents').
+        app.include_router(
+            workflow_runtime.router,
+            prefix=f"{self.settings.api_prefix}/runtime",
+            dependencies=runtime,
         )
         return app
 

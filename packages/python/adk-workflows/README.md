@@ -34,9 +34,9 @@ the worker runs the task's `run` job on it:
 | Field | What |
 | --- | --- |
 | `tenant_id` | The organization. |
-| `agent_id`, `revision`, `name` | The ADK workflow, its revision and name when the run started. |
+| `agent_id`, `revision`, `version`, `name` | The ADK workflow, its revision, which version ran (`"draft"` or a published one's number) and its name when the run started. |
 | `document` | The ADK workflow as it was then: a run is pinned to it. |
-| `saved` | The saved ADK workflows it runs (Saved nodes), by ID, as they were then. |
+| `saved` | The saved ADK workflows it runs (Saved nodes, workflow tools), by reference (`ag_x`, `ag_x@3`, `ag_x@draft`), each at the version named, as they were then. |
 | `input` | The run's input, held to its start's input schema. |
 | `session_id` | The run's ADK session, made by the admin API. |
 | `run_as`, `run_as_name` | The member it acts as: the session's user. |

@@ -64,8 +64,8 @@ DOTFILES = {"gitignore": ".gitignore", "dockerignore": ".dockerignore"}
 #: Templates that would be read as the package's own (pyproject.toml, main.py) end in this.
 TEMPLATE_SUFFIX = ".template"
 #: ``@@if flag@@ … @@end@@`` on one line, and on lines of their own.
-INLINE_IF = re.compile(r"@@if (!?[a-z-]+)@@(.*?)@@end@@")
-BLOCK_IF = re.compile(r"@@if (!?[a-z-]+)@@")
+INLINE_IF = re.compile(r"@@if (!?[a-z0-9-]+)@@(.*?)@@end@@")
+BLOCK_IF = re.compile(r"@@if (!?[a-z0-9-]+)@@")
 REACT = "^19.2.8"
 #: Nodes only a hosted runtime can run, and the service a project gives them.
 HOSTED_ONLY = {
@@ -403,6 +403,16 @@ def _chain(options: StarterOptions) -> tuple[str, bool]:
         add("Replies stream as the model writes them.", ".with_streaming(True)")
     else:
         add("Replies arrive whole, not word by word.", ".with_streaming(False)")
+    if options.a2a:
+        add(
+            "Google's A2A protocol too: JSON-RPC at /a2a, its card at /.well-known/agent-card.json.",
+            ".with_a2a()",
+        )
+    else:
+        lines += [
+            "\t# Google's A2A protocol too (forge-agent-runtime[a2a]): JSON-RPC at /a2a:",
+            "\t# .with_a2a()",
+        ]
     if options.ui:
         add("The built UI, served at /; the run API is at /api.", '.with_web(HERE / "web" / "dist")')
     if options.cors_origins:
@@ -448,6 +458,11 @@ def _choices(options: StarterOptions) -> str:
         "| Interface | The chat UI and the API, on one port |"
         if options.ui
         else "| Interface | The API alone, for your own front end or services |"
+    )
+    out.append(
+        "| Protocols | ADK's run API (`/api`) and Google's A2A (`/a2a`, 1.0 and 0.3) |"
+        if options.a2a
+        else "| Protocols | ADK's run API (`/api`) |"
     )
     access = "An API key (`AGENT_API_KEYS`)" if options.api_key else "Anyone who can reach it"
     if options.cors_origins:
@@ -526,6 +541,14 @@ def _env_example(
         "# --- The server (forge_agent_runtime.AgentServerSettings); these are the defaults ---",
         "# FORGE_AGENT_HOST=127.0.0.1",
         "# FORGE_AGENT_PORT=8000",
+        *(
+            [
+                "# The address A2A's card gives callers; the one each request came to by default",
+                "# FORGE_AGENT_PUBLIC_URL=https://agent.example.com",
+            ]
+            if options.a2a
+            else []
+        ),
         "# What HTTP tools may reach besides the internet",
         "# FORGE_AGENT_ALLOW_PRIVATE=false",
         "# FORGE_AGENT_ALLOWED_HOSTS=[]",
@@ -760,6 +783,7 @@ def generate_project(
         *(["data"] if options.keeps_data else []),
         *(["compose"] if options.services else []),
         *(["api-key"] if options.api_key else []),
+        *(["a2a"] if options.a2a else []),
     }
     run_doc = (
         "    uv run main.py                 # the agent and its UI on http://127.0.0.1:8000\n"

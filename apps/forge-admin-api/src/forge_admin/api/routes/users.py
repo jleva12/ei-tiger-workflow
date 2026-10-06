@@ -11,7 +11,13 @@ from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import delete, select
 
 from forge_admin.api.routes.common import Audited, Session, commit_or_conflict
-from forge_admin.auth.access import SITE, CurrentUser, Enforcer, authorize, current_user
+from forge_admin.auth.access import (
+    SITE,
+    CurrentUser,
+    Enforcer,
+    authorize,
+    current_person,
+)
 from forge_admin.auth.authorization import SUBJECT_PATTERN, is_reserved_subject
 from forge_admin.models import CasbinRule, User
 
@@ -99,7 +105,7 @@ async def _require_unique(
             raise HTTPException(status.HTTP_409_CONFLICT, detail)
 
 
-@router.get("", dependencies=[Depends(current_user)])
+@router.get("", dependencies=[Depends(current_person)])
 async def list_users(session: Session) -> list[UserRead]:
     """
     List everyone who uses Forge.
@@ -143,7 +149,7 @@ async def create_user(
     return UserRead.model_validate(record)
 
 
-@router.get("/{user_id}", dependencies=[Depends(current_user)])
+@router.get("/{user_id}", dependencies=[Depends(current_person)])
 async def get_user(user_id: UserIdPath, session: Session) -> UserRead:
     """
     Get one user.

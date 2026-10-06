@@ -1,3 +1,7 @@
+import {
+  toolIssues,
+  type ChatAgentValidationContext,
+} from "@/features/agents/lib/validate"
 import type { BuilderIssue, IssueLevel } from "@/features/builder/lib/types"
 import { checkField } from "@/features/steps/lib/expressions"
 import type { StepData } from "@/features/steps/lib/model"
@@ -18,8 +22,10 @@ import {
   RESERVED_NAMES,
   subAgentsOf,
   walkSubAgents,
+  type AgentConfigs,
   type AgentStep,
   type LlmSettings,
+  type LlmTool,
   type SubAgent,
 } from "./model"
 import { agentScopesOf } from "./scope"
@@ -40,6 +46,25 @@ export type AgentValidationContext = {
    * saved-agent nodes, to find ones that would run themselves.
    */
   agents?: Map<string, { name: string; uses: string[] }>
+  /**
+   * The organization's agents from the Agents page, for LLM agents that are
+   * one or call one: their names, versions, and the input their latest
+   * declares (its JSON Schema).
+   */
+  chatAgents?: Map<string, ChatAgentLookup>
+  /** The organization's MCP servers and knowledge bases, for the tools. */
+  mcpServers?: ChatAgentValidationContext["mcpServers"]
+  knowledgeBases?: ChatAgentValidationContext["knowledgeBases"]
+}
+
+/** An agent from the Agents page, as a workflow's checks see it. */
+export type ChatAgentLookup = {
+  name: string
+  /** Its latest published version; null before it's published. */
+  published: number | null
+  hasDraft: boolean
+  /** The JSON Schema of the input it takes (its state_schema). */
+  input: Record<string, unknown>
 }
 
 // ADK's {key} (not a {{ }} template): what an instruction held before.
@@ -47,7 +72,7 @@ const SINGLE_BRACES = /(?<![{])(\{([A-Za-z_][A-Za-z0-9_]*)\??\})(?![}])/
 // A field with more than this many problems reports only these.
 const PER_FIELD = 3
 
-type Found = [code: string, level: IssueLevel, message: string]
+type Found = [code: string, level: IssueLevel, message: string, field?: string]
 
 // The setting each of a node's own issues is about, by its code.
 const FIELDS: Record<string, string> = {
@@ -99,8 +124,79 @@ function llmIssues(config: LlmSettings): Found[] {
   return out
 }
 
+/**
+ * What's wrong in an LLM agent's tools: each one's settings, as the Agents
+ * builder checks a tool node's, and two the model would call by one name.
+ * Each issue names its setting: `<prefix>tools.<tool ID>.<setting>`.
+ */
+function toolsIssues(
+  tools: LlmTool[],
+  context: AgentValidationContext,
+  prefix = ""
+): Found[] {
+  const out: Found[] = []
+  const tool = {
+    agents: context.chatAgents
+      ? new Map(
+          [...context.chatAgents].map(([id, a]) => [
+            id,
+            { name: a.name, uses: [] },
+          ])
+        )
+      : undefined,
+    workflows: context.agents,
+    selfId: context.selfId,
+    mcpServers: context.mcpServers,
+    knowledgeBases: context.knowledgeBases,
+  } satisfies ChatAgentValidationContext
+  const named = new Map<string, string[]>()
+  for (const each of tools) {
+    const at = `${prefix}tools.${each.id}`
+    const label = each.name.trim() || "A tool"
+    for (const [code, level, message, field] of toolIssues(each, tool)) {
+      out.push([
+        `tool-${each.id}-${code}`,
+        level,
+        `${label}: ${message}`,
+        `${at}.${field ?? "name"}`,
+      ])
+    }
+    if (each.kind === "saved_agent" && context.chatAgents) {
+      const found = context.chatAgents.get(each.config.agent)
+      if (each.config.agent && found && found.published === null) {
+        out.push([
+          `tool-${each.id}-unpublished`,
+          "error",
+          `${label}: ${found.name} isn't published yet: an agent is called at its latest published version.`,
+          `${at}.agent`,
+        ])
+      }
+    }
+    if (each.kind === "http_tool" || each.kind === "knowledge_base") {
+      const name = adkName(each.name)
+      if (name) named.set(name, [...(named.get(name) ?? []), each.id])
+    }
+  }
+  for (const [name, ids] of named) {
+    if (ids.length < 2) continue
+    for (const id of ids) {
+      out.push([
+        `tool-${id}-same-name`,
+        "error",
+        `Two tools are called ${name}: the model tells them apart by name.`,
+        `${prefix}tools.${id}.name`,
+      ])
+    }
+  }
+  return out
+}
+
 /** What's wrong in a sub-agent's settings, and in its own sub-agents. */
-function subAgentIssues(agents: SubAgent[], path: string[] = []): Found[] {
+function subAgentIssues(
+  agents: SubAgent[],
+  context: AgentValidationContext,
+  path: string[] = []
+): Found[] {
   const out: Found[] = []
   for (const agent of agents) {
     const where = [...path, agent.name.trim() || "A sub-agent"]
@@ -120,7 +216,84 @@ function subAgentIssues(agents: SubAgent[], path: string[] = []): Found[] {
         `${where.join(" › ")}: ${message}`,
       ])
     }
-    out.push(...subAgentIssues(agent.config.sub_agents, where))
+    if (agent.kind === "llm") {
+      for (const [code, level, message, field] of toolsIssues(
+        agent.config.tools,
+        context,
+        `agents.${agent.id}.`
+      )) {
+        out.push([
+          `${agent.id}-${code}`,
+          level,
+          `${where.join(" › ")}: ${message}`,
+          field,
+        ])
+      }
+    }
+    out.push(...subAgentIssues(agent.config.sub_agents, context, where))
+  }
+  return out
+}
+
+/** What's missing or wrong in an LLM node that is an agent from the Agents page. */
+function agentSourceIssues(
+  config: AgentConfigs["llm"],
+  context: AgentValidationContext
+): Found[] {
+  if (!config.agent)
+    return [["agent", "error", "Pick the agent from the Agents page it uses."]]
+  const found = context.chatAgents?.get(config.agent)
+  // Unknown until they load: a pick isn't called deleted meanwhile.
+  if (!context.chatAgents) return []
+  if (!found)
+    return [["agent", "error", "That agent was deleted; pick another."]]
+  const out: Found[] = []
+  if (config.version === "draft") {
+    if (!found.hasDraft)
+      out.push([
+        "version",
+        "error",
+        `${found.name} has no draft: it's published as it is. Pick a version.`,
+        "version",
+      ])
+  } else if (found.published === null) {
+    out.push([
+      "version",
+      "error",
+      `${found.name} isn't published yet: publish it, or use its draft.`,
+      "version",
+    ])
+  } else if (config.version !== null && config.version > found.published) {
+    out.push([
+      "version",
+      "error",
+      `${found.name} has no version ${config.version} yet.`,
+      "version",
+    ])
+  }
+  const declared = found.input.properties
+  const fields =
+    declared && typeof declared === "object" ? Object.keys(declared) : []
+  const required = Array.isArray(found.input.required)
+    ? (found.input.required as string[])
+    : []
+  for (const field of required) {
+    if (!config.inputs[field]?.trim())
+      out.push([
+        `input-${field}`,
+        "error",
+        `${found.name} needs its input ${field}: say what it is.`,
+        `inputs.${field}`,
+      ])
+  }
+  for (const field of Object.keys(config.inputs)) {
+    if (!fields.includes(field) && config.inputs[field].trim())
+      out.push([
+        `input-${field}`,
+        "warning",
+        `${found.name} doesn't take an input ${field} any more.`,
+        `inputs.${field}`,
+      ])
   }
   return out
 }
@@ -134,7 +307,11 @@ function settingsIssues(
   const out: Found[] = []
   switch (step.kind) {
     case "llm":
+      // An agent from the Agents page brings its own instruction and tools.
+      if (step.config.source === "agent")
+        return agentSourceIssues(step.config, context)
       out.push(...llmIssues(step.config))
+      out.push(...toolsIssues(step.config.tools, context))
       break
     case "sequential":
     case "parallel":
@@ -178,7 +355,7 @@ function settingsIssues(
     default:
       break
   }
-  out.push(...subAgentIssues(subAgentsOf(step)))
+  out.push(...subAgentIssues(subAgentsOf(step), context))
   return out
 }
 
@@ -268,7 +445,13 @@ export function validateAgent(
     message: string,
     field = step ? fieldOf(code) : undefined
   ) =>
-    issues.push({ id: `${step ?? "agent"}:${code}`, level, step, field, message })
+    issues.push({
+      id: `${step ?? "agent"}:${code}`,
+      level,
+      step,
+      field,
+      message,
+    })
 
   const byId = new Map(graph.steps.map((s) => [s.id, s]))
   const outgoing = new Map<string, { output: string; target: string }[]>()
@@ -284,7 +467,12 @@ export function validateAgent(
   if (starts.length === 0)
     add("error", undefined, "start", "Add a start: every run begins there.")
   for (const extra of starts.slice(1)) {
-    add("error", extra.id, "start", "A workflow has one start; remove this one.")
+    add(
+      "error",
+      extra.id,
+      "start",
+      "A workflow has one start; remove this one."
+    )
   }
   if (starts[0] && !(outgoing.get(starts[0].id)?.length ?? 0)) {
     add(
@@ -431,13 +619,13 @@ export function validateAgent(
   }
 
   for (const step of graph.steps) {
-    for (const [code, level, message] of [
+    for (const [code, level, message, field] of [
       ...settingsIssues(step.data, context),
       ...(step.data.kind === "switch"
         ? switchIssues(step.data as StepData, scopeOf(step.id))
         : []),
-    ]) {
-      add(level, step.id, code, message)
+    ] as Found[]) {
+      add(level, step.id, code, message, field ?? fieldOf(code))
     }
     // What its expressions read: paths that lead nowhere, wrong types.
     for (const setting of agentExpressionSettings(step.data)) {

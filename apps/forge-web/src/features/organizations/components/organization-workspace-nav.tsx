@@ -16,20 +16,23 @@ import {
 /**
  * An organization workspace's sub nav: Overview on top, then its sections:
  * Workflows and agents (Workflows, Agents), Integrations (MCP servers,
- * Knowledge bases) and, for those who may see its members, Settings
- * (Members). Render it anywhere in the page: it goes in the shell's pinned
- * `ShellSidebarHeader`.
+ * Knowledge bases) and Settings: Members, for those who may see them, and API
+ * keys, for those who manage them. Render it anywhere in the page: it goes
+ * in the shell's pinned `ShellSidebarHeader`.
  */
 export function OrganizationWorkspaceNav({
   organizationId,
   view,
   members,
+  apiKeys,
 }: {
   organizationId: string
   /** The page open; none when it isn't one of them (an error page). */
   view?: WorkspaceView
   /** You may see its members (`members:read`): show Members. */
   members: boolean
+  /** You manage its API keys (`api_keys:manage`): show API keys. */
+  apiKeys: boolean
 }) {
   // The default page is the one without a view.
   const viewItem = (key: WorkspaceView) => (
@@ -51,7 +54,10 @@ export function OrganizationWorkspaceNav({
 
   const sections = WORKSPACE_SECTIONS.map((section) => ({
     ...section,
-    views: section.views.filter((key) => key !== "config" || members),
+    views: section.views.filter(
+      (key) =>
+        (key !== "config" || members) && (key !== "api-keys" || apiKeys)
+    ),
   })).filter((section) => section.views.length > 0)
 
   return (

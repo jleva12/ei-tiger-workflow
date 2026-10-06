@@ -216,8 +216,8 @@ class SpannerSearchBackend:
         self.search = Search(db, "chunks", similarity)
 
     def options(self, req: HybridSearchRequest) -> dict[str, Any]:
-        p: dict[str, Any] = {"tenant": req.tenant_id}
-        conditions = ["TenantId=@tenant"]
+        p: dict[str, Any] = {"tenants": list(req.tenant_ids)}
+        conditions = ["TenantId IN UNNEST(@tenants)"]
         for name, expr, values in (
             ("docs", "ScopeId", req.filters.doc_ids),
             ("sources", field("source_type"), req.filters.source_types),

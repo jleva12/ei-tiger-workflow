@@ -26,7 +26,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, aclosing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Protocol
 
 import httpx
 from google.adk.agents.run_config import RunConfig, StreamingMode
@@ -43,22 +43,18 @@ from pydantic.alias_generators import to_camel
 
 from forge_agent_runtime.build import build_app
 from forge_agent_runtime.document import ChatAgentDocument, DocumentError, load_document
+from forge_agent_runtime.refs import AgentNotFound, AgentRef, Version
 from forge_agent_runtime.services import RuntimeServices
 from forge_agent_runtime.templating import REQUEST_KEY
 from forge_common.adk.models import ProviderModels
 
 log = logging.getLogger(__name__)
 
-Version = int | Literal["draft"] | None
 #: The state the model picker sends with every message.
 FIXED_STATE: dict[str, Any] = {
     "model": {"type": "string"},
     "thinking_level": {"enum": ["", "off", "minimal", "low", "medium", "high", "xhigh"]},
 }
-
-
-class AgentNotFound(LookupError):
-    """No agent (or no such version of one) by that name."""
 
 
 class StateRefused(ValueError):
@@ -67,30 +63,6 @@ class StateRefused(ValueError):
     def __init__(self, problems: list[str]) -> None:
         super().__init__("; ".join(problems))
         self.problems = problems
-
-
-@dataclass(frozen=True)
-class AgentRef:
-    """An agent and which of its versions: ``ca_x``, ``ca_x@3``, ``ca_x@draft``."""
-
-    agent_id: str
-    version: Version = None
-
-    @classmethod
-    def parse(cls, text: str) -> AgentRef:
-        agent_id, _, version = text.partition("@")
-        if not agent_id:
-            raise AgentNotFound(f"{text!r} doesn't name an agent.")
-        if not version:
-            return cls(agent_id)
-        if version == "draft":
-            return cls(agent_id, "draft")
-        if version.isdigit() and int(version) > 0:
-            return cls(agent_id, int(version))
-        raise AgentNotFound(f"{text!r}: a version is a number, or draft.")
-
-    def __str__(self) -> str:
-        return self.agent_id if self.version is None else f"{self.agent_id}@{self.version}"
 
 
 @dataclass(frozen=True)
@@ -303,13 +275,18 @@ class AgentExecutor:
         """:raises AgentNotFound: There's no such agent or version."""
         return await self.source.get(AgentRef.parse(app_name))
 
-    async def runner(self, app_name: str) -> tuple[Runner, ResolvedAgent]:
+    async def runner(
+        self, app_name: str, *, resolved: ResolvedAgent | None = None
+    ) -> tuple[Runner, ResolvedAgent]:
         """
+        :param app_name: The agent.
+        :param resolved: Its definition, when the caller already found it.
         :return: A runner for the agent (built now if it isn't cached), and its definition.
         :raises AgentNotFound: There's no such agent or version.
         :raises BuildError: It can't be built as it is.
         """
-        resolved = await self.resolve(app_name)
+        if resolved is None:
+            resolved = await self.resolve(app_name)
         key = resolved.cache_key
         runner = self._runners.get(key)
         if runner is None:

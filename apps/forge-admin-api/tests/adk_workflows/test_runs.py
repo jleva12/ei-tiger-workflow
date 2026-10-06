@@ -17,6 +17,7 @@ from forge_admin.adk_workflows.queue import EmbeddingError
 from forge_admin.adk_workflows.runs import (
     MAX_ANSWER,
     AdkRunError,
+    PreparedRun,
     check_input,
     checked_answer,
     prepare_run,
@@ -86,7 +87,8 @@ def finder(*documents: dict[str, Any]) -> Any:
 
     async def find(agent_id: str) -> dict[str, Any] | None:
         found.append(agent_id)
-        return records.get(agent_id)
+        kept = records.get(agent_id)
+        return kept["document"] if kept is not None else None
 
     find.found = found  # type: ignore[attr-defined]
     return find
@@ -172,7 +174,7 @@ async def started(queue: FakeQueue, *runs: dict[str, Any]) -> list[dict[str, Any
                 store,
                 queue,  # type: ignore[arg-type]
                 run["record"],
-                saved=run["saved"],
+                prepared=PreparedRun(run["saved"]),
                 input=run["input"],
                 run_as="member-1",
                 run_as_name="Ada Lovelace",
@@ -191,7 +193,7 @@ def test_a_run_is_kept_with_its_documents_session_and_member_and_queued() -> Non
     top = agent("ag_top0000001", saved("leaf", "ag_leaf000001"))
     carried = asyncio.run(prepare_run(record(top), {"n": 1}, finder(leaf, top)))
     queue = FakeQueue()
-    one = {"record": record(top), "saved": carried, "input": {"n": 1}}
+    one = {"record": record(top), "saved": carried.saved, "input": {"n": 1}}
     run, again = asyncio.run(started(queue, one, {**one, "input": None}))
     session_id = run["session_id"]
     assert (run["status"], run["attempt"]) == ("queued", 1)
@@ -205,9 +207,12 @@ def test_a_run_is_kept_with_its_documents_session_and_member_and_queued() -> Non
         "tenant_id": ORG,
         "agent_id": "ag_top0000001",
         "revision": 3,
+        "version": None,
         "name": "Agent ag_top0000001",
         "document": top,
         "saved": {"ag_leaf000001": leaf},
+        "chat_agents": {},
+        "knowledge_bases": {},
         "input": {"n": 1},
         "session_id": session_id,
         "run_as": "member-1",
@@ -264,3 +269,118 @@ def test_an_answer_fits_a_decisions_comment() -> None:
     assert checked_answer({}, fits) == json.dumps(fits)
     with pytest.raises(AdkRunError, match="the most it can be is 4,000"):
         checked_answer({}, fits + "x")
+
+
+def llm_node(node_id: str, **config: Any) -> dict[str, Any]:
+    return node(
+        node_id,
+        "llm",
+        {"instruction": "Help.", "model": {"provider": "", "name": ""}, **config},
+    )
+
+
+def tool(tool_id: str, kind: str, **config: Any) -> dict[str, Any]:
+    return {"id": tool_id, "kind": kind, "name": tool_id.title(), "config": config}
+
+
+class FakeResources:
+    """The organization's agents (one published at v2, with a draft),
+    knowledge bases and MCP servers, as a run would find them."""
+
+    def __init__(self) -> None:
+        self.asked: list[tuple[str, Any]] = []
+
+    async def chat_agent(self, agent_id: str, version: Any) -> dict[str, Any]:
+        self.asked.append((agent_id, version))
+        if agent_id != "ca_support":
+            raise LookupError(f"the organization has no agent {agent_id}")
+        if version not in (None, 2, "draft"):
+            raise LookupError(f"Support has no version {version}")
+        return {"id": agent_id, "version": version or 2}
+
+    async def knowledge_bases(self, ids: list[str]) -> dict[str, dict[str, str]]:
+        known = {"kb_hr": {"name": "HR", "description": "Policies"}}
+        return {kb: known[kb] for kb in ids if kb in known}
+
+    async def mcp_servers(self, ids: list[str]) -> set[str]:
+        return {server for server in ids if server == "srv_docs"}
+
+
+def test_a_run_carries_the_agents_and_knowledge_bases_its_llm_agents_use() -> None:
+    called = agent("ag_called0001", node("done", "end", {"outcome": "succeeded"}))
+    top = agent(
+        "ag_top0000001",
+        llm_node("support", source="agent", agent="ca_support", version=None),
+        llm_node(
+            "triage",
+            tools=[
+                tool("kb", "knowledge_base", knowledge_bases=["kb_hr"]),
+                tool("docs", "mcp", server="srv_docs"),
+                tool("helper", "saved_agent", agent="ca_support"),
+                tool("flow", "adk_workflow", workflow="ag_called0001"),
+            ],
+            sub_agents=[
+                {
+                    "id": "drafter",
+                    "kind": "llm",
+                    "name": "Drafter",
+                    "config": {
+                        "tools": [
+                            tool("pinned", "knowledge_base", knowledge_bases=["kb_hr"])
+                        ]
+                    },
+                }
+            ],
+        ),
+    )
+    resources = FakeResources()
+    prepared = asyncio.run(
+        prepare_run(record(top), None, finder(called, top), resources)  # type: ignore[arg-type]
+    )
+    # The workflow called as a tool comes along like a saved one.
+    assert list(prepared.saved) == ["ag_called0001"]
+    assert prepared.chat_agents == {"ca_support": {"id": "ca_support", "version": 2}}
+    assert resources.asked == [("ca_support", None)]
+    assert prepared.knowledge_bases == {
+        "kb_hr": {"name": "HR", "description": "Policies"}
+    }
+
+    def refused(document: dict[str, Any], match: str) -> None:
+        with pytest.raises(AdkRunError, match=match):
+            asyncio.run(
+                prepare_run(record(document), None, finder(document), FakeResources())
+            )  # type: ignore[arg-type]
+
+    refused(
+        agent("ag_a000000001", llm_node("one", source="agent", agent="ca_gone")),
+        "Node 'One': the organization has no agent ca_gone",
+    )
+    refused(
+        agent(
+            "ag_a000000001",
+            llm_node("one", source="agent", agent="ca_support", version=7),
+        ),
+        "Node 'One': Support has no version 7",
+    )
+    refused(
+        agent("ag_a000000001", llm_node("one", source="agent", agent="")),
+        "Node 'One': choose the agent from the Agents page it uses",
+    )
+    refused(
+        agent(
+            "ag_a000000001",
+            llm_node(
+                "one", tools=[tool("kb", "knowledge_base", knowledge_bases=["kb_x"])]
+            ),
+        ),
+        "Node 'One', tool 'Kb': the organization has no knowledge base kb_x",
+    )
+    refused(
+        agent(
+            "ag_a000000001", llm_node("one", tools=[tool("m", "mcp", server="srv_x")])
+        ),
+        "Node 'One', tool 'M': the organization has no MCP server srv_x",
+    )
+    # Without the organization's resources, a run that uses them can't start.
+    with pytest.raises(AdkRunError, match="isn't set up here"):
+        asyncio.run(prepare_run(record(top), None, finder(called, top)))

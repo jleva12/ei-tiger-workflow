@@ -37,6 +37,15 @@ app = server.create_app()  # built once, the same object afterwards
   header whose `sub` is their user ID (`auth/security.py`, `auth/tokens.py`).
 - **API key**: when `FORGE_ADMIN_API_KEY` is set, every route below the
   prefix requires it in the `X-API-Key` header. The health probes stay open.
+- **Organizations' API keys**: what outside apps send instead of a person's
+  sign-in, as `Authorization: Bearer fk_…` or `X-API-Key: fk_…`
+  (`auth/api_keys.py`). A key is the Casbin subject `apikey:<id>` holding one
+  of its organization's roles, so it's authorized as a member would be; it
+  stands in for the deployment's API key. Keys can't use the routes only
+  people may (the users directory, the assistant, API keys themselves).
+- **The runtime** (`/api/v1/runtime`): the organizations' agents and
+  workflows for outside callers, public or not by `FORGE_ADMIN_AGENT_RUNTIME_PUBLIC`
+  (see [The runtime](#the-runtime)).
 - **Public routes**: routers in `PUBLIC_ROUTERS` mount at the root with
   neither the API key nor a user, and check their callers themselves. There
   are none at the moment.
@@ -183,9 +192,25 @@ The organization's agents (see [Agents](#agents-1)), not the assistant's.
 |---|---|---|---|
 | GET | `/organizations/{id}/agents` | The agents, most recently changed first, each with its whole `forge.agent/v1` `document`, `revision` and who saved it when | `organizations:read` |
 | POST | `/organizations/{id}/agents` | Make one, `{"document"}` | `agents:manage` |
-| GET | `/organizations/{id}/agents/{agent_id}` | One agent | `organizations:read` |
-| PUT | `/organizations/{id}/agents/{agent_id}` | Save its next version, `{"document", "revision"}`; 409 when someone saved it since that revision | `agents:manage` |
+| GET | `/organizations/{id}/agents/{agent_id}` | One agent, with its published `versions` | `organizations:read` |
+| PUT | `/organizations/{id}/agents/{agent_id}/draft` | Save its draft, `{"document", "revision"}`; 409 when someone saved it since that revision, or (`NO_DRAFT`) it's published with no draft. `PUT …/{agent_id}` does the same, for consoles from before versions | `agents:manage` |
+| POST | `/organizations/{id}/agents/{agent_id}/publish` | Publish the draft as its version, `{"revision"}`; 422 `{"msg", "problems"}` when it can't be yet | `agents:manage` |
+| POST | `/organizations/{id}/agents/{agent_id}/versions` | Start the next version's draft from a published one, `{"from_version"?}`; 409 `DRAFT_EXISTS` or `NOT_PUBLISHED` | `agents:manage` |
+| DELETE | `/organizations/{id}/agents/{agent_id}/draft` | Discard the draft; 409 `NO_DRAFT` or `NOT_PUBLISHED` | `agents:manage` |
+| GET | `/organizations/{id}/agents/{agent_id}/versions/{n}` | One published version, with its document | `organizations:read` |
 | DELETE | `/organizations/{id}/agents/{agent_id}` | Delete it | `agents:manage` |
+
+### API keys
+
+The organization's API keys (see [The runtime](#the-runtime)). A key's
+`secret` is answered once, when it's made.
+
+| Method | Path | What | Needs |
+|---|---|---|---|
+| GET | `/organizations/{id}/api-keys` | The keys, newest first: name, role, `hint` (`fk_…` and its last four characters), expiry, when last used | `api_keys:manage`, as a person |
+| POST | `/organizations/{id}/api-keys` | Make one, `{"name", "role"?, "expires_at"?}` (role `org:api` by default; an organization's role whose every grant you hold there; expiry within two years, or never): 201 with its `secret` | `api_keys:manage`, as a person |
+| GET, PATCH | `/organizations/{id}/api-keys/{key_id}` | One key; rename it or change its role, `{"name"?, "role"?}` | `api_keys:manage`, as a person |
+| DELETE | `/organizations/{id}/api-keys/{key_id}` | Delete it, and its role: apps using it are refused from their next call | `api_keys:manage`, as a person |
 
 ### ADK workflow runs
 
@@ -194,7 +219,7 @@ Runs of the organization's ADK workflows (its agents); see
 
 | Method | Path | What | Needs |
 |---|---|---|---|
-| POST | `/organizations/{id}/agents/{agent_id}/runs` | Run it as you, `{"input"}`: 202 with the run, queued | `agents:run` |
+| POST | `/organizations/{id}/agents/{agent_id}/runs` | Run it as you, `{"input", "version"?}` (a published one's number, or `"draft"`; its draft when it has one, else its latest published, by default): 202 with the run, queued | `agents:run` |
 | GET | `/organizations/{id}/adk-runs` | The organization's runs, newest first, `?agent_id=&status=&limit=&offset=` (`status` repeatable; `limit` 1–100, 20): `{"items", "total"}` | `organizations:read` |
 | GET | `/organizations/{id}/adk-runs/{run_id}` | One run: what it runs, its input and result, what it waits for, its activity and the actions its status allows | `organizations:read` |
 | GET | `/organizations/{id}/adk-runs/{run_id}/steps` | A run's steps, read from its ADK session: `{"steps", "session_id"}` | `organizations:read` |
@@ -215,6 +240,21 @@ Runs of the organization's ADK workflows (its agents); see
 | POST | `/agents/run_sse` | Run your turn and stream the agent's events (Server-Sent Events) |
 
 Every assistant route needs a signed-in user, and `{you}` must be them.
+
+### The runtime
+
+Below `/api/v1/runtime`, for outside apps; who may call is
+[The runtime](#the-runtime)'s rule, not a route's permission.
+
+| Method | Path | What |
+|---|---|---|
+| POST | `/runtime/run_sse`; GET, POST `/runtime/apps/{app}/users/{user}/sessions`… | A chat agent over ADK's run API (`appName` `ca_x`, `ca_x@3`, `ca_x@draft`) |
+| GET | `/runtime/a2a/{app}/.well-known/agent-card.json` | A chat agent's or workflow's A2A card (`ca_…`, `ag_…`) |
+| POST | `/runtime/a2a/{app}` | A2A JSON-RPC, 1.0 and 0.3 |
+| GET | `/runtime/workflows/{ref}` | A workflow at a version (`ag_x`, `ag_x@3`, `ag_x@draft`): its name, what it does, the input its start takes |
+| POST | `/runtime/workflows/{ref}/runs` | Run it, `{"input", "wait"?}`: 201 with the run (and `Location`), once it pauses or ends or `wait` runs out |
+| GET | `/runtime/workflows/{ref}/runs/{run}?wait=` | Follow a run |
+| POST | `/runtime/workflows/{ref}/runs/{run}/answers`, `…/decisions`, `…/cancel` | Answer the question it waits at, `{"request_id", "answer", "wait"?}`; decide the approval, `{"request_id", "approved", "comment"?, "wait"?}`; give it up |
 
 ### Outside the API prefix
 
@@ -272,6 +312,7 @@ freely afterwards.
 | `org:admin` | Organization administrator | `organizations:read`, `organizations:update`, `members:read`, `members:update`, `agents:manage`, `agents:run`, `agents:approve`, `agents:manage_runs` |
 | `org:member` | Organization member | `organizations:read`, `members:read`, `agents:manage`, `agents:run` |
 | `org:viewer` | Organization viewer | `organizations:read`, `members:read` |
+| `org:api` | API caller | `agents:run`: what an organization's API key usually holds |
 
 The default permissions, and what checks them:
 
@@ -284,7 +325,8 @@ The default permissions, and what checks them:
 | `roles:create` / `update` / `delete` | Creating, editing and deleting roles (on the site) |
 | `permissions:create` / `update` / `delete` | Creating, editing and deleting permissions (on the site) |
 | `agents:manage` | Making, saving and deleting agents |
-| `agents:run` | Running ADK workflows (agents); answering their runs' questions and deciding the approvals any member may |
+| `agents:run` | Running ADK workflows (agents); answering their runs' questions and deciding the approvals any member may; calling the organization's agents and workflows through the runtime when it isn't public |
+| `api_keys:manage` | Making, changing and deleting the organization's API keys (`org:admin` by default) |
 | `agents:approve` | Deciding the ADK workflow runs' approvals the organization's administrators decide |
 | `agents:manage_runs` | Retrying, resubmitting and abandoning the organization's ADK workflow runs |
 | `*:*` | Everything |
@@ -346,6 +388,21 @@ its input, its text parsed when it's JSON. It refuses what can't run (no start, 
 missing or self-running saved agent, edges it can't follow) with an
 `AgentBuildError` naming the node. The async worker runs them: see
 [ADK workflow runs](#adk-workflow-runs-1).
+
+Agents have versions, as chat agents do (`adk_workflows/versioned_store.py`,
+shared by both): the draft the builder saves, and published versions,
+frozen in `agent_versions` (`ag_x@3`), that nothing changes. One saved
+before versions existed is a draft of version 1 until it's first published.
+Publishing checks it can be (`runs.check_publishable`): it has a start, it
+builds, and it runs only what doesn't change: other workflows' and chat
+agents' published versions, never a draft or a never-published workflow.
+
+Which version runs is named by reference (`adk_workflows/versions.py`). A
+`saved` node and a workflow tool each have a `version`: a published one's
+number, `"draft"`, or null for the latest published as each run starts
+(while it has none, its current document). Outside callers name it the same
+way: `ag_x` needs a published version (404 saying how to run the draft),
+`ag_x@3` pins one, `ag_x@draft` runs the draft. A run records its `version`.
 
 ## ADK workflow runs
 
@@ -475,6 +532,44 @@ deadline is a rejection the worker makes.
 | 409 | The run's status doesn't allow it, `detail` saying so |
 | 422 | Input or an answer that doesn't fit, a document that doesn't build, or a malformed query |
 | 503 | The runs' database isn't answering, or the worker's queue isn't set up |
+
+## The runtime
+
+The organizations' agents and workflows, for outside apps and other agents:
+chat agents over ADK's run API (`chat_agents/runtime.py`, the
+`forge_agent_runtime` package's routes), workflows over REST
+(`adk_workflows/runtime.py`), and both over Google's A2A protocol at the same
+URLs, by name (`ca_…`, `ag_…`; workflows' is `adk_workflows/a2a.py`, an
+`A2aService` of the runtime's A2A router).
+
+Who may call is one setting, `FORGE_ADMIN_AGENT_RUNTIME_PUBLIC`
+(`auth/runtime_access.py`):
+
+- **Public** (the default): anyone may, with no credentials. Credentials
+  sent must be valid, and say who's calling: their A2A tasks and runs are
+  theirs, and their usage.
+- **Not public**: every call needs an organization's API key or a Forge
+  sign-in holding `agents:run` in the organization the agent or workflow is
+  theirs; a key only ever reaches its own organization's. A person's ADK
+  conversations are their own (`userId` is theirs); a key's are its end
+  users', any ID but a Forge user's or another key's. Cards need the same,
+  and say how to sign in.
+
+A workflow run started from outside runs as its caller (`apikey:<id>`, a
+person, or `anonymous`), its trigger `{"type": "runtime", "protocol":
+"rest"|"a2a", …}`. It's its starter's to follow, answer and cancel (an
+anonymous one is anyone's who has its ID); otherwise reading needs
+`organizations:read`, answering `agents:run`, cancelling
+`agents:manage_runs`; anything else answers 404. Approvals are decided only
+by callers holding what the step asks of its approvers: never anonymously.
+`wait` is capped at `FORGE_ADMIN_WORKFLOW_RUNTIME_WAIT` (60 seconds).
+
+Over A2A a task is a run (its ID the run's): the first message's data part
+(or text, as JSON) is the input; the task is `working` while the run goes,
+`input-required` while it waits for someone (with what an answer must fit,
+or who decides), `completed` with the result as the artifact `result`,
+`failed`, or `canceled`. The next message on the task answers what it waits
+at; reading the task catches it up with its run.
 
 ## The assistant
 
@@ -754,6 +849,11 @@ tables, `adk_runs` and `adk_run_events`, exactly as the run store
 (`forge_task_adk_workflows.run_store.metadata`) describes them
 (`tests/db/test_run_store_migration.py` holds it to that), and renames
 `background_tasks:manage` to `agents:manage_runs` with every grant of it.
+`0011api_keys` creates `api_keys` (each key's name, its secret's SHA-256 and
+last four characters, expiry and last use), adds `api_keys:manage`
+(`org:admin`) and the role `org:api` ("API caller", `agents:run`), and
+rewords `agents:run` to cover the runtime. `0012adk_run_versions` adds
+`adk_runs.version`, which version of a workflow a run ran.
 
 Define models on `forge_admin.db.base.AuditBase` under `models/` and import
 them in `models/__init__.py`, then from `apps/forge-admin-api`:

@@ -315,6 +315,16 @@ function StandaloneSettings({
             value={options.interface}
             onChange={(value) => set("interface", value)}
           />
+          <CheckField
+            label="Speak Google's A2A protocol too"
+            checked={options.a2a}
+            onChange={(checked) => set("a2a", checked)}
+            description={
+              options.a2a
+                ? "Other agents call it at /a2a (A2A 1.0 and 0.3) and find its card at /.well-known/agent-card.json, beside ADK's run API."
+                : "ADK's run API only. One line in main.py turns A2A on later."
+            }
+          />
         </SettingsSection>
 
         <SettingsSection title="Where it keeps things">

@@ -1,5 +1,9 @@
 import type { ImportResult } from "@/features/builder/components/import-dialog"
-import { edgeId, type BuilderGraph, type Point } from "@/features/builder/lib/types"
+import {
+  edgeId,
+  type BuilderGraph,
+  type Point,
+} from "@/features/builder/lib/types"
 import { readList } from "@/features/steps/lib/document"
 import { HTTP_METHODS, THINKING_LEVELS } from "@/features/steps/lib/model"
 import {
@@ -204,8 +208,9 @@ const ENUMS: Record<string, readonly string[]> = {
 /**
  * Settings from whatever a document holds: the defaults, with every value
  * of the right type taken from `raw`. What doesn't fit is dropped and noted.
+ * A workflow's LLM agents read their tools' settings with it too.
  */
-function readSettings(
+export function readSettings(
   kind: ChatKind,
   raw: unknown,
   at: string,
@@ -243,6 +248,14 @@ function readSettings(
       )
         config[key] = value
       else notes.push(`${path} should be a number, or null.`)
+    } else if (key === "version") {
+      if (
+        value === null ||
+        value === "draft" ||
+        (typeof value === "number" && Number.isInteger(value) && value > 0)
+      )
+        config[key] = value
+      else notes.push(`${path} should be a version's number, "draft", or null.`)
     } else if (key === "model") {
       const model = { provider: "", name: "" }
       if (isRecord(value)) {

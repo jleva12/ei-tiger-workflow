@@ -84,9 +84,7 @@ function askedLine(pause: AdkRunPause, deadline = false) {
     step && `${step} step`,
     workflow,
     pause.requested_at && `asked ${formatRelative(pause.requested_at)}`,
-    deadline &&
-      pause.deadline &&
-      `expires ${formatRelative(pause.deadline)}`,
+    deadline && pause.deadline && `expires ${formatRelative(pause.deadline)}`,
   ]
     .filter(Boolean)
     .join(" · ")
@@ -139,6 +137,20 @@ export function ApprovalPanel({
         </Chip>
       }
     >
+      {pause.details.confirmation && (
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">
+            The agent would call{" "}
+            <code className="font-mono text-foreground">
+              {pause.details.tool}
+            </code>{" "}
+            with
+          </span>
+          <pre className="max-h-48 overflow-auto rounded-(--radius-control) border bg-background p-2 font-mono text-xs">
+            {JSON.stringify(pause.details.args ?? {}, null, 2)}
+          </pre>
+        </div>
+      )}
       {allowed ? (
         <>
           <Field>
@@ -233,8 +245,7 @@ export function HumanInputPanel({
   const busy = answer.isPending || answer.isSuccess
   const message =
     pause.reason ||
-    (typeof pause.details.message === "string" &&
-      pause.details.message) ||
+    (typeof pause.details.message === "string" && pause.details.message) ||
     "It asks for an answer"
 
   const submit = (event: React.SubmitEvent<HTMLFormElement>) => {
