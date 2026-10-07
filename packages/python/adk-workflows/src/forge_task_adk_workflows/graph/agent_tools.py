@@ -40,6 +40,7 @@ from forge_agent_runtime import (
 from forge_agent_runtime.document import DocumentError
 from forge_agent_runtime.executor import check_state
 from forge_agent_runtime.templating import REQUEST_KEY
+from forge_codegraph import Repository, WorkerError, code_passages, interleave
 from google.adk import Context, Event
 from google.adk.agents import BaseAgent, LlmAgent
 from google.adk.agents.callback_context import CallbackContext
@@ -94,10 +95,13 @@ class AgentServices:
     :ivar runtime: The runtime's services: the environment ``${NAME}`` comes
         from, where HTTP tools may go, the organization's MCP servers.
     :ivar search: Searches knowledge bases; None when the worker can't.
+    :ivar code: The code graph worker's API, which searches graph knowledge
+        bases (``forge_codegraph.CodeGraph``); None when it isn't set up.
     :ivar workflow_wait: Seconds a workflow called as a tool is waited for.
     :ivar organization_id: The run's organization (per run).
     :ivar chat_agents: The agents from the Agents page the run carries, by reference (per run).
-    :ivar knowledge_bases: The knowledge bases it carries: name and description, by ID (per run).
+    :ivar knowledge_bases: The knowledge bases it carries: name, description and
+        kind, and a graph one's repositories, by ID (per run).
     :ivar workflows: Runs the workflows its LLM agents call (per run).
     :ivar opened: The toolsets the run built: closed when it stops.
     """
@@ -106,6 +110,7 @@ class AgentServices:
     runtime: RuntimeServices = field(default_factory=RuntimeServices)
     http: httpx.AsyncClient | None = None
     search: KnowledgeSearch | None = None
+    code: Any = None
     workflow_wait: float = 120.0
     organization_id: str | None = None
     chat_agents: Mapping[str, dict[str, Any]] = field(default_factory=dict)
@@ -140,7 +145,7 @@ class AgentServices:
         """:return: The runtime's services for this run's tools: its knowledge bases and workflows."""
         return replace(
             self.runtime,
-            knowledge_bases=SnapshotKnowledgeBases(self.knowledge_bases, self.search),
+            knowledge_bases=SnapshotKnowledgeBases(self.knowledge_bases, self.search, self.code),
             workflows=self.workflows,
         )
 
@@ -160,11 +165,15 @@ class AgentServices:
 
 class SnapshotKnowledgeBases:
     """The organization's knowledge bases a run carries (checked as it
-    started), searched with the worker's search: the runtime's ``KnowledgeBases``."""
+    started), searched with the worker's search: the runtime's ``KnowledgeBases``.
+    A RAG knowledge base's documents with the documents task's search; a graph
+    one's code, of the repositories the run carries for it, with the code
+    graph worker's API. Their passages are taken in turn, best first."""
 
-    def __init__(self, known: Mapping[str, dict[str, Any]], search: KnowledgeSearch | None) -> None:
+    def __init__(self, known: Mapping[str, dict[str, Any]], search: KnowledgeSearch | None, code: Any = None) -> None:
         self.known = known
         self.search_with = search
+        self.code = code
 
     def _check(self, ids: Sequence[str]) -> None:
         missing = [i for i in ids if i not in self.known]
@@ -174,22 +183,79 @@ class SnapshotKnowledgeBases:
     def _name(self, knowledge_base_id: str) -> str:
         return str(self.known[knowledge_base_id].get("name") or knowledge_base_id)
 
+    def _graph(self, knowledge_base_id: str) -> bool:
+        return self.known[knowledge_base_id].get("kind") == "graph"
+
+    def _repositories(self, knowledge_base_id: str) -> list[Any]:
+        listed = self.known[knowledge_base_id].get("repositories")
+        return [
+            Repository(id=str(r["id"]), graph_id=str(r["graph_id"]), name=str(r.get("name") or ""))
+            for r in (listed if isinstance(listed, list) else [])
+            if isinstance(r, dict) and r.get("id") and r.get("graph_id")
+        ]
+
+    def _about(self, knowledge_base_id: str) -> str:
+        description = str(self.known[knowledge_base_id].get("description") or "")
+        if not self._graph(knowledge_base_id):
+            return description
+        names = [r.name for r in self._repositories(knowledge_base_id)]
+        code = f"code of {', '.join(names)}" if names else "code repositories"
+        return "; ".join(p for p in (description.strip(), code) if p)
+
     async def describe(
         self, knowledge_base_ids: Sequence[str], *, organization_id: str | None
     ) -> list[tuple[str, str]]:
         self._check(knowledge_base_ids)
-        return [(self._name(i), str(self.known[i].get("description") or "")) for i in knowledge_base_ids]
+        return [(self._name(i), self._about(i)) for i in knowledge_base_ids]
 
     async def search(
         self, knowledge_base_ids: Sequence[str], query: str, *, organization_id: str | None, limit: int
     ) -> list[dict[str, Any]]:
         self._check(knowledge_base_ids)
-        if self.search_with is None:
+        wanted = list(dict.fromkeys(knowledge_base_ids))
+        documents = [i for i in wanted if not self._graph(i)]
+        code = [i for i in wanted if self._graph(i)]
+        ranked: list[list[dict[str, Any]]] = []
+        if documents:
+            if self.search_with is None:
+                raise RuntimeError(
+                    "Knowledge bases can't be searched on this worker: its documents task isn't set up "
+                    "(HYBRID_MONGO__URI, HYBRID_EMBEDDING__*)"
+                )
+            ranked.append(await self.search_with({i: self._name(i) for i in documents}, query, limit))
+        if code:
+            ranked.append(await self._search_code(code, query, limit))
+        return interleave(ranked, limit)
+
+    async def _search_code(self, knowledge_base_ids: list[str], query: str, limit: int) -> list[dict[str, Any]]:
+        if self.code is None:
             raise RuntimeError(
-                "Knowledge bases can't be searched on this worker: its documents task isn't set up "
-                "(HYBRID_MONGO__URI, HYBRID_EMBEDDING__*)"
+                "Graph knowledge bases can't be searched on this worker: set "
+                "HYBRID_ADK_WORKFLOWS__CODEGRAPH_URL and HYBRID_ADK_WORKFLOWS__CODEGRAPH_TOKEN"
             )
-        return await self.search_with({i: self._name(i) for i in knowledge_base_ids}, query, limit)
+        # Each repository's hits cited as from the first knowledge base that has it.
+        owners: dict[str, tuple[str, Any]] = {}
+        for i in knowledge_base_ids:
+            for repository in self._repositories(i):
+                owners.setdefault(repository.graph_id, (i, repository))
+        if not owners:
+            return []
+        try:
+            hits = await self.code.search(list(owners)[:50], query, limit=limit)
+        except WorkerError as error:
+            raise RuntimeError(f"The code graph is unavailable; try again ({error.code}).") from None
+        passages: list[dict[str, Any]] = []
+        for hit in hits:
+            owner = owners.get(str(hit.get("repository_id", "")))
+            if owner is not None:
+                knowledge_base_id, repository = owner
+                passages += code_passages(
+                    [hit],
+                    knowledge_base_id=knowledge_base_id,
+                    knowledge_base=self._name(knowledge_base_id),
+                    repositories=[repository],
+                )
+        return passages
 
 
 class LazyToolset(BaseToolset):

@@ -745,6 +745,9 @@ def test_a_search_answers_passages_with_their_documents_names(
                 "location": "",
                 "text": "A finance lead approves refunds over 500 USD.",
                 "score": 0.92,
+                # A document's, not code's.
+                "repository_id": None,
+                "node_id": None,
             },
             # The removed document's isn't, though its chunks remain until
             # its delete job runs.

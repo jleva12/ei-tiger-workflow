@@ -11,9 +11,11 @@ from forge_admin.models.authorization import (
     PermissionGroupLink,
     Role,
 )
+from forge_admin.models.code_repositories import CodeIngestionJob, CodeRepository
 from forge_admin.models.hierarchy import Organization
 from forge_admin.models.knowledge import (
     KnowledgeBase,
+    KnowledgeBaseRepository,
     KnowledgeCollection,
     KnowledgeDocument,
 )
@@ -23,7 +25,10 @@ from forge_admin.models.users import User
 __all__ = [
     "ApiKey",
     "CasbinRule",
+    "CodeIngestionJob",
+    "CodeRepository",
     "KnowledgeBase",
+    "KnowledgeBaseRepository",
     "KnowledgeCollection",
     "KnowledgeDocument",
     "McpOAuthFlow",

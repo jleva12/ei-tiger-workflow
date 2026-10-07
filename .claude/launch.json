@@ -41,6 +41,14 @@
         "forge-ui"
       ],
       "port": 5185
+    },
+    {
+      "name": "codegraph-mcp",
+      "runtimeExecutable": "make",
+      "runtimeArgs": [
+        "codegraph-mcp"
+      ],
+      "port": 8103
     }
   ]
 }

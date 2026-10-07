@@ -1,0 +1,66 @@
+[project]
+name = "forge-codegraph-mcp"
+version = "0.1.0"
+description = "The code graph MCP server: read-only tools over the graph the code graph worker writes to Spanner, served over streamable HTTP with FastMCP"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.141.1",
+    # The MCP endpoint, its auth providers and its middleware.
+    "fastmcp>=4.0.10,<5",
+    # Structured logging with request ids (forge_common.logging).
+    "forge-common[logging]",
+    # The graph, read from the worker's Spanner database.
+    "google-cloud-spanner>=3.70,<4",
+    # Callers' credentials, checked with the admin API (access.py).
+    "httpx>=0.28",
+    # Questions embedded with the worker's model, for the semantic branch.
+    "openai>=1.40",
+    "pydantic-settings>=2.15.0",
+    "python-dotenv>=1.0",
+    "uvicorn[standard]>=0.53.0",
+]
+
+[project.scripts]
+forge-codegraph-mcp = "forge_codegraph_mcp.main:main"
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM", "RUF"]
+ignore = ["RUF012"]
+
+[tool.ruff.lint.pycodestyle]
+# The formatter wraps code at 100; prose it cannot wrap (docstrings, comments,
+# the template's among them) may run to 120.
+max-line-length = 120
+
+[tool.ruff.lint.isort]
+known-first-party = ["forge_codegraph_mcp"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastMCP injects tool dependencies through parameter defaults, like FastAPI's
+# Depends (already allowed).
+extend-immutable-calls = [
+    "fastmcp.dependencies.Depends",
+    "fastmcp.dependencies.CurrentAccessToken",
+    "fastmcp.dependencies.CurrentContext",
+    # dataclasses.field with the result's JSON rendering.
+    "forge_codegraph_mcp.graph.model.jfield",
+]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+check_untyped_defs = true

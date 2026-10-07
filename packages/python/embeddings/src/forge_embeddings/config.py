@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 from forge_tasks.settings import EnvSettings
 
@@ -26,6 +26,15 @@ class EmbeddingSettings(BaseModel):
     azure_endpoint: str | None = None  # set -> Azure OpenAI
     api_version: str | None = None  # Azure API version
     organization: str | None = None
+
+    @field_validator(
+        "document_model", "query_model", "base_url", "azure_endpoint", "api_version", "organization", mode="before"
+    )
+    @classmethod
+    def _empty_is_unset(cls, value: object) -> object:
+        # The apps reference the shared FORGE_EMBEDDING_* (e.g. an empty
+        # FORGE_EMBEDDING_BASE_URL for OpenAI itself), so empty means unset.
+        return None if isinstance(value, str) and not value.strip() else value
 
     @property
     def model(self) -> str:

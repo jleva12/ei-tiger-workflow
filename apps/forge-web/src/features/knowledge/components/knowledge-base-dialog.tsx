@@ -26,13 +26,17 @@ import {
   useOpenCount,
 } from "@/features/admin/components/dialog-state"
 import { toApiError, type ApiError } from "@/lib/api/index"
-import type { KnowledgeBase, KnowledgeBaseCreate } from "../lib/api"
+import type { KnowledgeBase, KnowledgeBaseKind } from "../lib/api"
 
-/** Creates a knowledge base, or renames and describes one. */
+/** What the dialog saves: a new knowledge base's kind is the caller's. */
+export type KnowledgeBaseInput = { name: string; description: string }
+
+/** Creates a knowledge base of a kind, or renames and describes one. */
 export function KnowledgeBaseDialog({
   open,
   onOpenChange,
   base,
+  kind = "rag",
   organizationName,
   onSubmit,
 }: {
@@ -40,9 +44,11 @@ export function KnowledgeBaseDialog({
   onOpenChange: (open: boolean) => void
   /** The knowledge base to edit; without one the dialog creates one. */
   base?: KnowledgeBase
+  /** What a new one holds: documents (`rag`) or code repositories (`graph`). */
+  kind?: KnowledgeBaseKind
   organizationName: string
   /** Saves; rejects with the API's error, which the dialog shows. */
-  onSubmit: (input: Required<KnowledgeBaseCreate>) => Promise<unknown>
+  onSubmit: (input: KnowledgeBaseInput) => Promise<unknown>
 }) {
   const count = useOpenCount(open)
   // While it closes, it keeps showing what it showed.
@@ -53,6 +59,7 @@ export function KnowledgeBaseDialog({
         <KnowledgeBaseForm
           key={count}
           base={open ? base : shown}
+          kind={kind}
           organizationName={organizationName}
           onSubmit={onSubmit}
           onDone={() => onOpenChange(false)}
@@ -62,17 +69,42 @@ export function KnowledgeBaseDialog({
   )
 }
 
+const COPY: Record<
+  KnowledgeBaseKind,
+  {
+    title: string
+    about: (organization: string) => string
+    placeholder: string
+  }
+> = {
+  rag: {
+    title: "New RAG knowledge base",
+    about: (organization) =>
+      `A set of ${organization}'s documents its agents can search: runbooks, specs, policies. Upload them once it's made.`,
+    placeholder: "Engineering handbook",
+  },
+  graph: {
+    title: "New graph knowledge base",
+    about: (organization) =>
+      `A set of ${organization}'s code repositories its agents can search, ingested into the code graph: each declaration, how it connects, and its source. Add the repositories once it's made.`,
+    placeholder: "Payments services",
+  },
+}
+
 function KnowledgeBaseForm({
   base,
+  kind,
   organizationName,
   onSubmit,
   onDone,
 }: {
   base?: KnowledgeBase
+  kind: KnowledgeBaseKind
   organizationName: string
-  onSubmit: (input: Required<KnowledgeBaseCreate>) => Promise<unknown>
+  onSubmit: (input: KnowledgeBaseInput) => Promise<unknown>
   onDone: () => void
 }) {
+  const copy = COPY[base?.kind ?? kind]
   const id = React.useId()
   const [name, setName] = React.useState(base?.name ?? "")
   const [description, setDescription] = React.useState(base?.description ?? "")
@@ -107,13 +139,11 @@ function KnowledgeBaseForm({
   return (
     <form onSubmit={submit} noValidate className="grid gap-6">
       <DialogHeader>
-        <DialogTitle>
-          {base ? "Edit knowledge base" : "New knowledge base"}
-        </DialogTitle>
+        <DialogTitle>{base ? "Edit knowledge base" : copy.title}</DialogTitle>
         <DialogDescription>
           {base
             ? `Rename or describe ${base.name}.`
-            : `A set of ${organizationName}'s documents its agents can search: runbooks, specs, policies. Upload them once it's made.`}
+            : copy.about(organizationName)}
         </DialogDescription>
       </DialogHeader>
       {error && error.status !== 409 && (
@@ -131,7 +161,7 @@ function KnowledgeBaseForm({
             autoFocus
             maxLength={200}
             autoComplete="off"
-            placeholder="Engineering handbook"
+            placeholder={copy.placeholder}
             value={name}
             aria-invalid={Boolean(nameError)}
             onChange={(event) => {

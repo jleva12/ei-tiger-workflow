@@ -1,0 +1,88 @@
+# The code graph ingestion worker and the Spanner emulator it writes the graph
+# to. Included by the root compose.yaml; also works as a standalone stack,
+# from the repository root:
+#   docker compose --env-file .env.compose --env-file .env.common -f apps/forge-codegraph-worker/compose.yaml up --build
+# Application settings are mounted from apps/forge-codegraph-worker/.env; the environment
+# below overrides that file for the container and points it at worker-spanner.
+# Its knobs are WORKER_* variables from .env.compose, never CODEGRAPH_*:
+# Compose also interpolates this file from apps/forge-codegraph-worker/.env, whose native
+# settings must not leak into the container. The container has no
+# .env.common, so the shared values the mounted file references come from
+# .env.common here (the root Makefile passes it with --env-file) and win over
+# the file's unresolved references.
+services:
+  # Development emulator: all data lives in memory and is lost on restart. It
+  # serializes read-write transactions and has no search indexes; measure
+  # throughput on managed Spanner, not here. The worker creates the instance,
+  # database and schema on start (CODEGRAPH_SPANNER_AUTO_PROVISION).
+  worker-spanner:
+    image: gcr.io/cloud-spanner-emulator/emulator:1.5.52
+    restart: unless-stopped
+    mem_limit: ${SPANNER_MEMORY_LIMIT:-4g}
+    memswap_limit: ${SPANNER_MEMORY_LIMIT:-4g}
+    cpus: ${SPANNER_CPUS:-4}
+    ports:
+      - "127.0.0.1:${SPANNER_GRPC_PORT:-19030}:9010"
+      - "127.0.0.1:${SPANNER_HTTP_PORT:-19040}:9020"
+  # Claims admitted ingestion jobs from Spanner and loads one graph generation
+  # per job.
+  worker:
+    build:
+      context: ../..
+      dockerfile: apps/forge-codegraph-worker/Dockerfile
+    image: forge-codegraph-worker:local
+    init: true
+    restart: unless-stopped
+    depends_on:
+      worker-spanner:
+        condition: service_started
+      # The queue of ingestion jobs is in the admin API's MySQL.
+      admin-mysql:
+        condition: service_healthy
+    environment:
+      CODEGRAPH_ENV_FILE: /etc/codegraph/worker.env
+      CODEGRAPH_WORK_DIR: /var/lib/codegraph
+      CODEGRAPH_BUILD_MODE: ${WORKER_BUILD_MODE:-maven-resolved}
+      CODEGRAPH_LANGUAGES: '${WORKER_LANGUAGES:-{"java":{"fallback_release":21,"java_home":"/opt/java/codegraph-jdk","maven_executable":"/opt/maven/bin/mvn","cache_dir":"/var/lib/codegraph/java/cache","work_dir":"/var/lib/codegraph/java/work","max_heap_mib":2048},"typescript":{},"python":{}}}'
+      CODEGRAPH_TIMEOUT: ${WORKER_TIMEOUT:-2h}
+      CODEGRAPH_HEALTH_ADDR: 0.0.0.0:8080
+      CODEGRAPH_QUEUE: ${WORKER_QUEUE:-ingestion}
+      # The admin API's MySQL, with its credentials, as the async worker's
+      # run store reaches it.
+      CODEGRAPH_JOBS_MYSQL_DSN: ${ADMIN_MYSQL_USER:-forge_admin}:${ADMIN_MYSQL_PASSWORD:-local-admin}@tcp(admin-mysql:3306)/${ADMIN_MYSQL_DATABASE:-forge_admin}
+      CODEGRAPH_SPANNER_DATABASE: ${WORKER_SPANNER_DATABASE:-projects/codegraph-local/instances/codegraph/databases/codegraph}
+      CODEGRAPH_SCOPE: ${WORKER_SCOPE:-codegraph}
+      CODEGRAPH_SPANNER_AUTO_PROVISION: "true"
+      CODEGRAPH_STARTUP_TIMEOUT: ${WORKER_STARTUP_TIMEOUT:-60s}
+      SPANNER_EMULATOR_HOST: worker-spanner:9010
+      # Every GitHub fetch authenticates with this token; empty reads
+      # anonymously, so only public repositories ingest.
+      CODEGRAPH_GITHUB_TOKEN: ${FORGE_GITHUB_TOKEN:-}
+      FORGE_ENV_COMMON_FILE: ""
+      CODEGRAPH_ADMISSION_TOKEN: ${FORGE_CODEGRAPH_ADMISSION_TOKEN:-}
+      CODEGRAPH_GRAPH_CURSOR_SIGNING_KEY: ${FORGE_CODEGRAPH_CURSOR_SIGNING_KEY:-}
+      # The embedding model every app shares (FORGE_EMBEDDING_* in .env.common).
+      CODEGRAPH_EMBEDDING_MODEL: ${FORGE_EMBEDDING_MODEL:-text-embedding-3-large}
+      CODEGRAPH_EMBEDDING_DIMENSIONS: ${FORGE_EMBEDDING_DIMENSIONS:-1024}
+      CODEGRAPH_EMBEDDING_BASE_URL: ${FORGE_EMBEDDING_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - "127.0.0.1:${WORKER_HEALTH_PORT:-18090}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "2", "http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      start_period: 20s
+      retries: 6
+    volumes:
+      - type: bind
+        source: ./.env
+        target: /etc/codegraph/worker.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - worker-scratch:/var/lib/codegraph
+    stop_grace_period: ${WORKER_STOP_GRACE_PERIOD:-1m}
+
+volumes:
+  worker-scratch:

@@ -100,7 +100,7 @@ src/forge_admin/
   cli/                   The console commands
     serve.py             forge-admin: logging, migrations, uvicorn
     seed.py              forge-admin-seed: the site administrator
-    token.py             forge-admin-token: a bearer token for a user
+    token.py             forge-admin-token: a bearer token for a user, optionally for an organization
   db/                    Persistence
     base.py              Base and AuditBase, which every model derives from; column types
     session.py           Engine, per-request sessions (get_session), ping
@@ -211,6 +211,99 @@ The organization's API keys (see [The runtime](#the-runtime)). A key's
 | POST | `/organizations/{id}/api-keys` | Make one, `{"name", "role"?, "expires_at"?}` (role `org:api` by default; an organization's role whose every grant you hold there; expiry within two years, or never): 201 with its `secret` | `api_keys:manage`, as a person |
 | GET, PATCH | `/organizations/{id}/api-keys/{key_id}` | One key; rename it or change its role, `{"name"?, "role"?}` | `api_keys:manage`, as a person |
 | DELETE | `/organizations/{id}/api-keys/{key_id}` | Delete it, and its role: apps using it are refused from their next call | `api_keys:manage`, as a person |
+
+### MCP servers
+
+The organization's remote MCP servers (streamable HTTP), which its agents
+and workflows use as toolsets, each with how Forge authenticates to it (an
+auth method from `forge_mcp_servers`; its secrets are write-only).
+
+| Method | Path | What | Needs |
+|---|---|---|---|
+| GET | `/mcp-auth-methods` | The auth methods, each with its form's fields | |
+| GET | `/mcp-server-defaults` | The servers the application offers ready-made (below): URL, timeout, auth method with its settings and help for its fields, headers | a signed-in user |
+| GET, POST | `/organizations/{id}/mcp-servers` | The servers, by name; add one, `{"name", "url", "description"?, "headers"?, "timeout_seconds"?, "auth"?}` | `organizations:read`; `mcp_servers:manage` to add |
+| GET, PATCH, DELETE | `/organizations/{id}/mcp-servers/{server_id}` | One server; change it (a new URL or auth disconnects it); delete it with its credentials | `organizations:read`; `mcp_servers:manage` to change |
+| POST | `/organizations/{id}/mcp-servers/{server_id}/check` | Connect as its agents would and list its tools | `mcp_servers:manage` |
+| POST, DELETE | `/organizations/{id}/mcp-servers/{server_id}/oauth[/start]` | Start an OAuth sign-in (answers where to send the person; they come back to `/mcp-oauth/callback`), or forget it | `mcp_servers:manage` |
+
+**Default servers.** The web console's **+ MCP server** offers a new,
+empty server or one of the application's: ready-made configurations in
+`src/forge_admin/mcp_servers/default_servers.yaml` (or the file
+`FORGE_ADMIN_MCP_SERVER_DEFAULTS` names), whose form opens filled in so the
+person only adds what's theirs. Each has a name, description, URL, timeout,
+instructions, an auth method with its settings and help for its fields
+(label, description, placeholder), and the headers it takes (required ones
+can't be removed and need a value). Strings may name the environment,
+`${NAME}` or `${NAME:-default}`. The API checks the file when it starts: an
+auth method there isn't, settings it doesn't take or a value nothing defines
+stop it. The first is the **code explorer**, the code graph MCP server
+([apps/forge-codegraph-mcp](../forge-codegraph-mcp/README.md)): a bearer
+token, one of the organization's API keys, at `FORGE_ADMIN_CODEGRAPH_MCP_URL`
+(natively `http://localhost:8103/mcp`; Compose sets the stack's).
+
+### Code graph
+
+What a credential may read of the code graph, which the code graph MCP
+server asks about every credential it's sent, passing it on as it came. A
+credential reads one organization's code repositories: an organization's API
+key its own organization's; a sign-in token the organization it was minted
+for, which its `org_id` claim names (`forge-admin-token --organization`).
+
+| Method | Path | What | Needs |
+|---|---|---|---|
+| GET | `/code-graph/access` | `{"subject", "organization_id", "repositories": [{"url", "owner", "name", "branch"}]}`: the organization's code repositories, by URL. 403 for a credential that names no organization | `repositories:read` in the credential's organization |
+
+### Code repositories
+
+The GitHub repositories an organization ingests into the code graph, each on
+one branch, and their ingestions. An ingestion is a row of
+`code_ingestion_jobs`, the code graph worker's queue
+([apps/forge-codegraph-worker](../forge-codegraph-worker/README.md)): the
+routes queue it, the worker claims it (`FOR UPDATE SKIP LOCKED`, under a
+lease fenced by the row's claim token), builds the graph in Spanner and
+writes its status, error and counts back, which the routes read. Times the
+worker compares (`eligible_at`) are the database's clock. A repository's
+graph is one per GitHub URL, shared by every organization that has it, and
+follows the branch it was first ingested on.
+
+| Method | Path | What | Needs |
+|---|---|---|---|
+| GET, POST | `/organizations/{id}/code-repositories` | The repositories, by URL, each with its latest ingestion and its latest successful one; add one, `{"url", "branch", "ingest"?}` (queues its first ingestion unless `ingest` is false). 409 when the organization has the URL, or another organization has it on another branch (the message names it); 422 for a URL that isn't `https://github.com/owner/name` or a branch Git wouldn't take | `organizations:read`; `repositories:manage` to add |
+| GET, DELETE | `/organizations/{id}/code-repositories/{repository_id}` | One repository; remove it with its ingestions (one running stops; the graph stays) | `organizations:read`; `repositories:manage` to remove |
+| GET, POST | `/organizations/{id}/code-repositories/{repository_id}/ingestions` | Its ingestions, newest first (`limit`, `offset`); queue one, `{"commit"?}` (the branch's head without it): 202, or 200 with the one already queued or running (made eligible now when it waits to retry); 409 when that one is of another commit | `organizations:read`; `repositories:manage` to queue |
+| GET | `/organizations/{id}/code-repositories/{repository_id}/ingestions/{job_id}` | One ingestion: `status` (`QUEUED`, `RUNNING`, `SUCCEEDED`, `SUPERSEDED`, `FAILED`), `commit_sha`, `attempts`, `error_code` and `error_message`, the graph's `codegraph_repository_id`, `run_id`, `generation` and `metrics` | `organizations:read` |
+| POST | `/organizations/{id}/code-repositories/{repository_id}/ingestions/{job_id}/retry` | Queue a failed ingestion again with its attempts reset; it ingests the same commit and resumes its run. 409 unless it failed and no other is queued or running | `repositories:manage` |
+
+A repository's code graph, relayed from the worker's API
+(`FORGE_ADMIN_CODEGRAPH_URL`, with its token `FORGE_ADMIN_CODEGRAPH_TOKEN`),
+for the web console's code graph explorer and Ingestion tab. Graph reads take
+`generation` (0 for the live one) and answer 409 before an ingestion of the
+repository succeeded, 503 when the worker isn't set up or doesn't answer, and
+502 when it refuses the admin API's token.
+
+| Method | Path | What | Needs |
+|---|---|---|---|
+| GET | `/organizations/{id}/code-repositories/{repository_id}/graph` | A page of its published graph: nodes of one `kind` or any, the edges among them, `next_cursor` | `repositories:read` |
+| GET | `/organizations/{id}/code-repositories/{repository_id}/graph/neighbors`, `/symbols`, `/source`, `/node` | A node's edges and their other ends (`node`, `direction`, `limit`, `cursor`); the nodes named `name`; a node's source with `context` lines; one node | `repositories:read` |
+| GET | `/organizations/{id}/code-repositories/{repository_id}/stats` | What the code graph holds of it: `code_graph.status` (`ok`, `not_ingested`, `unavailable` with why), the live graph's totals, and its latest `runs` | `repositories:read` |
+
+### Knowledge bases
+
+An organization's knowledge bases, of two kinds (`kind`, fixed when made):
+`rag`, documents uploaded to it (`…/documents`, `…/document-collections`),
+and `graph`, code repositories (`knowledge_base_repositories`), searched in
+the code graph. A graph one's reads count `repositories` and those `ingested`;
+document and collection routes answer 409 for it. Chat agents and workflow
+LLM nodes search both kinds with the knowledge base tool; a search of RAG and
+graph knowledge bases together takes their passages in turn.
+
+| Method | Path | What | Needs |
+|---|---|---|---|
+| GET, POST | `/organizations/{id}/knowledge-bases` | The knowledge bases, by name; make one, `{"name", "description"?, "kind"?}` (`rag` by default) | `organizations:read`; `knowledge_bases:manage` to make |
+| POST | `/organizations/{id}/knowledge-bases/{kb}/search` | Search it as its agents do, `{"query", "limit"?}`: a RAG one's passages, or a graph one's code (each hit a declaration, with `repository_id`, `node_id` and its source) | `organizations:read` |
+| GET, POST | `/organizations/{id}/knowledge-bases/{kb}/repositories` | A graph knowledge base's repositories, each with its latest ingestion and latest success; add one, `{"repository_id"}` (one of the organization's) or `{"url", "branch", "ingest"?}` (a GitHub repository, added to the organization when it doesn't have it): 201, or 200 when it has it already | `organizations:read`; `knowledge_bases:manage` to add, and `repositories:manage` to add a repository to the organization |
+| DELETE | `/organizations/{id}/knowledge-bases/{kb}/repositories/{repository_id}` | Remove it from the knowledge base; it stays in the organization, with its code graph | `knowledge_bases:manage` |
 
 ### ADK workflow runs
 
@@ -327,6 +420,8 @@ The default permissions, and what checks them:
 | `agents:manage` | Making, saving and deleting agents |
 | `agents:run` | Running ADK workflows (agents); answering their runs' questions and deciding the approvals any member may; calling the organization's agents and workflows through the runtime when it isn't public |
 | `api_keys:manage` | Making, changing and deleting the organization's API keys (`org:admin` by default) |
+| `repositories:manage` | Adding and removing the organization's code repositories, and starting and retrying their ingestions (`org:admin` and `org:member` by default) |
+| `repositories:read` | Reading the organization's code through the code graph MCP server (`GET /code-graph/access`; every organization role and `org:api` by default) |
 | `agents:approve` | Deciding the ADK workflow runs' approvals the organization's administrators decide |
 | `agents:manage_runs` | Retrying, resubmitting and abandoning the organization's ADK workflow runs |
 | `*:*` | Everything |
@@ -788,7 +883,9 @@ For local development, the first user is you, the site administrator:
    in `apps/forge-web/.env.local` and `.env.compose`, which the web console
    sends. Rerun it when it expires. `forge-admin-token --msid <msid>` (or
    `--email`, `--days`) mints one for anyone else in `users`, e.g. to try the
-   console as them.
+   console as them. `--organization <id or name>` mints one that acts in an
+   organization (its `org_id` claim), as services serving one organization's
+   data need, such as the code graph MCP server.
 
 ```sh
 make infrastructure
@@ -854,6 +951,13 @@ last four characters, expiry and last use), adds `api_keys:manage`
 (`org:admin`) and the role `org:api` ("API caller", `agents:run`), and
 rewords `agents:run` to cover the runtime. `0012adk_run_versions` adds
 `adk_runs.version`, which version of a workflow a run ran.
+`0014code_repositories` creates `code_repositories` (an organization's GitHub
+repositories, each URL once per organization, on one branch) and
+`code_ingestion_jobs` (the code graph worker's queue: each ingestion's
+commit, status, lease and claim token, attempts, run and outcome), and adds
+`repositories:manage` (`org:admin`, `org:member`).
+`0015repositories_read` adds `repositories:read`, granted to `org:admin`,
+`org:member`, `org:viewer` and `org:api`.
 
 Define models on `forge_admin.db.base.AuditBase` under `models/` and import
 them in `models/__init__.py`, then from `apps/forge-admin-api`:
@@ -928,6 +1032,8 @@ of it reaches the settings unless `.env` references it. `make env` creates
 | `FORGE_ADMIN_AGENT_MODEL` | the configuration's default, or `gemini-3.5-flash` | The model the assistant runs on until a conversation chooses: `provider/model`, or an id only one provider has |
 | `FORGE_ADMIN_AGENT_MODELS` | `[]` | JSON array: with a model provider configuration, which of its models a conversation may choose (all when empty); without, other Gemini models |
 | `FORGE_ADMIN_AGENT_SCREENS` | unset | A screen configuration shaped like `assistant/screens.yaml`, which is used when this is unset |
+| `FORGE_ADMIN_MCP_SERVER_DEFAULTS` | unset | The MCP servers offered ready-made, a file shaped like `mcp_servers/default_servers.yaml`, which is used when this is unset (see [MCP servers](#mcp-servers)) |
+| `FORGE_ADMIN_CODEGRAPH_MCP_URL` | `http://localhost:8103/mcp` | Where the ready-made code explorer is (a reference of `default_servers.yaml`, not a setting); Compose sets the stack's |
 | `FORGE_ADMIN_HOST` / `_PORT` | `127.0.0.1` / `8101` | Listener; the image sets `0.0.0.0` |
 | `FORGE_ADMIN_RELOAD` | `false` | Restart on source changes (`make admin` sets it) |
 | `FORGE_ADMIN_LOGGING__LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL` (any case), for every logger |

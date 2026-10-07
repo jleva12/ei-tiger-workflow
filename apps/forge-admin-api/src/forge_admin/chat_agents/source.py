@@ -26,6 +26,7 @@ from forge_agent_runtime import (
     RuntimeServices,
     parse_document,
 )
+from forge_codegraph import CodeGraph
 from forge_common.adk.models import ProviderModels
 from forge_common.adk.usage import price_from
 from forge_common.model_provider import load_model_provider_config
@@ -250,6 +251,7 @@ def create_executor(
     queue: Embedding | None,
     models: ProviderModels | None = None,
     knowledge_search: KnowledgeSearch | None = None,
+    codegraph: CodeGraph | None = None,
 ) -> AgentExecutor:
     """
     The hosted runtime: agents from ``store``, conversations in the admin
@@ -273,7 +275,9 @@ def create_executor(
         )
         if agents is not None
         else None,
-        knowledge_bases=OrganizationKnowledgeBases(sessions, knowledge_search),
+        knowledge_bases=OrganizationKnowledgeBases(
+            sessions, knowledge_search, codegraph
+        ),
     )
     models = models or chat_agent_models(settings)
     return AgentExecutor(

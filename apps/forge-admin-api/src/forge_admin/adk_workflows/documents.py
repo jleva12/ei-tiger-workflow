@@ -69,6 +69,8 @@ ADDED_SETTINGS: dict[str, dict[str, Any]] = {
     # 2026-10-05: which version of the workflow runs; null for its latest
     # published (its current document while it has none).
     "saved": {"version": None},
+    # 2026-10-07: whether a match takes the first rule that holds, or every one.
+    "match": {"mode": "first"},
 }
 # The same for sub-agents, in a node's settings.
 ADDED_SUB_AGENT_SETTINGS: dict[str, dict[str, Any]] = {"llm": {"tools": []}}

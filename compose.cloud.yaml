@@ -1,0 +1,50 @@
+# The code graph worker, and the MCP server reading its graph, on managed
+# Cloud Spanner instead of the emulator.
+# Overlay on compose.yaml, which make adds with SPANNER=cloud:
+#   make up SPANNER=cloud
+#   docker compose --env-file .env.compose --env-file .env.common -f compose.yaml -f compose.cloud.yaml up -d
+# Needs WORKER_CLOUD_SPANNER_DATABASE in .env.compose, a Google credential
+# that can read and write that database at CLOUD_SPANNER_KEY_FILE (default
+# ./.secrets/spanner-sa.json), and the codegraph schema already in it
+# (make worker-spanner-cloud): nothing provisions managed Spanner on its own.
+# Neither needs the emulator, so it isn't started. Changing the set
+# of compose files can make Compose recreate the project's network and every
+# container on it, the emulator and its in-memory data included, so switch
+# modes when that data is disposable.
+services:
+  worker:
+    depends_on: !reset {}
+    environment:
+      # Empty counts as unset for the Spanner client and for the
+      # auto-provision guard, so the client dials the managed API.
+      SPANNER_EMULATOR_HOST: ""
+      CODEGRAPH_SPANNER_DATABASE: ${WORKER_CLOUD_SPANNER_DATABASE:?Set WORKER_CLOUD_SPANNER_DATABASE in .env.compose}
+      CODEGRAPH_SPANNER_AUTO_PROVISION: "false"
+      GOOGLE_APPLICATION_CREDENTIALS: /run/codegraph-secrets/spanner-credentials.json
+      # The client exports its metrics to Cloud Monitoring by default, which a
+      # credential scoped to Spanner can't write.
+      SPANNER_DISABLE_BUILTIN_METRICS: "true"
+      # Query enhancement (spelling, synonyms, plurals, IDF scoring) works on
+      # managed Spanner; the emulator ignores it.
+      CODEGRAPH_SEARCH_ENHANCE_QUERY: ${WORKER_SEARCH_ENHANCE_QUERY:-true}
+    volumes:
+      - type: bind
+        source: ${CLOUD_SPANNER_KEY_FILE:-./.secrets/spanner-sa.json}
+        target: /run/codegraph-secrets/spanner-credentials.json
+        read_only: true
+        bind:
+          create_host_path: false
+  codegraph-mcp:
+    environment:
+      SPANNER_EMULATOR_HOST: ""
+      CODEGRAPH_SPANNER__DATABASE: ${WORKER_CLOUD_SPANNER_DATABASE:?Set WORKER_CLOUD_SPANNER_DATABASE in .env.compose}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/codegraph-secrets/spanner-credentials.json
+      SPANNER_DISABLE_BUILTIN_METRICS: "true"
+      CODEGRAPH_SEARCH__ENHANCE_QUERY: ${CODEGRAPH_MCP_SEARCH_ENHANCE_QUERY:-true}
+    volumes:
+      - type: bind
+        source: ${CLOUD_SPANNER_KEY_FILE:-./.secrets/spanner-sa.json}
+        target: /run/codegraph-secrets/spanner-credentials.json
+        read_only: true
+        bind:
+          create_host_path: false

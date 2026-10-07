@@ -1,29 +1,46 @@
 """``forge-admin-token``: print a bearer token for a user, for local development.
 
 ``make web-token`` runs it for the site administrator and sets the result as
-the web console's ``VITE_API_TOKEN``. See ``auth/tokens.py`` for the token.
+the web console's ``VITE_API_TOKEN``. With ``--organization`` the token acts
+in one organization (its ``org_id`` claim): what the code graph's MCP server
+needs, which serves only that organization's repositories. See
+``auth/tokens.py`` for the token.
 """
 
 import argparse
 import asyncio
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from forge_admin.auth.tokens import mint_token
 from forge_admin.config import Settings, get_settings
 from forge_admin.db.session import create_engine, create_sessionmaker
-from forge_admin.models import User
+from forge_admin.models import Organization, User
 
 DEFAULT_DAYS = 90
 
 
-async def _find_user(settings: Settings, *, msid: str, email: str) -> User | None:
+async def _find(
+    settings: Settings, *, msid: str, email: str, organization: str
+) -> tuple[User | None, Organization | None]:
+    """The user, and the organization named by ID or name (None if none)."""
     engine = create_engine(settings)
     try:
         async with create_sessionmaker(engine)() as session:
             column, value = (User.msid, msid) if msid else (User.email, email)
-            return await session.scalar(select(User).where(column == value))
+            user = await session.scalar(select(User).where(column == value))
+            found = None
+            if organization:
+                found = await session.scalar(
+                    select(Organization).where(
+                        or_(
+                            Organization.id == organization,
+                            Organization.name == organization,
+                        )
+                    )
+                )
+            return user, found
     finally:
         await engine.dispose()
 
@@ -52,6 +69,13 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
+        "--organization",
+        help=(
+            "the organization the token acts in, by ID or name: the code graph's "
+            "MCP server reads only its repositories"
+        ),
+    )
+    parser.add_argument(
         "--days",
         type=int,
         default=DEFAULT_DAYS,
@@ -67,13 +91,22 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit("Pass --msid or --email, or set FORGE_ADMIN_SITE_ADMIN_MSID")
     if args.days < 1:
         raise SystemExit("--days must be at least 1")
-    user = asyncio.run(_find_user(settings, msid=msid.strip(), email=email))
+    named = (args.organization or "").strip()
+    user, organization = asyncio.run(
+        _find(settings, msid=msid.strip(), email=email, organization=named)
+    )
     if user is None:
         who_text = f"MS ID {msid}" if msid else f"email {email}"
         raise SystemExit(f"No user with {who_text}; add them first (forge-admin-seed)")
+    if named and organization is None:
+        raise SystemExit(f"No organization with ID or name {named}")
     print(
         mint_token(
-            settings, user, lifetime=timedelta(days=args.days), groups=args.group
+            settings,
+            user,
+            lifetime=timedelta(days=args.days),
+            groups=args.group,
+            organization_id=organization.id if organization else None,
         )
     )
 

@@ -15,7 +15,8 @@ is
   graph and in the graphs of the loops it's in (the innermost item's first),
   never those of a saved agent it runs or runs in. It's every kind's: LLM and
   team agents' too, not only Forge's steps. If, Switch and Match record the
-  way they took (``{"branch": ...}``); a step that took its Error way records
+  way they took (``{"branch": ...}``), a Match taking every rule that holds
+  the ways (``{"branches": [...]}``); a step that took its Error way records
   ``{"output": None, "error": {...}}``.
 - ``state``: the session's state, but for Forge's own keys (``forge:``).
 - a loop's item and index: the bindings its body was built with.
@@ -161,6 +162,8 @@ def _record(event: Event, info: StepInfo) -> dict[str, Any] | None:
     # What an event of a step says it handed on, if anything.
     if info.kind in LOGIC:
         route = event.actions.route if event.actions else None
+        if isinstance(route, list):  # a match taking every rule that holds
+            return {"output": {"branches": route}}
         return {"output": {"branch": route}} if isinstance(route, str) else None
     error = (event.custom_metadata or {}).get(ERROR_KEY)
     if error is not None:

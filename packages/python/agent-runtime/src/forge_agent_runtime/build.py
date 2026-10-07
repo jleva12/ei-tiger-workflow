@@ -351,7 +351,8 @@ def _knowledge_description(described: list[tuple[str, str]]) -> str:
     several = len(parts) > 1
     return (
         f"Searches the knowledge base{'s' if several else ''} {'; '.join(parts)} for passages "
-        "that answer a question. Use it before answering from what these documents say."
+        "that answer a question: of documents, or of code (each a declaration, with its file). "
+        "Use it before answering from what they hold."
         + (" Each passage names the knowledge base it's from." if several else "")
     )
 

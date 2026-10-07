@@ -1,0 +1,183 @@
+{
+  "schema_version": "1.0.0",
+  "expected_repository_id": "github.com/example/app",
+  "inventory": {
+    "inputs": [
+      {
+        "id": "src-main",
+        "kind": "source_root",
+        "location": {
+          "root": "checkout",
+          "path": "src/main/java"
+        }
+      },
+      {
+        "id": "src-test",
+        "kind": "source_root",
+        "location": {
+          "root": "checkout",
+          "path": "src/test/java"
+        }
+      },
+      {
+        "id": "generated",
+        "kind": "generated_source_root",
+        "location": {
+          "root": "checkout",
+          "path": "generated"
+        },
+        "sha256": "0221d8f5d13ff021b9b937653da418afce773746ca7cdb5f60af4224bebfa131"
+      },
+      {
+        "id": "jdk",
+        "kind": "jdk",
+        "location": {
+          "root": "toolchain",
+          "path": "jdk"
+        },
+        "sha256": "eea04f3ab8b4615714f3a06d264c6fd582def9daae5add73fe952619e2d5a185"
+      },
+      {
+        "id": "classes",
+        "kind": "class_directory",
+        "location": {
+          "root": "artifacts",
+          "path": "classes"
+        },
+        "sha256": "157ab878a073310dd88ef83d45258262bf62d39e6711b5866899a62c81fe0e51"
+      },
+      {
+        "id": "jar-v1",
+        "kind": "jar",
+        "location": {
+          "root": "artifacts",
+          "path": "deps/lib-1.jar"
+        },
+        "sha256": "4707dc3ffa79f4b7cea9c128b13b1dda191ec2e37164c88f3851704a56faa4b8"
+      },
+      {
+        "id": "jar-v2",
+        "kind": "jar",
+        "location": {
+          "root": "artifacts",
+          "path": "deps/lib-2.jar"
+        },
+        "sha256": "8022a9bed69c4fdcac2e3942b5aeedad0f509ec54ff69aad0108a37ac451c3e2"
+      },
+      {
+        "id": "sources-v1",
+        "kind": "jar",
+        "location": {
+          "root": "artifacts",
+          "path": "deps/lib-1-sources.jar"
+        },
+        "sha256": "9c6144ec8d3354c2d1b1e7150e01bf31c7e7b618afb1c984f1eda10266a4f816"
+      }
+    ],
+    "jdks": [
+      {
+        "id": "java21",
+        "home_input_id": "jdk",
+        "vendor": "Eclipse Adoptium",
+        "version": "21.0.6",
+        "major": 21
+      }
+    ],
+    "modules": [
+      {
+        "id": "app",
+        "name": "app",
+        "directory": ".",
+        "coordinates": {
+          "group": "example",
+          "name": "app",
+          "version": "1.0.0",
+          "extension": "jar"
+        }
+      }
+    ],
+    "source_sets": [
+      {
+        "id": "app-main",
+        "module_id": "app",
+        "name": "main",
+        "kind": "main",
+        "jdk_id": "java21",
+        "target_release": 21,
+        "source_root_ids": [
+          "src-main"
+        ],
+        "generated_root_ids": [
+          "generated"
+        ],
+        "output_input_id": "classes",
+        "classpath": [
+          {
+            "kind": "artifact",
+            "ref_id": "lib-v1"
+          }
+        ],
+        "module_path": [
+          {
+            "kind": "artifact",
+            "ref_id": "lib-v2"
+          }
+        ]
+      },
+      {
+        "id": "app-test",
+        "module_id": "app",
+        "name": "test",
+        "kind": "test",
+        "jdk_id": "java21",
+        "target_release": 21,
+        "source_root_ids": [
+          "src-test"
+        ],
+        "classpath": [
+          {
+            "kind": "source_set",
+            "ref_id": "app-main"
+          },
+          {
+            "kind": "artifact",
+            "ref_id": "lib-v2"
+          },
+          {
+            "kind": "artifact",
+            "ref_id": "lib-v1"
+          }
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "id": "lib-v1",
+        "coordinates": {
+          "group": "example",
+          "name": "library",
+          "version": "1.0.0",
+          "extension": "jar"
+        },
+        "binary_input_id": "jar-v1",
+        "sources_input_id": "sources-v1",
+        "origin": {
+          "repository_id": "github.com/example/library",
+          "snapshot_id": "library-commit-1",
+          "module_id": "library",
+          "source_set_id": "main"
+        }
+      },
+      {
+        "id": "lib-v2",
+        "coordinates": {
+          "group": "example",
+          "name": "library",
+          "version": "2.0.0",
+          "extension": "jar"
+        },
+        "binary_input_id": "jar-v2"
+      }
+    ]
+  }
+}

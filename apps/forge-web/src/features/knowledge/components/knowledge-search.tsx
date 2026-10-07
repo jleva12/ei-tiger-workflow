@@ -27,21 +27,25 @@ const SEARCH_LIMIT = 8
  * Tries a search of the knowledge base as its agents would: a question in,
  * the chunks that answer it best out, each with its document, where in the
  * document it is (its headings) and how closely it matched. A hit opens its
- * document in the viewer.
+ * document in the viewer. A graph knowledge base's hits are its code: each
+ * a declaration, with its repository and file, opening it in the code graph.
  */
 export function KnowledgeSearchDialog({
   open,
   onOpenChange,
   scope,
   baseName,
-  onOpenDocument,
+  code = false,
+  onOpenHit,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   scope: KnowledgeScope
   baseName: string
-  /** Opens the hit's document in the viewer. */
-  onOpenDocument: (documentId: string) => void
+  /** A graph knowledge base's: it searches code. */
+  code?: boolean
+  /** Opens the hit: its document in the viewer, or its node in the code graph. */
+  onOpenHit: (hit: SearchHit) => void
 }) {
   const id = React.useId()
   const [query, setQuery] = React.useState("")
@@ -76,7 +80,11 @@ export function KnowledgeSearchDialog({
             id={`${id}-query`}
             autoFocus
             autoComplete="off"
-            placeholder="How do we rotate the payment keys?"
+            placeholder={
+              code
+                ? "Where are webhook signatures checked?"
+                : "How do we rotate the payment keys?"
+            }
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             className="flex-1"
@@ -105,14 +113,17 @@ export function KnowledgeSearchDialog({
           ) : hits === undefined ? (
             !search.isPending && (
               <PanelEmpty illustration="search">
-                Results show here, with the document and section each passage
-                comes from.
+                {code
+                  ? "Results show here, with the repository, file and declaration each comes from."
+                  : "Results show here, with the document and section each passage comes from."}
               </PanelEmpty>
             )
           ) : hits.length === 0 ? (
             <PanelEmpty illustration="search">
-              Nothing in {baseName} matches “{asked}”. Only documents that are
-              ready are searched.
+              Nothing in {baseName} matches “{asked}”.{" "}
+              {code
+                ? "Only repositories that were ingested are searched."
+                : "Only documents that are ready are searched."}
             </PanelEmpty>
           ) : (
             <ol className="grid gap-2 pb-1">
@@ -123,7 +134,7 @@ export function KnowledgeSearchDialog({
                   rank={index + 1}
                   onOpen={() => {
                     onOpenChange(false)
-                    onOpenDocument(hit.document_id)
+                    onOpenHit(hit)
                   }}
                 />
               ))}
@@ -172,12 +183,20 @@ function HitItem({
             {hit.score.toFixed(3)}
           </span>
         </span>
-        {hit.section_path.length > 0 && (
+        {(hit.section_path.length > 0 || hit.location) && (
           <span className="truncate pl-6 text-2xs text-subtle">
-            {hit.section_path.join(" › ")}
+            {[hit.section_path.join(" › "), hit.node_id && hit.location]
+              .filter(Boolean)
+              .join(" · ")}
           </span>
         )}
-        <span className="line-clamp-3 pl-6 text-xs/relaxed whitespace-pre-line text-muted-foreground">
+        <span
+          className={
+            hit.node_id
+              ? "line-clamp-4 pl-6 font-mono text-2xs/relaxed whitespace-pre text-muted-foreground"
+              : "line-clamp-3 pl-6 text-xs/relaxed whitespace-pre-line text-muted-foreground"
+          }
+        >
           {hit.text}
         </span>
       </button>

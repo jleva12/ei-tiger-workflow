@@ -6,6 +6,8 @@ adds.
   value the expression gives, as text, else default; the first rule whose
   condition holds, else otherwise) and hand on what came in. The event's route
   is the way's output ID: ``steps.<id>.output`` records it as ``{branch}``.
+  A match in mode "all" takes every rule whose condition holds, at once (else
+  otherwise): its route is their IDs, a list, recorded as ``{branches}``.
 - ``merge``: "all" is a ``JoinNode`` that waits for every way in and hands on
   what each handed on, by step ID. "any" goes on at the first way in (each
   way in tags what it hands on with its step ID on the way, so it's
@@ -17,9 +19,18 @@ adds.
   It hands on ``{count, results}`` (what each item's body handed back) by its
   Done way. More items than it allows fail the run.
 - ``end``: finishes its way with ``{outcome, result}``, its result its
-  expression's, else what came in. A failed one fails the run
-  (:class:`RunFailed` with the result). A succeeded End can't stop other
-  ways still running.
+  expression's, else what came in. Neither stops other ways still running:
+  a failed one's outcome is the finish's to collect, and the run fails once
+  every way has ended. In a loop's body or a saved agent, whose finish is
+  what one step hands on, a failed one fails the run at once
+  (:class:`RunFailed` with the result).
+- the finish: every ending of the agent's graph, each tagged on the way with
+  the step it ended at (``ending``), in the order they came:
+  ``{outcome, result}``, the result the one ending's, or, when more than one
+  way ended, every ending's ``{step, name, outcome, result}``. It runs once
+  per ending, each time handing on all so far: ADK keeps the last. Its
+  outcome is failed when any ending's is, with ``error`` naming each failed
+  End and ``step`` the first.
 """
 
 import asyncio
@@ -41,7 +52,6 @@ from forge_task_adk_workflows.graph.factories.base import (
 )
 from forge_task_adk_workflows.graph.names import (
     BACK_NODE,
-    ENDED_NODE,
     FINISH_NODE,
     STOP_NODE,
     adk_name,
@@ -94,18 +104,24 @@ def match(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
     s = settings_of(node, MatchConfig)
     evaluator = ctx.services.evaluator
 
+    every = s.mode == "all"
+
     def run(adk: Context, node_input: Any) -> Event:
         data = ctx.data(adk, node_input)
-        way = "otherwise"
+        ways: list[str] = []
         for index, arm in enumerate(s.arms):
             what = f"The condition of {arm.label or f'rule {index + 1}'}"
             try:
                 if evaluator.truthy(arm.condition, data, what=what):
-                    way = arm.id
-                    break
+                    ways.append(arm.id)
+                    if not every:
+                        break
             except StepFailed as error:
                 raise failed(node, error) from None
-        return Event(output=node_input, route=way)  # type: ignore[call-arg]  # ADK's shorthand for actions.route
+        ways = ways or ["otherwise"]
+        # A list of routes takes every edge whose route is one of them.
+        route = ways if every else ways[0]
+        return Event(output=node_input, route=route)  # type: ignore[call-arg]  # ADK's shorthand for actions.route
 
     return FunctionNode(name=_name(node), func=run)
 
@@ -222,6 +238,10 @@ async def _each(one: Callable[[int], Awaitable[None]], count: int, at_once: int)
 def end(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
     s = settings_of(node, EndConfig)
     evaluator = ctx.services.evaluator
+    # The agent's own graph: its finish collects a failed outcome, and the run
+    # fails once every way has ended. A loop body's or a saved agent's ends
+    # are one step's: a failed one fails the run at once.
+    collected = ctx.top and ctx.scope.depth == 0
 
     def run(adk: Context, node_input: Any) -> dict[str, Any]:
         if s.result.strip():
@@ -231,41 +251,67 @@ def end(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
                 raise failed(node, error) from None
         else:
             result = as_data(node_input)
-        if s.outcome == "failed":
-            said = as_text(result)
-            raise RunFailed(
-                f"{label_of(node)} failed the run" + (f": {said}" if said else ""),
-                result=result,
-                step=node["id"],
-            )
-        return {"outcome": "succeeded", "result": result}
+        if s.outcome == "failed" and not collected:
+            raise RunFailed(_failure(label_of(node), result), result=result, step=node["id"])
+        return {"outcome": s.outcome, "result": result}
 
     return FunctionNode(name=_name(node), func=run)
 
 
 def finish(*, top: bool) -> FunctionNode:
     """
-    The hidden node every ending of an agent's graph leads to: ADK takes one
-    ending with an output. It hands on ``{outcome, result}``, the run's; a
-    saved agent hands on its result.
+    The hidden node every ending of an agent's graph leads to (each through
+    its ``ending``): ADK takes one ending with an output. Each time a way
+    ends, it hands on every ending so far, ``{outcome, result}`` (with
+    ``error`` and ``step`` when one failed), the run's; a saved agent hands
+    on the result.
     """
 
-    def run(node_input: Any) -> Any:
-        if top or not isinstance(node_input, dict):
-            return node_input
-        return node_input.get("result")
+    def run(adk: Context, node_input: Any) -> Any:
+        # Once per run of its graph: a saved agent run twice has its own.
+        key = f"{PRIVATE_STATE}endings:{adk.invocation_id}:{adk.node_path.rpartition('@')[0]}"
+        endings = [*(adk.state.get(key) or []), as_data(node_input)]
+        adk.state[key] = endings
+        finished = finished_with(endings)
+        return finished if top else finished["result"]
 
     return FunctionNode(name=FINISH_NODE, func=run)
 
 
-def ended() -> FunctionNode:
-    """The hidden node the endings that aren't End steps lead to: their run
-    succeeded, with what they handed on as its result."""
+def finished_with(endings: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    :param endings: Every ending so far, ``{step, name, outcome, result}``, in
+        the order they came.
+    :return: The run's finish: ``{outcome, result}``, the result the one
+        ending's, else every ending; with ``error`` naming each failed End and
+        ``step`` the first, when one failed.
+    """
+    result = endings[0].get("result") if len(endings) == 1 else endings
+    failed = [ending for ending in endings if ending.get("outcome") == "failed"]
+    if not failed:
+        return {"outcome": "succeeded", "result": result}
+    return {
+        "outcome": "failed",
+        "result": result,
+        "error": "; ".join(_failure(_label(ending), ending.get("result")) for ending in failed),
+        "step": failed[0].get("step"),
+    }
+
+
+def ending(name: str, node: dict[str, Any]) -> FunctionNode:
+    """The hidden node between a step the agent's graph ends at and the
+    finish: it tags what the step ended with (an End's ``{outcome, result}``,
+    else a success with what it handed on) with the step's ID and name."""
+    step = {"step": text(node.get("id")), "name": text(node.get("name"))}
+    is_end = node.get("kind") == "end"
 
     def run(node_input: Any) -> dict[str, Any]:
-        return {"outcome": "succeeded", "result": as_data(node_input)}
+        handed = as_data(node_input)
+        if is_end and isinstance(handed, dict):
+            return {**step, "outcome": handed.get("outcome") or "succeeded", "result": handed.get("result")}
+        return {**step, "outcome": "succeeded", "result": handed}
 
-    return FunctionNode(name=ENDED_NODE, func=run)
+    return FunctionNode(name=name, func=run)
 
 
 def back() -> FunctionNode:
@@ -290,3 +336,13 @@ def stop() -> FunctionNode:
 
 def _name(node: dict[str, Any]) -> str:
     return adk_name(text(node.get("name")))
+
+
+def _label(ending: dict[str, Any]) -> str:
+    # An ending's step as label_of names it: ``Stop (stop)``.
+    return f"{text(ending.get('name')) or text(ending.get('step'))} ({text(ending.get('step'))})"
+
+
+def _failure(label: str, result: Any) -> str:
+    said = as_text(result)
+    return f"{label} failed the run" + (f": {said}" if said else "")

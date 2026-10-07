@@ -91,20 +91,23 @@ async def _identify(
         )
     user_id: str | None = None
     groups: tuple[str, ...] = ()
+    organization_id: str | None = None
     if key is not None:
-        user_id = key.subject
+        user_id, organization_id = key.subject, key.organization_id
     elif token is not None:
         try:
             identity = verify_identity(settings, token)
         except TokenError as error:
             raise _refused(str(error)) from None
         user_id, groups = identity.subject, identity.groups
+        organization_id = identity.organization_id
     elif local and settings.local_user_id:
         user_id = settings.local_user_id
         groups = groups_of(settings.local_user_groups)
     request.state.user_id = user_id
     request.state.groups = groups
     request.state.api_key = key
+    request.state.organization_id = organization_id
     set_caller(user_id, groups)
     fallback = ANONYMOUS_ACTOR if expected is None or not gate else API_KEY_ACTOR
     set_actor(user_id or fallback)
@@ -126,8 +129,10 @@ async def authenticate(
     ``FORGE_ADMIN_LOCAL_USER_ID``, else no one. ``request.state.user_id``
     holds the caller (``apikey:<id>`` for a key), ``request.state.groups``
     the company groups their token names (whose linked permissions
-    authorization counts), ``request.state.api_key`` the key's identity, and
-    changes are audited as the caller, or as ``api-key`` when only the
+    authorization counts), ``request.state.api_key`` the key's identity,
+    ``request.state.organization_id`` the organization the credential is
+    for (a key's own, or the one a token was minted for), and changes are
+    audited as the caller, or as ``api-key`` when only the
     deployment's key was verified, or ``anonymous``. This dependency is async
     so the actor stays set for the route that follows.
 

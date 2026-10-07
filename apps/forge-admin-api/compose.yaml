@@ -78,6 +78,20 @@ services:
       FORGE_ADMIN_S3_SECRET_ACCESS_KEY: ${FORGE_S3_SECRET_ACCESS_KEY:-local-forge-secret}
       FORGE_ADMIN_S3_CREATE_BUCKET: "true"
       FORGE_ADMIN_KNOWLEDGE_DATABASE: ${FORGE_KNOWLEDGE_DATABASE:-forge_knowledge}
+      # Where the ready-made code explorer MCP server is on the stack's network
+      # (apps/forge-codegraph-mcp), for servers added from it: the admin API
+      # and the async worker both reach it there.
+      FORGE_ADMIN_CODEGRAPH_MCP_URL: http://codegraph-mcp:8103/mcp
+      # Graph knowledge bases and the code graph explorer: the code graph
+      # worker's API on the stack's network (apps/forge-codegraph-worker),
+      # with its token from .env.common. Called on use, so no depends_on.
+      FORGE_ADMIN_CODEGRAPH_URL: http://worker:8080
+      FORGE_ADMIN_CODEGRAPH_TOKEN: ${FORGE_CODEGRAPH_ADMISSION_TOKEN:-}
+      # Searches embedded with the model every app shares (FORGE_EMBEDDING_*
+      # in .env.common), as the async worker embedded the chunks.
+      FORGE_ADMIN_KNOWLEDGE_EMBEDDING__DOCUMENT_MODEL: ${FORGE_EMBEDDING_MODEL:-text-embedding-3-large}
+      FORGE_ADMIN_KNOWLEDGE_EMBEDDING__DIMENSIONS: ${FORGE_EMBEDDING_DIMENSIONS:-1024}
+      FORGE_ADMIN_KNOWLEDGE_EMBEDDING__BASE_URL: ${FORGE_EMBEDDING_BASE_URL:-}
     ports:
       - "127.0.0.1:${ADMIN_PORT:-18201}:8091"
     read_only: true

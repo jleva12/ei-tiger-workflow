@@ -27,6 +27,11 @@ x-async-worker: &async-worker
       required: false
   environment: &async-worker-environment
     HYBRID_REDIS_URL: redis://redis:6379/0
+    # The embedding model every app shares (FORGE_EMBEDDING_* in .env.common):
+    # knowledge base chunks are embedded, and searched, with it.
+    HYBRID_EMBEDDING__DOCUMENT_MODEL: ${FORGE_EMBEDDING_MODEL:-text-embedding-3-large}
+    HYBRID_EMBEDDING__DIMENSIONS: ${FORGE_EMBEDDING_DIMENSIONS:-1024}
+    HYBRID_EMBEDDING__BASE_URL: ${FORGE_EMBEDDING_BASE_URL:-}
   read_only: true
   tmpfs:
     - /tmp:rw,noexec,nosuid,size=256m
@@ -59,6 +64,10 @@ services:
       <<: *async-worker-environment
       HYBRID_ADK_WORKFLOWS__SESSION_DATABASE_URL: mysql+aiomysql://${ADMIN_MYSQL_USER:-forge_admin}:${ADMIN_MYSQL_PASSWORD:-local-admin}@admin-mysql:3306/${ADMIN_MYSQL_DATABASE:-forge_admin}
       HYBRID_ADK_WORKFLOWS__GOOGLE_API_KEY: ${FORGE_GOOGLE_API_KEY:-}
+      # Graph knowledge bases' search: the code graph worker's API on the
+      # stack's network, with its token from .env.common.
+      HYBRID_ADK_WORKFLOWS__CODEGRAPH_URL: http://worker:8080
+      HYBRID_ADK_WORKFLOWS__CODEGRAPH_TOKEN: ${FORGE_CODEGRAPH_ADMISSION_TOKEN:-}
     healthcheck:
       test: ["CMD", "forge-async-worker", "worker", "--check", "--queues=adk_workflows"]
       interval: 10s

@@ -29,9 +29,11 @@ person's answer, the timer), and every retry.
   signal, and the decision starts the job again.
 - **Progress.** Each finished step is a note on the run's activity, and a
   checkpoint.
-- **End.** The graph's finish (``{outcome, result}``) is the job's result. A
-  :class:`RunFailed` (input that doesn't fit, a failed End, a step that failed
-  with no way to take) fails it. A model's or the database's hiccup is a
+- **End.** The graph's finish (``{outcome, result}``) is the job's result,
+  once no way of it still waits: every ending's, when more than one way
+  ended. A failed End's fails it, once every way has ended, naming each
+  failed End. A :class:`RunFailed` (input that doesn't fit, a step that
+  failed with no way to take) fails it at once. A model's or the database's hiccup is a
   :class:`TransientError`: the worker tries again, and the run carries on.
 - **Interrupted** (the worker died, a hiccup, or a failed run retried:
   its invocation has events, but no pending pause and no finish): the
@@ -235,8 +237,9 @@ class AdkRun:
                 # What its tools opened (MCP sessions): a Workflow's runner doesn't close them.
                 await agents.close()
         self.state["finished"] = finished
-        await self._save(f"The run {finished.get('outcome') or 'succeeded'}")
-        await self._note(f"The run {finished.get('outcome') or 'succeeded'}")
+        outcome = finished.get("outcome") or "succeeded"
+        await self._save(f"The run {outcome}")
+        await self._note(f"The run failed: {finished['error']}" if finished.get("error") else f"The run {outcome}")
         return self._succeeded(finished)
 
     def _agents(self) -> AgentServices | None:
@@ -278,9 +281,10 @@ class AdkRun:
     def _succeeded(self, finished: dict[str, Any]) -> JobResult:
         if finished.get("outcome") == "failed":
             return JobResult.failed(
-                "The run ended failed",
+                str(finished.get("error") or "The run ended failed")[:2000],
                 outcome="failed",
                 result=finished.get("result"),
+                step=finished.get("step"),
                 session_id=self.session_id,
             )
         return ok(
@@ -295,13 +299,11 @@ class AdkRun:
         await self._begin(await self._open())
         while True:
             session = await self._open()
-            finished = _finish_of(session)
-            if finished is not None:
-                return finished
+            # A way that ended doesn't end the run while another waits.
             pauses = pending_pauses(session)
             if not pauses:
-                # It ended without reaching an ending that hands one on.
-                return {"outcome": "succeeded", "result": None}
+                # Without a finish, it ended without reaching an ending that hands one on.
+                return _finish_of(session) or {"outcome": "succeeded", "result": None}
             pause = pauses[0]
             response = await self._answer(pause, session)
             await self._drive(pause.answer(response))
@@ -655,7 +657,8 @@ def _hands_on(event: Event) -> bool:
 
 
 def _finish_of(session: Session) -> dict[str, Any] | None:
-    """:return: The run's finish, ``{outcome, result}``, once its graph ended."""
+    """:return: The run's finish, ``{outcome, result}``, once a way of its graph
+    ended: the finish's last, which has every ending so far."""
     found = None
     for event in session.events:
         if event.output is None:

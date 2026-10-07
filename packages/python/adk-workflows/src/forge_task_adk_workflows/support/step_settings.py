@@ -79,6 +79,8 @@ class MatchArm(_Config):
 
 class MatchConfig(_Config):
     arms: list[MatchArm] = Field(default_factory=list)
+    # "first" takes the first rule that holds; "all" takes every one, at once.
+    mode: Literal["first", "all"] = "first"
 
 
 class LoopConfig(_Config):

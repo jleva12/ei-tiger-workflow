@@ -14,8 +14,6 @@ MAX_NAME = 48
 # these are never a node's.
 #: Where every ending of an agent's graph leads: its one output.
 FINISH_NODE = "__finish__"
-#: Where the endings that aren't End steps lead, before the finish.
-ENDED_NODE = "__ended__"
 #: Where a loop body's ways back to its loop lead: the item's result.
 BACK_NODE = "__back__"
 #: Where a loop body's other endings lead: they hand on nothing.
@@ -40,6 +38,12 @@ def adk_name(name: str) -> str:
 def body_name(loop: str) -> str:
     """:return: The ADK name of a loop's body graph."""
     return f"{loop}__each"
+
+
+def ending_name(step: str) -> str:
+    """:return: The ADK name of the hidden node between an ending step and the
+    finish, which tags what it ended with with the step."""
+    return f"{step}__ended"
 
 
 def via_name(merge: str, source: str) -> str:

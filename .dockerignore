@@ -20,6 +20,8 @@ node_modules
 **/.ruff_cache
 **/.mypy_cache
 **/.coverage
+**/.codegraph-work
+apps/forge-codegraph-worker/python-analyzer/.cache
 
 # Locally mounted keys never enter Git or build contexts.
 .secrets/

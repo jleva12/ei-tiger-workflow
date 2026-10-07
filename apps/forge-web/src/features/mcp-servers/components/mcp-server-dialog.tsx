@@ -36,8 +36,11 @@ import {
 } from "@/features/builder/components/settings-dialog"
 import {
   useAuthMethods,
+  useMcpServerDefaults,
   type AuthMethodInfo,
+  type FieldHelp,
   type McpServerCreate,
+  type McpServerDefault,
   type McpServerRecord,
 } from "@/features/mcp-servers/lib/api"
 import {
@@ -90,20 +93,212 @@ export function McpServerDialog({
   if (target !== undefined && target !== shown) setShown(target)
   return (
     <SettingsDialog open={open} onOpenChange={onOpenChange}>
-      {shown !== undefined && (
+      {shown ? (
         <McpServerForm
           // A new form for each opening, and once a new server is added.
-          key={`${count}:${shown?.id ?? "new"}`}
-          server={shown ?? undefined}
+          key={`${count}:${shown.id}`}
+          server={shown}
           onDone={() => onOpenChange(false)}
           {...props}
         />
+      ) : (
+        shown === null && (
+          <NewMcpServer
+            key={count}
+            onDone={() => onOpenChange(false)}
+            {...props}
+          />
+        )
       )}
     </SettingsDialog>
   )
 }
 
-type HeaderDraft = { id: string; name: string; value: string }
+type FormProps = Omit<McpServerDialogProps, "open" | "onOpenChange" | "server">
+
+/**
+ * A server being added: first a choice between the servers the application
+ * offers ready-made and a new, empty one, then the form, filled in with the
+ * one chosen. Without any to offer, the form straight away.
+ */
+function NewMcpServer({
+  onDone,
+  ...props
+}: FormProps & { onDone: () => void }) {
+  const defaults = useMcpServerDefaults()
+  // undefined while choosing; null for a new, empty server.
+  const [start, setStart] = React.useState<McpServerDefault | null>()
+  const offered = defaults.data ?? []
+  const choosing =
+    start === undefined && !(defaults.isSuccess && offered.length === 0)
+  if (choosing)
+    return (
+      <ServerChooser
+        defaults={defaults}
+        onChoose={(chosen) => setStart(chosen)}
+        onDone={onDone}
+      />
+    )
+  return (
+    <McpServerForm
+      key={start?.id ?? "new"}
+      template={start ?? undefined}
+      onBack={offered.length > 0 ? () => setStart(undefined) : undefined}
+      onDone={onDone}
+      {...props}
+    />
+  )
+}
+
+/** The servers the application offers ready-made, and a new, empty one. */
+function ServerChooser({
+  defaults,
+  onChoose,
+  onDone,
+}: {
+  defaults: ReturnType<typeof useMcpServerDefaults>
+  onChoose: (chosen: McpServerDefault | null) => void
+  onDone: () => void
+}) {
+  const methods = useAuthMethods()
+  const methodLabel = (kind: string) =>
+    methods.data?.find((m) => m.kind === kind)?.label ?? kind
+  return (
+    <>
+      <SettingsHeader
+        glyph={<SettingsGlyph icon={MCP_SERVERS_ICON} tone="action" />}
+        title="Add an MCP server"
+        description="Start from a server Forge knows how to connect to, or from scratch"
+        closeLabel="Close adding an MCP server"
+      />
+      <SettingsBody>
+        <SettingsSection title="Application MCP servers">
+          <p className="text-xs/[1.6] text-muted-foreground">
+            Ready-made: where each is and how Forge signs in to it are filled
+            in, so you only add what&apos;s yours.
+          </p>
+          {defaults.isPending ? (
+            <div className="flex flex-col gap-2" aria-busy="true">
+              <Skeleton className="h-16" />
+              <Skeleton className="h-16" />
+            </div>
+          ) : defaults.error ? (
+            <ErrorCallout
+              title="Couldn't load the application's MCP servers"
+              action={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void defaults.refetch()}
+                >
+                  Retry
+                </Button>
+              }
+            >
+              {defaults.error.message}
+            </ErrorCallout>
+          ) : (
+            <ul className="flex flex-col divide-y rounded-(--radius-item) border">
+              {defaults.data.map((server) => (
+                <li key={server.id}>
+                  <ChoiceButton
+                    icon={MCP_SERVERS_ICON}
+                    title={server.name}
+                    chip={methodLabel(server.auth.kind)}
+                    description={server.description}
+                    detail={server.url}
+                    onClick={() => onChoose(server)}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </SettingsSection>
+        <SettingsSection title="Another server">
+          <div className="rounded-(--radius-item) border">
+            <ChoiceButton
+              icon="plus"
+              title="New MCP server"
+              description="Any remote MCP server over streamable HTTP: you fill in where it is and how Forge signs in to it."
+              onClick={() => onChoose(null)}
+            />
+          </div>
+        </SettingsSection>
+      </SettingsBody>
+      <SettingsFooter>
+        <SettingsHint>Pick one to set it up</SettingsHint>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="max-[600px]:ml-auto"
+          onClick={onDone}
+        >
+          Cancel
+        </Button>
+      </SettingsFooter>
+    </>
+  )
+}
+
+/** One choice of the chooser: a row that opens what it names. */
+function ChoiceButton({
+  icon,
+  title,
+  chip,
+  description,
+  detail,
+  onClick,
+}: {
+  icon: React.ComponentProps<typeof SettingsGlyph>["icon"]
+  title: string
+  chip?: string
+  description?: string
+  detail?: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group/choice flex w-full items-start gap-3 px-3 py-2.5 text-left transition-[background-color] duration-150 hover:bg-muted/60"
+    >
+      <SettingsGlyph icon={icon} />
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-[0.8125rem] font-medium text-foreground">
+            {title}
+          </span>
+          {chip && <Chip>{chip}</Chip>}
+        </span>
+        {description && (
+          <span className="line-clamp-2 text-2xs/[1.6] text-muted-foreground">
+            {description}
+          </span>
+        )}
+        {detail && (
+          <span className="truncate font-mono text-2xs text-subtle">
+            {detail}
+          </span>
+        )}
+      </span>
+      <Icon
+        icon="right"
+        className="mt-1.5 shrink-0 text-subtle transition-colors group-hover/choice:text-foreground"
+      />
+    </button>
+  )
+}
+
+type HeaderDraft = {
+  id: string
+  name: string
+  value: string
+  /** From a default server that needs it: kept, and filled in. */
+  required?: boolean
+  description?: string
+}
 
 const draftId = () => Math.random().toString(36).slice(2, 10)
 
@@ -120,6 +315,8 @@ function defaultsOf(method: AuthMethodInfo | undefined) {
 
 function McpServerForm({
   server,
+  template,
+  onBack,
   readOnly = false,
   onCreate,
   onUpdate,
@@ -130,24 +327,36 @@ function McpServerForm({
   onDelete,
   onDone,
 }: Omit<McpServerDialogProps, "open" | "onOpenChange"> & {
+  /** A new server's starting point: one the application offers. */
+  template?: McpServerDefault
+  /** Back to choosing what to start from. */
+  onBack?: () => void
   onDone: () => void
 }) {
   const id = React.useId()
   const methods = useAuthMethods()
-  const [name, setName] = React.useState(server?.name ?? "")
-  const [description, setDescription] = React.useState(
-    server?.description ?? ""
-  )
-  const [url, setUrl] = React.useState(server?.url ?? "")
+  // A server shows what it has; a new one starts from its template, if any.
+  const start = server ?? template
+  const [name, setName] = React.useState(start?.name ?? "")
+  const [description, setDescription] = React.useState(start?.description ?? "")
+  const [url, setUrl] = React.useState(start?.url ?? "")
   const [timeout, setTimeoutText] = React.useState(
-    String(server?.timeout_seconds ?? 30)
+    String(start?.timeout_seconds ?? 30)
   )
-  const [headers, setHeaders] = React.useState<HeaderDraft[]>(
-    () => server?.headers.map((h) => ({ ...h, id: draftId() })) ?? []
+  const [headers, setHeaders] = React.useState<HeaderDraft[]>(() =>
+    server
+      ? server.headers.map((h) => ({ ...h, id: draftId() }))
+      : (template?.headers.map((h) => ({
+          id: draftId(),
+          name: h.name,
+          value: h.value,
+          required: h.required,
+          description: h.description,
+        })) ?? [])
   )
-  const [kind, setKind] = React.useState(server?.auth.kind ?? "none")
+  const [kind, setKind] = React.useState(start?.auth.kind ?? "none")
   const [settings, setSettings] = React.useState<Record<string, string>>(
-    server?.auth.settings ?? {}
+    start?.auth.settings ?? {}
   )
   // Secrets typed in; those left empty keep what's saved.
   const [secrets, setSecrets] = React.useState<Record<string, string>>({})
@@ -159,6 +368,9 @@ function McpServerForm({
   const [error, setError] = React.useState<ApiError>()
 
   const method = methods.data?.find((m) => m.kind === kind)
+  // The template's help with its method's fields, while that's the method.
+  const help =
+    template && template.auth.kind === kind ? template.auth.fields : {}
   // A server's saved secrets count only while its method stays the same.
   const saved =
     server && server.auth.kind === kind ? server.auth.secrets_set : []
@@ -171,10 +383,11 @@ function McpServerForm({
     setKind(next)
     setSecrets({})
     setCleared([])
+    const defaults = defaultsOf(methods.data?.find((m) => m.kind === next))
     setSettings(
-      server && server.auth.kind === next
-        ? server.auth.settings
-        : defaultsOf(methods.data?.find((m) => m.kind === next))
+      start && start.auth.kind === next
+        ? { ...defaults, ...start.auth.settings }
+        : defaults
     )
     touch()
   }
@@ -191,7 +404,9 @@ function McpServerForm({
         : undefined,
     headers: headers.some((h) => !HEADER_NAME.test(h.name.trim()))
       ? "Every header needs a name of letters, digits and - (no spaces)."
-      : undefined,
+      : headers
+          .filter((h) => h.required && !h.value.trim())
+          .map((h) => `The server needs ${h.name}: give it a value.`)[0],
     fields: Object.fromEntries(
       (method?.fields ?? [])
         .filter((f) => f.required)
@@ -201,7 +416,7 @@ function McpServerForm({
               (!saved.includes(f.name) || cleared.includes(f.name))
             : !values[f.name]?.trim()
         )
-        .map((f) => [f.name, `${f.label} is needed.`])
+        .map((f) => [f.name, `${help[f.name]?.label ?? f.label} is needed.`])
     ) as Record<string, string>,
   }
   const invalid =
@@ -260,11 +475,19 @@ function McpServerForm({
     <>
       <SettingsHeader
         glyph={<SettingsGlyph icon={MCP_SERVERS_ICON} tone="action" />}
-        title={server ? server.name : "New MCP server"}
+        title={
+          server
+            ? server.name
+            : template
+              ? `Add ${template.name}`
+              : "New MCP server"
+        }
         description={
           server
             ? `MCP server · ${method?.label ?? server.auth.kind} · ${status?.label}`
-            : "MCP server · Streamable HTTP"
+            : template
+              ? "Application MCP server · Streamable HTTP"
+              : "MCP server · Streamable HTTP"
         }
         closeLabel="Close the MCP server's settings"
       />
@@ -279,6 +502,19 @@ function McpServerForm({
               A remote MCP server, over streamable HTTP. Its tools can be
               attached to the organization&apos;s agents.
             </p>
+            {template?.instructions && (
+              <div
+                role="note"
+                aria-label="What it needs"
+                className="flex gap-2.5 rounded-(--radius-item) border border-notice-border bg-notice-surface p-3 text-xs/[1.6] text-foreground"
+              >
+                <Icon
+                  icon="info"
+                  className="mt-0.5 shrink-0 text-notice-accent"
+                />
+                <span>{template.instructions}</span>
+              </div>
+            )}
             {error && (
               <ErrorCallout
                 title={`Couldn't ${server ? "save" : "add"} the MCP server`}
@@ -316,9 +552,7 @@ function McpServerForm({
                   touch()
                 }}
               />
-              {shown(problems.name) && (
-                <FieldError>{problems.name}</FieldError>
-              )}
+              {shown(problems.name) && <FieldError>{problems.name}</FieldError>}
             </Field>
             <Field data-invalid={Boolean(shown(problems.url))}>
               <FieldLabel htmlFor={`${id}-url`}>Server URL</FieldLabel>
@@ -371,6 +605,7 @@ function McpServerForm({
               method={method}
               onKind={pickKind}
               settings={values}
+              help={help}
               onSetting={(name, value) => {
                 setSettings((prev) => ({ ...prev, [name]: value }))
                 touch()
@@ -430,7 +665,11 @@ function McpServerForm({
               </Field>
               <Field>
                 <FieldLabel htmlFor={`${id}-transport`}>Transport</FieldLabel>
-                <Input id={`${id}-transport`} disabled value="Streamable HTTP" />
+                <Input
+                  id={`${id}-transport`}
+                  disabled
+                  value="Streamable HTTP"
+                />
               </Field>
             </div>
           </SettingsSection>
@@ -445,6 +684,12 @@ function McpServerForm({
         </SettingsBody>
 
         <SettingsFooter>
+          {!server && onBack && (
+            <Button type="button" variant="ghost" size="sm" onClick={onBack}>
+              <Icon icon="left" data-icon="inline-start" />
+              Back
+            </Button>
+          )}
           {server && !readOnly && onDelete && (
             <Button
               type="button"
@@ -509,6 +754,7 @@ function AuthFields({
   method,
   onKind,
   settings,
+  help = {},
   onSetting,
   secrets,
   onSecret,
@@ -524,6 +770,8 @@ function AuthFields({
   method: AuthMethodInfo | undefined
   onKind: (kind: string) => void
   settings: Record<string, string>
+  /** How the server being added words some of the method's fields. */
+  help?: Record<string, FieldHelp>
   onSetting: (name: string, value: string) => void
   secrets: Record<string, string>
   onSecret: (name: string, value: string) => void
@@ -586,7 +834,14 @@ function AuthFields({
         </Select>
         {method && <FieldDescription>{method.description}</FieldDescription>}
       </Field>
-      {method?.fields.map((field) => {
+      {method?.fields.map((original) => {
+        const own = help[original.name]
+        const field = {
+          ...original,
+          label: own?.label ?? original.label,
+          description: own?.description ?? original.description,
+          placeholder: own?.placeholder ?? original.placeholder,
+        }
         const fieldId = `${id}-auth-${field.name}`
         const problem = problems[field.name]
         const isSaved = field.secret && saved.includes(field.name)
@@ -676,48 +931,59 @@ function HeaderRows({
         organization: put credentials in Authentication.
       </p>
       {headers.map((header) => (
-        <div
-          key={header.id}
-          className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-center gap-1.5"
-        >
-          <Input
-            aria-label="Header name"
-            className="font-mono text-xs"
-            value={header.name}
-            placeholder="X-Tenant"
-            spellCheck={false}
-            autoComplete="off"
-            disabled={readOnly}
-            autoFocus={header.id === added}
-            aria-invalid={
-              (Boolean(error) && !HEADER_NAME.test(header.name.trim())) ||
-              undefined
-            }
-            onChange={(event) => change(header, { name: event.target.value })}
-          />
-          <Input
-            aria-label={`${header.name.trim() || "Header"} value`}
-            className="font-mono text-xs"
-            value={header.value}
-            placeholder="Value"
-            spellCheck={false}
-            autoComplete="off"
-            disabled={readOnly}
-            onChange={(event) => change(header, { value: event.target.value })}
-          />
-          {!readOnly && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label={`Remove ${header.name.trim() || "header"}`}
-              className="text-muted-foreground hover:text-destructive"
-              onClick={() =>
-                onChange(headers.filter((h) => h.id !== header.id))
+        <div key={header.id} className="flex flex-col gap-1">
+          <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-center gap-1.5">
+            <Input
+              aria-label="Header name"
+              className="font-mono text-xs"
+              value={header.name}
+              placeholder="X-Tenant"
+              spellCheck={false}
+              autoComplete="off"
+              // The server needs it by this name.
+              disabled={readOnly || header.required}
+              autoFocus={header.id === added}
+              aria-invalid={
+                (Boolean(error) && !HEADER_NAME.test(header.name.trim())) ||
+                undefined
               }
-            >
-              <Icon icon={Delete02Icon} />
-            </Button>
+              onChange={(event) => change(header, { name: event.target.value })}
+            />
+            <Input
+              aria-label={`${header.name.trim() || "Header"} value`}
+              className="font-mono text-xs"
+              value={header.value}
+              placeholder={header.required ? "Needed" : "Value"}
+              spellCheck={false}
+              autoComplete="off"
+              disabled={readOnly}
+              aria-invalid={
+                (Boolean(error) && header.required && !header.value.trim()) ||
+                undefined
+              }
+              onChange={(event) =>
+                change(header, { value: event.target.value })
+              }
+            />
+            {!readOnly && !header.required && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={`Remove ${header.name.trim() || "header"}`}
+                className="text-muted-foreground hover:text-destructive"
+                onClick={() =>
+                  onChange(headers.filter((h) => h.id !== header.id))
+                }
+              >
+                <Icon icon={Delete02Icon} />
+              </Button>
+            )}
+            {/* Keeps the value as wide as the others'. */}
+            {!readOnly && header.required && <span className="size-8" />}
+          </div>
+          {header.description && (
+            <FieldDescription>{header.description}</FieldDescription>
           )}
         </div>
       ))}

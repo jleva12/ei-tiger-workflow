@@ -18,7 +18,10 @@ export type ToolChecks = {
     string,
     { name: string; connected: boolean; tools: string[] | null }
   >
-  knowledgeBases?: Map<string, { name: string; ready: number }>
+  knowledgeBases?: Map<
+    string,
+    { name: string; kind: "rag" | "graph"; ready: number }
+  >
 }
 
 export function useToolLookups(organizationId: string): {
@@ -49,8 +52,10 @@ export function useToolLookups(organizationId: string): {
             {
               name: kb.name,
               description: kb.description,
-              documents: kb.documents,
-              ready: kb.ready,
+              kind: kb.kind,
+              // A graph knowledge base's repositories, and those ingested.
+              documents: kb.kind === "graph" ? kb.repositories : kb.documents,
+              ready: kb.kind === "graph" ? kb.ingested : kb.ready,
             },
           ])
         ),
@@ -70,7 +75,14 @@ export function useToolLookups(organizationId: string): {
           : undefined,
         knowledgeBases: knowledgeBases.isSuccess
           ? new Map(
-              bases.map((kb) => [kb.id, { name: kb.name, ready: kb.ready }])
+              bases.map((kb) => [
+                kb.id,
+                {
+                  name: kb.name,
+                  kind: kb.kind,
+                  ready: kb.kind === "graph" ? kb.ingested : kb.ready,
+                },
+              ])
             )
           : undefined,
       },

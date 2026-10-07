@@ -293,6 +293,10 @@ export type KnowledgeSearch = KnowledgePlace & {
   layout?: "grid"
   /** The document open in the viewer, over the page. */
   document?: string
+  /** A graph knowledge base's: the repository open, its view, and a node of its code graph to open at. */
+  repository?: string
+  section?: "ingestion"
+  node?: string
 }
 
 /* -------------------------------------------------------------------------- */

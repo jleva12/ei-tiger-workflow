@@ -9,6 +9,10 @@ members have it by default). Auth methods are pluggable
 with their forms' fields. A method's secrets are write-only: a server answers
 which are set, never what they are.
 
+``GET /mcp-server-defaults`` lists the servers the application offers
+ready-made (``forge_admin.mcp_servers.defaults``): the web console fills in
+the form with one, and the person adds what's theirs.
+
 An OAuth sign-in starts at ``POST …/oauth/start``, which answers where to
 send the person; the authorization server sends them back to the web
 console's ``/oauth/mcp/callback``, which hands what came back to
@@ -49,6 +53,7 @@ from forge_admin.auth.access import (
     authorize,
 )
 from forge_admin.db.audit import UtcDateTime, utc_now
+from forge_admin.mcp_servers.defaults import DefaultServer
 from forge_admin.models import McpOAuthFlow, McpServer
 
 logger = logging.getLogger(__name__)
@@ -302,6 +307,23 @@ async def list_auth_methods(request: Request) -> list[AuthMethodInfo]:
     :return: The auth methods.
     """
     return [method.describe() for method in service(request).methods]
+
+
+@router.get("/mcp-server-defaults")
+async def list_mcp_server_defaults(
+    request: Request, user: CurrentUser
+) -> list[DefaultServer]:
+    """
+    The MCP servers the application offers ready-made: what connecting to
+    each takes (its URL, timeout, auth method with its settings and help for
+    its fields, and the headers it needs), to fill in a new server's form.
+    For signed-in people: the URLs can be addresses inside the deployment.
+    \f
+    :param request: The request.
+    :param user: Who's asking.
+    :return: The default servers, as the file lists them.
+    """
+    return list(request.app.state.mcp_server_defaults)
 
 
 @router.get("/organizations/{organization_id}/mcp-servers")

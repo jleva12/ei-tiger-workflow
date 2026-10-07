@@ -32,7 +32,8 @@ from structlog.typing import EventDict, Processor
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 # Loggers that install their own handlers; they're reset to propagate to root.
-_MANAGED_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi")
+# FastMCP adds a Rich console handler to its own when it's imported.
+_MANAGED_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi", "fastmcp", "mcp")
 
 
 class LoggingSettings(BaseModel):

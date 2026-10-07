@@ -203,6 +203,7 @@ const ENUMS: Record<string, readonly string[]> = {
 const KIND_ENUMS: Record<string, Record<string, readonly string[]>> = {
   llm: { mode: ["single_turn", "task"], source: ["inline", "agent"] },
   merge: { mode: ["all", "any"] },
+  match: { mode: ["first", "all"] },
   http: { method: HTTP_METHODS },
   delay: { unit: DELAY_UNITS.map((u) => u.value) },
   approval: { approvers: ["org:admin", "org:member"] },

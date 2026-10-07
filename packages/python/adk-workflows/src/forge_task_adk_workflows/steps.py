@@ -10,14 +10,15 @@ One entry per node of the document, in the document's order::
   - ``done``: it handed on its output (``error`` too when it took its Error
     way, handing on nothing);
   - ``failed``: it failed the run (ADK's error event, e.g. ``RunFailed``, at it
-    or inside it);
+    or inside it), or it's a failed End (the run fails once every way ends);
   - ``waiting``: it asked a person, or the timer, and waits for the answer (a
     pending pause: an approval, human input, a long delay);
   - ``running``: it started (an event at it or inside it) and hasn't finished;
   - ``not_reached``: nothing of it is in the session.
 - ``output`` / ``error``: what it handed on, as ``steps.<id>`` reads it
   (``data.py``): an LLM agent's answer as its output schema makes it, If /
-  Switch / Match's ``{"branch"}``, a loop's ``{count, results}``, a saved
+  Switch / Match's ``{"branch"}`` (a Match taking every rule that holds,
+  ``{"branches"}``), a loop's ``{count, results}``, a saved
   agent's result. A step run more than once (in a loop's body) shows its last.
 - ``calls``: the tools its LLM agents called (theirs, and those of the agent
   from the Agents page it is): ``{"id", "agent", "name", "args", "status",
@@ -55,6 +56,7 @@ from forge_task_adk_workflows.graph.factories.agents import answer_parser
 from forge_task_adk_workflows.graph.factories.base import config_of, items, text
 from forge_task_adk_workflows.graph.names import adk_name, body_name
 from forge_task_adk_workflows.graph.pauses import REQUEST_CONFIRMATION, REQUEST_INPUT, pending_pauses
+from forge_task_adk_workflows.support.expressions import as_text
 
 DONE = "done"
 FAILED = "failed"
@@ -157,6 +159,7 @@ def run_steps(session: Session | None, document: dict[str, Any]) -> list[dict[st
     sources = _sources(document, seen)
     _infer_silent(nodes, sources, seen)
     _started_when_handed_on(sources, seen)
+    _failed_ends(nodes, seen)
     return [
         {
             "id": node["id"],
@@ -217,6 +220,21 @@ def _is_error(response: Any) -> bool:
 def _shortened(value: Any) -> Any:
     text_ = json.dumps(value, ensure_ascii=False, default=str)
     return value if len(text_) <= MAX_RESPONSE else {"truncated": text_[:MAX_RESPONSE]}
+
+
+def _failed_ends(nodes: list[dict[str, Any]], seen: dict[str, _Seen]) -> None:
+    # An End that ended its way failed: the run fails once every way has
+    # ended, so the End itself hands on its {outcome, result}.
+    for node in nodes:
+        found = seen[node["id"]]
+        output = found.output
+        if node.get("kind") != "end" or found.status != DONE or not isinstance(output, dict):
+            continue
+        if output.get("outcome") == "failed":
+            found.failed_at = found.finished
+            said = as_text(output.get("result"))
+            label = f"{text(node.get('name')) or node['id']} ({node['id']})"
+            found.error = {"message": f"{label} failed the run" + (f": {said}" if said else ""), "code": "RunFailed"}
 
 
 def _finished(event: Event, info: StepInfo) -> dict[str, Any] | None:

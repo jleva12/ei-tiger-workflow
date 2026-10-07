@@ -29,6 +29,9 @@ dependencies = [
     "boto3>=1.40",
     "forge-task-documents",
     "python-multipart>=0.0.20",
+    # Graph knowledge bases and the code graph explorer: the code graph
+    # worker's read and search API (packages/python/codegraph).
+    "forge-codegraph",
     "google-adk>=2.9.2",
     "httpx2>=2.13.1",
     "jsonschema>=4.26",

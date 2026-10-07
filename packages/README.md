@@ -1,8 +1,10 @@
 # Packages
 
-Shared Python libraries used by the applications in `apps/`: the admin API
-(`apps/forge-admin-api`) and the async worker (`apps/forge-async-worker`);
-and the Forge UI design system the web console's components come from
+Shared Python and Go libraries used by the applications in `apps/`: the
+admin API (`apps/forge-admin-api`), the async worker
+(`apps/forge-async-worker`) and the code graph worker
+(`apps/forge-codegraph-worker`); and the Forge UI design system the web
+console's components come from
 (`forge-ui/`, below them). Each Python library is a `src/`-layout member of the
 uv workspace in the root `pyproject.toml`, which also lists it in
 `[tool.uv.sources]` (`name = { workspace = true }`), so an app depends on it by
@@ -41,6 +43,19 @@ Dockerfile copies the package directory before `uv sync --package <app>`.
   a document before a run and to read a run's steps from its session. Its
   tests, and task-sdk's, run with the worker's checks
   (`make async-worker-check`).
+- [`python/codegraph/`](python/codegraph/README.md) (`forge-codegraph`,
+  `forge_codegraph`) is the code graph worker's read and search API: a
+  client, and code search hits as the knowledge base tool's passages (cited
+  like documents'). The admin API (graph knowledge bases, the code graph
+  explorer) and the ADK workflows task (LLM nodes searching a graph
+  knowledge base) both use it (`make codegraph-check`).
+
+[`go/code-graph/`](go/code-graph/README.md) holds the Go modules the code
+graph ingestion worker (`apps/forge-codegraph-worker`) links: the graph's
+domain and parser contracts, its Spanner storage, schema and search, the
+queries agents ask of it (`agentquery`), the shared service configuration
+and the audited Java grammar. Each is a Go module of its own, joined by the
+root `go.work` (`make worker-check`).
 
 [`forge-ui/`](forge-ui/README.md) is the Forge UI design system: shadcn
 primitives on Base UI, Forge composites, the theme and the data and state

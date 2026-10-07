@@ -690,12 +690,18 @@ export function validateAgent(
           outgoing,
           incoming
         )) {
-          const name = byId.get(branching)?.data.name ?? branching
+          const data = byId.get(branching)?.data
+          const name = data?.name ?? branching
+          // A match taking every rule that holds may take both, but not
+          // always: it would wait for good when one doesn't hold.
+          const every = data?.kind === "match" && data.config.mode === "all"
           add(
             "error",
             step.id,
             `merge-exclusive-${branching}`,
-            `Its ways in come from different ways out of ${name}, and a run takes only one, so waiting for all would never go on. Wait for any instead.`
+            every
+              ? `Its ways in come from different rules of ${name}, and a run takes only the rules that hold, so waiting for all may never go on. Wait for any instead.`
+              : `Its ways in come from different ways out of ${name}, and a run takes only one, so waiting for all would never go on. Wait for any instead.`
           )
         }
       }

@@ -36,6 +36,8 @@ export type HeaderRow = { id: string; name: string; value: string }
 export type SwitchCase = { id: string; value: string }
 /** A rule of a match: its label and the condition that takes it. */
 export type MatchArm = { id: string; label: string; condition: string }
+/** Whether a match takes the first rule that holds, or every one at once. */
+export type MatchMode = "first" | "all"
 
 export type StepConfigs = {
   approval: {
@@ -65,7 +67,7 @@ export type StepConfigs = {
   delay: { amount: number; unit: DelayUnit }
   if: { condition: string }
   switch: { value: string; cases: SwitchCase[] }
-  match: { arms: MatchArm[] }
+  match: { arms: MatchArm[]; mode: MatchMode }
   loop: {
     /** An expression giving the list to go through. */
     items: string
@@ -240,14 +242,15 @@ export const STEP_KINDS: { [K in StepKind]: KindInfo<K> } = {
   match: {
     label: "Match",
     icon: LeftToRightListBulletIcon,
-    summary: "Routes to the first rule whose condition holds.",
-    keywords: "pattern rules guard first condition route",
+    summary: "Routes to the first rule whose condition holds, or to every one.",
+    keywords: "pattern rules guard first condition route all every fan out",
     idPrefix: "match",
     defaults: () => ({
       arms: [
         { id: uid("rule"), label: "", condition: "" },
         { id: uid("rule"), label: "", condition: "" },
       ],
+      mode: "first",
     }),
   },
   loop: {

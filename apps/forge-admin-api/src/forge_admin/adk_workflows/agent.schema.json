@@ -1128,9 +1128,10 @@
     },
     "config_match": {
       "type": "object",
-      "description": "Routes to the first rule whose condition holds.",
+      "description": "Routes to the first rule whose condition holds, or to every one.",
       "required": [
-        "arms"
+        "arms",
+        "mode"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1156,7 +1157,15 @@
               }
             }
           },
-          "description": "In order: the first rule whose JSONata condition is true is taken."
+          "description": "In order: the first rule whose JSONata condition is true is taken (mode first), or every one, at once (mode all)."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "first",
+            "all"
+          ],
+          "description": "first takes the first rule that holds; all takes every one that holds, at once."
         }
       }
     },

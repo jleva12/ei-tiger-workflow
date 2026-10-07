@@ -1,0 +1,56 @@
+# The application's default MCP servers: ready-made configurations the web
+# console offers on an organization's MCP servers page (+ MCP server), beside
+# a new, empty one. Picking one opens the usual form filled in with this, so
+# the person only adds what's theirs: a token, a header's value.
+# FORGE_ADMIN_MCP_SERVER_DEFAULTS names another file instead of this one.
+#
+# Each server:
+#   id                 stable, lowercase letters, digits and -
+#   name, description  what the added server is called and is for
+#   url                its streamable HTTP endpoint
+#   timeout_seconds    how long it has to answer (default 30)
+#   instructions       what the person does first, in a sentence or two
+#   auth.kind          an auth method (GET /mcp-auth-methods): none, api_key,
+#                      bearer, oauth, oauth_client_credentials
+#   auth.settings      the method's settings (its defaults for those left out)
+#   auth.fields        help with the method's fields for this server, by name:
+#                      label, description, placeholder
+#   headers            name, value, description, required: sent with every
+#                      request (not secret; credentials go in auth)
+#
+# A string may name a value from the environment, ${NAME}, or with a fallback,
+# ${NAME:-default}: the process environment over the admin's .env. The API
+# checks this file when it starts.
+
+servers:
+  # The code graph MCP server (apps/forge-codegraph-mcp): read-only tools over
+  # the repositories the code graph worker ingested. It serves one
+  # organization's code repositories to each credential: an organization's
+  # API key, or a token minted for one, which it checks with this API
+  # (GET /code-graph/access, needing repositories:read). Natively it listens
+  # on 8103; Compose sets FORGE_ADMIN_CODEGRAPH_MCP_URL to its address on the
+  # stack's network.
+  - id: code-explorer
+    name: Code explorer
+    description: >-
+      Explore the code of the organization's repositories: answer questions
+      with evidence, search declarations, walk callers and callees, assess a
+      change's impact and read the exact source.
+    url: ${FORGE_ADMIN_CODEGRAPH_MCP_URL:-http://localhost:8103/mcp}
+    timeout_seconds: 60
+    instructions: >-
+      The code explorer reads the code repositories of the organization whose
+      API key it's sent. Make a key on this organization's API keys page
+      (its default role, API caller, may read the organization's code) and
+      paste it as the token.
+    auth:
+      kind: bearer
+      fields:
+        token:
+          label: Organization API key
+          description: >-
+            An API key of this organization (fk_…), sent as Authorization:
+            Bearer …; kept encrypted, nobody can read it back. A token minted
+            for the organization (forge-admin-token --organization) works too.
+          placeholder: fk_…
+    headers: []

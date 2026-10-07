@@ -12,21 +12,26 @@ WORKDIR /src
 COPY pyproject.toml uv.lock ./
 COPY apps/forge-admin-api/pyproject.toml apps/forge-admin-api/
 COPY apps/forge-async-worker/pyproject.toml apps/forge-async-worker/
+COPY apps/forge-codegraph-mcp/pyproject.toml apps/forge-codegraph-mcp/
 COPY packages/python/adk-workflows/pyproject.toml packages/python/adk-workflows/
 COPY packages/python/agent-runtime/pyproject.toml packages/python/agent-runtime/
+COPY packages/python/codegraph/pyproject.toml packages/python/codegraph/
 COPY packages/python/common/pyproject.toml packages/python/common/
 COPY packages/python/documents/pyproject.toml packages/python/documents/
 COPY packages/python/embeddings/pyproject.toml packages/python/embeddings/
 COPY packages/python/jsonata/pyproject.toml packages/python/jsonata/
+COPY packages/python/mcp-servers/pyproject.toml packages/python/mcp-servers/
 COPY packages/python/task-sdk/pyproject.toml packages/python/task-sdk/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --package forge-admin --no-install-workspace
 COPY packages/python/adk-workflows/ packages/python/adk-workflows/
 COPY packages/python/agent-runtime/ packages/python/agent-runtime/
+COPY packages/python/codegraph/ packages/python/codegraph/
 COPY packages/python/common/ packages/python/common/
 COPY packages/python/documents/ packages/python/documents/
 COPY packages/python/embeddings/ packages/python/embeddings/
 COPY packages/python/jsonata/ packages/python/jsonata/
+COPY packages/python/mcp-servers/ packages/python/mcp-servers/
 COPY packages/python/task-sdk/ packages/python/task-sdk/
 COPY apps/forge-admin-api/ apps/forge-admin-api/
 # Installs the app itself (with its migrations) and the local packages into

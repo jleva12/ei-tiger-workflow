@@ -1,0 +1,167 @@
+[
+  {
+    "name": "diamond",
+    "requirement": "E05",
+    "files": {
+      "Audit.java": "class P { Object a = new java.util.ArrayList<>(); Object b = new java.util.ArrayList(); }"
+    },
+    "release": "21",
+    "valid": true
+  },
+  {
+    "name": "field_javadoc",
+    "requirement": "E09",
+    "files": {
+      "Audit.java": "class P { /** Field documentation. */ public static final int VALUE = 1; }"
+    },
+    "release": "21",
+    "valid": true
+  },
+  {
+    "name": "java8_private_interface",
+    "requirement": "E08",
+    "files": {
+      "Audit.java": "interface P { private void hidden() {} }"
+    },
+    "release": "21",
+    "valid": true
+  },
+  {
+    "name": "java8_private_interface_invalid8",
+    "requirement": "E08",
+    "files": {
+      "Audit.java": "interface P { private void hidden() {} }"
+    },
+    "release": "8",
+    "valid": false
+  },
+  {
+    "name": "java8_resource_reference",
+    "requirement": "E08",
+    "files": {
+      "Audit.java": "class P { void f(java.io.Closeable c) throws Exception { try(c) { c.close(); } } }"
+    },
+    "release": "21",
+    "valid": true
+  },
+  {
+    "name": "java8_resource_reference_invalid8",
+    "requirement": "E08",
+    "files": {
+      "Audit.java": "class P { void f(java.io.Closeable c) throws Exception { try(c) { c.close(); } } }"
+    },
+    "release": "8",
+    "valid": false
+  },
+  {
+    "name": "multi_catch_annotations",
+    "requirement": "E04",
+    "files": {
+      "Audit.java": "import java.lang.annotation.*; @Target(ElementType.TYPE_USE) @interface Mark {} class First extends RuntimeException {} class Second extends RuntimeException {} class P { void f() { try { } catch (@Mark First | @Mark Second e) { } } }"
+    },
+    "release": "21",
+    "valid": true
+  },
+  {
+    "name": "nested_annotation_default",
+    "requirement": "E06",
+    "files": {
+      "Audit.java": "@interface Inner { String value(); } @interface Outer { Inner value() default @Inner(\"x\"); }"
+    },
+    "release": "21",
+    "valid": true
+  },
+  {
+    "name": "pattern",
+    "requirement": "E03",
+    "files": {
+      "Audit.java": "class P { void f(Object o) { if (o instanceof String s) { s.trim(); } } }"
+    },
+    "release": "21",
+    "valid": true
+  },
+  {
+    "name": "qualified_super_reference",
+    "requirement": "E01",
+    "files": {
+      "Audit.java": "class Outer { class Inner { java.util.function.Supplier<String> r = Outer.super::toString; } }"
+    },
+    "release": "21",
+    "valid": true
+  },
+  {
+    "name": "qualified_this_reference",
+    "requirement": "E01",
+    "files": {
+      "Audit.java": "class Outer { String value() { return \"x\"; } class Inner { java.util.function.Supplier<String> r = Outer.this::value; } }"
+    },
+    "release": "21",
+    "valid": true
+  },
+  {
+    "name": "value_lambda",
+    "requirement": "E02",
+    "files": {
+      "Audit.java": "class P { void accept(java.util.function.Consumer<String> c) {} void accept(java.util.function.Function<String,String> f) {} String use(String x) { return x; } void f() { accept(x -> { return use(x); }); } }"
+    },
+    "release": "21",
+    "valid": true
+  },
+  {
+    "name": "value_name_reference",
+    "requirement": "E01",
+    "files": {
+      "Audit.java": "class Service { void run() {} } class Box { Service service; } class P { Box box; Service service; Runnable a = service::run; Runnable b = box.service::run; }"
+    },
+    "release": "21",
+    "valid": true
+  },
+  {
+    "name": "varargs_annotation",
+    "requirement": "E04",
+    "files": {
+      "Audit.java": "import java.lang.annotation.*; @Target(ElementType.TYPE_USE) @interface Mark {} class P { void f(String @Mark ... values) {} }"
+    },
+    "release": "21",
+    "valid": true
+  },
+  {
+    "name": "void_lambda",
+    "requirement": "E02",
+    "files": {
+      "Audit.java": "class P { void accept(java.util.function.Consumer<String> c) {} void accept(java.util.function.Function<String,String> f) {} String use(String x) { return x; } void f() { accept(x -> { use(x); }); } }"
+    },
+    "release": "21",
+    "valid": true
+  },
+  {
+    "name": "switch_patterns",
+    "requirement": "E02/E03",
+    "release": "21",
+    "valid": true,
+    "files": {
+      "P.java": "class P {\n record R(Object x) {} record W(R r) {}\n int f(Object o) {\n  if (!(o instanceof String s) || s.isEmpty()) return 0;\n  return switch(o) {\n   case String t when !t.isEmpty() -> t.length();\n   case W(R(String t)) -> { yield t.length(); }\n   case null, default -> 0;\n  };\n }\n}"
+    }
+  },
+  {
+    "name": "unicode_translation",
+    "requirement": "E07",
+    "release": "21",
+    "valid": true,
+    "files": {
+      "P.java": "// comment\\u000aclass \\u0050 { String s=\"\\uD800\"; int \\uD801\\uDC00; void f(){ \\uD801\\uDC00 \\u003d 1; } }"
+    }
+  },
+  {
+    "name": "module_directives",
+    "requirement": "E07",
+    "release": "21",
+    "valid": true,
+    "files": {
+      "module-info.java": "@Deprecated module app { requires static transitive java.logging; exports p to java.logging; opens p to java.logging; uses p.Service; provides p.Service with p.Impl,p.Other; }",
+      "p/Service.java": "package p; public interface Service {}",
+      "p/Impl.java": "package p; public class Impl implements Service { public Impl() {} }",
+      "p/Other.java": "package p; public class Other implements Service { public Other() {} }"
+    }
+  }
+]

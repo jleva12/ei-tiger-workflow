@@ -230,6 +230,21 @@ def test_a_step_failing_in_a_loops_body_fails_the_loop_too(tmp_path: Path) -> No
     assert steps["each"]["error"] == steps["bad"]["error"]
 
 
+def test_a_failed_end_is_failed_with_what_it_ended_with(tmp_path: Path) -> None:
+    # The run fails once every way has ended, so the End hands on its
+    # ending; it's still the step that failed the run.
+    document = agent(
+        [ANY_START, end("stop", '"No refund"', outcome="failed")],
+        [("start", "next", "stop")],
+    )
+    ran = asyncio.run(Sessions(tmp_path).run(document, {}))
+    steps = steps_of(ran, document)
+    assert statuses(steps) == {"start": "done", "stop": "failed"}
+    assert steps["stop"]["output"] == {"outcome": "failed", "result": "No refund"}
+    assert steps["stop"]["error"] == {"message": "Stop (stop) failed the run: No refund", "code": "RunFailed"}
+    assert steps["stop"]["finished_at"] is not None
+
+
 def test_a_step_that_took_its_error_way_is_done_with_its_error(tmp_path: Path) -> None:
     def gone(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, text="gone")

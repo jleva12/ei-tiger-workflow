@@ -32,7 +32,7 @@ export function stepDetail(step: StepData): string {
     case "switch":
       return `${plural(step.config.cases.length, "case")} and a default`
     case "match":
-      return `${plural(step.config.arms.length, "rule")}, first that holds`
+      return `${plural(step.config.arms.length, "rule")}, ${step.config.mode === "all" ? "every one that holds" : "first that holds"}`
     case "loop":
       return step.config.concurrency > 1
         ? `${step.config.concurrency} at a time`

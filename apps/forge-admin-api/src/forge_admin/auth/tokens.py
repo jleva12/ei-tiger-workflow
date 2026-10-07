@@ -7,6 +7,11 @@ development, ``forge-admin-token`` (``cli/token.py``) mints one for a user,
 e.g. for the web console's ``VITE_API_TOKEN`` (``make web-token``). The
 assistant mints short-lived ones for the person it is talking to
 (``mint_subject_token``), to call other Forge services as them.
+
+A token may also name the organization it acts in (``ORGANIZATION_CLAIM``):
+``forge-admin-token --organization`` mints one, for services that serve one
+organization's data at a time, such as the code graph's MCP server, which
+reads only that organization's repositories (``GET /code-graph/access``).
 """
 
 import re
@@ -16,6 +21,7 @@ from typing import Any
 
 import jwt
 
+from forge_admin.auth.access import UUID_PATTERN
 from forge_admin.auth.authorization import (
     GROUP_NAME_PATTERN,
     SUBJECT_PATTERN,
@@ -26,6 +32,8 @@ from forge_admin.db.audit import utc_now
 from forge_admin.models import User
 
 ALGORITHM = "HS256"
+#: The claim naming the organization a token acts in, by ID.
+ORGANIZATION_CLAIM = "org_id"
 
 
 # The most groups read from a token; a directory's long tail stops here.
@@ -38,10 +46,14 @@ class TokenError(Exception):
 
 @dataclass(frozen=True)
 class Identity:
-    """Who a token identifies: the user, and the company groups they're in."""
+    """
+    Who a token identifies: the user, the company groups they're in, and the
+    organization it was minted for, if it names one.
+    """
 
     subject: str
     groups: tuple[str, ...] = ()
+    organization_id: str | None = None
 
 
 def mint_token(
@@ -51,21 +63,25 @@ def mint_token(
     lifetime: timedelta,
     now: datetime | None = None,
     groups: list[str] | None = None,
+    organization_id: str | None = None,
 ) -> str:
     """
     Sign a token that identifies a user.
 
     Besides ``sub``, it carries the user's profile as an identity provider's
     would (``email``, ``given_name``, ``family_name``, ``name``, ``msid``); the
-    API reads only ``sub``, and the groups claim when ``groups`` are given.
+    API reads only ``sub``, the groups claim when ``groups`` are given, and
+    ``ORGANIZATION_CLAIM`` when it's minted for an organization.
 
     :param settings: Settings with ``jwt_secret``.
     :param user: The user it identifies.
     :param lifetime: How long it is valid.
     :param now: When it is issued; defaults to the current time.
     :param groups: The company groups it says they're in.
+    :param organization_id: The organization it acts in.
     :return: The encoded JWT.
-    :raises TokenError: No ``jwt_secret`` is configured.
+    :raises TokenError: No ``jwt_secret`` is configured, or the organization
+        ID isn't one.
     """
     issued = now or utc_now()
     claims: dict[str, Any] = {
@@ -80,7 +96,7 @@ def mint_token(
     }
     if groups:
         claims[settings.jwt_groups_claim] = list(groups)
-    return _sign(settings, claims)
+    return _sign(settings, _for_organization(claims, organization_id))
 
 
 def mint_subject_token(
@@ -89,6 +105,7 @@ def mint_subject_token(
     *,
     lifetime: timedelta,
     now: datetime | None = None,
+    organization_id: str | None = None,
 ) -> str:
     """
     Sign a token that only identifies a user, for this API's own calls on
@@ -99,14 +116,27 @@ def mint_subject_token(
     :param subject: The user's ID.
     :param lifetime: How long it is valid; keep it short.
     :param now: When it is issued; defaults to the current time.
+    :param organization_id: The organization it acts in, for a service that
+        serves one organization's data at a time.
     :return: The encoded JWT.
-    :raises TokenError: No ``jwt_secret`` is configured, or the subject isn't
-        one ``verify_token`` would accept.
+    :raises TokenError: No ``jwt_secret`` is configured, or the subject or
+        organization ID isn't one ``verify_identity`` would accept.
     """
     if not re.fullmatch(SUBJECT_PATTERN, subject) or is_reserved_subject(subject):
         raise TokenError("Invalid token subject")
     issued = now or utc_now()
-    return _sign(settings, {"sub": subject, "iat": issued, "exp": issued + lifetime})
+    claims: dict[str, Any] = {"sub": subject, "iat": issued, "exp": issued + lifetime}
+    return _sign(settings, _for_organization(claims, organization_id))
+
+
+def _for_organization(
+    claims: dict[str, Any], organization_id: str | None
+) -> dict[str, Any]:
+    if organization_id is not None:
+        if not re.fullmatch(UUID_PATTERN, organization_id):
+            raise TokenError("Invalid token organization")
+        claims[ORGANIZATION_CLAIM] = organization_id
+    return claims
 
 
 def _sign(settings: Settings, claims: dict[str, Any]) -> str:
@@ -148,15 +178,17 @@ def groups_of(value: object) -> tuple[str, ...]:
 
 def verify_identity(settings: Settings, token: str) -> Identity:
     """
-    Check a bearer token and return who it identifies: the user, and the
-    company groups its ``jwt_groups_claim`` names.
+    Check a bearer token and return who it identifies: the user, the
+    company groups its ``jwt_groups_claim`` names, and the organization its
+    ``ORGANIZATION_CLAIM`` names.
 
     :param settings: The API's settings.
     :param token: The encoded JWT.
-    :return: Its ``sub`` (the user's ID), and its groups.
+    :return: Its ``sub`` (the user's ID), its groups and organization.
     :raises TokenError: Tokens aren't accepted, or this one is expired,
-        wrongly signed, for another issuer or audience, or lacks a valid
-        ``sub``, ``iat`` or ``exp``.
+        wrongly signed, for another issuer or audience, lacks a valid
+        ``sub``, ``iat`` or ``exp``, or names an organization by something
+        that isn't an ID.
     """
     if settings.jwt_secret is None:
         raise TokenError("This API does not accept bearer tokens")
@@ -177,4 +209,11 @@ def verify_identity(settings: Settings, token: str) -> Identity:
     # Roles, groups and subjects share Casbin's namespace; see members.assign_role.
     if not re.fullmatch(SUBJECT_PATTERN, subject) or is_reserved_subject(subject):
         raise TokenError("Invalid bearer token subject")
-    return Identity(str(subject), groups_of(claims.get(settings.jwt_groups_claim)))
+    organization = claims.get(ORGANIZATION_CLAIM)
+    if organization is not None and not (
+        isinstance(organization, str) and re.fullmatch(UUID_PATTERN, organization)
+    ):
+        raise TokenError("Invalid bearer token organization")
+    return Identity(
+        str(subject), groups_of(claims.get(settings.jwt_groups_claim)), organization
+    )

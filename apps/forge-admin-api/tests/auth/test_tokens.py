@@ -9,11 +9,18 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 
 from forge_admin.api.server import ApiServer
-from forge_admin.auth.tokens import TokenError, mint_token, verify_token
+from forge_admin.auth.tokens import (
+    ORGANIZATION_CLAIM,
+    TokenError,
+    mint_subject_token,
+    mint_token,
+    verify_identity,
+    verify_token,
+)
 from forge_admin.cli import token as token_cli
 from forge_admin.config import Settings
 from forge_admin.db.audit import current_actor, utc_now
-from forge_admin.models import User
+from forge_admin.models import Organization, User
 
 SECRET = "test-secret-that-is-at-least-32-chars"
 USER = User(
@@ -136,3 +143,76 @@ USER_FIELDS = {
     "email": USER.email,
     "msid": USER.msid,
 }
+
+
+ORG = "3f6c0000-0000-4000-8000-000000000001"
+
+
+def test_a_token_minted_for_an_organization_names_it(signed: Settings) -> None:
+    for token in (
+        mint_token(signed, USER, lifetime=DAY, organization_id=ORG),
+        mint_subject_token(signed, USER.id, lifetime=DAY, organization_id=ORG),
+    ):
+        assert (
+            jwt.decode(token, options={"verify_signature": False})[ORGANIZATION_CLAIM]
+            == ORG
+        )
+        assert verify_identity(signed, token).organization_id == ORG
+    unscoped = mint_token(signed, USER, lifetime=DAY)
+    assert ORGANIZATION_CLAIM not in jwt.decode(
+        unscoped, options={"verify_signature": False}
+    )
+    assert verify_identity(signed, unscoped).organization_id is None
+
+
+def test_an_organization_must_be_named_by_its_id(signed: Settings) -> None:
+    with pytest.raises(TokenError, match="organization"):
+        mint_token(signed, USER, lifetime=DAY, organization_id="Acme")
+    with pytest.raises(TokenError, match="organization"):
+        mint_subject_token(signed, USER.id, lifetime=DAY, organization_id="Acme")
+    now = utc_now()
+    forged = jwt.encode(
+        {
+            "sub": USER.id,
+            "iat": now,
+            "exp": now + DAY,
+            "iss": "forge-local",
+            "aud": "forge-admin",
+            ORGANIZATION_CLAIM: ["Acme"],
+        },
+        SECRET,
+        algorithm="HS256",
+    )
+    assert whoami_with(signed, forged) == (
+        401,
+        {"detail": "Invalid bearer token organization"},
+    )
+
+
+def test_minting_for_an_organization_names_it_by_id_or_name(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    keyed = settings.model_copy(update={"jwt_secret": SecretStr(SECRET)})
+    monkeypatch.setattr(token_cli, "get_settings", lambda: keyed)
+    acme = Organization(id=ORG, name="Acme", description="")
+    asked: list[str] = []
+
+    async def find(
+        _settings: Settings, *, msid: str, email: str, organization: str
+    ) -> tuple[User, Organization | None]:
+        asked.append(organization)
+        return USER, acme if organization in (ORG, "Acme") else None
+
+    monkeypatch.setattr(token_cli, "_find", find)
+    token_cli.main(["--msid", "alovelace", "--organization", " Acme "])
+    token = capsys.readouterr().out.strip()
+    assert verify_identity(keyed, token).organization_id == ORG
+    with pytest.raises(SystemExit, match="No organization with ID or name Globex"):
+        token_cli.main(["--msid", "alovelace", "--organization", "Globex"])
+    token_cli.main(["--msid", "alovelace"])
+    assert (
+        verify_identity(keyed, capsys.readouterr().out.strip()).organization_id is None
+    )
+    assert asked == ["Acme", "Globex", ""]

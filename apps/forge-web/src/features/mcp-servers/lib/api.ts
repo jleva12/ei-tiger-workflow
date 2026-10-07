@@ -42,7 +42,11 @@ export type AuthMethodInfo = {
 
 export type McpServerStatus = "unchecked" | "ok" | "error" | "needs_auth"
 
-export type McpTool = { name: string; title: string | null; description: string }
+export type McpTool = {
+  name: string
+  title: string | null
+  description: string
+}
 
 export type McpServerRecord = {
   id: string
@@ -130,6 +134,56 @@ export function useAuthMethods() {
     queryKey: ["mcp-auth-methods"],
     queryFn: ({ signal }) =>
       api.get<AuthMethodInfo[]>("/mcp-auth-methods", { signal }),
+    // They change only with the admin API.
+    staleTime: Infinity,
+  })
+}
+
+/** How a default server words one of its auth method's fields. */
+export type FieldHelp = {
+  label: string | null
+  description: string | null
+  placeholder: string | null
+}
+
+/** A header a default server takes with every request. */
+export type DefaultHeader = {
+  name: string
+  value: string
+  description: string
+  /** The server needs it: it can't be removed, and needs a value. */
+  required: boolean
+}
+
+/**
+ * A server the application offers ready-made (the admin API's
+ * `default_servers.yaml`): what connecting to it takes, to fill in a new
+ * server's form, so the person only adds what's theirs.
+ */
+export type McpServerDefault = {
+  id: string
+  name: string
+  description: string
+  url: string
+  timeout_seconds: number
+  /** What the person does before adding it. */
+  instructions: string
+  auth: {
+    kind: string
+    settings: Record<string, string>
+    /** Help with the method's fields for this server, by field name. */
+    fields: Record<string, FieldHelp>
+  }
+  headers: DefaultHeader[]
+}
+
+/** The servers the application offers ready-made. */
+export function useMcpServerDefaults({ enabled = true } = {}) {
+  return useQuery({
+    queryKey: ["mcp-server-defaults"],
+    queryFn: ({ signal }) =>
+      api.get<McpServerDefault[]>("/mcp-server-defaults", { signal }),
+    enabled,
     // They change only with the admin API.
     staleTime: Infinity,
   })

@@ -20,6 +20,11 @@ references to `.env.common`): the `OPENAI_API_KEY`, `AZURE_OPENAI_API_KEY`,
 `VOYAGE_API_KEY` and `ANTHROPIC_API_KEY` fallbacks are only seen as real
 environment variables.
 
+In this repository the apps set the model, dimensions and base URL from the
+shared `FORGE_EMBEDDING_*` in `.env.common`
+(`HYBRID_EMBEDDING__DOCUMENT_MODEL=${FORGE_EMBEDDING_MODEL}`), which the code
+graph embeds with too; empty strings count as unset.
+
 ```
 HYBRID_EMBEDDING__PROVIDER=openai   HYBRID_EMBEDDING__API_KEY=...   # the default embedder: OpenAI
 HYBRID_EMBEDDING__DOCUMENT_MODEL=text-embedding-3-large   HYBRID_EMBEDDING__DIMENSIONS=1024

@@ -1,8 +1,10 @@
 """
-An organization's knowledge bases: named sets of documents its chat agents
-search with a knowledge base tool (``forge_admin.knowledge``). Their
-documents and collections are ``knowledge_documents`` and
-``knowledge_collections``.
+An organization's knowledge bases: named sets its chat agents search with a
+knowledge base tool (``forge_admin.knowledge``). A RAG knowledge base holds
+documents, filed in collections (``knowledge_documents`` and
+``knowledge_collections``); a graph knowledge base holds code repositories
+(``knowledge_base_repositories``, see ``knowledge_repositories``), searched
+in the code graph.
 
 Reading needs ``organizations:read`` in the organization; creating, changing
 and deleting need ``knowledge_bases:manage`` (its admins and members have it
@@ -13,6 +15,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Request, status
+from forge_codegraph import WorkerError
 from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import ColumnElement, case, false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +38,14 @@ from forge_admin.auth.access import (
     authorize,
 )
 from forge_admin.knowledge.access import MANAGE, NOT_FOUND, READ, knowledge_base_of
+from forge_admin.knowledge.graph import (
+    codegraph_of,
+    graph_ids,
+    linked,
+    search_code,
+    searchable,
+    unavailable,
+)
 from forge_admin.knowledge.queue import KnowledgeQueue, QueueError
 from forge_admin.knowledge.search import (
     MAX_RESULTS,
@@ -44,6 +55,7 @@ from forge_admin.knowledge.search import (
 )
 from forge_admin.knowledge.storage import DocumentStore, StorageError
 from forge_admin.models import KnowledgeBase, KnowledgeDocument
+from forge_admin.models.knowledge import GRAPH, RAG, Kind
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +70,9 @@ Query = Annotated[
 class KnowledgeBaseCreate(BaseModel):
     name: Name
     description: str = Field(default="", max_length=4000)
+    # rag: documents uploaded to it; graph: the organization's code
+    # repositories. It never changes.
+    kind: Kind = "rag"
 
 
 class KnowledgeBaseUpdate(BaseModel):
@@ -70,8 +85,14 @@ class KnowledgeBaseRead(Audited):
     organization_id: str
     name: str
     description: str
-    # Its documents: how many, how many are searchable (SUCCEEDED) and how
-    # many FAILED, their chunks and their bytes.
+    # rag (documents) or graph (code repositories).
+    kind: str = RAG
+    # A graph knowledge base's repositories, and how many of them an
+    # ingestion of succeeded: those its searches find code in.
+    repositories: int = 0
+    ingested: int = 0
+    # A RAG knowledge base's documents: how many, how many are searchable
+    # (SUCCEEDED) and how many FAILED, their chunks and their bytes.
     documents: int = 0
     ready: int = 0
     failed: int = 0
@@ -107,6 +128,11 @@ class SearchHit(BaseModel):
     # meaning to the query's (-1 to 1); higher is better. Hits are in their
     # ranked order, which also weighs their words.
     score: float
+    # A graph knowledge base's code: the repository (Forge's ID) and the
+    # node in its code graph; the filename is the repository and the file,
+    # the section path the declaration.
+    repository_id: str | None = None
+    node_id: str | None = None
 
 
 class SearchResults(BaseModel):
@@ -165,6 +191,8 @@ NO_DOCUMENTS = {
     "size_bytes": 0,
     "stale": 0,
 }
+# The counts of a knowledge base without repositories.
+NO_REPOSITORIES = {"repositories": 0, "ingested": 0}
 
 
 def _search_model(request: Request) -> str | None:
@@ -215,16 +243,49 @@ async def _counts(
     }
 
 
+async def _repository_counts(
+    session: AsyncSession, knowledge_base_ids: list[str]
+) -> dict[str, dict[str, int]]:
+    """:return: Each graph knowledge base's repositories, and how many have a
+    graph, by its ID."""
+    repositories = await linked(session, knowledge_base_ids)
+    graphs = await graph_ids(
+        session, list({r.id for rs in repositories.values() for r in rs})
+    )
+    return {
+        kb_id: {
+            "repositories": len(rs),
+            "ingested": sum(1 for r in rs if r.id in graphs),
+        }
+        for kb_id, rs in repositories.items()
+    }
+
+
+async def _reads(
+    session: AsyncSession, knowledge_bases: list[KnowledgeBase], model: str | None
+) -> list[KnowledgeBaseRead]:
+    documents = await _counts(
+        session, [kb.id for kb in knowledge_bases if kb.kind != GRAPH], model
+    )
+    repositories = await _repository_counts(
+        session, [kb.id for kb in knowledge_bases if kb.kind == GRAPH]
+    )
+    return [
+        as_read(
+            KnowledgeBaseRead,
+            kb,
+            **documents.get(kb.id, NO_DOCUMENTS),
+            **repositories.get(kb.id, NO_REPOSITORIES),
+            embedding_model=model,
+        )
+        for kb in knowledge_bases
+    ]
+
+
 async def _read(
     session: AsyncSession, knowledge_base: KnowledgeBase, model: str | None
 ) -> KnowledgeBaseRead:
-    counts = await _counts(session, [knowledge_base.id], model)
-    return as_read(
-        KnowledgeBaseRead,
-        knowledge_base,
-        **counts.get(knowledge_base.id, NO_DOCUMENTS),
-        embedding_model=model,
-    )
+    return (await _reads(session, [knowledge_base], model))[0]
 
 
 @router.get("/organizations/{organization_id}/knowledge-bases")
@@ -237,7 +298,7 @@ async def list_knowledge_bases(
 ) -> list[KnowledgeBaseRead]:
     """
     List an organization's knowledge bases, by name, with their documents'
-    counts.
+    counts, or their repositories'.
     \f
     :raises HTTPException: 403 without organizations:read in the organization.
     """
@@ -249,17 +310,7 @@ async def list_knowledge_bases(
             .order_by(KnowledgeBase.name)
         )
     )
-    model = _search_model(request)
-    counts = await _counts(session, [kb.id for kb in found], model)
-    return [
-        as_read(
-            KnowledgeBaseRead,
-            kb,
-            **counts.get(kb.id, NO_DOCUMENTS),
-            embedding_model=model,
-        )
-        for kb in found
-    ]
+    return await _reads(session, found, _search_model(request))
 
 
 @router.post(
@@ -275,20 +326,25 @@ async def create_knowledge_base(
     enforcer: Enforcer,
 ) -> KnowledgeBaseRead:
     """
-    Add a knowledge base to the organization, empty.
+    Add a knowledge base to the organization, empty: of documents (``rag``,
+    the default) or of code repositories (``graph``).
     \f
     :raises HTTPException: 403 without knowledge_bases:manage in the
         organization; 409 when the name is taken.
     """
     await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
     knowledge_base = KnowledgeBase(
-        organization_id=organization_id, name=body.name, description=body.description
+        organization_id=organization_id,
+        name=body.name,
+        description=body.description,
+        kind=body.kind,
     )
     session.add(knowledge_base)
     await commit_or_conflict(session, NAME_TAKEN)
     logger.info(
-        "%s created knowledge base %s (%s) in organization %s",
+        "%s created %s knowledge base %s (%s) in organization %s",
         user,
+        knowledge_base.kind,
         knowledge_base.name,
         knowledge_base.id,
         organization_id,
@@ -306,13 +362,14 @@ async def get_knowledge_base(
     enforcer: Enforcer,
 ) -> KnowledgeBaseRead:
     """
-    Read one knowledge base, with its documents' counts.
+    Read one knowledge base, with its documents' counts, or its
+    repositories'.
     \f
     :raises HTTPException: 403 without organizations:read in the organization;
         404 for another organization's knowledge base, or none.
     """
     knowledge_base = await knowledge_base_of(
-        session, enforcer, user, organization_id, knowledge_base_id
+        session, enforcer, user, organization_id, knowledge_base_id, kind=None
     )
     return await _read(session, knowledge_base, _search_model(request))
 
@@ -328,15 +385,21 @@ async def update_knowledge_base(
     enforcer: Enforcer,
 ) -> KnowledgeBaseRead:
     """
-    Rename a knowledge base or change its description. Agents that use it
-    keep using it: they name it by ID.
+    Rename a knowledge base or change its description (not its kind).
+    Agents that use it keep using it: they name it by ID.
     \f
     :raises HTTPException: 403 without knowledge_bases:manage in the
         organization; 404 for another organization's knowledge base, or none;
         409 when the name is taken.
     """
     knowledge_base = await knowledge_base_of(
-        session, enforcer, user, organization_id, knowledge_base_id, manage=True
+        session,
+        enforcer,
+        user,
+        organization_id,
+        knowledge_base_id,
+        manage=True,
+        kind=None,
     )
     if body.name is not None:
         knowledge_base.name = body.name
@@ -364,7 +427,8 @@ async def delete_knowledge_base(
     the async worker), then its records and collections. Each step is safe to
     repeat, so a deletion that fails part way leaves the knowledge base with
     the documents not yet removed, and deleting it again finishes the job.
-    Agents that use it no longer find anything in it.
+    A graph knowledge base's repositories stay in the organization, and their
+    code graphs with them. Agents that use it no longer find anything in it.
     \f
     :raises HTTPException: 403 without knowledge_bases:manage in the
         organization; 404 for another organization's knowledge base, or none;
@@ -372,7 +436,13 @@ async def delete_knowledge_base(
         or the worker is unavailable.
     """
     knowledge_base = await knowledge_base_of(
-        session, enforcer, user, organization_id, knowledge_base_id, manage=True
+        session,
+        enforcer,
+        user,
+        organization_id,
+        knowledge_base_id,
+        manage=True,
+        kind=None,
     )
     documents = list(
         await session.scalars(
@@ -463,14 +533,21 @@ async def search_knowledge_base(
     that best match the query, by meaning and by its words (hybrid BM25 and
     vector search), best first. Each document answers as its last completed
     ingestion left it: one being ingested again answers as it was until its
-    new version is ready, and a removed one isn't found.
+    new version is ready, and a removed one isn't found. A graph knowledge
+    base answers its repositories' code the same way, from the code graph:
+    each hit a declaration, with its source, as of the last ingestion that
+    succeeded.
     \f
     :raises HTTPException: 403 without organizations:read in the
         organization; 404 for another organization's knowledge base, or none;
-        503 when searching isn't set up, or MongoDB or the embedding model is
-        unavailable.
+        502 when the code graph worker refuses; 503 when searching isn't set
+        up, or MongoDB, the embedding model or the code graph is unavailable.
     """
-    await knowledge_base_of(session, enforcer, user, organization_id, knowledge_base_id)
+    knowledge_base = await knowledge_base_of(
+        session, enforcer, user, organization_id, knowledge_base_id, kind=None
+    )
+    if knowledge_base.kind == GRAPH:
+        return await _search_code(request, session, knowledge_base, body)
     search: KnowledgeSearch | None = request.app.state.knowledge_search
     if search is None:
         raise HTTPException(
@@ -506,6 +583,39 @@ async def search_knowledge_base(
     )
 
 
+async def _search_code(
+    request: Request,
+    session: AsyncSession,
+    knowledge_base: KnowledgeBase,
+    body: SearchRequest,
+) -> SearchResults:
+    graph = codegraph_of(request)
+    repositories = (await searchable(session, [knowledge_base.id]))[knowledge_base.id]
+    try:
+        passages = await search_code(
+            graph, [(knowledge_base, repositories)], body.query, limit=body.limit
+        )
+    except WorkerError as error:
+        raise unavailable(error) from None
+    return SearchResults(
+        hits=[
+            SearchHit(
+                chunk_id=p["node_id"],
+                ref=p["ref"],
+                document_id=p["document_id"],
+                filename=p["document"],
+                section_path=[p["section"]] if p["section"] else [],
+                location=p["location"],
+                text=p["text"],
+                score=p["score"],
+                repository_id=p["repository_id"],
+                node_id=p["node_id"],
+            )
+            for p in passages
+        ]
+    )
+
+
 @router.post("/organizations/{organization_id}/knowledge-bases/search")
 async def search_knowledge_bases(
     organization_id: NodeId,
@@ -516,15 +626,16 @@ async def search_knowledge_bases(
     enforcer: Enforcer,
 ) -> OrganizationSearchResults:
     """
-    Search some of an organization's knowledge bases, or all of them, as
+    Search some of an organization's RAG knowledge bases, or all of them, as
     one: the passages of their documents that best match the query, ranked
     together, best first, each with the knowledge base it's from. Passages
-    of documents removed since they were indexed are left out.
+    of documents removed since they were indexed are left out. Graph
+    knowledge bases are searched one at a time (.../{knowledge_base_id}/search).
     \f
     :raises HTTPException: 403 without organizations:read in the
-        organization; 404 for a knowledge base it doesn't have; 503 when
-        searching isn't set up, or the store or the embedding model is
-        unavailable.
+        organization; 404 for a knowledge base it doesn't have; 409 for a
+        graph knowledge base; 503 when searching isn't set up, or the store
+        or the embedding model is unavailable.
     """
     await authorize(session, enforcer, user, READ, Scope(Level.ORG, organization_id))
     query = select(KnowledgeBase).where(
@@ -538,7 +649,16 @@ async def search_knowledge_bases(
     }
     if missing := [i for i in wanted if i not in found]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"{NOT_FOUND}: {missing[0]}")
-    searched = [found[i] for i in wanted] if wanted else list(found.values())
+    if graphs := [i for i in wanted if found[i].kind == GRAPH]:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{found[graphs[0]].name} is a graph knowledge base: search it on its own",
+        )
+    searched = (
+        [found[i] for i in wanted]
+        if wanted
+        else [kb for kb in found.values() if kb.kind != GRAPH]
+    )
     if not searched:
         return OrganizationSearchResults(searched=[], hits=[])
     search: KnowledgeSearch | None = request.app.state.knowledge_search

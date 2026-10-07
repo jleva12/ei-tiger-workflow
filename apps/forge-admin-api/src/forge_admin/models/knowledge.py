@@ -1,13 +1,22 @@
-"""Organizations' knowledge bases: named sets of documents their chat agents
-search, the documents uploaded to each, and the collections they're filed in."""
+"""Organizations' knowledge bases: named sets of documents (RAG) or code
+repositories (graph) their chat agents search, the documents uploaded to
+each, the collections they're filed in, and the repositories a graph
+knowledge base includes."""
 
 from datetime import datetime
+from typing import Literal
 from uuid import uuid4
 
 from sqlalchemy import BigInteger, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from forge_admin.db.base import AUDIT_TIMESTAMP, AuditBase, ascii_string
+
+#: A knowledge base of uploaded documents, chunked and embedded by the async
+#: worker; and one of code repositories, searched in the code graph.
+RAG = "rag"
+GRAPH = "graph"
+Kind = Literal["rag", "graph"]
 
 
 def new_id() -> str:
@@ -17,11 +26,14 @@ def new_id() -> str:
 
 class KnowledgeBase(AuditBase):
     """
-    A named set of an organization's documents, e.g. "HR policies": its chat
-    agents search it with a knowledge base tool. It's the async worker's
-    tenant for its documents' chunks, so a search of it finds only its own.
+    A named set of an organization's documents, e.g. "HR policies", or of its
+    code repositories: its chat agents search it with a knowledge base tool.
+    A RAG one is the async worker's tenant for its documents' chunks, so a
+    search of it finds only its own; a graph one searches the code graph of
+    the repositories it includes (:class:`KnowledgeBaseRepository`).
 
     :ivar organization_id: The organization.
+    :ivar kind: :data:`RAG` or :data:`GRAPH`; it never changes.
     :ivar name: Unique in the organization.
     :ivar description: What it holds, optionally; agents' tools describe it so.
     """
@@ -33,8 +45,35 @@ class KnowledgeBase(AuditBase):
     organization_id: Mapped[str] = mapped_column(
         ascii_string(36), ForeignKey("organizations.id", ondelete="CASCADE"), index=True
     )
+    kind: Mapped[str] = mapped_column(ascii_string(16), default=RAG, server_default=RAG)
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
+
+
+class KnowledgeBaseRepository(AuditBase):
+    """
+    A code repository a graph knowledge base includes: the organization's
+    (``code_repositories``), which other knowledge bases may include too.
+    Removing either removes the link; unlinking leaves the repository in the
+    organization.
+
+    :ivar knowledge_base_id: The graph knowledge base.
+    :ivar repository_id: The repository.
+    """
+
+    __tablename__ = "knowledge_base_repositories"
+
+    knowledge_base_id: Mapped[str] = mapped_column(
+        ascii_string(36),
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ascii_string(36),
+        ForeignKey("code_repositories.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
 
 
 class KnowledgeCollection(AuditBase):

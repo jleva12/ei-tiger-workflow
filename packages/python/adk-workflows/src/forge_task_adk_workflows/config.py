@@ -58,6 +58,13 @@ class AdkWorkflowsSettings(BaseModel):
     # Seconds a workflow an LLM agent calls as a tool is waited for before
     # the tool answers where it got to.
     workflow_tool_wait: float = Field(default=120.0, gt=0)
+    # Graph knowledge bases' search: the code graph worker's API
+    # (apps/forge-codegraph-worker, CODEGRAPH_HEALTH_ADDR) and its token
+    # (CODEGRAPH_ADMISSION_TOKEN, .env.common's FORGE_CODEGRAPH_ADMISSION_TOKEN).
+    # Unset, a knowledge base tool searching one fails its step saying so.
+    codegraph_url: str | None = Field(default=None, pattern=r"^https?://\S+$")
+    codegraph_token: SecretStr | None = Field(default=None, min_length=32)
+    codegraph_timeout: float = Field(default=30.0, gt=0, le=120)
 
     @field_validator(
         "session_database_url",
@@ -65,6 +72,8 @@ class AdkWorkflowsSettings(BaseModel):
         "model_provider_config",
         "default_model",
         "secrets_key",
+        "codegraph_url",
+        "codegraph_token",
         mode="before",
     )
     @classmethod

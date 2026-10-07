@@ -47,6 +47,10 @@ the **assistant** (the AI helper on every page).
 | What the worker does with a run (start, pause, resume, retry) | `apps/forge-async-worker/src/forge_async_worker/` (`jobs.py`, `control.py`) |
 | How an ADK workflow becomes a Google ADK graph, and each step's code | `packages/python/adk-workflows/src/forge_task_adk_workflows/` (`graph/`, `steps.py`, `support/`) |
 | The run store (runs, their status and activity) | `packages/python/adk-workflows/src/forge_task_adk_workflows/run_store.py` |
+| An organization's code repositories and their ingestions: the page, the routes, the queue table the worker claims from | `apps/forge-web/src/features/code-repositories/`, `apps/forge-admin-api/src/forge_admin/api/routes/code_repositories.py`, `models/code_repositories.py`, `apps/forge-codegraph-worker/internal/jobqueue/` |
+| How a GitHub repository is ingested into the code graph (fetch, parse, resolve, load, embed) | `apps/forge-codegraph-worker/` (`internal/ingestion/`, `internal/languages/`, `internal/resolve/`) |
+| The code graph's MCP tools, and the queries behind them | `apps/forge-codegraph-mcp/src/forge_codegraph_mcp/` (`tools/graph.py`, `graph/query/`, `graph/spanner.py`) |
+| The code graph's storage, schema, search and the queries agents ask of it | `packages/go/code-graph/` (`storage/`, `agentquery/`) |
 | Settings, ports and the Compose stack | `.env.common`, each app's `.env`, `compose.yaml`, `Makefile` |
 
 ## What it does
@@ -98,6 +102,30 @@ the **assistant** (the AI helper on every page).
   its roles (API caller by default), sent as `Authorization: Bearer fk_…`;
   when the runtime isn't public, calls need one (or a sign-in) with
   `agents:run` where the agent or workflow is.
+- **Code ingestion.** The code graph worker
+  ([forge-codegraph-worker](apps/forge-codegraph-worker/README.md)) turns a
+  GitHub repository's branch into a graph of its code: declarations,
+  references, calls, types and files, with each declaration's source and its
+  embedding, published one generation per commit and updated incrementally.
+  It analyses Java (javac, with Maven or Gradle), TypeScript/JavaScript (the
+  TypeScript compiler) and Python (Pyright). The graph is in Spanner (the
+  emulator locally) and is the engine for making codebases a knowledge
+  base. An organization adds its GitHub repositories on its **Code
+  repositories** page (or `/api/v1/organizations/{org}/code-repositories`),
+  each on one branch; the admin API queues each ingestion as a row of
+  `code_ingestion_jobs` in its MySQL, and the worker claims it there, builds
+  the graph and writes how it went back. A repository's graph is one per
+  GitHub URL, shared by the organizations that have it. A **graph knowledge
+  base** (Knowledge bases → Knowledge base → Graph knowledge base) holds some
+  of the organization's repositories: its page adds them (one of the
+  organization's, or a GitHub URL), ingests them, explores each one's code
+  graph and audits its ingestions; chat agents and workflow LLM nodes search
+  it with their knowledge base tool, as they search a RAG one's documents,
+  through the worker's search API, and cite the declarations they answer
+  from. The code graph MCP server
+  ([forge-codegraph-mcp](apps/forge-codegraph-mcp/README.md)) serves the
+  published graphs to agents: read-only tools to explore a question, search,
+  walk callers and callees, assess a change's impact and read exact source.
 - **AI assistant.** A Google ADK agent served by the admin API (`/api/v1/agents`),
   on Gemini by default or the models of the shared model-provider YAML. It
   acts as the signed-in person, within their permissions: it explains their
@@ -112,6 +140,9 @@ the **assistant** (the AI helper on every page).
 | `web` | `apps/forge-web` | 5190 (dev), 18190 (Compose) | React web console on the Forge UI design system: the ADK workflow builder and its runs, the agent builder, administration of organizations, users, roles and permissions, and the assistant panel |
 | `admin` | `apps/forge-admin-api` | 8101 (native), 18201 (Compose) | FastAPI API (`/api/v1`, docs at `/docs`): organizations, users, Casbin roles and permissions, ADK workflows (MongoDB), ADK workflow runs (starting, listing, deciding, retrying, from the run store), runs' steps from their ADK sessions, and the assistant |
 | `admin-mysql` | `apps/forge-admin-api` | 13326 | MySQL 8.4 for the admin API (Alembic migrations), ADK workflow runs (the run store) and their sessions, with a persistent volume |
+| `worker` | `apps/forge-codegraph-worker` | 8090 (native), 18090 (Compose) | Go code graph ingestion worker: claims ingestion jobs from the admin MySQL's `code_ingestion_jobs` and loads one graph generation per job into Spanner; health probes and its graph API on the same port |
+| `codegraph-mcp` | `apps/forge-codegraph-mcp` | 8103 (native), 18203 (Compose) | Python MCP server (FastMCP, streamable HTTP at `/mcp`) over the worker's code graph: explore, search, callers and callees, impact, changes, path, hubs and source; reads the worker's Spanner database |
+| `worker-spanner` | `apps/forge-codegraph-worker` | 19030 (gRPC), 19040 (REST) | Cloud Spanner emulator the worker writes the code graph to; in memory, so `make down` loses it (`SPANNER=cloud` uses managed Spanner instead) |
 | `async-worker-adk-workflows` | `apps/forge-async-worker` | none (SAQ worker) | Async worker (`forge-async-worker`) serving the `adk_workflows` queue: runs organizations' ADK workflows on Google ADK, the runs and their sessions in the admin MySQL, pausing for approvals, questions and waits |
 | `mongo` | `compose.infrastructure.yaml` | 27037 | Shared MongoDB (Atlas Local 8.3.9, a single-node replica set): ADK workflows (`forge_admin`); persistent volumes |
 | `redis` | `compose.infrastructure.yaml` | 16389 | Shared Redis: the async worker's SAQ queue in database 0; persistent AOF, no eviction |
@@ -125,6 +156,11 @@ the **assistant** (the AI helper on every page).
   Redis (SAQ, db 0)
     ▼
   async-worker-adk-workflows ──► MySQL  each run (the run store) and its ADK session
+
+  admin API ──► MySQL (code_ingestion_jobs)  an organization's repository's ingestion, queued
+                    ▲ claim (FOR UPDATE SKIP LOCKED), lease, outcome
+  worker (code graph) ──► GitHub   clone and fetch the repository
+                     └──► Spanner  each repository's code graph, its source and embeddings
 ```
 
 MongoDB and Redis are defined once in [compose.infrastructure.yaml](compose.infrastructure.yaml),
@@ -139,30 +175,37 @@ loopback-only ports.
 ## Run locally
 
 Requires Node.js 24+, [uv](https://docs.astral.sh/uv/) (it installs Python
-3.13 itself) and, for the container stack, Docker Compose 2.20.3+.
+3.13 itself), Go 1.25+ with a C compiler for the code graph worker (its
+parsers and SQLite use cgo) and, for the container stack, Docker Compose
+2.20.3+.
 
 Put your names, email and MS ID in the `FORGE_ADMIN_SITE_ADMIN_*` settings of
 `apps/forge-admin-api/.env` first (`make env` creates it): the seed makes you
 the site administrator, and the web console signs in as you with a bearer
 token. For the assistant and LLM nodes, set `FORGE_GOOGLE_API_KEY` in
-`.env.common`.
+`.env.common`. For the code graph worker to ingest private repositories, set
+`FORGE_GITHUB_TOKEN` there too (public ones need none), and
+`OPENAI_API_KEY` for it to embed them.
 
 ```sh
 make infrastructure    # admin-mysql, migrations, and you as the site administrator
 make web-token         # sign the web console in as you (VITE_API_TOKEN)
-make start             # build and start web, admin, async-worker-* and their databases
+make start             # build and start web, admin, async-worker-*, worker, codegraph-mcp and their databases
 make logs-admin
-make down              # MySQL, MongoDB and Redis data persist in volumes
+make down              # MySQL, MongoDB and Redis data persist in volumes; the Spanner emulator's don't
 ```
 
 For native development, install once and run each app with reload:
 
 ```sh
-make install           # npm ci in apps/forge-web and packages/forge-ui; uv sync --all-packages into the root .venv
+make install           # npm ci in apps/forge-web and packages/forge-ui; uv sync --all-packages into the root .venv;
+                       # the code graph worker's analyzers and Go modules
 make web               # Vite dev server on http://localhost:5190
 make admin-deps        # admin-mysql, and the shared mongo and redis
 make admin             # admin API on http://localhost:8101; docs at /docs
 make async-worker      # redis and admin-mysql, then the async worker on the adk_workflows queue
+make worker            # the Spanner emulator, then the code graph worker on http://localhost:8090
+make codegraph-mcp     # the code graph MCP server on http://localhost:8103/mcp, reading the worker's graph
 ```
 
 Or run them all at once in one terminal, each output line prefixed with its
@@ -178,9 +221,17 @@ make up-all-local
 ### Settings
 
 Values several apps share live once in `.env.common` at the root: the
-admin's MySQL connection, the shared MongoDB and Redis, and the model API
-keys (`FORGE_GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). Everything else lives with its app:
-`apps/forge-admin-api/.env` and `apps/forge-async-worker/.env`, plus
+admin's MySQL connection, the shared MongoDB and Redis, the model API
+keys (`FORGE_GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`), and the
+one embedding model and vector length everything embeds with
+(`FORGE_EMBEDDING_MODEL`, `FORGE_EMBEDDING_DIMENSIONS` and
+`FORGE_EMBEDDING_BASE_URL`): the knowledge bases' chunks and searches, and the
+code graph and its MCP server's questions, so none can disagree. Changing
+them means embedding everything again (see `.env.common.example`). `make env`
+points every app's embedding settings at them, and `make
+infrastructure-check` fails when an app's template or Compose service doesn't. Everything else lives with its app:
+`apps/forge-admin-api/.env`, `apps/forge-async-worker/.env`,
+`apps/forge-codegraph-worker/.env` and `apps/forge-codegraph-mcp/.env`, plus
 `apps/forge-web/.env.local` (see `apps/forge-web/.env.example`). `make env`
 creates each from its `.env.example` (`.env.common` from
 `.env.common.example`, `.env.compose` from `.env.compose.example`) and
@@ -241,7 +292,25 @@ apps/
     compose.yaml          async-worker-adk-workflows
     .env.example          Worker and task settings template
     pyproject.toml        The app's dependencies (the ADK workflows task among them) and tool settings (a workspace member)
-packages/                 Shared Python libraries and the Forge UI design system (see packages/README.md)
+  forge-codegraph-worker/ Go code ingestion engine: GitHub repositories into a code graph in Spanner (see its README)
+    cmd/                  codegraph-worker (the process) and codegraph-schema (the Spanner DDL)
+    internal/             workerapp/ (config, job loop, health, admission and graph API), ingestion/ (the pipeline),
+                          languages/, parser/, resolve/ (Java, TypeScript, Python), buildcontext/, discovery/,
+                          graphanalysis/, localindex/, repository/github/
+    python-analyzer/, typescript-analyzer/  The Pyright and TypeScript compiler bridges it runs under Node
+    docs/                 Design notes: architecture, language routing, build context, IR, parser contract
+    Dockerfile            Go build with the JDK, Maven, Node and uv it analyses projects with, built from the repository root
+    compose.yaml          worker and worker-spanner (the Spanner emulator)
+    .env.example          Worker settings template
+    go.mod, go.sum        The module and its dependencies; replaces point at packages/go/code-graph
+  forge-codegraph-mcp/    Python MCP server over the code graph, on the template-mcp design (see its README)
+    src/forge_codegraph_mcp/  server.py (ServerBuilder), core/ (settings, auth, FastMCP factory), routes/, tools/,
+                          graph/ (the Spanner reader and the graph queries, ported from packages/go/code-graph)
+    tests/                Pytest suite on an in-memory graph; no Spanner needed
+    Dockerfile            uv workspace build, from the repository root
+    compose.yaml          codegraph-mcp, reading the worker's database
+    .env.example          Server settings template
+packages/                 Shared Python and Go libraries and the Forge UI design system (see packages/README.md)
   forge-ui/               Forge UI: shadcn primitives, Forge composites, theme and libraries, a demo app, and the
                           shadcn registry apps install them from (registry.json, public/r)
   python/common/          forge-common: ADK toolset helpers and the shared model-provider YAML and loader
@@ -249,12 +318,16 @@ packages/                 Shared Python libraries and the Forge UI design system
   python/task-sdk/        forge-tasks: the contract between the async worker and a task package
   python/adk-workflows/   forge-task-adk-workflows: the ADK workflows task, which builds and runs ADK workflows,
                           and the run store their runs are kept in
+  go/code-graph/          The Go modules the code graph worker links: domain, storage (Spanner), agentquery,
+                          serviceconfig, authorization and the audited tree-sitter-java grammar
 tests/infrastructure/     Validates the rendered Compose stack (make infrastructure-check)
 .claude/                  Agent skills for the Forge UI, data and state conventions; dev-server launch config
 .github/workflows/        forge-ui-registry.yml: Forge UI's typecheck, tests and committed-registry check
 registry.json             Includes packages/forge-ui/registry.json, for shadcn's owner/repo/item addresses
 compose.yaml              Includes compose.infrastructure.yaml and each app's compose.yaml
 compose.infrastructure.yaml  The shared MongoDB and Redis
+compose.cloud.yaml        Overlay that puts the code graph worker and MCP server on managed Cloud Spanner (make up SPANNER=cloud)
+go.work, go.work.sum      The Go workspace: the code graph worker and its modules
 .env.compose.example      Root Compose settings template
 .env.common.example       Settings several apps share, which each app's .env references
 Makefile                  Checks and local development commands for every app
@@ -279,15 +352,18 @@ workspace's `members` in the root `pyproject.toml`.
 
 Run `make` from the repository root. Run `npm` or `uv` inside the app it
 belongs to, for example `cd apps/forge-web && npm install <pkg>` or
-`cd apps/forge-admin-api && uv add <pkg>`.
+`cd apps/forge-admin-api && uv add <pkg>`, and `go` inside the Go module it
+belongs to, for example `cd apps/forge-codegraph-worker && go get <module>`.
 
 ## Validation
 
 ```sh
 make check             # Compose stack; web typecheck, lint, tests and build; admin lint, format and unit tests;
-                       # async worker and task packages lint, format, types and unit tests; forge-common and JSONata checks;
-                       # Forge UI typecheck, tests and committed registry
+                       # async worker and task packages lint, format, types and unit tests; code graph worker vet and
+                       # unit tests; code graph MCP server lint, format, types and unit tests; forge-common and JSONata
+                       # checks; Forge UI typecheck, tests and committed registry
 make admin-test-mysql  # admin migrations and readiness against real MySQL
 make async-worker-test-redis  # the async worker's SAQ queue against redis
+make worker-test-spanner      # the code graph's storage and ingestion pipeline against the Spanner emulator
 make docker-build      # build every service image
 ```

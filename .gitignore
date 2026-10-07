@@ -30,6 +30,10 @@ __pycache__/
 .mypy_cache/
 .coverage
 
+# The code graph worker's disposable scratch: git mirrors, the syntax cache,
+# run indexes and installed packages.
+.codegraph-work/
+
 # Locally mounted keys never enter Git or build contexts.
 .secrets/
 

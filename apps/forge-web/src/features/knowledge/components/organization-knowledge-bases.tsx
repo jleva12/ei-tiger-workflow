@@ -14,7 +14,9 @@ import {
   EmptyWorkspace,
 } from "@/components/forge/empty-state"
 import { ErrorCallout } from "@/components/forge/feedback"
+import { Icon } from "@/components/forge/icon"
 import { ShellHeaderActions } from "@/components/forge/shell/index"
+import { Chip } from "@/components/forge/status"
 import { Button } from "@/components/ui/button"
 import { DeleteDialog } from "@/features/admin/components/delete-dialog"
 import {
@@ -28,9 +30,12 @@ import {
   organizationKnowledgeBases,
   useOrganizationKnowledgeBases,
   type KnowledgeBase,
+  type KnowledgeBaseKind,
 } from "../lib/api"
 import { formatBytes, formatCount, KNOWLEDGE_ICON } from "../lib/knowledge"
 import { KnowledgeBaseDialog } from "./knowledge-base-dialog"
+import { KNOWLEDGE_BASE_KINDS } from "../lib/kinds"
+import { NewKnowledgeBaseMenu } from "./new-knowledge-base-menu"
 
 const FEATURES: Partial<DataTableFeatureConfig> = {
   ...ADMIN_TABLE_FEATURES,
@@ -52,6 +57,13 @@ type RowActions = {
   remove?: (base: KnowledgeBase) => void
 }
 const ActionsContext = React.createContext<RowActions | undefined>(undefined)
+
+// What a knowledge base holds, and how much of it is searchable: its
+// documents, or a graph one's repositories.
+const contentsOf = (base: KnowledgeBase) =>
+  base.kind === "graph" ? base.repositories : base.documents
+const readyOf = (base: KnowledgeBase) =>
+  base.kind === "graph" ? base.ingested : base.ready
 
 const helper = createColumnHelper<KnowledgeBase>()
 const COLUMNS = helper.columns([
@@ -76,21 +88,42 @@ const COLUMNS = helper.columns([
       </span>
     ),
   }),
-  helper.accessor("documents", {
-    header: "Documents",
-    size: 120,
-    meta: { label: "Documents", align: "right" },
-    cell: ({ getValue }) => (
-      <span className="tabular-nums">{formatCount(getValue())}</span>
+  helper.accessor("kind", {
+    header: "Type",
+    size: 110,
+    meta: { label: "Type" },
+    cell: ({ getValue }) => {
+      const info = KNOWLEDGE_BASE_KINDS[getValue()]
+      return <Chip icon={info.icon}>{info.short}</Chip>
+    },
+  }),
+  helper.accessor(contentsOf, {
+    id: "contents",
+    header: "Contents",
+    size: 150,
+    meta: { label: "Contents", align: "right" },
+    cell: ({ row: { original: base } }) => (
+      <span className="tabular-nums">
+        {base.kind === "graph"
+          ? plural(base.repositories, "repository", "repositories")
+          : plural(base.documents, "document")}
+      </span>
     ),
   }),
-  helper.accessor("ready", {
+  helper.accessor(readyOf, {
+    id: "ready",
     header: "Ready",
-    size: 120,
+    size: 140,
     meta: { label: "Ready", align: "right" },
     cell: ({ row: { original: base } }) => (
       <span className="text-muted-foreground tabular-nums">
-        {base.documents ? (
+        {base.kind === "graph" ? (
+          base.repositories ? (
+            `${formatCount(base.ingested)} ingested`
+          ) : (
+            "–"
+          )
+        ) : base.documents ? (
           <>
             {formatCount(base.ready)}
             {base.failed > 0 && (
@@ -113,8 +146,10 @@ const COLUMNS = helper.columns([
       align: "right",
       cellClassName: "text-muted-foreground",
     },
-    cell: ({ getValue }) => (
-      <span className="tabular-nums">{formatCount(getValue())}</span>
+    cell: ({ row: { original: base }, getValue }) => (
+      <span className="tabular-nums">
+        {base.kind === "graph" ? "–" : formatCount(getValue())}
+      </span>
     ),
   }),
   helper.accessor("size_bytes", {
@@ -125,8 +160,10 @@ const COLUMNS = helper.columns([
       align: "right",
       cellClassName: "text-muted-foreground",
     },
-    cell: ({ getValue }) => (
-      <span className="tabular-nums">{formatBytes(getValue())}</span>
+    cell: ({ row: { original: base }, getValue }) => (
+      <span className="tabular-nums">
+        {base.kind === "graph" ? "–" : formatBytes(getValue())}
+      </span>
     ),
   }),
   helper.accessor("updated_at", {
@@ -162,11 +199,13 @@ function BaseMenu({ base }: { base: KnowledgeBase }) {
 }
 
 /**
- * An organization's knowledge bases: the sets of documents its agents can
- * search, each with how many documents it holds, how many are ready and
- * how much it stores. A knowledge base opens its own page, to upload and
- * file documents and try a search; those who manage knowledge bases
- * (`knowledge_bases:manage`) also make, rename and delete them here.
+ * An organization's knowledge bases: what its agents can search. A RAG one
+ * holds documents, with how many it holds, how many are ready and how much
+ * it stores; a graph one holds code repositories, with how many are
+ * ingested into the code graph. A knowledge base opens its own page, to
+ * upload documents or add repositories and try a search; those who manage
+ * knowledge bases (`knowledge_bases:manage`) also make one of either kind
+ * (the action's menu), rename and delete them here.
  */
 export function OrganizationKnowledgeBases({
   organizationId,
@@ -186,6 +225,7 @@ export function OrganizationKnowledgeBases({
   const [editing, setEditing] = React.useState<{
     open: boolean
     base?: KnowledgeBase
+    kind?: KnowledgeBaseKind
   }>({ open: false })
   const [removing, setRemoving] = React.useState<KnowledgeBase>()
   const bases = React.useMemo(() => list.data ?? [], [list.data])
@@ -209,13 +249,19 @@ export function OrganizationKnowledgeBases({
         : {},
     [canManage]
   )
-  const startCreate = () => setEditing({ open: true })
+  const startCreate = (kind: KnowledgeBaseKind) =>
+    setEditing({ open: true, kind })
 
   return (
     <>
       {canManage && (
         <ShellHeaderActions>
-          <PrimaryAction onClick={startCreate}>Knowledge base</PrimaryAction>
+          <NewKnowledgeBaseMenu
+            trigger={<PrimaryAction />}
+            onPick={startCreate}
+          >
+            Knowledge base
+          </NewKnowledgeBaseMenu>
         </ShellHeaderActions>
       )}
 
@@ -240,19 +286,23 @@ export function OrganizationKnowledgeBases({
           title={`Give ${organizationName}'s agents something to read`}
           description={
             canManage
-              ? "A knowledge base is a set of documents — runbooks, specs, policies — split into chunks and embedded so agents can search it. Make one, upload its documents, then attach it to the agents that need it."
+              ? "A knowledge base is what agents search: a set of documents — runbooks, specs, policies — split into chunks and embedded (RAG), or code repositories ingested into the code graph (graph). Make one, fill it, then attach it to the agents that need it."
               : `${organizationName} has no knowledge bases yet. Those who manage its knowledge bases make them and upload their documents.`
           }
           actions={
             canManage ? (
-              <Button variant="outline" onClick={startCreate}>
+              <NewKnowledgeBaseMenu
+                trigger={<Button variant="outline" />}
+                onPick={startCreate}
+              >
                 New knowledge base
-              </Button>
+                <Icon icon="down" data-icon="inline-end" />
+              </NewKnowledgeBaseMenu>
             ) : undefined
           }
           steps={[
             { icon: KNOWLEDGE_ICON, label: "Make a knowledge base" },
-            { icon: Upload04Icon, label: "Upload documents" },
+            { icon: Upload04Icon, label: "Upload documents or add code" },
             { icon: "robot", label: "Attach it to agents" },
           ]}
         />
@@ -261,7 +311,7 @@ export function OrganizationKnowledgeBases({
           <DataTable
             className="rounded-none border-0"
             title="Knowledge bases"
-            description={`The documents ${organizationName}'s agents can search, in ${plural(bases.length, "knowledge base")}.`}
+            description={`What ${organizationName}'s agents can search, in ${plural(bases.length, "knowledge base")}: documents, and code.`}
             columns={COLUMNS}
             data={bases}
             isLoading={list.isPending}
@@ -282,13 +332,17 @@ export function OrganizationKnowledgeBases({
           setEditing((current) => ({ ...current, open: next }))
         }
         base={editing.base}
+        kind={editing.kind}
         organizationName={organizationName}
         onSubmit={async (input) => {
           if (editing.base) {
             await update.mutateAsync({ id: editing.base.id, data: input })
             return
           }
-          const made = await create.mutateAsync(input)
+          const made = await create.mutateAsync({
+            ...input,
+            kind: editing.kind ?? "rag",
+          })
           open(made.id)
         }}
       />
@@ -298,9 +352,13 @@ export function OrganizationKnowledgeBases({
         onClose={() => setRemoving(undefined)}
         title={`Delete ${removing?.name ?? "the knowledge base"}?`}
         description={
-          removing?.documents
-            ? `Its ${plural(removing.documents, "document")} and their ${plural(removing.chunks, "chunk")} are deleted with it, and agents that use it stop finding them. This can't be undone.`
-            : "It's empty. Agents that use it lose it. This can't be undone."
+          removing?.kind === "graph"
+            ? removing.repositories
+              ? `Its ${plural(removing.repositories, "repository", "repositories")} stay in ${organizationName}, with their code graphs; agents that use it stop searching them. This can't be undone.`
+              : "It's empty. Agents that use it lose it. This can't be undone."
+            : removing?.documents
+              ? `Its ${plural(removing.documents, "document")} and their ${plural(removing.chunks, "chunk")} are deleted with it, and agents that use it stop finding them. This can't be undone.`
+              : "It's empty. Agents that use it lose it. This can't be undone."
         }
         confirmLabel="Delete knowledge base"
         onConfirm={async () => {

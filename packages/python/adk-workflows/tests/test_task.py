@@ -238,6 +238,50 @@ async def test_a_failing_step_fails_the_run_naming_it(sessions: DatabaseSessionS
     assert w.control.said()[-1].startswith("The run failed: Bad (bad) failed")
 
 
+async def test_a_way_that_ended_waits_for_one_still_waiting_on_a_person(sessions: DatabaseSessionService) -> None:
+    # Two ways at once: one ends straight away, the other waits for an
+    # approval. The run ends once both have, with both endings.
+    w = worker(sessions)
+    document = agent(
+        [
+            START_NODE,
+            node(
+                "route",
+                "match",
+                {
+                    "mode": "all",
+                    "arms": [
+                        {"id": "log_it", "label": "", "condition": "true"},
+                        {"id": "ask", "label": "", "condition": "true"},
+                    ],
+                },
+            ),
+            end("logged", '"logged"'),
+            node("review", "approval", {"message": "Ship?", "approvers": "org:admin", "timeout_hours": 24}),
+            end("shipped", "steps.review.output.approved"),
+        ],
+        [
+            ("start", "next", "route"),
+            ("route", "log_it", "logged"),
+            ("route", "ask", "review"),
+            ("review", "approved", "shipped"),
+        ],
+    )
+    run = payload(document, {})
+
+    with pytest.raises(AwaitingDecision):
+        await w.run(run)
+
+    w.control.decide(REVIEW, Decision(approved=True, comment="go", actor_id="u-7", actor_name="Lead"))
+    result = await w.run(run)
+
+    assert result.status is JobStatus.OK
+    assert result.detail["result"] == [
+        {"step": "logged", "name": "Logged", "outcome": "succeeded", "result": "logged"},
+        {"step": "shipped", "name": "Shipped", "outcome": "succeeded", "result": True},
+    ]
+
+
 async def test_an_end_that_fails_the_run_fails_it_with_its_result(sessions: DatabaseSessionService) -> None:
     w = worker(sessions)
     document = line(end("stop", '{"why": "no"}', outcome="failed"))
@@ -245,8 +289,10 @@ async def test_an_end_that_fails_the_run_fails_it_with_its_result(sessions: Data
     result = await w.run(payload(document, {}))
 
     assert result.status is JobStatus.FAILED
+    assert result.error == 'Stop (stop) failed the run: {"why": "no"}'
     assert result.detail["result"] == {"why": "no"}
     assert result.detail["step"] == "stop"
+    assert w.control.said()[-1] == 'The run failed: Stop (stop) failed the run: {"why": "no"}'
 
 
 async def test_a_document_that_cant_be_built_fails_without_a_session(sessions: DatabaseSessionService) -> None:

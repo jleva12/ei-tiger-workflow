@@ -1,0 +1,246 @@
+[
+  {
+    "name": "external_import_collision",
+    "files": {
+      "local/Client.java": "package local; public class Client { public void save() {} }",
+      "app/Use.java": "package app; import outside.Client; class Use { void run(Client c) { c.save(); } }"
+    }
+  },
+  {
+    "name": "constructor_import_precedence",
+    "files": {
+      "lib/Foo.java": "package lib; public class Foo {}",
+      "app/Foo.java": "package app; class Foo {}",
+      "app/Use.java": "package app; import lib.Foo; class Use { void run() { new Foo(); } }"
+    }
+  },
+  {
+    "name": "imported_base_collision",
+    "files": {
+      "lib/Base.java": "package lib; public class Base { public void act() {} }",
+      "app/Base.java": "package app; class Base { public void act() {} }",
+      "app/Child.java": "package app; import lib.Base; class Child extends Base { void run() { act(); } }"
+    }
+  },
+  {
+    "name": "nested_base_collision",
+    "files": {
+      "other/A.java": "package other; public class A { public void go() {} }",
+      "app/Outer.java": "package app; class Outer { static class A { void go() {} } static class B extends A { void run() { go(); } } }"
+    }
+  },
+  {
+    "name": "inherited_overload_arity",
+    "files": {
+      "p/Base.java": "package p; class Base { void act(int n) {} }",
+      "p/Child.java": "package p; class Child extends Base { void act() {} void run() { act(1); } }"
+    }
+  },
+  {
+    "name": "inherited_overload_types",
+    "files": {
+      "p/Base.java": "package p; class Base { void act(String s) {} }",
+      "p/Child.java": "package p; class Child extends Base { void act(int n) {} void run() { act(\"text\"); act(1); } }"
+    }
+  },
+  {
+    "name": "static_import_overload",
+    "files": {
+      "lib/Util.java": "package lib; public class Util { public static void act() {} public static void act(int n) {} }",
+      "app/Use.java": "package app; import static lib.Util.act; class Use { void run() { act(1); } }"
+    }
+  },
+  {
+    "name": "lexical_scope",
+    "files": {
+      "p/A.java": "package p; class A { void save() {} }",
+      "p/B.java": "package p; class B { void save() {} }",
+      "p/Use.java": "package p; class Use { A service; void run() {\nservice.save();\n{ B service = new B(); service.save(); }\nservice.save();\n} }"
+    }
+  },
+  {
+    "name": "qualified_receiver",
+    "files": {
+      "a/Service.java": "package a; public class Service { public void save() {} }",
+      "b/Service.java": "package b; public class Service { public void save() {} }",
+      "app/Use.java": "package app; class Use { a.Service field; void run(a.Service a, b.Service b) { a.save(); b.save(); field.save(); } }"
+    }
+  },
+  {
+    "name": "wildcard_import",
+    "files": {
+      "vendor/a/Service.java": "package vendor.a; public class Service { public void save() {} }",
+      "vendor/b/Service.java": "package vendor.b; public class Service { public void save() {} }",
+      "app/Use.java": "package app; import vendor.a.*; class Use { void run(Service s) { new Service(); s.save(); } }"
+    }
+  },
+  {
+    "name": "single_package_wildcard",
+    "files": {
+      "b/Service.java": "package b; public class Service {}",
+      "app/Use.java": "package app; import b.*; class Use { Service s; }"
+    }
+  },
+  {
+    "name": "same_package_source_sets",
+    "files": {
+      "src/main/java/com/x/Owner.java": "package com.x; public class Owner { public void go() {} }",
+      "src/main/java/com/y/Owner.java": "package com.y; public class Owner { public void go() {} }",
+      "src/test/java/com/x/Use.java": "package com.x; class Use { Owner owner; void run(Owner o) { new Owner(); o.go(); } }"
+    }
+  },
+  {
+    "name": "multi_hop_chain",
+    "files": {
+      "p/A.java": "package p; class A { B next() { return null; } }",
+      "p/B.java": "package p; class B { C next() { return null; } void save() {} }",
+      "p/C.java": "package p; class C { void save() {} }",
+      "p/Use.java": "package p; class Use { void run(A a) { a.next().next().save(); } }"
+    }
+  },
+  {
+    "name": "implicit_this_chain",
+    "files": {
+      "p/Owner.java": "package p; class Owner { void name() {} }",
+      "p/Pet.java": "package p; class Pet { void name() {} }",
+      "p/OwnerRepo.java": "package p; class OwnerRepo { Owner load() { return null; } }",
+      "p/PetRepo.java": "package p; class PetRepo { Pet load() { return null; } void run() { load().name(); } }"
+    }
+  },
+  {
+    "name": "field_references",
+    "files": {
+      "p/Entity.java": "package p; class Entity {}",
+      "p/Use.java": "package p; import java.util.List; class Use { List<Entity> entities; int count; int run() { this.count = 1; return count; } }"
+    }
+  },
+  {
+    "name": "static_field",
+    "files": {
+      "p/Limits.java": "package p; class Limits { static final int MAX = 1; static final int QUOTA = 2; }",
+      "p/Use.java": "package p; class Use { int run() { return Limits.MAX + Limits.QUOTA; } }"
+    }
+  },
+  {
+    "name": "inherited_field",
+    "files": {
+      "p/Service.java": "package p; class Service { void save() {} }",
+      "p/Decoy.java": "package p; class Decoy { void save() {} }",
+      "p/Base.java": "package p; class Base { Service service; }",
+      "p/Child.java": "package p; class Child extends Base { void run() { service.save(); this.service.save(); } }"
+    }
+  },
+  {
+    "name": "enum_ownership",
+    "files": {
+      "p/Named.java": "package p; interface Named { void act(); }",
+      "p/Mode.java": "package p; enum Mode implements Named { ON; public void act() {} void run() { act(); } }"
+    }
+  },
+  {
+    "name": "nested_initializers",
+    "files": {
+      "p/Repo.java": "package p; class Repo {}",
+      "p/Outer.java": "package p; class Outer { static class Inner {} Repo repo = new Repo();\nstatic { new Repo(); }\n{ new Repo(); } }"
+    }
+  },
+  {
+    "name": "constructor_delegation",
+    "files": {
+      "p/Base.java": "package p; class Base { Base(int n) {} }",
+      "p/Use.java": "package p; class Use extends Base { Use() { this(1); } Use(int n) { super(n); } void run() { new Use(); new Use(2); } }"
+    }
+  },
+  {
+    "name": "method_constructor_references",
+    "files": {
+      "p/Use.java": "package p; import java.util.function.Consumer; import java.util.function.Supplier; class Use { void act() {} void act(String s) {} void run() { Consumer<String> c = this::act; Supplier<Use> s = Use::new; } }"
+    }
+  },
+  {
+    "name": "imported_missing_member",
+    "files": {
+      "lib/Child.java": "package lib; public class Child extends outside.Base {}",
+      "app/Use.java": "package app; import lib.Child; class Use { void run() { Child.inherited(); } }"
+    }
+  },
+  {
+    "name": "spring_mapping",
+    "files": {
+      "p/Api.java": "package p; @RequestMapping(value=\"/api\", produces=\"application/json\") class Api { @GetMapping(path=\"/orders\", produces=\"application/json\") void one() {} @RequestMapping(path={\"/a\",\"/b\"}, method={RequestMethod.GET,RequestMethod.POST}) void two() {} @RequestMapping(\"/any\") void any() {} }"
+    }
+  },
+  {
+    "name": "http_false_positive",
+    "files": {
+      "p/Use.java": "package p; import java.util.Map; class Use { void run(Map<String,String> map) { map.get(\"/orders\"); map.put(\"/etc\", \"x\"); } }"
+    }
+  },
+  {
+    "name": "http_verb_host",
+    "files": {
+      "p/Api.java": "package p; class Api { @PostMapping(\"/orders\") void orders() {} }",
+      "p/Use.java": "package p; class Use { void run(RestTemplate client) { client.getForObject(\"https://different-service.example/orders\", String.class); } }"
+    }
+  },
+  {
+    "name": "feign_direction",
+    "files": {
+      "p/OrderClient.java": "package p; @FeignClient(name=\"orders\") interface OrderClient { @GetMapping(\"/orders/{id}\") String get(long id); }"
+    }
+  },
+  {
+    "name": "annotation_type_parameters",
+    "files": {
+      "p/Use.java": "package p; class Use<T> { @GetMapping(\"/x\") T run(T input) { return input; } }"
+    }
+  },
+  {
+    "name": "anonymous_owner",
+    "files": {
+      "p/Job.java": "package p; class Job { void run() {} void start() { Runnable task = new Runnable() { public void run() {} }; run(); } }"
+    }
+  },
+  {
+    "name": "lombok",
+    "files": {
+      "p/Flag.java": "package p; @Data class Flag { private boolean isActive; @Getter(AccessLevel.NONE) private String secret; private final String id = \"x\"; }"
+    }
+  },
+  {
+    "name": "parameter_forms",
+    "files": {
+      "p/Service.java": "package p; class Service { void save() {} }",
+      "p/Decoy.java": "package p; class Decoy { void save() {} }",
+      "p/Use.java": "package p; import java.util.function.Consumer; class Use { void run(Service... values) { Consumer<Service> c = (Service s) -> s.save(); try {} catch (RuntimeException e) { e.getMessage(); } } }"
+    }
+  },
+  {
+    "name": "dispatch",
+    "files": {
+      "p/Svc.java": "package p; interface Svc { void go(); }",
+      "p/Impl.java": "package p; class Impl implements Svc { public void go() {} }",
+      "p/Use.java": "package p; class Use { void run(Svc svc) { svc.go(); } }"
+    }
+  },
+  {
+    "name": "repeated_sites",
+    "files": {
+      "p/Use.java": "package p; class Use { void save(int n) {} void run() {\nsave(1);\nsave(2);\n} }"
+    }
+  },
+  {
+    "name": "positive_control",
+    "files": {
+      "p/Base.java": "package p; class Base { void act() {} }",
+      "p/Use.java": "package p; class Use extends Base { void run() { act(); } }"
+    }
+  },
+  {
+    "name": "type_shadowing",
+    "files": {
+      "lib/Foo.java": "package lib; public class Foo { public void act() {} }",
+      "p/Use.java": "package p; import lib.Foo; class Use { static class Foo { void act() {} } void run(Foo foo) { foo.act(); } }"
+    }
+  }
+]

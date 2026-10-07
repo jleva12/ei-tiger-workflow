@@ -1,0 +1,39 @@
+{
+  "_comment": "How a GitHub repository is named: ParseGitHubURL, CanonicalURL, ValidBranch and ValidCommit here, and their port in the Forge admin API (forge_admin.code_repositories.github). Both test against this file, so they agree.",
+  "urls": [
+    {"url": "https://github.com/Acme/Widgets", "canonical": "https://github.com/acme/widgets"},
+    {"url": "https://github.com/acme/widgets.git", "canonical": "https://github.com/acme/widgets"},
+    {"url": "https://github.com/acme/widgets/", "canonical": "https://github.com/acme/widgets"},
+    {"url": "https://GitHub.com/acme/widgets", "canonical": "https://github.com/acme/widgets"},
+    {"url": "HTTPS://github.com/acme/widgets", "canonical": "https://github.com/acme/widgets"},
+    {"url": "https://github.com/acme/widgets.git.git", "canonical": "https://github.com/acme/widgets.git"},
+    {"url": "https://github.com/a-b-c/my_repo.js", "canonical": "https://github.com/a-b-c/my_repo.js"},
+    {"url": "http://github.com/acme/widgets"},
+    {"url": "https://gitlab.com/acme/widgets"},
+    {"url": "https://x:y@github.com/acme/widgets"},
+    {"url": "https://github.com:443/acme/widgets"},
+    {"url": "https://github.com/acme/widgets?tab=readme"},
+    {"url": "https://github.com/acme/widgets?"},
+    {"url": "https://github.com/acme/widgets#readme"},
+    {"url": "https://github.com/acme/widgets/tree/main"},
+    {"url": "https://github.com/acme"},
+    {"url": "https://github.com//acme/widgets"},
+    {"url": "https://github.com/acme/wid%2Fgets"},
+    {"url": "https://github.com/acme/wid%20gets"},
+    {"url": "https://github.com/-acme/widgets"},
+    {"url": "https://github.com/acme/.."},
+    {"url": "https://github.com/acme/."},
+    {"url": " https://github.com/acme/widgets"},
+    {"url": "https:github.com/acme/widgets"},
+    {"url": "github.com/acme/widgets"},
+    {"url": ""}
+  ],
+  "branches": {
+    "valid": ["main", "master", "feature/x", "release-1.2", "users/jo/fix_1"],
+    "invalid": ["", "@", "-x", "x.", "a..b", "a@{1}", "a b", "a~1", "a^", "a:b", "a?", "a*", "a[", "a\\b", "a//b", "a/.b", "a.lock", "/a", "a/", "tab\tname"]
+  },
+  "commits": {
+    "valid": ["0123456789abcdef0123456789abcdef01234567", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"],
+    "invalid": ["", "main", "0123456789ABCDEF0123456789ABCDEF01234567", "0123456789abcdef0123456789abcdef0123456", "0123456789abcdef0123456789abcdef012345678"]
+  }
+}

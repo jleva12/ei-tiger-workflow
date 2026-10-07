@@ -1,0 +1,1465 @@
+{
+  "schema_version": "1.3.0",
+  "source": {
+    "file_id": "file:demo",
+    "repository_id": "repo:example",
+    "snapshot_id": "snapshot:example",
+    "path": "demo/Demo.java",
+    "content_sha256": "baa73beafa1fd565713619a8c87f47b558aff5e1db82d2069aa23a017af1795e",
+    "size_bytes": 518,
+    "language": "java"
+  },
+  "producer": {
+    "name": "manual-contract-fixture",
+    "version": "1"
+  },
+  "root_scope_id": "scope:file",
+  "scopes": [
+    {
+      "id": "scope:file",
+      "kind": "file",
+      "span": {
+        "start": {
+          "byte_offset": 0,
+          "line": 1,
+          "column": 0
+        },
+        "end": {
+          "byte_offset": 518,
+          "line": 19,
+          "column": 0
+        }
+      }
+    },
+    {
+      "id": "scope:demo",
+      "kind": "type",
+      "span": {
+        "start": {
+          "byte_offset": 155,
+          "line": 5,
+          "column": 0
+        },
+        "end": {
+          "byte_offset": 517,
+          "line": 18,
+          "column": 1
+        }
+      },
+      "parent_id": "scope:file",
+      "owner_declaration_id": "decl:demo"
+    },
+    {
+      "id": "scope:ctor0",
+      "kind": "callable",
+      "span": {
+        "start": {
+          "byte_offset": 225,
+          "line": 8,
+          "column": 4
+        },
+        "end": {
+          "byte_offset": 244,
+          "line": 8,
+          "column": 23
+        }
+      },
+      "parent_id": "scope:demo",
+      "owner_declaration_id": "decl:ctor0"
+    },
+    {
+      "id": "scope:ctor1",
+      "kind": "callable",
+      "span": {
+        "start": {
+          "byte_offset": 249,
+          "line": 9,
+          "column": 4
+        },
+        "end": {
+          "byte_offset": 263,
+          "line": 9,
+          "column": 18
+        }
+      },
+      "parent_id": "scope:demo",
+      "owner_declaration_id": "decl:ctor1"
+    },
+    {
+      "id": "scope:run",
+      "kind": "callable",
+      "span": {
+        "start": {
+          "byte_offset": 268,
+          "line": 10,
+          "column": 4
+        },
+        "end": {
+          "byte_offset": 482,
+          "line": 16,
+          "column": 5
+        }
+      },
+      "parent_id": "scope:demo",
+      "owner_declaration_id": "decl:run"
+    },
+    {
+      "id": "scope:block",
+      "kind": "block",
+      "span": {
+        "start": {
+          "byte_offset": 314,
+          "line": 12,
+          "column": 8
+        },
+        "end": {
+          "byte_offset": 356,
+          "line": 12,
+          "column": 50
+        }
+      },
+      "parent_id": "scope:run",
+      "owner_declaration_id": "decl:run"
+    },
+    {
+      "id": "scope:accept",
+      "kind": "callable",
+      "span": {
+        "start": {
+          "byte_offset": 487,
+          "line": 17,
+          "column": 4
+        },
+        "end": {
+          "byte_offset": 515,
+          "line": 17,
+          "column": 32
+        }
+      },
+      "parent_id": "scope:demo",
+      "owner_declaration_id": "decl:accept"
+    }
+  ],
+  "declarations": [
+    {
+      "id": "decl:demo",
+      "kind": "class",
+      "name": "Demo",
+      "span": {
+        "start": {
+          "byte_offset": 96,
+          "line": 4,
+          "column": 0
+        },
+        "end": {
+          "byte_offset": 517,
+          "line": 18,
+          "column": 1
+        }
+      },
+      "declaring_scope_id": "scope:file",
+      "type": {
+        "form": "top_level",
+        "type_parameter_ids": [
+          "decl:t"
+        ]
+      },
+      "annotation_ids": [
+        "annotation:route"
+      ],
+      "body_scope_id": "scope:demo"
+    },
+    {
+      "id": "decl:t",
+      "kind": "type_parameter",
+      "name": "T",
+      "span": {
+        "start": {
+          "byte_offset": 166,
+          "line": 5,
+          "column": 11
+        },
+        "end": {
+          "byte_offset": 167,
+          "line": 5,
+          "column": 12
+        }
+      },
+      "declaring_scope_id": "scope:demo",
+      "type_parameter": {},
+      "owner_id": "decl:demo"
+    },
+    {
+      "id": "decl:values",
+      "kind": "field",
+      "name": "values",
+      "span": {
+        "start": {
+          "byte_offset": 175,
+          "line": 6,
+          "column": 4
+        },
+        "end": {
+          "byte_offset": 200,
+          "line": 6,
+          "column": 29
+        }
+      },
+      "declaring_scope_id": "scope:demo",
+      "variable": {
+        "declared_type_id": "type:list"
+      },
+      "owner_id": "decl:demo"
+    },
+    {
+      "id": "decl:service",
+      "kind": "field",
+      "name": "service",
+      "span": {
+        "start": {
+          "byte_offset": 205,
+          "line": 7,
+          "column": 4
+        },
+        "end": {
+          "byte_offset": 220,
+          "line": 7,
+          "column": 19
+        }
+      },
+      "declaring_scope_id": "scope:demo",
+      "variable": {
+        "declared_type_id": "type:client"
+      },
+      "owner_id": "decl:demo"
+    },
+    {
+      "id": "decl:ctor0",
+      "kind": "constructor",
+      "name": "Demo",
+      "span": {
+        "start": {
+          "byte_offset": 225,
+          "line": 8,
+          "column": 4
+        },
+        "end": {
+          "byte_offset": 244,
+          "line": 8,
+          "column": 23
+        }
+      },
+      "declaring_scope_id": "scope:demo",
+      "callable": {
+        "constructor_form": "normal"
+      },
+      "owner_id": "decl:demo",
+      "body_scope_id": "scope:ctor0"
+    },
+    {
+      "id": "decl:ctor1",
+      "kind": "constructor",
+      "name": "Demo",
+      "span": {
+        "start": {
+          "byte_offset": 249,
+          "line": 9,
+          "column": 4
+        },
+        "end": {
+          "byte_offset": 263,
+          "line": 9,
+          "column": 18
+        }
+      },
+      "declaring_scope_id": "scope:demo",
+      "callable": {
+        "constructor_form": "normal",
+        "parameter_ids": [
+          "decl:n"
+        ]
+      },
+      "owner_id": "decl:demo",
+      "body_scope_id": "scope:ctor1"
+    },
+    {
+      "id": "decl:n",
+      "kind": "parameter",
+      "name": "n",
+      "span": {
+        "start": {
+          "byte_offset": 254,
+          "line": 9,
+          "column": 9
+        },
+        "end": {
+          "byte_offset": 259,
+          "line": 9,
+          "column": 14
+        }
+      },
+      "declaring_scope_id": "scope:ctor1",
+      "variable": {
+        "declared_type_id": "type:int"
+      },
+      "owner_id": "decl:ctor1"
+    },
+    {
+      "id": "decl:run",
+      "kind": "method",
+      "name": "run",
+      "span": {
+        "start": {
+          "byte_offset": 268,
+          "line": 10,
+          "column": 4
+        },
+        "end": {
+          "byte_offset": 482,
+          "line": 16,
+          "column": 5
+        }
+      },
+      "declaring_scope_id": "scope:demo",
+      "callable": {
+        "return_type_id": "type:void:run"
+      },
+      "owner_id": "decl:demo",
+      "body_scope_id": "scope:run"
+    },
+    {
+      "id": "decl:local",
+      "kind": "local_variable",
+      "name": "service",
+      "span": {
+        "start": {
+          "byte_offset": 316,
+          "line": 12,
+          "column": 10
+        },
+        "end": {
+          "byte_offset": 337,
+          "line": 12,
+          "column": 31
+        }
+      },
+      "declaring_scope_id": "scope:block",
+      "variable": {
+        "declared_type_id": "type:other",
+        "initializer_id": "expr:null"
+      },
+      "owner_id": "decl:run"
+    },
+    {
+      "id": "decl:accept",
+      "kind": "method",
+      "name": "accept",
+      "span": {
+        "start": {
+          "byte_offset": 487,
+          "line": 17,
+          "column": 4
+        },
+        "end": {
+          "byte_offset": 515,
+          "line": 17,
+          "column": 32
+        }
+      },
+      "declaring_scope_id": "scope:demo",
+      "callable": {
+        "return_type_id": "type:void:accept",
+        "parameter_ids": [
+          "decl:value"
+        ]
+      },
+      "owner_id": "decl:demo",
+      "body_scope_id": "scope:accept"
+    },
+    {
+      "id": "decl:value",
+      "kind": "parameter",
+      "name": "value",
+      "span": {
+        "start": {
+          "byte_offset": 499,
+          "line": 17,
+          "column": 16
+        },
+        "end": {
+          "byte_offset": 511,
+          "line": 17,
+          "column": 28
+        }
+      },
+      "declaring_scope_id": "scope:accept",
+      "variable": {
+        "declared_type_id": "type:string"
+      },
+      "owner_id": "decl:accept"
+    }
+  ],
+  "imports": [
+    {
+      "occurrence": {
+        "id": "import:client",
+        "span": {
+          "start": {
+            "byte_offset": 73,
+            "line": 3,
+            "column": 0
+          },
+          "end": {
+            "byte_offset": 95,
+            "line": 3,
+            "column": 22
+          }
+        },
+        "scope_id": "scope:file"
+      },
+      "kind": "single_type",
+      "name": {
+        "segments": [
+          {
+            "text": "outside"
+          },
+          {
+            "text": "Client"
+          }
+        ]
+      },
+      "spelling": "import outside.Client;"
+    }
+  ],
+  "types": [
+    {
+      "id": "type:list",
+      "kind": "named",
+      "span": {
+        "start": {
+          "byte_offset": 175,
+          "line": 6,
+          "column": 4
+        },
+        "end": {
+          "byte_offset": 192,
+          "line": 6,
+          "column": 21
+        }
+      },
+      "scope_id": "scope:demo",
+      "spelling": "java.util.List<T>",
+      "named": {
+        "segments": [
+          {
+            "name": "java"
+          },
+          {
+            "name": "util"
+          },
+          {
+            "name": "List",
+            "type_arguments": [
+              "type:t-use"
+            ],
+            "argument_syntax": "explicit"
+          }
+        ]
+      }
+    },
+    {
+      "id": "type:t-use",
+      "kind": "named",
+      "span": {
+        "start": {
+          "byte_offset": 190,
+          "line": 6,
+          "column": 19
+        },
+        "end": {
+          "byte_offset": 191,
+          "line": 6,
+          "column": 20
+        }
+      },
+      "scope_id": "scope:demo",
+      "spelling": "T",
+      "named": {
+        "segments": [
+          {
+            "name": "T"
+          }
+        ]
+      }
+    },
+    {
+      "id": "type:client",
+      "kind": "named",
+      "span": {
+        "start": {
+          "byte_offset": 205,
+          "line": 7,
+          "column": 4
+        },
+        "end": {
+          "byte_offset": 211,
+          "line": 7,
+          "column": 10
+        }
+      },
+      "scope_id": "scope:demo",
+      "spelling": "Client",
+      "named": {
+        "segments": [
+          {
+            "name": "Client"
+          }
+        ]
+      }
+    },
+    {
+      "id": "type:int",
+      "kind": "primitive",
+      "span": {
+        "start": {
+          "byte_offset": 254,
+          "line": 9,
+          "column": 9
+        },
+        "end": {
+          "byte_offset": 257,
+          "line": 9,
+          "column": 12
+        }
+      },
+      "scope_id": "scope:ctor1",
+      "spelling": "int",
+      "primitive": "int"
+    },
+    {
+      "id": "type:void:run",
+      "kind": "void",
+      "span": {
+        "start": {
+          "byte_offset": 268,
+          "line": 10,
+          "column": 4
+        },
+        "end": {
+          "byte_offset": 272,
+          "line": 10,
+          "column": 8
+        }
+      },
+      "scope_id": "scope:demo",
+      "spelling": "void"
+    },
+    {
+      "id": "type:void:accept",
+      "kind": "void",
+      "span": {
+        "start": {
+          "byte_offset": 487,
+          "line": 17,
+          "column": 4
+        },
+        "end": {
+          "byte_offset": 491,
+          "line": 17,
+          "column": 8
+        }
+      },
+      "scope_id": "scope:demo",
+      "spelling": "void"
+    },
+    {
+      "id": "type:other",
+      "kind": "named",
+      "span": {
+        "start": {
+          "byte_offset": 316,
+          "line": 12,
+          "column": 10
+        },
+        "end": {
+          "byte_offset": 321,
+          "line": 12,
+          "column": 15
+        }
+      },
+      "scope_id": "scope:block",
+      "spelling": "Other",
+      "named": {
+        "segments": [
+          {
+            "name": "Other"
+          }
+        ]
+      }
+    },
+    {
+      "id": "type:string",
+      "kind": "named",
+      "span": {
+        "start": {
+          "byte_offset": 499,
+          "line": 17,
+          "column": 16
+        },
+        "end": {
+          "byte_offset": 505,
+          "line": 17,
+          "column": 22
+        }
+      },
+      "scope_id": "scope:accept",
+      "spelling": "String",
+      "named": {
+        "segments": [
+          {
+            "name": "String"
+          }
+        ]
+      }
+    },
+    {
+      "id": "type:route",
+      "kind": "named",
+      "span": {
+        "start": {
+          "byte_offset": 97,
+          "line": 4,
+          "column": 1
+        },
+        "end": {
+          "byte_offset": 102,
+          "line": 4,
+          "column": 6
+        }
+      },
+      "scope_id": "scope:file",
+      "spelling": "Route",
+      "named": {
+        "segments": [
+          {
+            "name": "Route"
+          }
+        ]
+      }
+    }
+  ],
+  "expressions": [
+    {
+      "id": "expr:ctorarg",
+      "kind": "literal",
+      "span": {
+        "start": {
+          "byte_offset": 239,
+          "line": 8,
+          "column": 18
+        },
+        "end": {
+          "byte_offset": 240,
+          "line": 8,
+          "column": 19
+        }
+      },
+      "scope_id": "scope:ctor0",
+      "spelling": "1",
+      "literal": {
+        "kind": "integer",
+        "lexeme": "1"
+      }
+    },
+    {
+      "id": "expr:ctorcall",
+      "kind": "call",
+      "span": {
+        "start": {
+          "byte_offset": 234,
+          "line": 8,
+          "column": 13
+        },
+        "end": {
+          "byte_offset": 241,
+          "line": 8,
+          "column": 20
+        }
+      },
+      "scope_id": "scope:ctor0",
+      "spelling": "this(1)",
+      "occurrence_id": "call:this"
+    },
+    {
+      "id": "expr:null",
+      "kind": "literal",
+      "span": {
+        "start": {
+          "byte_offset": 332,
+          "line": 12,
+          "column": 26
+        },
+        "end": {
+          "byte_offset": 336,
+          "line": 12,
+          "column": 30
+        }
+      },
+      "scope_id": "scope:block",
+      "spelling": "null",
+      "literal": {
+        "kind": "null",
+        "lexeme": "null"
+      }
+    },
+    {
+      "id": "expr:receiver1",
+      "kind": "name",
+      "span": {
+        "start": {
+          "byte_offset": 289,
+          "line": 11,
+          "column": 8
+        },
+        "end": {
+          "byte_offset": 296,
+          "line": 11,
+          "column": 15
+        }
+      },
+      "scope_id": "scope:run",
+      "spelling": "service",
+      "name": {
+        "segments": [
+          {
+            "text": "service"
+          }
+        ]
+      }
+    },
+    {
+      "id": "expr:arg1",
+      "kind": "literal",
+      "span": {
+        "start": {
+          "byte_offset": 302,
+          "line": 11,
+          "column": 21
+        },
+        "end": {
+          "byte_offset": 303,
+          "line": 11,
+          "column": 22
+        }
+      },
+      "scope_id": "scope:run",
+      "spelling": "1",
+      "literal": {
+        "kind": "integer",
+        "lexeme": "1"
+      }
+    },
+    {
+      "id": "expr:call1",
+      "kind": "call",
+      "span": {
+        "start": {
+          "byte_offset": 289,
+          "line": 11,
+          "column": 8
+        },
+        "end": {
+          "byte_offset": 304,
+          "line": 11,
+          "column": 23
+        }
+      },
+      "scope_id": "scope:run",
+      "spelling": "service.save(1)",
+      "occurrence_id": "call:save1"
+    },
+    {
+      "id": "expr:receiver2",
+      "kind": "name",
+      "span": {
+        "start": {
+          "byte_offset": 338,
+          "line": 12,
+          "column": 32
+        },
+        "end": {
+          "byte_offset": 345,
+          "line": 12,
+          "column": 39
+        }
+      },
+      "scope_id": "scope:block",
+      "spelling": "service",
+      "name": {
+        "segments": [
+          {
+            "text": "service"
+          }
+        ]
+      }
+    },
+    {
+      "id": "expr:arg2",
+      "kind": "literal",
+      "span": {
+        "start": {
+          "byte_offset": 351,
+          "line": 12,
+          "column": 45
+        },
+        "end": {
+          "byte_offset": 352,
+          "line": 12,
+          "column": 46
+        }
+      },
+      "scope_id": "scope:block",
+      "spelling": "2",
+      "literal": {
+        "kind": "integer",
+        "lexeme": "2"
+      }
+    },
+    {
+      "id": "expr:call2",
+      "kind": "call",
+      "span": {
+        "start": {
+          "byte_offset": 338,
+          "line": 12,
+          "column": 32
+        },
+        "end": {
+          "byte_offset": 353,
+          "line": 12,
+          "column": 47
+        }
+      },
+      "scope_id": "scope:block",
+      "spelling": "service.save(2)",
+      "occurrence_id": "call:save2"
+    },
+    {
+      "id": "expr:receiver3",
+      "kind": "name",
+      "span": {
+        "start": {
+          "byte_offset": 365,
+          "line": 13,
+          "column": 8
+        },
+        "end": {
+          "byte_offset": 372,
+          "line": 13,
+          "column": 15
+        }
+      },
+      "scope_id": "scope:run",
+      "spelling": "service",
+      "name": {
+        "segments": [
+          {
+            "text": "service"
+          }
+        ]
+      }
+    },
+    {
+      "id": "expr:arg3",
+      "kind": "literal",
+      "span": {
+        "start": {
+          "byte_offset": 378,
+          "line": 13,
+          "column": 21
+        },
+        "end": {
+          "byte_offset": 379,
+          "line": 13,
+          "column": 22
+        }
+      },
+      "scope_id": "scope:run",
+      "spelling": "3",
+      "literal": {
+        "kind": "integer",
+        "lexeme": "3"
+      }
+    },
+    {
+      "id": "expr:call3",
+      "kind": "call",
+      "span": {
+        "start": {
+          "byte_offset": 365,
+          "line": 13,
+          "column": 8
+        },
+        "end": {
+          "byte_offset": 380,
+          "line": 13,
+          "column": 23
+        }
+      },
+      "scope_id": "scope:run",
+      "spelling": "service.save(3)",
+      "occurrence_id": "call:save3"
+    },
+    {
+      "id": "expr:receiver4",
+      "kind": "name",
+      "span": {
+        "start": {
+          "byte_offset": 390,
+          "line": 14,
+          "column": 8
+        },
+        "end": {
+          "byte_offset": 397,
+          "line": 14,
+          "column": 15
+        }
+      },
+      "scope_id": "scope:run",
+      "spelling": "service",
+      "name": {
+        "segments": [
+          {
+            "text": "service"
+          }
+        ]
+      }
+    },
+    {
+      "id": "expr:next",
+      "kind": "call",
+      "span": {
+        "start": {
+          "byte_offset": 390,
+          "line": 14,
+          "column": 8
+        },
+        "end": {
+          "byte_offset": 404,
+          "line": 14,
+          "column": 22
+        }
+      },
+      "scope_id": "scope:run",
+      "spelling": "service.next()",
+      "occurrence_id": "call:next"
+    },
+    {
+      "id": "expr:arg4",
+      "kind": "literal",
+      "span": {
+        "start": {
+          "byte_offset": 410,
+          "line": 14,
+          "column": 28
+        },
+        "end": {
+          "byte_offset": 411,
+          "line": 14,
+          "column": 29
+        }
+      },
+      "scope_id": "scope:run",
+      "spelling": "4",
+      "literal": {
+        "kind": "integer",
+        "lexeme": "4"
+      }
+    },
+    {
+      "id": "expr:call4",
+      "kind": "call",
+      "span": {
+        "start": {
+          "byte_offset": 390,
+          "line": 14,
+          "column": 8
+        },
+        "end": {
+          "byte_offset": 412,
+          "line": 14,
+          "column": 30
+        }
+      },
+      "scope_id": "scope:run",
+      "spelling": "service.next().save(4)",
+      "occurrence_id": "call:save4"
+    },
+    {
+      "id": "expr:this",
+      "kind": "this",
+      "span": {
+        "start": {
+          "byte_offset": 463,
+          "line": 15,
+          "column": 49
+        },
+        "end": {
+          "byte_offset": 467,
+          "line": 15,
+          "column": 53
+        }
+      },
+      "scope_id": "scope:run",
+      "spelling": "this"
+    },
+    {
+      "id": "expr:methodref",
+      "kind": "callable_reference",
+      "span": {
+        "start": {
+          "byte_offset": 463,
+          "line": 15,
+          "column": 49
+        },
+        "end": {
+          "byte_offset": 475,
+          "line": 15,
+          "column": 61
+        }
+      },
+      "scope_id": "scope:run",
+      "spelling": "this::accept",
+      "occurrence_id": "callable:accept"
+    },
+    {
+      "id": "expr:a",
+      "kind": "literal",
+      "span": {
+        "start": {
+          "byte_offset": 111,
+          "line": 4,
+          "column": 15
+        },
+        "end": {
+          "byte_offset": 115,
+          "line": 4,
+          "column": 19
+        }
+      },
+      "scope_id": "scope:file",
+      "spelling": "\"/a\"",
+      "literal": {
+        "kind": "string",
+        "lexeme": "\"/a\""
+      }
+    },
+    {
+      "id": "expr:b",
+      "kind": "literal",
+      "span": {
+        "start": {
+          "byte_offset": 117,
+          "line": 4,
+          "column": 21
+        },
+        "end": {
+          "byte_offset": 121,
+          "line": 4,
+          "column": 25
+        }
+      },
+      "scope_id": "scope:file",
+      "spelling": "\"/b\"",
+      "literal": {
+        "kind": "string",
+        "lexeme": "\"/b\""
+      }
+    },
+    {
+      "id": "expr:produces",
+      "kind": "literal",
+      "span": {
+        "start": {
+          "byte_offset": 135,
+          "line": 4,
+          "column": 39
+        },
+        "end": {
+          "byte_offset": 153,
+          "line": 4,
+          "column": 57
+        }
+      },
+      "scope_id": "scope:file",
+      "spelling": "\"application/json\"",
+      "literal": {
+        "kind": "string",
+        "lexeme": "\"application/json\""
+      }
+    }
+  ],
+  "calls": [
+    {
+      "occurrence": {
+        "id": "call:this",
+        "span": {
+          "start": {
+            "byte_offset": 234,
+            "line": 8,
+            "column": 13
+          },
+          "end": {
+            "byte_offset": 241,
+            "line": 8,
+            "column": 20
+          }
+        },
+        "scope_id": "scope:ctor0",
+        "enclosing_declaration_id": "decl:ctor0"
+      },
+      "kind": "this_constructor",
+      "expression_id": "expr:ctorcall",
+      "arguments": [
+        {
+          "expression_id": "expr:ctorarg"
+        }
+      ]
+    },
+    {
+      "occurrence": {
+        "id": "call:save1",
+        "span": {
+          "start": {
+            "byte_offset": 289,
+            "line": 11,
+            "column": 8
+          },
+          "end": {
+            "byte_offset": 304,
+            "line": 11,
+            "column": 23
+          }
+        },
+        "scope_id": "scope:run",
+        "enclosing_declaration_id": "decl:run"
+      },
+      "kind": "method",
+      "expression_id": "expr:call1",
+      "name": "save",
+      "receiver_id": "expr:receiver1",
+      "arguments": [
+        {
+          "expression_id": "expr:arg1"
+        }
+      ]
+    },
+    {
+      "occurrence": {
+        "id": "call:save2",
+        "span": {
+          "start": {
+            "byte_offset": 338,
+            "line": 12,
+            "column": 32
+          },
+          "end": {
+            "byte_offset": 353,
+            "line": 12,
+            "column": 47
+          }
+        },
+        "scope_id": "scope:block",
+        "enclosing_declaration_id": "decl:run"
+      },
+      "kind": "method",
+      "expression_id": "expr:call2",
+      "name": "save",
+      "receiver_id": "expr:receiver2",
+      "arguments": [
+        {
+          "expression_id": "expr:arg2"
+        }
+      ]
+    },
+    {
+      "occurrence": {
+        "id": "call:save3",
+        "span": {
+          "start": {
+            "byte_offset": 365,
+            "line": 13,
+            "column": 8
+          },
+          "end": {
+            "byte_offset": 380,
+            "line": 13,
+            "column": 23
+          }
+        },
+        "scope_id": "scope:run",
+        "enclosing_declaration_id": "decl:run"
+      },
+      "kind": "method",
+      "expression_id": "expr:call3",
+      "name": "save",
+      "receiver_id": "expr:receiver3",
+      "arguments": [
+        {
+          "expression_id": "expr:arg3"
+        }
+      ]
+    },
+    {
+      "occurrence": {
+        "id": "call:next",
+        "span": {
+          "start": {
+            "byte_offset": 390,
+            "line": 14,
+            "column": 8
+          },
+          "end": {
+            "byte_offset": 404,
+            "line": 14,
+            "column": 22
+          }
+        },
+        "scope_id": "scope:run",
+        "enclosing_declaration_id": "decl:run"
+      },
+      "kind": "method",
+      "expression_id": "expr:next",
+      "name": "next",
+      "receiver_id": "expr:receiver4",
+      "arguments": []
+    },
+    {
+      "occurrence": {
+        "id": "call:save4",
+        "span": {
+          "start": {
+            "byte_offset": 390,
+            "line": 14,
+            "column": 8
+          },
+          "end": {
+            "byte_offset": 412,
+            "line": 14,
+            "column": 30
+          }
+        },
+        "scope_id": "scope:run",
+        "enclosing_declaration_id": "decl:run"
+      },
+      "kind": "method",
+      "expression_id": "expr:call4",
+      "name": "save",
+      "receiver_id": "expr:next",
+      "arguments": [
+        {
+          "expression_id": "expr:arg4"
+        }
+      ]
+    }
+  ],
+  "callable_references": [
+    {
+      "occurrence": {
+        "id": "callable:accept",
+        "span": {
+          "start": {
+            "byte_offset": 463,
+            "line": 15,
+            "column": 49
+          },
+          "end": {
+            "byte_offset": 475,
+            "line": 15,
+            "column": 61
+          }
+        },
+        "scope_id": "scope:run",
+        "enclosing_declaration_id": "decl:run"
+      },
+      "kind": "method",
+      "expression_id": "expr:methodref",
+      "qualifier_id": "expr:this",
+      "name": "accept"
+    }
+  ],
+  "references": [],
+  "type_uses": [
+    {
+      "occurrence": {
+        "id": "typeuse:list",
+        "span": {
+          "start": {
+            "byte_offset": 175,
+            "line": 6,
+            "column": 4
+          },
+          "end": {
+            "byte_offset": 192,
+            "line": 6,
+            "column": 21
+          }
+        },
+        "scope_id": "scope:demo",
+        "enclosing_declaration_id": "decl:values"
+      },
+      "role": "field",
+      "type_ref_id": "type:list"
+    },
+    {
+      "occurrence": {
+        "id": "typeuse:t",
+        "span": {
+          "start": {
+            "byte_offset": 190,
+            "line": 6,
+            "column": 19
+          },
+          "end": {
+            "byte_offset": 191,
+            "line": 6,
+            "column": 20
+          }
+        },
+        "scope_id": "scope:demo",
+        "enclosing_declaration_id": "decl:values"
+      },
+      "role": "generic_argument",
+      "type_ref_id": "type:t-use",
+      "parent_type_id": "type:list"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "annotation:route",
+      "occurrence": {
+        "id": "annotation-use:route",
+        "span": {
+          "start": {
+            "byte_offset": 96,
+            "line": 4,
+            "column": 0
+          },
+          "end": {
+            "byte_offset": 154,
+            "line": 4,
+            "column": 58
+          }
+        },
+        "scope_id": "scope:file",
+        "enclosing_declaration_id": "decl:demo"
+      },
+      "type_ref_id": "type:route",
+      "arguments": [
+        {
+          "name": "path",
+          "value": {
+            "kind": "array",
+            "span": {
+              "start": {
+                "byte_offset": 110,
+                "line": 4,
+                "column": 14
+              },
+              "end": {
+                "byte_offset": 122,
+                "line": 4,
+                "column": 26
+              }
+            },
+            "elements": [
+              {
+                "kind": "expression",
+                "span": {
+                  "start": {
+                    "byte_offset": 111,
+                    "line": 4,
+                    "column": 15
+                  },
+                  "end": {
+                    "byte_offset": 115,
+                    "line": 4,
+                    "column": 19
+                  }
+                },
+                "expression_id": "expr:a"
+              },
+              {
+                "kind": "expression",
+                "span": {
+                  "start": {
+                    "byte_offset": 117,
+                    "line": 4,
+                    "column": 21
+                  },
+                  "end": {
+                    "byte_offset": 121,
+                    "line": 4,
+                    "column": 25
+                  }
+                },
+                "expression_id": "expr:b"
+              }
+            ]
+          }
+        },
+        {
+          "name": "produces",
+          "value": {
+            "kind": "expression",
+            "span": {
+              "start": {
+                "byte_offset": 135,
+                "line": 4,
+                "column": 39
+              },
+              "end": {
+                "byte_offset": 153,
+                "line": 4,
+                "column": 57
+              }
+            },
+            "expression_id": "expr:produces"
+          }
+        }
+      ]
+    }
+  ],
+  "coverage": {
+    "status": "partial",
+    "feature_set": "java-contract-example/1",
+    "issues": [
+      {
+        "feature": "syntax",
+        "reason": "skipped",
+        "message": "Hand-authored example preserves representative facts only; it is not parser output."
+      }
+    ]
+  },
+  "package": {
+    "name": {
+      "segments": [
+        {
+          "text": "demo"
+        }
+      ]
+    },
+    "span": {
+      "start": {
+        "byte_offset": 59,
+        "line": 2,
+        "column": 0
+      },
+      "end": {
+        "byte_offset": 72,
+        "line": 2,
+        "column": 13
+      }
+    }
+  }
+}

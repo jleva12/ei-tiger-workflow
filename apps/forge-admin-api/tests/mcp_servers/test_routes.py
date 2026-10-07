@@ -246,6 +246,15 @@ def test_the_auth_methods_are_listed_with_their_forms(workspace: Workspace) -> N
     assert key["secret"] is True and key["required"] is True
 
 
+def test_the_default_servers_are_listed(workspace: Workspace) -> None:
+    listed = workspace.call("GET", "/mcp-server-defaults")
+    assert listed.status_code == 200
+    explorer = next(s for s in listed.json() if s["id"] == "code-explorer")
+    assert explorer["auth"]["kind"] == "bearer"
+    assert explorer["url"].endswith("/mcp")
+    assert explorer["auth"]["fields"]["token"]["label"] == "Organization API key"
+
+
 # ----------------------------------------------------- adding and reading
 
 

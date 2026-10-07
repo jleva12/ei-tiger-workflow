@@ -50,7 +50,12 @@ export type ChatLookups = {
 export type KnowledgeBaseLookup = {
   name: string
   description: string
-  /** Its documents, and how many of them are searchable. */
+  /** `rag` holds documents; `graph` holds code repositories. */
+  kind: "rag" | "graph"
+  /**
+   * Its documents (a graph one's repositories), and how many of them are
+   * searchable (ingested).
+   */
   documents: number
   ready: number
 }

@@ -539,40 +539,57 @@ function SwitchFields({ id, config }: Props<"switch">) {
 
 function MatchFields({ id, config }: Props<"match">) {
   const set = useSetter<"match">(id)
+  const every = config.mode === "all"
   return (
-    <ListEditor
-      issue="arms"
-      label="Rules, in order"
-      items={config.arms}
-      onChange={(value) => set("arms", value)}
-      make={() => ({ id: uid("rule"), label: "", condition: "" })}
-      addLabel="Add rule"
-      ordered
-      renderItem={(arm, change, index) => ({
-        head: (
-          <Input
-            aria-label={`Rule ${index + 1} name`}
-            value={arm.label}
-            placeholder={`Rule ${index + 1}`}
-            onChange={(event) => change({ label: event.target.value })}
-            className={cn(bare, "text-xs font-medium md:text-xs")}
-          />
-        ),
-        body: (
-          <Setting
-            id={id}
-            setting={`arms.${arm.id}`}
-            label={`${arm.label.trim() || `Rule ${index + 1}`} condition`}
-            labelHidden
-            value={arm.condition}
-            multiline
-            placeholder={'previous.severity = "high"'}
-            onChange={(value) => change({ condition: value })}
-          />
-        ),
-      })}
-      description="Each condition is JSONata. The first that's true is taken; none takes Otherwise."
-    />
+    <>
+      <ChoiceField
+        issue="mode"
+        label="Takes"
+        value={config.mode}
+        options={[
+          { value: "first", label: "The first rule that holds, then stops" },
+          { value: "all", label: "Every rule that holds, at once" },
+        ]}
+        onChange={(value) => set("mode", value)}
+      />
+      <ListEditor
+        issue="arms"
+        label={every ? "Rules" : "Rules, in order"}
+        items={config.arms}
+        onChange={(value) => set("arms", value)}
+        make={() => ({ id: uid("rule"), label: "", condition: "" })}
+        addLabel="Add rule"
+        ordered={!every}
+        renderItem={(arm, change, index) => ({
+          head: (
+            <Input
+              aria-label={`Rule ${index + 1} name`}
+              value={arm.label}
+              placeholder={`Rule ${index + 1}`}
+              onChange={(event) => change({ label: event.target.value })}
+              className={cn(bare, "text-xs font-medium md:text-xs")}
+            />
+          ),
+          body: (
+            <Setting
+              id={id}
+              setting={`arms.${arm.id}`}
+              label={`${arm.label.trim() || `Rule ${index + 1}`} condition`}
+              labelHidden
+              value={arm.condition}
+              multiline
+              placeholder={'previous.severity = "high"'}
+              onChange={(value) => change({ condition: value })}
+            />
+          ),
+        })}
+        description={
+          every
+            ? "Each condition is JSONata. Every one that's true is taken, side by side; none takes Otherwise."
+            : "Each condition is JSONata. The first that's true is taken; none takes Otherwise."
+        }
+      />
+    </>
   )
 }
 

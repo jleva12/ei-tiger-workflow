@@ -1,0 +1,17 @@
+{
+  "name": "@codegraph/typescript-analyzer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "typescript": "6.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.1",
+    "esbuild": "0.25.12"
+  }
+}

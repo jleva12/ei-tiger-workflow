@@ -1,0 +1,13 @@
+go 1.25.0
+
+toolchain go1.25.5
+
+use (
+	./apps/forge-codegraph-worker
+	./packages/go/code-graph/agentquery
+	./packages/go/code-graph/authorization
+	./packages/go/code-graph/domain
+	./packages/go/code-graph/serviceconfig
+	./packages/go/code-graph/storage
+	./packages/go/code-graph/tree-sitter-java
+)

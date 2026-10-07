@@ -18,6 +18,8 @@ dependencies = [
   "forge-agent-runtime",
   # The organization's MCP servers, connected with their credentials (the admin's, shared)
   "forge-mcp-servers",
+  # Graph knowledge bases: their code searched in the code graph worker's API
+  "forge-codegraph",
 ]
 
 # Registers the task with the Forge async worker.

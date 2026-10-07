@@ -76,6 +76,7 @@ import { DocumentsView, type BulkActions } from "./knowledge-documents"
 import { KnowledgeNav } from "./knowledge-nav"
 import { CollectionShelf, KindStrip } from "./knowledge-overview"
 import { KnowledgeRail } from "./knowledge-rail"
+import { GraphKnowledge } from "./graph-knowledge"
 import { KnowledgeSearchDialog } from "./knowledge-search"
 
 export type SearchChange = (
@@ -214,6 +215,17 @@ export function KnowledgePage({
           Back to the knowledge bases
         </Button>
       </PageEmpty>
+    )
+  }
+  if (base.data.kind === "graph") {
+    return (
+      <GraphKnowledge
+        organizationId={organizationId}
+        organizationName={organization.name}
+        base={base.data}
+        search={search}
+        onSearch={onSearch}
+      />
     )
   }
   return (
@@ -1037,7 +1049,7 @@ function Knowledge({
         onOpenChange={setTesting}
         scope={scope}
         baseName={base.name}
-        onOpenDocument={(id) => onSearch({ document: id })}
+        onOpenHit={(hit) => onSearch({ document: hit.document_id })}
       />
       <CollectionDialog
         open={editing.open}

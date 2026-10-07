@@ -12,6 +12,7 @@ import {
 import { OrganizationAgents } from "@/features/adk-workflows/components/organization-agents"
 import { OrganizationChatAgents } from "@/features/agents/components/organization-chat-agents"
 import { OrganizationMcpServers } from "@/features/mcp-servers/components/organization-mcp-servers"
+import { OrganizationCodeRepositories } from "@/features/code-repositories/components/organization-code-repositories"
 import { OrganizationApiKeys } from "@/features/api-keys/components/organization-api-keys"
 import { OrganizationKnowledgeBases } from "@/features/knowledge/components/organization-knowledge-bases"
 import { OrganizationMembers } from "@/features/admin/components/organization-members"
@@ -46,7 +47,8 @@ import {
  * `agentRunTab`); Agents lists its chat agents, each opening its builder at
  * /organizations/$organizationId/chat-agents/$chatAgentId; MCP servers lists
  * the remote MCP servers its agents use as tools, one open in a dialog
- * (`mcpServer`); Members is who
+ * (`mcpServer`); Code repositories lists the GitHub repositories it ingests
+ * into the code graph, one open in a side panel (`repository`); Members is who
  * holds which role in it, which its admins change. Configuring an
  * organization is also site administration, at
  * /admin/organizations/$organizationId.
@@ -73,6 +75,9 @@ export const Route = createFileRoute("/organizations/$organizationId")({
       ...(view === "mcp-servers" &&
         typeof search.mcpServer === "string" &&
         search.mcpServer && { mcpServer: search.mcpServer }),
+      ...(view === "code-repositories" &&
+        typeof search.repository === "string" &&
+        search.repository && { repository: search.repository }),
     }
   },
   component: OrganizationWorkspacePage,
@@ -87,6 +92,7 @@ function OrganizationWorkspacePage() {
     agentRun,
     agentRunTab = "overview",
     mcpServer,
+    repository,
   } = Route.useSearch()
   const navigate = Route.useNavigate()
   const myOrganizations = useMyOrganizations()
@@ -244,6 +250,18 @@ function OrganizationWorkspacePage() {
           onOpenServer={(id) =>
             void navigate({
               search: (prev) => ({ ...prev, mcpServer: id }),
+              replace: true,
+            })
+          }
+        />
+      ) : view === "code-repositories" ? (
+        <OrganizationCodeRepositories
+          organizationId={organizationId}
+          organizationName={organization.name}
+          openRepository={repository}
+          onOpenRepository={(id) =>
+            void navigate({
+              search: (prev) => ({ ...prev, repository: id }),
               replace: true,
             })
           }

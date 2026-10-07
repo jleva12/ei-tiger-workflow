@@ -207,3 +207,17 @@ async def test_openai_without_a_key_starts_and_fails_its_jobs(monkeypatch):
     with pytest.raises(TaskError, match="HYBRID_EMBEDDING__API_KEY") as info:
         await emb.embed_documents(["a"])
     assert info.value.permanent
+
+
+def test_empty_shared_embedding_settings_mean_unset():
+    # The apps reference the shared FORGE_EMBEDDING_*; an empty base URL is
+    # OpenAI's own API, not a URL.
+    from forge_embeddings.config import EmbeddingSettings
+
+    settings = EmbeddingSettings(
+        document_model="text-embedding-3-large", dimensions="1024", base_url="", azure_endpoint=" "
+    )
+    assert settings.base_url is None and settings.azure_endpoint is None
+    assert settings.model == "text-embedding-3-large" and settings.dimensions == 1024
+    assert EmbeddingSettings(document_model="").model == "text-embedding-3-large"
+    assert EmbeddingSettings(base_url="https://gateway.example/v1").base_url == "https://gateway.example/v1"

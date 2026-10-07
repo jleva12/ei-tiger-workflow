@@ -7,6 +7,7 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import type { IconProp } from "@/components/forge/icons"
+import { CODE_REPOSITORIES_ICON } from "@/features/code-repositories/lib/display"
 import type { OverviewPeriod } from "@/features/overview/lib/overview"
 import type { AdkRunTab } from "@/features/runs/lib/runs"
 
@@ -20,7 +21,8 @@ import type { AdkRunTab } from "@/features/runs/lib/runs"
  * agents, each opening its builder at
  * /organizations/$organizationId/chat-agents/$chatAgentId), MCP servers
  * (the remote MCP servers its agents use as tools, each opening in a dialog),
- * Members (who holds which role in it; its admins change them) and API keys
+ * Code repositories (the GitHub repositories it ingests into the code graph,
+ * each opening in a side panel), Members (who holds which role in it; its admins change them) and API keys
  * (what outside apps send to call its agents and workflows). Overview is
  * the default, so it has no `view` in the URL.
  */
@@ -33,6 +35,12 @@ export const WORKSPACE_VIEWS = {
   // Each knowledge base opens its own page, at
   // /organizations/$organizationId/knowledge/$knowledgeBaseId.
   knowledge: { label: "Knowledge bases", icon: BookOpen01Icon },
+  // The GitHub repositories it ingests into the code graph, each opening in
+  // a side panel.
+  "code-repositories": {
+    label: "Code repositories",
+    icon: CODE_REPOSITORIES_ICON,
+  },
   config: { label: "Members", icon: "team" },
   "api-keys": { label: "API keys", icon: Key01Icon },
 } as const satisfies Record<string, { label: string; icon: IconProp }>
@@ -46,7 +54,10 @@ export type WorkspaceView = keyof typeof WORKSPACE_VIEWS
  */
 export const WORKSPACE_SECTIONS: { title: string; views: WorkspaceView[] }[] = [
   { title: "Workflows and agents", views: ["agents", "chat-agents"] },
-  { title: "Integrations", views: ["mcp-servers", "knowledge"] },
+  {
+    title: "Integrations",
+    views: ["mcp-servers", "knowledge", "code-repositories"],
+  },
   { title: "Settings", views: ["config", "api-keys"] },
 ]
 
@@ -74,4 +85,6 @@ export type WorkspaceSearch = {
   agentRunTab?: Exclude<AdkRunTab, "overview">
   /** On MCP servers, the server open in its dialog (its ID). */
   mcpServer?: string
+  /** On code repositories, the repository open in its side panel (its ID). */
+  repository?: string
 }

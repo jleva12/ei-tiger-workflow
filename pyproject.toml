@@ -9,8 +9,10 @@
 members = [
     "apps/forge-admin-api",
     "apps/forge-async-worker",
+    "apps/forge-codegraph-mcp",
     "packages/python/agent-runtime",
     "packages/python/adk-workflows",
+    "packages/python/codegraph",
     "packages/python/common",
     "packages/python/documents",
     "packages/python/embeddings",
@@ -22,6 +24,7 @@ members = [
 # Members depend on each other by name; these resolve them to the members.
 [tool.uv.sources]
 forge-agent-runtime = { workspace = true }
+forge-codegraph = { workspace = true }
 forge-common = { workspace = true }
 forge-embeddings = { workspace = true }
 forge-jsonata = { workspace = true }

@@ -68,6 +68,22 @@
   --viz-ramp-2: #3d6fd9;
   --viz-ramp-3: #6590e8;
   --viz-ramp-4: #88abef;
+  /* Code graph node families: four data-viz reference hues, validated to
+       stay apart for every pair and colour-vision type on these surfaces
+       (dark mode steps violet deeper to clear blue), and a neutral for the
+       rest. Nodes also differ by family shape and kind glyph and carry
+       their names, so colour never identifies a node alone. Each family's
+       ink is whichever of paper or graphite its glyph reads best on. */
+  --graph-file: #2a78d6;
+  --graph-type: #eb6834;
+  --graph-callable: #1baf7a;
+  --graph-value: #4a3aa7;
+  --graph-other: #9a9ca3;
+  --graph-file-ink: var(--background);
+  --graph-type-ink: var(--foreground);
+  --graph-callable-ink: var(--foreground);
+  --graph-value-ink: var(--background);
+  --graph-other-ink: var(--foreground);
   --radius: 0.5rem;
   --sidebar: oklch(0.998 0.002 260);
   --sidebar-foreground: oklch(0.235 0.009 260);
@@ -264,6 +280,17 @@
   --viz-ramp-3: #3b64c4;
   --viz-ramp-4: #274a9c;
 
+  --graph-file: #3987e5;
+  --graph-type: #d95926;
+  --graph-callable: #199e70;
+  --graph-value: #7a48c0;
+  --graph-other: #6b6e75;
+  --graph-file-ink: var(--background);
+  --graph-type-ink: var(--background);
+  --graph-callable-ink: var(--background);
+  --graph-value-ink: var(--foreground);
+  --graph-other-ink: var(--foreground);
+
 
   --subtle: oklch(0.6 0.01 260);
   --nav-foreground: oklch(0.7 0.009 260);
@@ -358,6 +385,11 @@
   --color-viz-ramp-2: var(--viz-ramp-2);
   --color-viz-ramp-3: var(--viz-ramp-3);
   --color-viz-ramp-4: var(--viz-ramp-4);
+  --color-graph-file: var(--graph-file);
+  --color-graph-type: var(--graph-type);
+  --color-graph-callable: var(--graph-callable);
+  --color-graph-value: var(--graph-value);
+  --color-graph-other: var(--graph-other);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);

@@ -16,6 +16,7 @@ from google.adk.sessions import DatabaseSessionService
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 
+from forge_admin import env_files
 from forge_admin.adk_workflows import runtime as workflow_runtime
 from forge_admin.adk_workflows.documents import AgentStore
 from forge_admin.adk_workflows.queue import Embedding
@@ -29,9 +30,11 @@ from forge_admin.chat_agents.source import create_executor
 from forge_admin.chat_agents.store import ChatAgentStore
 from forge_admin.config import Settings
 from forge_admin.db.session import create_engine, create_sessionmaker
+from forge_admin.knowledge.graph import codegraph_from
 from forge_admin.knowledge.queue import KnowledgeQueue
 from forge_admin.knowledge.search import KnowledgeSearch
 from forge_admin.knowledge.storage import DocumentStore
+from forge_admin.mcp_servers import defaults as mcp_server_defaults
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +127,12 @@ class ApiServer:
                 if key
                 else None
             )
+        # The MCP servers the web console offers ready-made, checked against
+        # the auth methods: a bad file stops the API here. Tests set their own.
+        if getattr(app.state, "mcp_server_defaults", None) is None:
+            app.state.mcp_server_defaults = mcp_server_defaults.load(
+                self.settings.mcp_server_defaults, env_files.environment()
+            )
         # Knowledge bases: their documents' files in the documents bucket, the
         # async worker's documents queue that embeds them, and the search over
         # what it embedded; each None when not set up. None connects until
@@ -134,6 +143,10 @@ class ApiServer:
             app.state.knowledge_queue = KnowledgeQueue.from_settings(self.settings)
         if getattr(app.state, "knowledge_search", None) is None:
             app.state.knowledge_search = KnowledgeSearch.from_settings(self.settings)
+        # Graph knowledge bases' search and the code graph explorer: the code
+        # graph worker's API; None when not set up. Tests set their own.
+        if getattr(app.state, "codegraph", None) is None:
+            app.state.codegraph = codegraph_from(self.settings)
         # The assistant's agents, keeping conversations in the same database.
         # Tests set their own (a scripted model, in-memory sessions).
         if getattr(app.state, "agents", None) is None:
@@ -155,6 +168,7 @@ class ApiServer:
                     runs=app.state.adk_runs,
                     queue=app.state.embedding,
                     knowledge_search=app.state.knowledge_search,
+                    codegraph=app.state.codegraph,
                 )
                 if app.state.chat_agents is not None
                 else None
@@ -189,6 +203,8 @@ class ApiServer:
                 await app.state.knowledge_queue.aclose()
             if app.state.knowledge_search is not None:
                 await app.state.knowledge_search.aclose()
+            if app.state.codegraph is not None:
+                await app.state.codegraph.aclose()
             if app.state.documents is not None:
                 app.state.documents.close()
             if app.state.organization_agents is not None:

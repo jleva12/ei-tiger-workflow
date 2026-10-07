@@ -119,6 +119,9 @@ class AdkWorkflowsTask:
         if self.services.http is not None:
             await self.services.http.aclose()
         agents = self.services.agents
+        code = getattr(agents, "code", None)
+        if code is not None:
+            await code.aclose()
         store = getattr(getattr(agents, "runtime", None), "mcp_servers", None)
         engine = getattr(getattr(store, "store", None), "engine", None)
         if engine is not None:
@@ -187,8 +190,20 @@ def build_agent_services(
         model_timeout=settings.model_timeout,
         mcp_servers=WorkerMcpServers(servers, store, unavailable=unavailable),
     )
+    code = None
+    if settings.codegraph_url and settings.codegraph_token:
+        from forge_codegraph import CodeGraph
+
+        code = CodeGraph.connect(
+            settings.codegraph_url, settings.codegraph_token.get_secret_value(), timeout=settings.codegraph_timeout
+        )
     return AgentServices(
-        models=models, runtime=runtime, http=http, search=search, workflow_wait=settings.workflow_tool_wait
+        models=models,
+        runtime=runtime,
+        http=http,
+        search=search,
+        code=code,
+        workflow_wait=settings.workflow_tool_wait,
     )
 
 

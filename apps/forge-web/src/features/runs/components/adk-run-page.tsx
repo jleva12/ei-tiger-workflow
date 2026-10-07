@@ -255,6 +255,65 @@ function StatusNotice({
 
 const json = (value: unknown) => JSON.stringify(value ?? null, null, 2)
 
+/** One way of a run that ended, when more than one did: the step it ended at, how, and with what. */
+type Ending = {
+  step: string
+  name: string
+  outcome: "succeeded" | "failed"
+  result: unknown
+}
+
+const ENDING_KEYS = ["name", "outcome", "result", "step"]
+
+/**
+ * A run's result as its endings, when more than one way ended (ways run at
+ * once: a Match taking every rule that holds, a step leading to several);
+ * else null, and the result is the one End's.
+ */
+function endingsOf(result: unknown): Ending[] | null {
+  if (!Array.isArray(result) || result.length < 2) return null
+  const every = result.every(
+    (item) =>
+      typeof item === "object" &&
+      item !== null &&
+      Object.keys(item).sort().join() === ENDING_KEYS.join() &&
+      typeof item.step === "string" &&
+      typeof item.name === "string" &&
+      (item.outcome === "succeeded" || item.outcome === "failed")
+  )
+  return every ? (result as Ending[]) : null
+}
+
+/** Each way that ended: its step, whether it succeeded, and its result. */
+function Endings({ endings }: { endings: Ending[] }) {
+  return (
+    <div className="flex flex-col gap-2">
+      {endings.map((ending, index) => (
+        <div
+          key={`${ending.step}-${index}`}
+          className="flex flex-col gap-1.5 rounded-(--radius-control) border px-3 py-2"
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 truncate text-sm font-medium text-foreground">
+              {ending.name || ending.step}
+            </span>
+            <code className="shrink-0 text-xs text-muted-foreground">
+              {ending.step}
+            </code>
+            <Chip
+              tone={ending.outcome === "failed" ? "danger" : "success"}
+              className="ml-auto shrink-0"
+            >
+              {ending.outcome === "failed" ? "Failed" : "Succeeded"}
+            </Chip>
+          </div>
+          <JsonView value={ending.result ?? null} className="max-h-[16rem]" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /**
  * The Overview tab: what the run waits for or why it failed, what it was
  * given and what it handed on, and its record, with its timing beside them.
@@ -270,6 +329,7 @@ function AdkRunOverview({
 }) {
   const ended = run.finished_at !== null
   const hasResult = run.result !== null && run.result !== undefined
+  const endings = endingsOf(run.result)
   return (
     <SubmissionLayout
       aside={
@@ -314,9 +374,15 @@ function AdkRunOverview({
               />
             ) : undefined
           }
-          description="Its End's result."
+          description={
+            endings
+              ? `${endings.length} ways ended, in the order they did: each one's step, how it ended and its result.`
+              : "Its End's result."
+          }
         >
-          {hasResult ? (
+          {endings ? (
+            <Endings endings={endings} />
+          ) : hasResult ? (
             <JsonView value={run.result} className="max-h-[28rem]" />
           ) : (
             <p className="text-[0.8125rem] text-muted-foreground">

@@ -1,0 +1,53 @@
+# The code graph MCP server: read-only Model Context Protocol tools over the
+# graph the code graph worker writes. Included by the root compose.yaml beside
+# apps/forge-codegraph-worker/compose.yaml, whose worker-spanner holds the
+# graph. Settings come from apps/forge-codegraph-mcp/.env, whose ${NAME}
+# references Compose resolves from .env.common (the root Makefile passes it
+# with --env-file); the environment below overrides the listener and points
+# the server at the worker's database and scope (WORKER_SPANNER_DATABASE,
+# WORKER_SCOPE), so both always use the same graph, with the shared values
+# the worker reads too, and at the admin API, which checks every caller's
+# credential.
+services:
+  codegraph-mcp:
+    build:
+      context: ../..
+      dockerfile: apps/forge-codegraph-mcp/Dockerfile
+    init: true
+    restart: unless-stopped
+    # The worker creates the emulator's database on start; this server only
+    # reads it.
+    depends_on:
+      worker:
+        condition: service_healthy
+    env_file:
+      - path: ./.env
+        required: false
+    environment:
+      CODEGRAPH_SERVER__HOST: 0.0.0.0
+      CODEGRAPH_SERVER__PORT: "8103"
+      CODEGRAPH_SERVER__RELOAD: "false"
+      CODEGRAPH_SPANNER__DATABASE: ${WORKER_SPANNER_DATABASE:-projects/codegraph-local/instances/codegraph/databases/codegraph}
+      CODEGRAPH_SPANNER__SCOPE: ${WORKER_SCOPE:-codegraph}
+      CODEGRAPH_SPANNER__CURSOR_SIGNING_KEY: ${FORGE_CODEGRAPH_CURSOR_SIGNING_KEY:-}
+      # The admin API checks callers' credentials, on the stack's network.
+      CODEGRAPH_MCP__AUTH__ADMIN_URL: http://admin:8091/api/v1
+      SPANNER_EMULATOR_HOST: worker-spanner:9010
+      # The embedding model every app shares (FORGE_EMBEDDING_* in .env.common).
+      CODEGRAPH_EMBEDDING__MODEL: ${FORGE_EMBEDDING_MODEL:-text-embedding-3-large}
+      CODEGRAPH_EMBEDDING__DIMENSIONS: ${FORGE_EMBEDDING_DIMENSIONS:-1024}
+      CODEGRAPH_EMBEDDING__BASE_URL: ${FORGE_EMBEDDING_BASE_URL:-}
+      CODEGRAPH_EMBEDDING__API_KEY: ${OPENAI_API_KEY:-}
+      # Query enhancement is a managed-Spanner feature the emulator ignores.
+      CODEGRAPH_SEARCH__ENHANCE_QUERY: ${CODEGRAPH_MCP_SEARCH_ENHANCE_QUERY:-false}
+      # The container has no .env.common: Compose resolved .env's references.
+      FORGE_ENV_COMMON_FILE: ""
+    ports:
+      - "127.0.0.1:${CODEGRAPH_MCP_PORT:-18203}:8103"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # SIGTERM drains in-flight requests within CODEGRAPH_SERVER__TIMEOUT_GRACEFUL_SHUTDOWN.
+    stop_grace_period: ${CODEGRAPH_MCP_STOP_GRACE_PERIOD:-30s}

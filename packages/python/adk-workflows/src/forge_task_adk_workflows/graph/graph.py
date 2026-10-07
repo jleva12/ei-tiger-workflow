@@ -7,7 +7,8 @@ kind's factory (``factories.FACTORIES``), joined by ADK's edges.
   start's, as a Pydantic model, so ADK checks a run's message against it.
 - **Routes.** Every way out of a branching step (HTTP, Approval, If, Switch,
   Match, Loop) is its output ID, and its node emits the route of the way it
-  takes; a Merge "any"'s way out is ``next``. Several ways from one node to
+  takes (a Match taking every rule that holds, a list of them: ADK takes each
+  edge whose route is in it); a Merge "any"'s way out is ``next``. Several ways from one node to
   another are one edge with a list of routes. Other nodes' edges have none:
   ADK takes them whatever comes. ADK's default route isn't used.
 - **Loops.** A loop's body (what its Each item way reaches before coming back
@@ -15,11 +16,15 @@ kind's factory (``factories.FACTORIES``), joined by ADK's edges.
   its ways back lead to a hidden node whose output is the item's result, its
   other endings to one that hands on nothing.
 - **Endings.** ADK takes one ending node with an output, so every ending of an
-  agent's graph leads to a hidden finish: an End's ``{outcome, result}``, or,
-  from any other ending, its run succeeded with what it handed on.
+  agent's graph leads, through a hidden node tagging it with its step, to a
+  hidden finish that collects them all: an End's ``{outcome, result}``, or,
+  from any other ending, a success with what it handed on. When ways run at
+  once (a Match taking every rule that holds, a step leading to several),
+  each that ends is one of the run's endings.
 - **Merges.** A Merge "all" is a ``JoinNode``, which goes on only once every
   node into it has; ways in from different ways out of one branching step
-  would never all come, so they're refused. A Merge "any"'s ways in pass
+  would never all come (or, from a Match taking every rule that holds, not
+  always), so they're refused. A Merge "any"'s ways in pass
   through hidden nodes that tag what they hand on with the step they came from.
 
 The checks are the builder's: one start, unique ADK names, sub-agent IDs that
@@ -52,13 +57,14 @@ from forge_task_adk_workflows.graph.factories.base import (
     text,
     where_of,
 )
-from forge_task_adk_workflows.graph.factories.logic import back, ended, finish, stop, via
+from forge_task_adk_workflows.graph.factories.logic import back, ending, finish, stop, via
 from forge_task_adk_workflows.graph.factories.start import input_model
 from forge_task_adk_workflows.graph.names import (
     GRAPH_NAME,
     RESERVED_NAMES,
     adk_name,
     body_name,
+    ending_name,
     via_name,
 )
 from forge_task_adk_workflows.graph.schemas import is_model, problems
@@ -359,13 +365,14 @@ class _Agent:
         if loop is not None:
             sink = stop()
             return [Edge(from_node=built[step], to_node=sink) for step in ends]
+        # Each ending tagged with its step on the way, so the finish can
+        # collect every way that ended.
         collector = finish(top=self.top)
-        edges = [Edge(from_node=built[step], to_node=collector) for step in ends if self.by_id[step]["kind"] == "end"]
-        others = [step for step in ends if self.by_id[step]["kind"] != "end"]
-        if others:
-            wrapper = ended()
-            edges.extend(Edge(from_node=built[step], to_node=wrapper) for step in others)
-            edges.append(Edge(from_node=wrapper, to_node=collector))
+        edges = []
+        for step in ends:
+            tag = ending(ending_name(built[step].name), self.by_id[step])
+            edges.append(Edge(from_node=built[step], to_node=tag))
+            edges.append(Edge(from_node=tag, to_node=collector))
         return edges
 
     @staticmethod
@@ -490,6 +497,9 @@ class _Agent:
                         if way == (step["id"], output) or (way[0] != step["id"] and way[0] in reach):
                             came.setdefault(way, set()).add(output)
                 ways = list(came.items())
+                # A match taking every rule that holds may take both, but
+                # not always: it would wait for good when one doesn't hold.
+                every = step["kind"] == "match" and config_of(step).get("mode") == "all"
                 for index, (first, outs) in enumerate(ways):
                     for second, others in ways[index + 1 :]:
                         if outs.isdisjoint(others):
@@ -499,7 +509,8 @@ class _Agent:
                                 f"come from different ways out of "
                                 f"'{text(step.get('name')) or step['id']}' "
                                 f"({', '.join(sorted(outs))} and "
-                                f"{', '.join(sorted(others))}), so it would never go "
+                                f"{', '.join(sorted(others))}), so it "
+                                f"{'may' if every else 'would'} never go "
                                 'on; make it go on at the first ("any").'
                             )
 

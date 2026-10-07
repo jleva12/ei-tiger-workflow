@@ -139,10 +139,11 @@ def test_a_switchs_edges_take_its_cases_ids() -> None:
         ("double", "size"): None,
         ("size", "big"): "big",
         ("size", "small"): "small",
-        # The endings that aren't End steps lead to the one hidden finish.
-        ("big", "__ended__"): None,
-        ("small", "__ended__"): None,
-        ("__ended__", "__finish__"): None,
+        # Each ending leads, tagged with its step, to the one hidden finish.
+        ("big", "big__ended"): None,
+        ("small", "small__ended"): None,
+        ("big__ended", "__finish__"): None,
+        ("small__ended", "__finish__"): None,
     }
 
 
@@ -372,7 +373,7 @@ def test_a_saved_agent_is_built_and_nested_whole() -> None:
         START.name,
         "__input__",
         "add_one",
-        "__ended__",
+        "add_one__ended",
         "__finish__",
     }
     assert routes(graph)[("check_the_number", "done")] is None
@@ -467,7 +468,12 @@ def test_a_graph_of_functions_runs_the_branch_its_router_takes(
         # The switch hands on what came into it.
         "size@1": {"n": n * 2},
         f"{route}@1": output,
-        "__ended__@1": {"outcome": "succeeded", "result": output},
+        f"{route}__ended@1": {
+            "step": route,
+            "name": route.title(),
+            "outcome": "succeeded",
+            "result": output,
+        },
         "__finish__@1": {"outcome": "succeeded", "result": output},
     }
     assert [event.actions.route for event in events if event.actions.route] == [route]

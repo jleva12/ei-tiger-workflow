@@ -79,7 +79,12 @@ export const CONFIGS: Record<StepKind, Record<string, unknown>> = {
     arms: {
       ...listOf({ id: text, label: text, condition: text }),
       description:
-        "In order: the first rule whose JSONata condition is true is taken.",
+        "In order: the first rule whose JSONata condition is true is taken (mode first), or every one, at once (mode all).",
+    },
+    mode: {
+      ...oneOf("first", "all"),
+      description:
+        "first takes the first rule that holds; all takes every one that holds, at once.",
     },
   },
   loop: {

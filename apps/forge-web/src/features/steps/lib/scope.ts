@@ -121,9 +121,17 @@ export function outputTypeOf(
       return t.object({
         resumed_at: t.string("When it went on.", { format: "date-time" }),
       })
+    case "match":
+      if (step.config.mode === "all")
+        return t.object({
+          branches: t.array(
+            t.string(),
+            "The ways it took, by output ID: every rule that held, else otherwise."
+          ),
+        })
+      return t.object({ branch: t.string("The way it took, by output ID.") })
     case "if":
     case "switch":
-    case "match":
       return t.object({ branch: t.string("The way it took, by output ID.") })
     case "loop":
       return t.object({

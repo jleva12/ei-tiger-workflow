@@ -104,6 +104,10 @@ class Settings(BaseSettings):
     # Seconds the admin API waits for an MCP server, or its OAuth
     # authorization server, to answer.
     mcp_timeout: float = Field(default=15.0, gt=0, le=120)
+    # The MCP servers the web console offers ready-made when adding one: a
+    # YAML file in the shape of mcp_servers/default_servers.yaml, which is
+    # used when this is unset.
+    mcp_server_defaults: Path | None = None
 
     # Knowledge bases (forge_admin.knowledge): an organization's named sets of
     # documents its chat agents search. Uploads are stored in this S3 bucket,
@@ -150,6 +154,16 @@ class Settings(BaseSettings):
     # relevance a passage needs (none: a question the documents don't answer
     # still finds the nearest passages), or __MIN_RERANK_SCORE with a reranker.
     knowledge_search: SearchConfig = SearchConfig()
+    # Graph knowledge bases and the code graph explorer: the code graph
+    # worker's API (apps/forge-codegraph-worker, CODEGRAPH_HEALTH_ADDR) and
+    # its token (CODEGRAPH_ADMISSION_TOKEN, from .env.common's
+    # FORGE_CODEGRAPH_ADMISSION_TOKEN). Unset, searching a graph knowledge
+    # base and reading a repository's graph answer that it isn't set up;
+    # ingestions still queue, in MySQL.
+    codegraph_url: str | None = Field(default=None, pattern=r"^https?://\S+$")
+    codegraph_token: SecretStr | None = Field(default=None, min_length=32)
+    # Seconds the admin API waits for the worker to answer.
+    codegraph_timeout: float = Field(default=30.0, gt=0, le=120)
 
     # The assistant: Google ADK agents (forge_admin.assistant). The models it may
     # run on: a model_provider.yaml, the file ADK workflows' LLM nodes read too, e.g.
@@ -248,8 +262,11 @@ class Settings(BaseSettings):
     @field_validator(
         "agent_model",
         "agent_screens",
+        "mcp_server_defaults",
         "starter_wheels",
         "api_key",
+        "codegraph_token",
+        "codegraph_url",
         "documents_bucket",
         "embedding_redis_url",
         "google_api_key",

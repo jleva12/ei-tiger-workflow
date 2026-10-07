@@ -337,7 +337,9 @@ def test_each_forge_kind_is_the_adk_node_its_factory_makes() -> None:
         ("first__via__both", "first"): None,
         ("first", "person"): "next",
         ("person", "done"): None,
-        ("done", "__finish__"): None,
+        # An ending is tagged with its step on its way to the finish.
+        ("done", "done__ended"): None,
+        ("done__ended", "__finish__"): None,
     }
 
 
@@ -401,6 +403,10 @@ def test_sub_agent_ids_are_state_keys_of_their_own(sub_id: str, message: str) ->
     assert refused(document) == f"Node 'Team', sub-agent 'Second': {message}"
 
 
+#: The example's endings: the steps that lead nowhere.
+ENDINGS = ("sent", "held_back", "replied", "refund_declined", "answered", "unknown_customer")
+
+
 def test_the_example_is_one_graph_of_adk_nodes() -> None:
     graph = build_agent(example())
     assert graph.name == "support_desk"
@@ -432,6 +438,8 @@ def test_the_example_is_one_graph_of_adk_nodes() -> None:
         "sum_up",
         "answered",
         "unknown_customer",
+        # Each ending's tag, on its way to the finish.
+        *(f"{end}__ended" for end in ENDINGS),
         "__finish__",
     }
     triage = nodes["triage"]
@@ -483,13 +491,9 @@ def test_the_example_is_one_graph_of_adk_nodes() -> None:
         ("polish_the_reply", "replied"): None,
         ("research", "sum_up"): None,
         ("sum_up", "answered"): None,
-        # Every ending leads to the one hidden finish.
-        ("sent", "__finish__"): None,
-        ("held_back", "__finish__"): None,
-        ("replied", "__finish__"): None,
-        ("refund_declined", "__finish__"): None,
-        ("answered", "__finish__"): None,
-        ("unknown_customer", "__finish__"): None,
+        # Every ending leads, tagged with its step, to the one hidden finish.
+        **{(end, f"{end}__ended"): None for end in ENDINGS},
+        **{(f"{end}__ended", "__finish__"): None for end in ENDINGS},
     }
 
 
@@ -702,6 +706,99 @@ def test_conditions_read_steps_and_previous(kind: str, count: int, expected: str
         ],
     )
     assert run(lambda: ran(document, {"count": count})).result == expected
+
+
+def match_all_agent() -> dict[str, Any]:
+    """A match taking every rule that holds, a step after each of its ways."""
+    return agent(
+        [
+            ISSUE_START,
+            node(
+                "route",
+                "match",
+                {
+                    "mode": "all",
+                    "arms": [
+                        {"id": "bug", "label": "Bug", "condition": 'input.issue.kind = "bug"'},
+                        {"id": "billing", "label": "Billing", "condition": 'input.issue.kind = "billing"'},
+                        {"id": "urgent", "label": "Urgent", "condition": 'input.issue.severity = "high"'},
+                    ],
+                },
+            ),
+            transform("triage", '{"ways": steps.route.output, "previous": previous}'),
+            transform("refund", '"refund"'),
+            transform("page", '"page"'),
+            transform("log", '{"ways": steps.route.output}'),
+        ],
+        [
+            ("start", "next", "route"),
+            ("route", "bug", "triage"),
+            ("route", "billing", "refund"),
+            ("route", "urgent", "page"),
+            ("route", "otherwise", "log"),
+        ],
+    )
+
+
+def test_a_match_taking_every_rule_runs_the_way_of_each_that_holds() -> None:
+    issue = {"issue": {"kind": "bug", "severity": "high"}}
+    session = run(lambda: ran(match_all_agent(), issue))
+    assert [event.actions.route for event in session.events if event.actions.route] == [["bug", "urgent"]]
+    # Each way's step runs, handed what came into the match; it records them all.
+    assert session.outputs("triage") == [{"ways": {"branches": ["bug", "urgent"]}, "previous": issue}]
+    assert session.outputs("page") == ["page"]
+    assert session.outputs("refund") == []
+    assert session.outputs("log") == []
+
+
+def test_a_match_taking_every_rule_takes_otherwise_when_none_holds() -> None:
+    session = run(lambda: ran(match_all_agent(), {"issue": {"kind": "question", "severity": "low"}}))
+    assert session.outputs("log") == [{"ways": {"branches": ["otherwise"]}}]
+    assert session.outputs("triage") == session.outputs("refund") == session.outputs("page") == []
+
+
+def test_a_match_taking_every_rule_runs_a_step_two_rules_lead_to_once() -> None:
+    document = match_all_agent()
+    document["edges"].append({"id": "u", "source": "route", "source_output": "urgent", "target": "triage"})
+    session = run(lambda: ran(document, {"issue": {"kind": "bug", "severity": "high"}}))
+    assert len(session.outputs("triage")) == 1
+
+
+def test_a_merge_all_over_rules_of_a_match_taking_every_one_is_refused() -> None:
+    # Both may come, but not always: it would wait for good when one doesn't.
+    document = agent(
+        [
+            START_NODE,
+            node(
+                "route",
+                "match",
+                {
+                    "mode": "all",
+                    "arms": [
+                        {"id": "a", "label": "", "condition": "input.a"},
+                        {"id": "b", "label": "", "condition": "input.b"},
+                    ],
+                },
+            ),
+            transform("yes", '"Y"'),
+            transform("also", '"A"'),
+            node("join", "merge", {"mode": "all"}),
+        ],
+        [
+            ("start", "next", "route"),
+            ("route", "a", "yes"),
+            ("route", "b", "also"),
+            ("yes", "next", "join"),
+            ("also", "next", "join"),
+        ],
+    )
+    assert refused(document) == (
+        "Node 'Join': it waits for all its ways in, but 'Yes' and 'Also' come from "
+        "different ways out of 'Route' (a and b), so it may never go on; "
+        'make it go on at the first ("any").'
+    )
+    document["nodes"][-1]["config"]["mode"] = "any"
+    build_agent(document)
 
 
 def test_a_way_taken_with_nothing_handed_on_still_leads_on() -> None:
@@ -936,11 +1033,80 @@ def test_an_end_that_fails_fails_the_run_with_its_result() -> None:
         [START_NODE, end("stop", '"No customer on file: " & input.id', "failed")],
         [("start", "next", "stop")],
     )
+    session = run(lambda: ran(document, {"id": "c9"}))
+    assert session.finished == {
+        "outcome": "failed",
+        "result": "No customer on file: c9",
+        "error": "Stop (stop) failed the run: No customer on file: c9",
+        "step": "stop",
+    }
+
+
+def fan_out(*ends: dict[str, Any]) -> dict[str, Any]:
+    """A match taking every rule that holds, each rule's way to an ending of its own."""
+    arms = [{"id": f"to_{e['id']}", "label": "", "condition": "true"} for e in ends]
+    return agent(
+        [START_NODE, node("route", "match", {"mode": "all", "arms": arms}), *ends],
+        [("start", "next", "route"), *(("route", f"to_{e['id']}", e["id"]) for e in ends)],
+    )
+
+
+def test_the_finish_collects_every_way_that_ended() -> None:
+    # Each ending, the step it ended at by ID and name, in the order they came.
+    session = run(lambda: ran(fan_out(end("tops", '"TOPS IMPACTED"'), end("umr", '"UMR IMPACTED"'))))
+    assert session.finished == {
+        "outcome": "succeeded",
+        "result": [
+            {"step": "tops", "name": "Tops", "outcome": "succeeded", "result": "TOPS IMPACTED"},
+            {"step": "umr", "name": "Umr", "outcome": "succeeded", "result": "UMR IMPACTED"},
+        ],
+    }
+
+
+def test_a_way_ending_at_another_step_is_an_ending_too() -> None:
+    session = run(lambda: ran(fan_out(end("tops", '"TOPS"'), transform("log", '{"logged": true}'))))
+    assert session.result == [
+        {"step": "tops", "name": "Tops", "outcome": "succeeded", "result": "TOPS"},
+        {"step": "log", "name": "Log", "outcome": "succeeded", "result": {"logged": True}},
+    ]
+
+
+def test_a_failed_end_fails_the_run_once_every_way_has_ended() -> None:
+    # The failed way doesn't stop the other: both end, and the run fails
+    # naming each failed End.
+    document = fan_out(
+        end("refused", '"No refund"', "failed"),
+        transform("notify", '"told"'),
+        end("lost", "", "failed"),
+    )
+    session = run(lambda: ran(document))
+    assert session.outputs("notify") == ["told"]
+    finished = session.finished
+    assert finished is not None
+    assert finished["outcome"] == "failed"
+    assert finished["error"] == "Refused (refused) failed the run: No refund; Lost (lost) failed the run"
+    assert finished["step"] == "refused"
+    assert [(e["step"], e["outcome"]) for e in finished["result"]] == [
+        ("refused", "failed"),
+        ("notify", "succeeded"),
+        ("lost", "failed"),
+    ]
+
+
+def test_a_failed_end_in_a_loops_body_fails_the_run_at_once() -> None:
+    document = agent(
+        [
+            START_NODE,
+            node("each", "loop", {"items": "[1, 2]", "item_name": "n"}),
+            end("bad", '"item " & $string(n)', "failed"),
+            end("done"),
+        ],
+        [("start", "next", "each"), ("each", "each", "bad"), ("each", "done", "done")],
+    )
     with pytest.raises(RunFailed) as raised:
-        run(lambda: ran(document, {"id": "c9"}))
-    assert raised.value.message == "Stop (stop) failed the run: No customer on file: c9"
-    assert raised.value.result == "No customer on file: c9"
-    assert raised.value.step == "stop"
+        run(lambda: ran(document))
+    assert raised.value.message == "Bad (bad) failed the run: item 1"
+    assert raised.value.step == "bad"
 
 
 # --------------------------------------------------------------- approvals
@@ -1671,6 +1837,7 @@ def test_a_saved_agent_runs_nested_with_its_own_input() -> None:
         "__input__",
         "add",
         "done",
+        "done__ended",
         "__finish__",
     }
 
@@ -1841,9 +2008,9 @@ def test_the_example_fails_for_a_customer_it_cant_find() -> None:
     def missing(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"detail": "no such customer"})
 
-    with pytest.raises(RunFailed) as raised:
-        run(lambda: ran(example(), MESSAGE, svc=services(missing, model=ScriptedLlm())))
-    assert raised.value.message == ("Unknown customer (unknown_customer) failed the run: No customer on file: c1")
+    session = run(lambda: ran(example(), MESSAGE, svc=services(missing, model=ScriptedLlm())))
+    assert session.finished is not None
+    assert session.finished["error"] == "Unknown customer (unknown_customer) failed the run: No customer on file: c1"
 
 
 def test_the_example_polishes_an_approved_refunds_reply_in_a_loop() -> None:

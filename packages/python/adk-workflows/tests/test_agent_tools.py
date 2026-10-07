@@ -113,6 +113,7 @@ def with_tools(
     *,
     servers: Servers | None = None,
     search: Searches | None = None,
+    code: Any = None,
 ) -> Worker:
     """A worker whose LLM agents run on ``llm``, their tools on fakes."""
     models = ProviderModels(PROVIDERS, build=lambda _call: llm)
@@ -122,6 +123,7 @@ def with_tools(
         runtime=RuntimeServices(environment={}, allowed_hosts=("api.example.com",), mcp_servers=servers),
         http=w.task.services.http,
         search=search,
+        code=code,
     )
     w.task.services = w.task.services.but(agents=agents)
     return w
@@ -190,6 +192,70 @@ async def test_a_knowledge_base_tool_searches_what_the_run_carries(sessions: Dat
     )
     assert gone.status is JobStatus.FAILED
     assert "tool 'Policies'" in str(gone.error) and "kb_hr" in str(gone.error)
+
+
+class CodeSearches:
+    """The code graph worker's search: answers its hits in the repositories asked."""
+
+    def __init__(self, hits: list[dict[str, Any]]) -> None:
+        self.hits = hits
+        self.asked: list[tuple[list[str], str, int]] = []
+
+    async def search(self, repository_ids: list[str], query: str, *, limit: int = 8) -> list[dict[str, Any]]:
+        self.asked.append((repository_ids, query, limit))
+        return [h for h in self.hits if h["repository_id"] in repository_ids]
+
+
+async def test_a_knowledge_base_tool_searches_a_graph_knowledge_bases_code(sessions: DatabaseSessionService) -> None:
+    from forge_codegraph import citation_ref as code_ref
+
+    llm = ScriptedLlm(turns=[[call("code", query="How are tokens signed?")], [text("With HMAC.")]])
+    code = CodeSearches(
+        [
+            {
+                "repository_id": "repo:widgets",
+                "id": "entity:signer",
+                "kind": "class",
+                "qualified_name": "widgets.Signer",
+                "file": "src/sign.py",
+                "line": 4,
+                "score": 0.7,
+                "snippet": "class Signer:",
+            }
+        ]
+    )
+    w = with_tools(sessions, llm, search=Searches(), code=code)
+    kb = tool("tool_kb", "knowledge_base", "Code", knowledge_bases=["kb_code"], max_results=3)
+    document = line(node("helper", "llm", llm_config(tools=[kb])), end("done", "steps.helper.output"))
+    carried = {
+        "kb_code": {
+            "name": "Widgets",
+            "description": "",
+            "kind": "graph",
+            "repositories": [{"id": "r1", "graph_id": "repo:widgets", "name": "acme/widgets"}],
+        }
+    }
+
+    result = await w.run(payload(document, {}, knowledge_bases=carried))
+
+    assert result.detail["result"] == "With HMAC."
+    assert code.asked == [(["repo:widgets"], "How are tokens signed?", 3)]
+    declared = llm.requests[0].config.tools[0].function_declarations  # type: ignore[index, union-attr]
+    assert "Widgets (code of acme/widgets)" in (declared[0].description or "")
+    answered = llm.requests[1].contents[-1].parts[0].function_response.response  # type: ignore[index, union-attr]
+    passage = answered["payload"]["passages"][0]
+    assert passage["ref"] == code_ref("repo:widgets:entity:signer")
+    assert (passage["document"], passage["location"]) == ("acme/widgets: src/sign.py", "src/sign.py, line 4")
+
+    # Without the code graph's API, the tool answers the model what to set.
+    llm.turns = [[call("code", query="x")], [text("I can't search the code.")]]
+    llm.requests.clear()
+    without = await with_tools(sessions, llm, search=Searches()).run(
+        payload(document, {}, knowledge_bases=carried).model_copy(update={"session_id": "other-session"})
+    )
+    assert without.detail["result"] == "I can't search the code."
+    refused = llm.requests[1].contents[-1].parts[0].function_response.response  # type: ignore[index, union-attr]
+    assert "CODEGRAPH_URL" in str(refused)
 
 
 async def test_the_documents_search_ranks_a_tools_knowledge_bases_together() -> None:

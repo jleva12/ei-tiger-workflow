@@ -18,24 +18,33 @@ import {
 } from "./knowledge"
 
 /*
- * An organization's knowledge bases, kept by the admin API: each holds its
- * own documents (`…/knowledge-bases/:kb/documents`) and nested collections
- * (`…/knowledge-bases/:kb/document-collections`). Each upload is stored,
- * then the embedding worker parses, chunks and embeds it; its `phase` is
- * that job as last read. Reading takes `organizations:read`; everything else
- * `knowledge_bases:manage`.
+ * An organization's knowledge bases, kept by the admin API. A RAG one holds
+ * its own documents (`…/knowledge-bases/:kb/documents`) and nested
+ * collections (`…/knowledge-bases/:kb/document-collections`): each upload is
+ * stored, then the embedding worker parses, chunks and embeds it; its
+ * `phase` is that job as last read. A graph one holds some of the
+ * organization's code repositories (`…/knowledge-bases/:kb/repositories`),
+ * searched in their code graphs. Reading takes `organizations:read`;
+ * everything else `knowledge_bases:manage`.
  */
 
 /* -------------------------------------------------------------------------- */
 /* Knowledge bases                                                            */
 /* -------------------------------------------------------------------------- */
 
+/** `rag`: documents uploaded to it. `graph`: code repositories. */
+export type KnowledgeBaseKind = "rag" | "graph"
+
 export type KnowledgeBase = {
   id: string
   organization_id: string
   name: string
   description: string
-  /** Its documents, how many are searchable and how many failed. */
+  kind: KnowledgeBaseKind
+  /** A graph one's repositories, and how many have a code graph to search. */
+  repositories: number
+  ingested: number
+  /** A RAG one's documents, how many are searchable and how many failed. */
   documents: number
   ready: number
   failed: number
@@ -48,8 +57,15 @@ export type KnowledgeBase = {
   updated_by: string
 }
 
-export type KnowledgeBaseCreate = { name: string; description?: string }
-export type KnowledgeBaseUpdate = Partial<KnowledgeBaseCreate>
+export type KnowledgeBaseCreate = {
+  name: string
+  description?: string
+  /** Fixed once it's made; `rag` when left out. */
+  kind?: KnowledgeBaseKind
+}
+export type KnowledgeBaseUpdate = Partial<
+  Pick<KnowledgeBaseCreate, "name" | "description">
+>
 
 export const organizationKnowledgeBases = createNestedResource<
   KnowledgeBase,
@@ -102,11 +118,19 @@ const collectionsPath = (scope: KnowledgeScope) =>
 
 export type SearchHit = {
   chunk_id: string
+  /** What an answer cites it by, e.g. "KQM4821". */
+  ref: string
   document_id: string
+  /** A graph knowledge base's: the repository and the file. */
   filename: string
   section_path: string[]
+  /** Where in the document (or the file) it is, in words. */
+  location: string
   text: string
   score: number
+  /** A graph knowledge base's code: the repository and its graph's node. */
+  repository_id: string | null
+  node_id: string | null
 }
 
 export type SearchResult = { hits: SearchHit[] }

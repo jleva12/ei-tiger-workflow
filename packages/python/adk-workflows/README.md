@@ -80,9 +80,16 @@ session:
    item's) is a note on the run's activity (`Transform (shape) finished`), and
    a checkpoint.
 4. **End.** The graph's finish, `{outcome, result}`, is the job's result (`ok`
-   with `outcome`, `result`, `steps` and `session_id`). A `RunFailed` (input
-   that doesn't fit the start, a failed End, a step that failed with no way to
-   take, a human input declined) fails it with its message and `step`. A
+   with `outcome`, `result`, `steps` and `session_id`), once no way of the
+   run still waits. The result is the one ending's; when ways run at once (a
+   Match taking every rule that holds, a step leading to several) and more
+   than one ends, it's every ending, `[{step, name, outcome, result}]`, in
+   the order they ended. A failed End doesn't stop the other ways: once every
+   way has ended, the run fails naming each failed End (its message), with
+   the first one's `step`; in a loop's body or a saved agent it fails the run
+   at once. A `RunFailed` (input that doesn't fit the start, a step that
+   failed with no way to take, a human input declined) fails it at once with
+   its message and `step`. A
    document that doesn't build fails it at once, without a retry. A model's,
    the network's or the database's hiccup is a `TransientError`: the worker
    tries again, with backoff.

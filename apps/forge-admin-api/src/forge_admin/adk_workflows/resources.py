@@ -7,7 +7,8 @@ once and the run carries what the worker needs:
   tool): their documents at the version named, with the saved agents they
   use bundled in, as the hosted runtime would run them;
 - knowledge bases: their names and descriptions, which their search tools
-  describe themselves by;
+  describe themselves by, and their kinds; a graph knowledge base's
+  repositories with a code graph, which the worker searches;
 - MCP servers: that they're the organization's (the worker connects to them
   itself, with their credentials, as they're kept then).
 """
@@ -20,7 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from forge_admin.chat_agents.bundle import bundle
 from forge_admin.chat_agents.store import ChatAgentStore
+from forge_admin.knowledge.graph import searchable
 from forge_admin.models import KnowledgeBase, McpServer
+from forge_admin.models.knowledge import GRAPH, RAG
 
 
 class RunResources:
@@ -82,18 +85,37 @@ class RunResources:
         bundled, _notes = await bundle(store, self.organization_id, document)
         return bundled
 
-    async def knowledge_bases(self, ids: Sequence[str]) -> dict[str, dict[str, str]]:
-        """:return: The organization's knowledge bases of those: name and description, by ID."""
+    async def knowledge_bases(self, ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+        """
+        :return: The organization's knowledge bases of those, by ID: name,
+            description and kind (``rag`` or ``graph``); a graph one's
+            repositories with a code graph too, ``{id, graph_id, name}``.
+        """
         async with self.sessions() as session:
-            found = await session.scalars(
-                select(KnowledgeBase).where(
-                    KnowledgeBase.id.in_(list(ids)),
-                    KnowledgeBase.organization_id == self.organization_id,
+            found = list(
+                await session.scalars(
+                    select(KnowledgeBase).where(
+                        KnowledgeBase.id.in_(list(ids)),
+                        KnowledgeBase.organization_id == self.organization_id,
+                    )
                 )
             )
-            return {
-                kb.id: {"name": kb.name, "description": kb.description} for kb in found
+            repositories = await searchable(
+                session, [kb.id for kb in found if kb.kind == GRAPH]
+            )
+        snapshot: dict[str, dict[str, Any]] = {}
+        for kb in found:
+            snapshot[kb.id] = {
+                "name": kb.name,
+                "description": kb.description,
+                "kind": kb.kind or RAG,
             }
+            if kb.kind == GRAPH:
+                snapshot[kb.id]["repositories"] = [
+                    {"id": r.id, "graph_id": r.graph_id, "name": r.name}
+                    for r in repositories.get(kb.id, [])
+                ]
+        return snapshot
 
     async def mcp_servers(self, ids: Sequence[str]) -> set[str]:
         """:return: Those of the IDs that are the organization's MCP servers."""
