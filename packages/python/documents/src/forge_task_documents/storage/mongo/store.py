@@ -29,6 +29,7 @@ from forge_task_documents.models import (
     utcnow,
 )
 from forge_task_documents.storage.mongo import pipelines
+from forge_task_documents.storage.mongo.pipelines import LIVE, PUBLISHED, UNPUBLISHED
 from forge_task_documents.storage.mongo.schema import (
     CHUNK_INDEXES,
     DOCUMENT_INDEXES,
@@ -205,8 +206,16 @@ class MongoChunkStore:
                 doc = chunk_to_doc(c, run_seq, binary_vectors=self.binary_vectors)
                 _id = doc.pop("_id")
                 # only overwrite chunks written by this or an older run; if a
-                # newer run owns the id, the upsert hits a duplicate key (11000)
-                ops.append(UpdateOne({"_id": _id, "run_seq": {"$not": {"$gt": run_seq}}}, {"$set": doc}, upsert=True))
+                # newer run owns the id, the upsert hits a duplicate key (11000).
+                # A new chunk is unpublished until the run is; one already
+                # there keeps whether it's published.
+                ops.append(
+                    UpdateOne(
+                        {"_id": _id, "run_seq": {"$not": {"$gt": run_seq}}},
+                        {"$set": doc, "$setOnInsert": UNPUBLISHED},
+                        upsert=True,
+                    )
+                )
             try:
                 await self._c.bulk_write(ops, ordered=False)
             except BulkWriteError as exc:
@@ -214,12 +223,18 @@ class MongoChunkStore:
                 if any(e.get("code") != 11000 for e in errors):
                     raise
                 skipped += len(errors)
-        res = await self._c.delete_many({"tenant_id": tenant_id, "doc_id": doc_id, "run_seq": {"$lt": run_seq}})
-        return ReplaceStats(upserted=len(chunks) - skipped, deleted=res.deleted_count)
+        return ReplaceStats(upserted=len(chunks) - skipped, deleted=0)
+
+    @_wrap_errors
+    async def publish_run(self, tenant_id: str, doc_id: str, run_seq: int) -> int:
+        key = {"tenant_id": tenant_id, "doc_id": doc_id}
+        await self._c.update_many({**key, "run_seq": run_seq, **UNPUBLISHED}, {"$unset": {LIVE: ""}})
+        res = await self._c.delete_many({**key, "run_seq": {"$lt": run_seq}})
+        return int(res.deleted_count)
 
     @_wrap_errors
     async def delete_run_chunks(self, tenant_id: str, doc_id: str, run_seq: int) -> int:
-        res = await self._c.delete_many({"tenant_id": tenant_id, "doc_id": doc_id, "run_seq": run_seq})
+        res = await self._c.delete_many({"tenant_id": tenant_id, "doc_id": doc_id, "run_seq": run_seq, **UNPUBLISHED})
         return int(res.deleted_count)
 
     @_wrap_errors
@@ -241,7 +256,7 @@ class MongoChunkStore:
     @_wrap_errors
     async def get_section(self, tenant_id: str, doc_id: str, section_key: str) -> list[Chunk]:
         cursor = self._c.find(
-            {"tenant_id": tenant_id, "doc_id": doc_id, "section_key": section_key}, {"embedding": 0}
+            {"tenant_id": tenant_id, "doc_id": doc_id, "section_key": section_key, **PUBLISHED}, {"embedding": 0}
         ).sort("ordinal", 1)
         return [doc_to_chunk(d) async for d in cursor]
 

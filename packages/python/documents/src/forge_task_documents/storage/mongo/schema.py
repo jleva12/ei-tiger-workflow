@@ -34,6 +34,7 @@ chunks collection (one per chunk; both BM25 and vector search run here)
   chunker_version, embedding_model,
   embedding: BinData(vector float32) | [double],
   run_seq,                                  # fencing token of the run that wrote it
+  live: false,                              # only while its run is unpublished
   updated_at
 }
 """
@@ -148,7 +149,7 @@ def doc_to_chunk(doc: Mapping[str, Any]) -> Chunk:
     if "shape_ids" in loc:
         loc = {**loc, "shape_ids": tuple(loc["shape_ids"])}
     data["location"] = SourceLocation(**loc)
-    for extra in ("section_text", "run_seq", "updated_at", "_score", "_score_details"):
+    for extra in ("section_text", "run_seq", "live", "updated_at", "_score", "_score_details"):
         data.pop(extra, None)
     return Chunk.model_validate(data)
 

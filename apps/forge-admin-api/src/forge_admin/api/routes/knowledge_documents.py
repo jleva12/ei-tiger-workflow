@@ -54,7 +54,9 @@ from forge_admin.knowledge.queue import (
     QueueError,
     document_job_key,
     outcome,
+    recorded,
 )
+from forge_admin.knowledge.search import KnowledgeSearch, SearchError
 from forge_admin.knowledge.storage import DocumentStore, StorageError, document_key
 from forge_admin.models import KnowledgeCollection, KnowledgeDocument
 from forge_admin.models.knowledge import new_id
@@ -66,6 +68,9 @@ router = APIRouter(tags=["knowledge base documents"])
 DocumentId = Annotated[str, Path(max_length=36)]
 # Phases of a job that hasn't finished; the others are final.
 ACTIVE = ("QUEUED", "RUNNING")
+# Phases that can still change without a new job: unfinished ones, and
+# MISSING, which the worker's own record of the document may settle.
+UNSETTLED = (*ACTIVE, "MISSING")
 # Final phases whose document can be ingested again: its job failed, or the
 # worker no longer has it.
 RETRYABLE = ("FAILED", "MISSING")
@@ -228,50 +233,87 @@ async def refresh(
     session: AsyncSession,
     queue: KnowledgeQueue | None,
     rows: Sequence[KnowledgeDocument],
+    records: KnowledgeSearch | None = None,
 ) -> None:
     """
-    Read the unfinished documents' jobs from the worker, all at once and
+    Read the unsettled documents' jobs from the worker, all at once and
     briefly, and save what changed. A worker that doesn't answer leaves them
-    as they were; one that no longer has a job makes it MISSING.
+    as they were. A job it no longer has (it keeps a finished one for a
+    week) is settled by the worker's own record of the document, which
+    ``records`` reads: SUCCEEDED or FAILED as its last run went, else
+    MISSING. A MISSING document is settled the same way.
 
     :param session: The request's database session.
-    :param queue: The worker's client; None leaves the rows alone.
-    :param rows: Documents; only unfinished ones are read.
+    :param queue: The worker's client; None leaves unfinished rows alone.
+    :param rows: Documents; only unsettled ones are read.
+    :param records: Reads the worker's records (the knowledge base search,
+        over its store); None leaves a job that's gone MISSING.
     """
-    active = [row for row in rows if row.phase in ACTIVE]
-    if queue is None or not active:
+    unsettled = [row for row in rows if row.phase in UNSETTLED]
+    if not unsettled:
         return
+    outcomes: dict[str, Outcome] = {}
+    active = [row for row in unsettled if row.phase in ACTIVE]
+    if queue is not None and active:
 
-    async def read(row: KnowledgeDocument) -> Outcome:
-        async with asyncio.timeout(REFRESH_TIMEOUT):
-            return outcome(await queue.job(row.job_key))
+        async def read(row: KnowledgeDocument) -> Outcome:
+            async with asyncio.timeout(REFRESH_TIMEOUT):
+                return outcome(await queue.job(row.job_key))
 
-    answers = await asyncio.gather(
-        *(read(row) for row in active), return_exceptions=True
-    )
-    for row, answer in zip(active, answers, strict=True):
-        if isinstance(answer, Outcome):
-            _apply(row, answer)
-        elif not isinstance(answer, QueueError | TimeoutError):
-            raise answer
+        answers = await asyncio.gather(
+            *(read(row) for row in active), return_exceptions=True
+        )
+        for row, answer in zip(active, answers, strict=True):
+            if isinstance(answer, Outcome):
+                outcomes[row.id] = answer
+            elif not isinstance(answer, QueueError | TimeoutError):
+                raise answer
+    gone = [
+        row
+        for row in unsettled
+        if (outcomes[row.id].phase if row.id in outcomes else row.phase) == "MISSING"
+    ]
+    if records is not None and gone:
+        try:
+            async with asyncio.timeout(REFRESH_TIMEOUT):
+                known = await records.records(
+                    (row.knowledge_base_id, row.id) for row in gone
+                )
+        except (SearchError, TimeoutError) as error:
+            logger.warning(
+                "The worker's records of documents are unavailable: %s", error
+            )
+        else:
+            for row in gone:
+                outcomes[row.id] = recorded(known.get((row.knowledge_base_id, row.id)))
+    for row in unsettled:
+        if row.id in outcomes:
+            _apply(row, outcomes[row.id])
     if session.dirty:
         await session.commit()
 
 
 async def _refresh_unfinished(
-    session: AsyncSession, queue: KnowledgeQueue | None, knowledge_base_id: str
+    session: AsyncSession,
+    queue: KnowledgeQueue | None,
+    knowledge_base_id: str,
+    records: KnowledgeSearch | None = None,
 ) -> None:
-    """Refresh every unfinished document of the knowledge base, so phases are
+    """Refresh every unsettled document of the knowledge base, so phases are
     current before the database is asked about them."""
-    if queue is None:
-        return
     rows = await session.scalars(
         select(KnowledgeDocument).where(
             KnowledgeDocument.knowledge_base_id == knowledge_base_id,
-            KnowledgeDocument.phase.in_(ACTIVE),
+            KnowledgeDocument.phase.in_(UNSETTLED),
         )
     )
-    await refresh(session, queue, list(rows))
+    await refresh(session, queue, list(rows), records)
+
+
+def _records(request: Request) -> KnowledgeSearch | None:
+    """:return: What reads the worker's records of documents; None when search isn't set up."""
+    search: KnowledgeSearch | None = request.app.state.knowledge_search
+    return search
 
 
 def _clients(request: Request) -> tuple[DocumentStore, KnowledgeQueue]:
@@ -569,7 +611,7 @@ async def list_documents(
         query = query.where(or_(*places))
     if phase:
         # Phases as the worker reports them now, not as last read.
-        await _refresh_unfinished(session, queue, knowledge_base_id)
+        await _refresh_unfinished(session, queue, knowledge_base_id, _records(request))
         query = query.where(KnowledgeDocument.phase.in_(phase))
     if extension:
         query = query.where(or_(*(_has_extension(e) for e in extension)))
@@ -588,7 +630,7 @@ async def list_documents(
             .limit(limit)
         )
     )
-    await refresh(session, queue, rows)
+    await refresh(session, queue, rows, _records(request))
     return [as_read(DocumentRead, row) for row in rows]
 
 
@@ -618,7 +660,7 @@ async def summarize_documents(
     """
     await knowledge_base_of(session, enforcer, user, organization_id, knowledge_base_id)
     await _refresh_unfinished(
-        session, request.app.state.knowledge_queue, knowledge_base_id
+        session, request.app.state.knowledge_queue, knowledge_base_id, _records(request)
     )
     rows = [
         _SummaryRow.model_validate(row, from_attributes=True)
@@ -686,7 +728,7 @@ async def get_document(
     """
     await knowledge_base_of(session, enforcer, user, organization_id, knowledge_base_id)
     row = await _document_of(session, knowledge_base_id, document_id)
-    await refresh(session, request.app.state.knowledge_queue, [row])
+    await refresh(session, request.app.state.knowledge_queue, [row], _records(request))
     return as_read(DocumentRead, row)
 
 
@@ -860,7 +902,7 @@ async def retry_document(
     )
     row = await _document_of(session, knowledge_base_id, document_id)
     _, queue = _clients(request)
-    await refresh(session, queue, [row])
+    await refresh(session, queue, [row], _records(request))
     if row.phase not in RETRYABLE:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -947,6 +989,9 @@ async def delete_document(
             raise HTTPException(
                 status.HTTP_502_BAD_GATEWAY, "Document storage refused the removal"
             ) from None
+    # No search finds it from now on, before its delete job runs.
+    if (search := _records(request)) is not None:
+        await search.forget(knowledge_base_id, document_id)
     try:
         await queue.delete_document(
             knowledge_base_id=knowledge_base_id, document_id=document_id

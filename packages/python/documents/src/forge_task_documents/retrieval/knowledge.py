@@ -34,6 +34,9 @@ if TYPE_CHECKING:
 
 #: The most passages one search answers.
 MAX_PASSAGES = 20
+#: Passages a search finds beyond its limit, in place of those of documents
+#: deleted (tombstoned) whose chunks haven't been removed yet.
+SPARE = 5
 
 
 def citation_ref(chunk_id: str) -> str:
@@ -189,8 +192,9 @@ class KnowledgeBaseSearch:
         :param query: What to look for, in plain words.
         :param limit: The most passages to answer, up to ``MAX_PASSAGES``.
         :param document_ids: Only these documents' passages.
-        :return: The passages, best first. A passage of a document the
-            worker has since deleted is left out.
+        :return: The passages, best first: from each document's last
+            completed ingestion (one being ingested again answers as it was
+            until the new version is published), never from a deleted one.
         :raises ValueError: No knowledge base is named.
         """
         tenant_ids = list(dict.fromkeys(knowledge_base_ids))
@@ -201,7 +205,8 @@ class KnowledgeBaseSearch:
             SearchQuery(
                 tenant_ids=tenant_ids,
                 text=query,
-                top_k=limit,
+                # A few more, for those of documents deleted since, left out below.
+                top_k=limit + SPARE,
                 filters=SearchFilters(doc_ids=list(document_ids) if document_ids else None),
             )
         )
@@ -220,7 +225,7 @@ class KnowledgeBaseSearch:
             )
             for hit in found.hits
             if (hit.chunk.tenant_id, hit.chunk.doc_id) in filenames
-        ]
+        ][:limit]
 
     async def _filenames(self, documents: set[tuple[str, str]]) -> dict[tuple[str, str], str]:
         """:return: Each document's name as uploaded, by (knowledge base, document); one the worker deleted is missing."""

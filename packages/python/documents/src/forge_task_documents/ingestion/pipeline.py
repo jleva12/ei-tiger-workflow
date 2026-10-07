@@ -7,6 +7,10 @@ Guarantees:
 - Newest run wins: each run takes a fencing token (``run_seq``, monotonic per
   document). Chunk writes never overwrite a newer run's chunks, stale runs
   can't mark the document READY, and they clean up what they wrote.
+- Search sees whole versions: a run's new chunks are unpublished until it
+  completes, then published at once with the old version's removed. Until
+  then the document's last version keeps answering; a run that fails or is
+  superseded never shows.
 - Every component is injected via its protocol; nothing here knows about
   file formats or databases.
 """
@@ -64,15 +68,18 @@ class IngestionPipeline:
         docs = self.storage.documents
 
         existing = await docs.get(tenant_id, doc_id)
-        if not force and self._is_unchanged(existing, source):
+        if not force and existing is not None and self._is_unchanged(existing, source):
+            # Its run completed; publishing it again repairs one that stopped
+            # between completing and publishing.
+            await self.storage.chunks.publish_run(tenant_id, doc_id, existing.run_seq)
             return IngestResult(
                 tenant_id=tenant_id,
                 doc_id=doc_id,
                 status=IngestStatus.READY,
                 skipped=True,
                 reason="unchanged",
-                chunk_count=existing.chunk_count if existing else 0,
-                embedding_model=existing.embedding_model if existing else None,
+                chunk_count=existing.chunk_count,
+                embedding_model=existing.embedding_model,
             )
 
         identity: dict[str, object] = {
@@ -125,7 +132,7 @@ class IngestionPipeline:
 
             with _timer(timings, "store_ms"):
                 wrote = True
-                stats = await self.storage.chunks.replace_document_chunks(tenant_id, doc_id, run_seq, chunks)
+                await self.storage.chunks.replace_document_chunks(tenant_id, doc_id, run_seq, chunks)
 
             completed = await docs.complete_run(
                 tenant_id,
@@ -144,6 +151,9 @@ class IngestionPipeline:
             )
             if not completed:
                 raise StaleRunError(f"run {run_seq} superseded during write")
+            # Only now does search see the new version, all of it at once.
+            with _timer(timings, "publish_ms"):
+                deleted_stale = await self.storage.chunks.publish_run(tenant_id, doc_id, run_seq)
         except Exception as exc:
             if isinstance(exc, StaleRunError):
                 if wrote:  # remove anything we wrote that a newer run won't overwrite
@@ -161,7 +171,7 @@ class IngestionPipeline:
             embedding_model=self.embedder.model_id,
             embedded=embedded,
             reused_embeddings=reused,
-            deleted_stale=stats.deleted,
+            deleted_stale=deleted_stale,
             timings_ms=timings,
         )
         log.info("ingest done", extra=result.model_dump(mode="json"))

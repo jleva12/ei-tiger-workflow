@@ -121,6 +121,10 @@ class InMemoryDocumentStore:
 class InMemoryChunkStore:
     def __init__(self) -> None:
         self.rows: dict[str, tuple[Chunk, int]] = {}  # chunk id -> (chunk, run_seq)
+        self.unpublished: set[str] = set()  # chunk ids search doesn't see yet
+
+    def searchable(self, chunk_id: str) -> bool:
+        return chunk_id not in self.unpublished
 
     async def get_embeddings_by_hash(self, tenant_id: str, content_hashes: Collection[str]) -> dict[str, list[float]]:
         wanted = set(content_hashes)
@@ -138,32 +142,42 @@ class InMemoryChunkStore:
             current = self.rows.get(c.id)
             if current is not None and current[1] > run_seq:
                 continue  # a newer run owns this chunk
+            if current is None:
+                self.unpublished.add(c.id)  # new: hidden until the run is published
             self.rows[c.id] = (c.model_copy(deep=True), run_seq)
             written += 1
-        stale = [
-            cid
-            for cid, (c, seq) in self.rows.items()
-            if c.tenant_id == tenant_id and c.doc_id == doc_id and seq < run_seq
-        ]
-        for cid in stale:
-            del self.rows[cid]
-        return ReplaceStats(upserted=written, deleted=len(stale))
+        return ReplaceStats(upserted=written, deleted=0)
+
+    async def publish_run(self, tenant_id: str, doc_id: str, run_seq: int) -> int:
+        stale = []
+        for cid, (c, seq) in self.rows.items():
+            if c.tenant_id != tenant_id or c.doc_id != doc_id:
+                continue
+            if seq == run_seq:
+                self.unpublished.discard(cid)
+            elif seq < run_seq:
+                stale.append(cid)
+        self._remove(stale)
+        return len(stale)
 
     async def delete_run_chunks(self, tenant_id: str, doc_id: str, run_seq: int) -> int:
         ids = [
             cid
             for cid, (c, seq) in self.rows.items()
-            if c.tenant_id == tenant_id and c.doc_id == doc_id and seq == run_seq
+            if c.tenant_id == tenant_id and c.doc_id == doc_id and seq == run_seq and cid in self.unpublished
         ]
-        for cid in ids:
-            del self.rows[cid]
+        self._remove(ids)
         return len(ids)
 
     async def delete_document_chunks(self, tenant_id: str, doc_id: str) -> int:
         ids = [cid for cid, (c, _) in self.rows.items() if c.tenant_id == tenant_id and c.doc_id == doc_id]
+        self._remove(ids)
+        return len(ids)
+
+    def _remove(self, ids: Collection[str]) -> None:
         for cid in ids:
             del self.rows[cid]
-        return len(ids)
+            self.unpublished.discard(cid)
 
     async def get_chunks(self, tenant_id: str, chunk_ids: Sequence[str]) -> list[Chunk]:
         out = []
@@ -177,7 +191,10 @@ class InMemoryChunkStore:
         rows = [
             c.model_copy(update={"embedding": None})
             for c, _ in self.rows.values()
-            if c.tenant_id == tenant_id and c.doc_id == doc_id and c.section_key == section_key
+            if c.tenant_id == tenant_id
+            and c.doc_id == doc_id
+            and c.section_key == section_key
+            and self.searchable(c.id)
         ]
         return sorted(rows, key=lambda c: c.ordinal)
 
@@ -191,7 +208,7 @@ class InMemorySearchBackend:
         f = req.filters
         out = []
         for c, _ in self._chunks.rows.values():
-            if c.tenant_id not in req.tenant_ids:
+            if c.tenant_id not in req.tenant_ids or not self._chunks.searchable(c.id):
                 continue
             if f.doc_ids and c.doc_id not in f.doc_ids:
                 continue

@@ -633,6 +633,9 @@ def test_deleting_a_knowledge_base_removes_everything_in_it(
     assert sorted(d["document_id"] for d in workspace.queue.deletions) == sorted(
         [first["id"], second["id"]]
     )
+    assert sorted(workspace.search.forgotten) == sorted(
+        [(kb, first["id"]), (kb, second["id"])]
+    )
     assert {d["knowledge_base_id"] for d in workspace.queue.deletions} == {kb}
     gone = workspace.call("GET", f"{KBS}/{kb}", VIEWER)
     assert (gone.status_code, gone.json()["detail"]) == (404, NO_KNOWLEDGE_BASE)
@@ -743,17 +746,8 @@ def test_a_search_answers_passages_with_their_documents_names(
                 "text": "A finance lead approves refunds over 500 USD.",
                 "score": 0.92,
             },
-            {
-                "chunk_id": "c2",
-                "ref": citation_ref("c2"),
-                "document_id": gone,
-                # Its record is gone: its title.
-                "filename": "Old policy",
-                "section_path": [],
-                "location": "",
-                "text": "",
-                "score": 0.5,
-            },
+            # The removed document's isn't, though its chunks remain until
+            # its delete job runs.
         ]
     }
     assert workspace.search.calls == [
@@ -1054,6 +1048,88 @@ def test_the_organization_sees_why_a_document_failed(
     workspace.queue.refuse = True
     one = workspace.call("GET", f"{documents_of(kb)}/{ids[0]}", VIEWER)
     assert one.json()["phase"] == "FAILED"
+
+
+def record(knowledge_base_id: str, document_id: str, status: str, **fields: Any) -> Any:
+    """The worker's own record of a document (forge_task_documents)."""
+    from forge_task_documents.models import DocumentRecord, IngestStatus
+
+    return DocumentRecord(
+        doc_id=document_id,
+        tenant_id=knowledge_base_id,
+        filename="doc.md",
+        sha256="0" * 64,
+        size_bytes=1,
+        status=IngestStatus(status),
+        **fields,
+    )
+
+
+def test_a_job_the_worker_no_longer_has_is_settled_by_its_record(
+    workspace: Workspace, kb: str
+) -> None:
+    """The worker's queue keeps a finished job for a week; then the worker's
+    own record of the document says how its ingestion went."""
+    ids = [workspace.uploaded(kb, name=f"doc-{n}.md")["id"] for n in range(4)]
+    for document_id in ids:
+        workspace.queue.forget(document_job_key(kb, document_id))
+    workspace.search.known = {
+        (kb, ids[0]): record(kb, ids[0], "ready", chunk_count=7, embedding_model=MODEL),
+        (kb, ids[1]): record(kb, ids[1], "failed", error="BadZipFile: not a zip"),
+        # A run that never finished, its job gone: nothing will finish it.
+        (kb, ids[2]): record(kb, ids[2], "processing"),
+        # ids[3]: the worker has no record of it.
+    }
+
+    listed = {
+        d["id"]: d for d in workspace.call("GET", documents_of(kb), VIEWER).json()
+    }
+    assert [
+        (listed[i]["phase"], listed[i]["error"], listed[i]["chunk_count"]) for i in ids
+    ] == [
+        ("SUCCEEDED", "", 7),
+        ("FAILED", "BadZipFile: not a zip", 0),
+        ("MISSING", "", 0),
+        ("MISSING", "", 0),
+    ]
+    assert listed[ids[0]]["embedding_model"] == MODEL
+    counts = workspace.call("GET", f"{KBS}/{kb}", VIEWER).json()
+    assert (counts["ready"], counts["failed"], counts["chunks"]) == (1, 1, 7)
+
+    # A MISSING one is settled once the worker has a record of it.
+    workspace.search.known[(kb, ids[3])] = record(kb, ids[3], "ready", chunk_count=2)
+    one = workspace.call("GET", f"{documents_of(kb)}/{ids[3]}", VIEWER).json()
+    assert (one["phase"], one["chunk_count"]) == ("SUCCEEDED", 2)
+
+
+def test_without_the_workers_records_a_job_thats_gone_is_missing_until_they_answer(
+    workspace: Workspace, kb: str
+) -> None:
+    document = workspace.uploaded(kb)
+    one = f"{documents_of(kb)}/{document['id']}"
+    workspace.queue.forget(document_job_key(kb, document["id"]))
+    workspace.search.known[(kb, document["id"])] = record(kb, document["id"], "ready")
+    workspace.search.down = True
+    assert workspace.call("GET", one, VIEWER).json()["phase"] == "MISSING"
+    workspace.search.down = False
+    assert workspace.call("GET", one, VIEWER).json()["phase"] == "SUCCEEDED"
+    # Without search set up at all, there are no records to read.
+    other = workspace.uploaded(kb, name="other.md")
+    workspace.queue.forget(document_job_key(kb, other["id"]))
+    workspace.state.knowledge_search = None
+    missing = workspace.call("GET", f"{documents_of(kb)}/{other['id']}", VIEWER)
+    assert missing.json()["phase"] == "MISSING"
+
+
+def test_a_removal_goes_on_when_search_cant_hide_the_document_first(
+    workspace: Workspace, kb: str
+) -> None:
+    document = workspace.uploaded(kb)
+    workspace.search.down = True  # its delete job hides it as it runs
+    one = f"{documents_of(kb)}/{document['id']}"
+    assert workspace.call("DELETE", one, MEMBER).status_code == 204
+    assert workspace.search.forgotten == []
+    assert workspace.queue.deletions[-1]["document_id"] == document["id"]
 
 
 def test_a_worker_that_doesnt_answer_leaves_the_phase_as_it_was(
@@ -1452,6 +1528,8 @@ def test_removing_a_document_clears_the_bucket_and_the_worker(
     assert workspace.queue.deletions == [
         {"knowledge_base_id": kb, "document_id": document["id"]}
     ]
+    # No search finds it from now on, though its delete job hasn't run.
+    assert set(workspace.search.forgotten) == {(kb, document["id"])}
     assert workspace.call("GET", one, VIEWER).status_code == 404
     assert workspace.call("GET", documents_of(kb), VIEWER).json() == []
     again = workspace.call("DELETE", one, MEMBER)

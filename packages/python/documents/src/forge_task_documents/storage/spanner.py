@@ -10,19 +10,21 @@ from __future__ import annotations
 from collections.abc import Collection, Sequence
 from typing import Any
 
+from google.cloud.spanner_v1.data_types import JsonObject
+
 from forge_embeddings.vector_store.spanner import (
     RECORDS,
     VECTORS,
     Database,
     Search,
     array,
+    execute,
     field,
     get_record,
     intersect,
     payload,
     put_record,
     put_vectors,
-    types,
     vector_row,
 )
 from forge_task_documents.models import (
@@ -36,6 +38,13 @@ from forge_task_documents.models import (
 )
 
 IDENTITY_FIELDS = ("filename", "media_type", "source_uri", "sha256", "size_bytes", "metadata")
+
+# A chunk a run wrote that search doesn't see until the run is published has
+# "live": false in its payload; every other chunk has no such key.
+PUBLISHED = f"COALESCE({field('live')}, 'true') != 'false'"
+UNPUBLISHED = f"{field('live')} = 'false'"
+# Chunks published per transaction.
+PUBLISH_BATCH = 500
 
 
 class SpannerDocumentStore:
@@ -164,27 +173,63 @@ class SpannerChunkStore:
             def write(tx: Any, batch: list[dict[str, Any]] = batch) -> int:
                 if not current(tx):
                     return 0
+                # A new chunk is unpublished until the run is; one already
+                # there keeps whether it's published.
+                p = {"tenant": tenant_id, "doc": doc_id, "ids": [r["Id"] for r in batch]}
+                shown = {
+                    r[0]: r[1] != "false"
+                    for r in execute(
+                        tx,
+                        f"SELECT Id, {field('live')} FROM {VECTORS} WHERE Namespace='chunks' AND "
+                        "TenantId=@tenant AND ScopeId=@doc AND Id IN UNNEST(@ids)",
+                        p,
+                    )
+                }
+                for row in batch:
+                    if not shown.get(row["Id"], False):
+                        row["Payload"] = JsonObject({**row["Payload"], "live": False})
                 put_vectors(tx, batch)
                 return len(batch)
 
             written += await self.db.transaction(write)
+        return ReplaceStats(upserted=written, deleted=0)
 
-        def cleanup(tx: Any) -> int:
-            if not current(tx):
-                return 0
-            p = {"tenant": tenant_id, "doc": doc_id, "seq": run_seq}
-            return tx.execute_update(
-                f"DELETE FROM {VECTORS} WHERE Namespace='chunks' AND TenantId=@tenant AND ScopeId=@doc AND RunSeq<@seq",
-                params=p,
-                param_types=types(p),
+    async def publish_run(self, tenant_id: str, doc_id: str, run_seq: int) -> int:
+        key = {"tenant": tenant_id, "doc": doc_id, "seq": run_seq}
+        where = "Namespace='chunks' AND TenantId=@tenant AND ScopeId=@doc"
+
+        def publish(tx: Any) -> int:
+            rows = execute(
+                tx,
+                f"SELECT Id, Payload FROM {VECTORS} WHERE {where} AND RunSeq=@seq AND {UNPUBLISHED} "
+                f"LIMIT {PUBLISH_BATCH}",
+                key,
             )
+            if rows:
+                tx.update(
+                    VECTORS,
+                    ["Namespace", "TenantId", "ScopeId", "Id", "Payload"],
+                    [
+                        [
+                            "chunks",
+                            tenant_id,
+                            doc_id,
+                            r[0],
+                            JsonObject({k: v for k, v in payload(r[1]).items() if k != "live"}),
+                        ]
+                        for r in rows
+                    ],
+                )
+            return len(rows)
 
-        return ReplaceStats(upserted=written, deleted=await self.db.transaction(cleanup))
+        while await self.db.transaction(publish) == PUBLISH_BATCH:
+            pass
+        return int(await self.db.delete(VECTORS, f"{where} AND RunSeq<@seq", key))
 
     async def delete_run_chunks(self, tenant_id: str, doc_id: str, run_seq: int) -> int:
         return await self.db.delete(
             VECTORS,
-            "Namespace='chunks' AND TenantId=@tenant AND ScopeId=@doc AND RunSeq=@seq",
+            f"Namespace='chunks' AND TenantId=@tenant AND ScopeId=@doc AND RunSeq=@seq AND {UNPUBLISHED}",
             {"tenant": tenant_id, "doc": doc_id, "seq": run_seq},
         )
 
@@ -205,7 +250,7 @@ class SpannerChunkStore:
 
     async def get_section(self, tenant_id: str, doc_id: str, section_key: str) -> list[Chunk]:
         rows = await self.db.query(
-            f"SELECT Payload FROM {VECTORS} WHERE Namespace='chunks' AND TenantId=@tenant AND ScopeId=@doc AND {field('section_key')}=@section ORDER BY CAST({field('ordinal')} AS INT64), Id",
+            f"SELECT Payload FROM {VECTORS} WHERE Namespace='chunks' AND TenantId=@tenant AND ScopeId=@doc AND {field('section_key')}=@section AND {PUBLISHED} ORDER BY CAST({field('ordinal')} AS INT64), Id",
             {"tenant": tenant_id, "doc": doc_id, "section": section_key},
         )
         return [Chunk.model_validate(payload(r[0])) for r in rows]
@@ -217,7 +262,7 @@ class SpannerSearchBackend:
 
     def options(self, req: HybridSearchRequest) -> dict[str, Any]:
         p: dict[str, Any] = {"tenants": list(req.tenant_ids)}
-        conditions = ["TenantId IN UNNEST(@tenants)"]
+        conditions = ["TenantId IN UNNEST(@tenants)", PUBLISHED]
         for name, expr, values in (
             ("docs", "ScopeId", req.filters.doc_ids),
             ("sources", field("source_type"), req.filters.source_types),

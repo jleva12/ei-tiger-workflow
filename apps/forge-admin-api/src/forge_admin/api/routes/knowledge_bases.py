@@ -25,7 +25,7 @@ from forge_admin.api.routes.common import (
     as_read,
     commit_or_conflict,
 )
-from forge_admin.api.routes.knowledge_documents import ACTIVE, refresh
+from forge_admin.api.routes.knowledge_documents import ACTIVE, UNSETTLED, refresh
 from forge_admin.auth.access import (
     UUID_PATTERN,
     CurrentUser,
@@ -96,7 +96,7 @@ class SearchHit(BaseModel):
     # every search.
     ref: str
     document_id: str
-    # The document's name as uploaded; its title when it's gone since.
+    # The document's name as uploaded.
     filename: str
     # The headings the passage is under, outermost first.
     section_path: list[str]
@@ -390,8 +390,9 @@ async def delete_knowledge_base(
                 "Document uploads aren't set up: set FORGE_ADMIN_DOCUMENTS_BUCKET "
                 "and FORGE_ADMIN_EMBEDDING_REDIS_URL",
             )
+        search: KnowledgeSearch | None = request.app.state.knowledge_search
         for document in documents:
-            await _remove(session, store, queue, document)
+            await _remove(session, store, queue, search, document)
     name = knowledge_base.name
     await session.delete(knowledge_base)
     await session.commit()
@@ -408,6 +409,7 @@ async def _remove(
     session: AsyncSession,
     store: DocumentStore,
     queue: KnowledgeQueue,
+    search: KnowledgeSearch | None,
     document: KnowledgeDocument,
 ) -> None:
     """Remove one document's file and chunks, then its record (committed, so
@@ -427,6 +429,9 @@ async def _remove(
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, "Document storage refused the removal"
         ) from None
+    # No search finds it from now on, before its delete job runs.
+    if search is not None:
+        await search.forget(document.knowledge_base_id, document.id)
     try:
         await queue.delete_document(
             knowledge_base_id=document.knowledge_base_id, document_id=document.id
@@ -456,8 +461,9 @@ async def search_knowledge_base(
     """
     Search a knowledge base as its agents do: the passages of its documents
     that best match the query, by meaning and by its words (hybrid BM25 and
-    vector search), best first. Only documents that finished ingesting are
-    found.
+    vector search), best first. Each document answers as its last completed
+    ingestion left it: one being ingested again answers as it was until its
+    new version is ready, and a removed one isn't found.
     \f
     :raises HTTPException: 403 without organizations:read in the
         organization; 404 for another organization's knowledge base, or none;
@@ -487,13 +493,15 @@ async def search_knowledge_base(
                 chunk_id=passage.chunk_id,
                 ref=passage.ref,
                 document_id=passage.document_id,
-                filename=names.get(passage.document_id, passage.document),
+                filename=names[passage.document_id],
                 section_path=passage.section_path,
                 location=passage.location,
                 text=passage.text,
                 score=passage.score,
             )
             for passage in passages
+            # A document removed since, whose chunks the worker hasn't yet.
+            if passage.document_id in names
         ]
     )
 
@@ -633,10 +641,11 @@ async def reindex_knowledge_base(
             await session.scalars(
                 select(KnowledgeDocument).where(
                     KnowledgeDocument.knowledge_base_id == knowledge_base_id,
-                    KnowledgeDocument.phase.in_(ACTIVE),
+                    KnowledgeDocument.phase.in_(UNSETTLED),
                 )
             )
         ),
+        request.app.state.knowledge_search,
     )
     wanted = KnowledgeDocument.phase.not_in(ACTIVE)
     if stale_only:

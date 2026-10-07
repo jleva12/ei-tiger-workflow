@@ -40,7 +40,7 @@ worker image has Tesseract; the deployment installs LibreOffice):
   (`HYBRID_DOCUMENTS__OFFICE__COMMAND`) to .pptx/.docx/.xlsx and read by the
   registry's parser for that; without LibreOffice they fail saying so.
 
-Consistency: per-document fencing token (`run_seq`), tombstoned deletes, stale-chunk cleanup. Adding a format = one `Parser` class (entry point group `forge_task_documents.parsers`). Swapping the DB = implement `DocumentStore`, `ChunkStore`, `SearchBackend` and call `register_document_storage(...)`.
+Consistency: per-document fencing token (`run_seq`), tombstoned deletes, stale-chunk cleanup, and whole versions in search: a run's new chunks are unpublished (`live: false`) until it completes, then `ChunkStore.publish_run` shows them and removes the old version's at once, so a document answers as its last completed ingestion left it. Adding a format = one `Parser` class (entry point group `forge_task_documents.parsers`). Swapping the DB = implement `DocumentStore`, `ChunkStore`, `SearchBackend` and call `register_document_storage(...)`.
 
 Jobs: `documents.ingest {tenant_id, doc_id, uri}`, `documents.delete {tenant_id, doc_id}`.
 

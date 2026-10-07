@@ -14,13 +14,15 @@ and finds only their chunks, ranked together.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING, Self
 
 from forge_task_documents.retrieval.knowledge import MAX_PASSAGES, Passage
 
 if TYPE_CHECKING:
+    from forge_task_documents.models import DocumentRecord
     from forge_task_documents.retrieval import KnowledgeBaseSearch
 
     from forge_admin.config import Settings
@@ -124,6 +126,49 @@ class KnowledgeSearch:
                 error,
             )
             raise SearchError(str(error) or type(error).__name__) from error
+
+    async def records(
+        self, documents: Iterable[tuple[str, str]]
+    ) -> dict[tuple[str, str], DocumentRecord | None]:
+        """
+        The worker's own records of documents: how each one's last ingestion
+        went, whatever its queue still has.
+
+        :param documents: (knowledge base, document) pairs.
+        :return: Each one's record, by the pair; None for one it has none of,
+            or has deleted.
+        :raises SearchError: The store failed.
+        """
+        keys = list(dict.fromkeys(documents))
+        store = self._search.storage.documents
+        try:
+            found = await asyncio.gather(*(store.get(*key) for key in keys))
+        except Exception as error:  # the store's: any is a failed read
+            raise SearchError(str(error) or type(error).__name__) from error
+        return dict(zip(keys, found, strict=True))
+
+    async def forget(self, knowledge_base_id: str, document_id: str) -> bool:
+        """
+        Tombstone the worker's record of a document being removed: from now
+        on no search finds it (this API's, chat agents', workflows'), though
+        its delete job hasn't removed its chunks yet, and an ingest still
+        running for it can't finish. Best effort: when the store fails, the
+        delete job tombstones it as it runs.
+
+        :return: Whether it's tombstoned now.
+        """
+        try:
+            await self._search.storage.documents.delete(knowledge_base_id, document_id)
+        except Exception as error:  # the store's; the delete job does it later
+            logger.warning(
+                "Couldn't hide document %s of knowledge base %s from search before "
+                "its delete job: %s",
+                document_id,
+                knowledge_base_id,
+                error,
+            )
+            return False
+        return True
 
     async def aclose(self) -> None:
         await self._search.aclose()

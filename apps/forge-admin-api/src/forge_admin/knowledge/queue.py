@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Self
 from uuid import uuid4
 
+from forge_task_documents.models import DocumentRecord, IngestStatus
 from redis import asyncio as aioredis
 from redis.exceptions import RedisError
 from saq.job import Status
@@ -92,6 +93,29 @@ def outcome(job: dict[str, Any] | None) -> Outcome:
             "FAILED", str(result.get("error") or "failed")[:ERROR_LENGTH], detail
         )
     return Outcome("SUCCEEDED", detail=detail)
+
+
+def recorded(record: DocumentRecord | None) -> Outcome:
+    """
+    A document's outcome as the worker's own record of it says: for one whose
+    job the queue no longer has (it keeps a finished one for ``RESULT_TTL``).
+
+    :param record: Its record; None when the worker has none, or deleted it.
+    :return: SUCCEEDED or FAILED as its last run went; MISSING when there's
+        no record, or one whose run never finished (with its job gone,
+        nothing will finish it).
+    """
+    if record is not None and record.status is IngestStatus.READY:
+        return Outcome(
+            "SUCCEEDED",
+            detail={
+                "chunk_count": record.chunk_count,
+                "embedding_model": record.embedding_model or "",
+            },
+        )
+    if record is not None and record.status is IngestStatus.FAILED:
+        return Outcome("FAILED", (record.error or "failed")[:ERROR_LENGTH])
+    return Outcome("MISSING")
 
 
 class KnowledgeQueue:

@@ -154,12 +154,26 @@ class ChunkStore(Protocol):
     async def replace_document_chunks(
         self, tenant_id: str, doc_id: str, run_seq: int, chunks: Sequence[Chunk]
     ) -> ReplaceStats:
-        """Upsert ``chunks`` tagged ``run_seq`` without overwriting chunks owned
-        by a newer run, then delete the doc's chunks from older runs."""
+        """Write ``chunks`` tagged ``run_seq`` without overwriting chunks owned
+        by a newer run. New chunks are written unpublished: search doesn't see
+        them until :meth:`publish_run`, so the document's last version keeps
+        answering while a new one is written, and what a failed or superseded
+        run wrote never shows. A chunk already there (the same text in the
+        same place) keeps whether it's published. Older runs' chunks stay
+        until the run is published."""
+        ...
+
+    async def publish_run(self, tenant_id: str, doc_id: str, run_seq: int) -> int:
+        """Make ``run_seq``'s chunks searchable and remove the chunks older runs
+        left, so search switches to the document's new version at once.
+        Idempotent; harmless for a run a newer one has published since.
+
+        :return: How many older chunks were removed.
+        """
         ...
 
     async def delete_run_chunks(self, tenant_id: str, doc_id: str, run_seq: int) -> int:
-        """Remove what a superseded run wrote."""
+        """Remove what a superseded run wrote and never published."""
         ...
 
     async def delete_document_chunks(self, tenant_id: str, doc_id: str) -> int: ...

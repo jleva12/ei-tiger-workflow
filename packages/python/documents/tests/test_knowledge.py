@@ -101,6 +101,9 @@ async def test_passages_name_their_documents_and_leave_out_deleted_ones(
     await storage.documents.delete("claims", "claims:Appeals guide.md")
     later = await knowledge.search(["claims"], "appeal a denied claim", limit=10)
     assert later and "Appeals guide.md" not in {p.document for p in later}
+    # It was the best match; the next ones take its place, so a search still
+    # answers as many as it was asked for.
+    assert len(await knowledge.search(["claims"], "appeal a denied claim", limit=2)) == 2
 
 
 async def test_limits_and_document_filters(knowledge: KnowledgeBaseSearch) -> None:

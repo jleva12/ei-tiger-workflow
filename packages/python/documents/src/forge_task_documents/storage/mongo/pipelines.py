@@ -12,7 +12,14 @@ from typing import Any
 
 from forge_task_documents.models import HybridSearchRequest
 
-HIDDEN_FIELDS = ["embedding", "embed_text", "run_seq"]
+# A chunk a run wrote that search doesn't see until the run is published
+# (ChunkStore.publish_run) has live: false; every other chunk, those written
+# before there was publishing too, has no such field.
+LIVE = "live"
+UNPUBLISHED = {LIVE: False}
+PUBLISHED = {LIVE: {"$ne": False}}
+
+HIDDEN_FIELDS = ["embedding", "embed_text", "run_seq", LIVE]
 MAX_NUM_CANDIDATES = 10_000  # Atlas limit
 
 
@@ -68,16 +75,21 @@ def vector_stage(req: HybridSearchRequest, *, index: str, path: str = "embedding
 
 
 def vector_leg(req: HybridSearchRequest, *, index: str) -> list[dict[str, Any]]:
-    """The vector leg: nearest neighbours, then only those embedded with the
-    query's model. Vectors of another model (a knowledge base not re-indexed
-    since the model changed) aren't comparable, and the same dimensions would
-    otherwise rank them as if they were. A $match after $vectorSearch needs
-    no index change (a pre-filter would need embedding_model in the vector
-    index) and is allowed in $rankFusion's input pipelines."""
-    stages = [vector_stage(req, index=index)]
+    """The vector leg: nearest neighbours, then only published ones embedded
+    with the query's model. Vectors of another model (a knowledge base not
+    re-indexed since the model changed) aren't comparable, and the same
+    dimensions would otherwise rank them as if they were. A $match after
+    $vectorSearch needs no index change (a pre-filter would need the fields in
+    the vector index) and is allowed in $rankFusion's input pipelines."""
+    match: dict[str, Any] = dict(PUBLISHED)
     if req.embedding_model:
-        stages.append({"$match": {"embedding_model": req.embedding_model}})
-    return stages
+        match["embedding_model"] = req.embedding_model
+    return [vector_stage(req, index=index), {"$match": match}]
+
+
+def text_leg(req: HybridSearchRequest, *, index: str) -> list[dict[str, Any]]:
+    """The text leg: BM25 matches, only published ones, as many as fuse."""
+    return [text_stage(req, index=index), {"$match": PUBLISHED}, {"$limit": req.per_leg_limit}]
 
 
 def text_stage(
@@ -127,7 +139,7 @@ def rank_fusion_pipeline(req: HybridSearchRequest, *, text_index: str, vector_in
                 "input": {
                     "pipelines": {
                         "vector": vector_leg(req, index=vector_index),
-                        "text": [text_stage(req, index=text_index), {"$limit": req.per_leg_limit}],
+                        "text": text_leg(req, index=text_index),
                     }
                 },
                 "combination": {"weights": {"vector": req.vector_weight, "text": req.text_weight}},
@@ -150,7 +162,7 @@ def single_leg_pipeline(
         head: list[dict[str, Any]] = vector_leg(req, index=vector_index)
         meta = "vectorSearchScore"
     elif leg == "text":
-        head = [text_stage(req, index=text_index), {"$limit": req.per_leg_limit}]
+        head = text_leg(req, index=text_index)
         meta = "searchScore"
     else:
         raise ValueError(f"unknown leg {leg!r}")

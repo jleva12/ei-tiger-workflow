@@ -126,15 +126,19 @@ async def test_list_documents(backend):
     assert [r.doc_id for r in ready] == ["d1"]
 
 
-async def test_replace_chunks_upserts_and_removes_stale(backend, registry, files):
+async def test_replace_chunks_upserts_and_publishing_removes_stale(backend, registry, files):
     store = backend.chunks
     chunks = _chunks(registry, files)
     stats = await store.replace_document_chunks("t1", "runbook.md", 1, chunks)
     assert stats.upserted == len(chunks) and stats.deleted == 0
+    assert await store.publish_run("t1", "runbook.md", 1) == 0
 
     kept = chunks[1:]  # pretend the first chunk disappeared in the new version
     stats = await store.replace_document_chunks("t1", "runbook.md", 2, kept)
-    assert stats.deleted == 1
+    assert stats.deleted == 0  # the old version stays until the new one is published
+    assert len(await store.get_chunks("t1", [c.id for c in chunks])) == len(chunks)
+    assert await store.publish_run("t1", "runbook.md", 2) == 1
+    assert await store.publish_run("t1", "runbook.md", 2) == 0  # idempotent
     got = await store.get_chunks("t1", [c.id for c in chunks])
     assert [c.id for c in got] == [c.id for c in kept]  # input order preserved, stale gone
     assert all(c.embedding is None for c in got)  # vectors never leave the store on reads
@@ -158,9 +162,32 @@ async def test_older_run_cannot_overwrite_newer_chunks(backend, registry, files)
     assert {c.id for c in await store.get_chunks("t1", [c.id for c in chunks])} == {c.id for c in newer}
 
 
+async def test_only_published_chunks_are_read_by_section(backend, registry, files):
+    chunks = _chunks(registry, files)
+    await backend.chunks.replace_document_chunks("t1", "runbook.md", 1, chunks)
+    assert await backend.chunks.get_section("t1", "runbook.md", chunks[0].section_key) == []
+    await backend.chunks.publish_run("t1", "runbook.md", 1)
+    assert await backend.chunks.get_section("t1", "runbook.md", chunks[0].section_key)
+
+
+async def test_a_stale_run_removes_only_what_it_never_published(backend, registry, files):
+    store = backend.chunks
+    chunks = _chunks(registry, files)
+    await store.replace_document_chunks("t1", "runbook.md", 1, chunks[:-1])
+    await store.publish_run("t1", "runbook.md", 1)
+    # Run 2 rewrites the published chunks and adds one, then is superseded.
+    await store.replace_document_chunks("t1", "runbook.md", 2, chunks)
+    assert await store.delete_run_chunks("t1", "runbook.md", 2) == 1  # only its new one
+    left = await store.get_chunks("t1", [c.id for c in chunks])
+    assert [c.id for c in left] == [c.id for c in chunks[:-1]]  # the published version is intact
+    key = chunks[0].section_key
+    assert await store.get_section("t1", "runbook.md", key)  # and still searchable
+
+
 async def test_get_section_is_ordered(backend, registry, files):
     chunks = _chunks(registry, files)
     await backend.chunks.replace_document_chunks("t1", "runbook.md", 1, list(reversed(chunks)))
+    await backend.chunks.publish_run("t1", "runbook.md", 1)
     key = chunks[0].section_key
     section = await backend.chunks.get_section("t1", "runbook.md", key)
     assert section and [c.ordinal for c in section] == sorted(c.ordinal for c in section)

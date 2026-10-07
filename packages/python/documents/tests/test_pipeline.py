@@ -149,6 +149,61 @@ async def test_reingest_unchanged_is_skipped(pipeline, files):
     assert again.skipped and again.reason == "unchanged" and again.embedding_model == "hashing-v1@256"
 
 
+REFUNDS_V1 = b"# Refunds\n\nRefunds are approved by the support lead within 30 days.\n"
+REFUNDS_V2 = b"# Refunds\n\nRefunds are approved by the finance director within 14 days.\n"
+
+
+async def found(search_service, text: str) -> str:
+    resp = await search_service.search(SearchQuery(tenant_ids=["t1"], text=text, rerank=False))
+    return " ".join(h.chunk.text for h in resp.hits)
+
+
+async def test_search_sees_whole_versions(pipeline, storage, search_service, monkeypatch):
+    await pipeline.ingest(source("refunds.md", REFUNDS_V1))
+    assert "support lead" in await found(search_service, "who approves refunds")
+
+    # A run writes the new version, then fails before completing: search never
+    # sees it, and the last version keeps answering.
+    complete = storage.documents.complete_run
+
+    async def database_gone(*args, **kwargs):
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr(storage.documents, "complete_run", database_gone)
+    with pytest.raises(RuntimeError):
+        await pipeline.ingest(source("refunds.md", REFUNDS_V2))
+    text = await found(search_service, "who approves refunds")
+    assert "support lead" in text and "finance director" not in text
+
+    # The next run completes and publishes it: the new version, none of the old.
+    monkeypatch.setattr(storage.documents, "complete_run", complete)
+    result = await pipeline.ingest(source("refunds.md", REFUNDS_V2))
+    assert result.deleted_stale == 1
+    text = await found(search_service, "who approves refunds")
+    assert "finance director" in text and "support lead" not in text
+
+
+async def test_a_run_that_stopped_before_publishing_is_published_next_time(
+    pipeline, storage, search_service, monkeypatch
+):
+    publish = storage.chunks.publish_run
+
+    async def crash(*args, **kwargs):
+        raise RuntimeError("the worker stopped")
+
+    monkeypatch.setattr(storage.chunks, "publish_run", crash)
+    with pytest.raises(RuntimeError):
+        await pipeline.ingest(source("refunds.md", REFUNDS_V1))
+    assert (await storage.documents.get("t1", "refunds.md")).status is IngestStatus.READY
+    assert await found(search_service, "who approves refunds") == ""  # complete, but unpublished
+
+    # Its retry finds it unchanged, and publishes it.
+    monkeypatch.setattr(storage.chunks, "publish_run", publish)
+    again = await pipeline.ingest(source("refunds.md", REFUNDS_V1))
+    assert again.skipped
+    assert "support lead" in await found(search_service, "who approves refunds")
+
+
 async def test_a_new_parser_version_reads_it_again(pipeline, files):
     await pipeline.ingest(source("runbook.md", files["runbook.md"]))
     parser = pipeline.registry.resolve(source("runbook.md", b""))

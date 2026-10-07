@@ -158,6 +158,22 @@ class FakeSearch:
     error: SearchError | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
     model_id: str = MODEL
+    # The worker's records of documents, by (knowledge base, document).
+    known: dict[tuple[str, str], Any] = field(default_factory=dict)
+    # The documents removed from search, and whether the store is down.
+    forgotten: list[tuple[str, str]] = field(default_factory=list)
+    down: bool = False
+
+    async def records(self, documents: Any) -> dict[tuple[str, str], Any]:
+        if self.down:
+            raise SearchError("connection refused")
+        return {key: self.known.get(key) for key in documents}
+
+    async def forget(self, knowledge_base_id: str, document_id: str) -> bool:
+        if self.down:
+            return False
+        self.forgotten.append((knowledge_base_id, document_id))
+        return True
 
     async def search(
         self,
