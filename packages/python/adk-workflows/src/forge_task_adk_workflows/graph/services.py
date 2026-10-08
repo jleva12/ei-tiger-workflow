@@ -85,6 +85,10 @@ class RunServices:
     #: (``graph.agent_tools.AgentServices``), the run's own; None where they
     #: can't run (a build that only checks a document).
     agents: Any = None
+    #: The files the run started with (``files.RunFile``): artifacts of its
+    #: session, which its start lists in ``state.files`` and its LLM agents
+    #: read with ADK's ``load_artifacts`` tool.
+    files: tuple[Any, ...] = ()
 
     @classmethod
     def of(cls, settings: AdkWorkflowsSettings, **services: Any) -> Self:

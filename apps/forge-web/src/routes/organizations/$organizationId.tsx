@@ -12,9 +12,8 @@ import {
 import { OrganizationAgents } from "@/features/adk-workflows/components/organization-agents"
 import { OrganizationChatAgents } from "@/features/agents/components/organization-chat-agents"
 import { OrganizationMcpServers } from "@/features/mcp-servers/components/organization-mcp-servers"
-import { OrganizationCodeRepositories } from "@/features/code-repositories/components/organization-code-repositories"
 import { OrganizationApiKeys } from "@/features/api-keys/components/organization-api-keys"
-import { OrganizationKnowledgeBases } from "@/features/knowledge/components/organization-knowledge-bases"
+import { OrganizationKnowledge } from "@/features/knowledge/components/organization-knowledge"
 import { OrganizationMembers } from "@/features/admin/components/organization-members"
 import { PrimaryAction } from "@/components/forge/app-shell"
 import { PageEmpty } from "@/components/forge/empty-state"
@@ -47,15 +46,26 @@ import {
  * `agentRunTab`); Agents lists its chat agents, each opening its builder at
  * /organizations/$organizationId/chat-agents/$chatAgentId; MCP servers lists
  * the remote MCP servers its agents use as tools, one open in a dialog
- * (`mcpServer`); Code repositories lists the GitHub repositories it ingests
- * into the code graph, one open in a side panel (`repository`); Members is who
+ * (`mcpServer`); Knowledge bases lists its knowledge bases, each opening its
+ * own page, and on its Code repositories tab (`knowledgeTab=repositories`;
+ * the old `view=code-repositories` lands there) the GitHub repositories it
+ * ingests into the code graph, one open in a side panel (`repository`);
+ * Members is who
  * holds which role in it, which its admins change. Configuring an
  * organization is also site administration, at
  * /admin/organizations/$organizationId.
  */
 export const Route = createFileRoute("/organizations/$organizationId")({
   validateSearch: (search: Record<string, unknown>): WorkspaceSearch => {
-    const view = isWorkspaceView(search.view) ? search.view : DEFAULT_VIEW
+    // Code repositories was a page of its own before it moved under
+    // Knowledge bases.
+    const legacy = search.view === "code-repositories"
+    const view = legacy
+      ? "knowledge"
+      : isWorkspaceView(search.view)
+        ? search.view
+        : DEFAULT_VIEW
+    const repositories = legacy || search.knowledgeTab === "repositories"
     return {
       view: view === DEFAULT_VIEW ? undefined : view,
       ...(view === "overview" &&
@@ -75,9 +85,12 @@ export const Route = createFileRoute("/organizations/$organizationId")({
       ...(view === "mcp-servers" &&
         typeof search.mcpServer === "string" &&
         search.mcpServer && { mcpServer: search.mcpServer }),
-      ...(view === "code-repositories" &&
-        typeof search.repository === "string" &&
-        search.repository && { repository: search.repository }),
+      ...(view === "knowledge" &&
+        repositories && {
+          knowledgeTab: "repositories" as const,
+          ...(typeof search.repository === "string" &&
+            search.repository && { repository: search.repository }),
+        }),
     }
   },
   component: OrganizationWorkspacePage,
@@ -92,6 +105,7 @@ function OrganizationWorkspacePage() {
     agentRun,
     agentRunTab = "overview",
     mcpServer,
+    knowledgeTab,
     repository,
   } = Route.useSearch()
   const navigate = Route.useNavigate()
@@ -254,10 +268,21 @@ function OrganizationWorkspacePage() {
             })
           }
         />
-      ) : view === "code-repositories" ? (
-        <OrganizationCodeRepositories
+      ) : view === "knowledge" ? (
+        // Each knowledge base opens its own page.
+        <OrganizationKnowledge
           organizationId={organizationId}
           organizationName={organization.name}
+          tab={knowledgeTab === "repositories" ? "repositories" : "bases"}
+          onTabChange={(next) =>
+            void navigate({
+              search: {
+                view: "knowledge",
+                knowledgeTab:
+                  next === "repositories" ? "repositories" : undefined,
+              },
+            })
+          }
           openRepository={repository}
           onOpenRepository={(id) =>
             void navigate({
@@ -265,12 +290,6 @@ function OrganizationWorkspacePage() {
               replace: true,
             })
           }
-        />
-      ) : view === "knowledge" ? (
-        // Each knowledge base opens its own page.
-        <OrganizationKnowledgeBases
-          organizationId={organizationId}
-          organizationName={organization.name}
         />
       ) : view === "chat-agents" ? (
         // Each chat agent opens its builder, a page of its own.

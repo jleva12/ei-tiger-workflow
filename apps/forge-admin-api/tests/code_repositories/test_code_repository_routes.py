@@ -166,7 +166,16 @@ def sqlite_tables() -> MetaData:
     """The tables the routes use, as SQLite takes them: without MySQL's
     microsecond CURRENT_TIMESTAMP(6) defaults (SQLAlchemy sets the times)."""
     tables = MetaData()
-    for name in ("organizations", "code_repositories", "code_ingestion_jobs"):
+    for name in (
+        "organizations",
+        "code_repositories",
+        "code_ingestion_jobs",
+        # Removing a repository removes it from knowledge bases' system maps.
+        "knowledge_bases",
+        "knowledge_base_repositories",
+        "knowledge_base_connections",
+        "knowledge_base_code_links",
+    ):
         table = Base.metadata.tables[name].to_metadata(tables)
         for column in table.columns:
             column.server_default = None

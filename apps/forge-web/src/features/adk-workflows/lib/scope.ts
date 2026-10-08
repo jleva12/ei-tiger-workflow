@@ -42,8 +42,24 @@ export function inputType(graph: AgentGraph): DataType {
       )
 }
 
+/** One of the files a run started with, as `state.files` lists it. */
+const RUN_FILE = t.object(
+  {
+    name: t.string(
+      "The file's name: its artifact's, which loads it (ctx.load_artifact)."
+    ),
+    media_type: t.string("Its media type, e.g. application/pdf."),
+    size_bytes: t.number("Its size, in bytes."),
+    type: t.string("Its type (pdf, word, png…); empty for another."),
+    version: t.number("Its artifact's version: 0."),
+  },
+  "A file the run started with.",
+  { required: ["name", "media_type", "size_bytes", "type", "version"] }
+)
+
 /**
- * The session's state: the run's input (kept as `input`), and each LLM
+ * The session's state: the run's input (kept as `input`), the files it
+ * started with (`files`, when its start allows them), and each LLM
  * sub-agent's answer under its ID (sub-agents aren't nodes, so this is
  * how the agents after them read them). A node's answer is
  * `steps.<id>.output`.
@@ -52,6 +68,12 @@ export function stateType(graph: AgentGraph): DataType {
   const keys: Record<string, DataType> = {
     input: { ...inputType(graph), description: "The run's input." },
   }
+  const start = graph.steps.find((s) => s.data.kind === "start")?.data
+  if (start?.kind === "start" && start.config.allow_files)
+    keys.files = t.array(
+      RUN_FILE,
+      "The files the run started with: artifacts of its session."
+    )
   for (const step of graph.steps) {
     for (const { agent } of walkSubAgents(subAgentsOf(step.data))) {
       if (agent.kind !== "llm") continue

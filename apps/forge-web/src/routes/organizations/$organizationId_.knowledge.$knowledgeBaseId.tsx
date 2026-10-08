@@ -13,12 +13,13 @@ import {
 
 /**
  * One of an organization's knowledge bases: what was uploaded to it for the
- * organization's agents to search, or a graph one's code repositories. Not
+ * organization's agents to search, or a system design one's code repositories. Not
  * nested in the workspace's page (`$organizationId_`), because it draws its
  * own sidebar in place of the workspace's. Only the organization's members
  * get in. `document` opens one in the viewer over the page, so it can be
- * linked to; `repository` (with `section` and `node`) a graph one's
- * repository, at a node of its code graph.
+ * linked to; `repository` (with `section` and `node`) a system design one's
+ * application, at a node of its code graph, and `show=applications` its
+ * applications' table rather than its system map.
  */
 export const Route = createFileRoute(
   "/organizations/$organizationId_/knowledge/$knowledgeBaseId"
@@ -48,6 +49,7 @@ export const Route = createFileRoute(
           ? search.repository
           : undefined,
       section: search.section === "ingestion" ? "ingestion" : undefined,
+      show: search.show === "applications" ? "applications" : undefined,
       node:
         typeof search.node === "string" &&
         search.node.length > 0 &&

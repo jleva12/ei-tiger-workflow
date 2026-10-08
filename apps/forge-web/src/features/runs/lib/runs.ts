@@ -191,8 +191,21 @@ export type AdkRunActions = {
 }
 
 /** A run with what only its page shows. */
+/** A file a run started with: an artifact of its session. */
+export type AdkRunFile = {
+  /** Its name: the artifact's, which steps load it by. */
+  name: string
+  media_type: string
+  size_bytes: number
+  /** Its type (`pdf`, `word`, …); empty for another. */
+  type: string
+  version: number
+}
+
 export type AdkRunDetail = AdkRun & {
   input: unknown
+  /** The files it started with. */
+  files: AdkRunFile[]
   /** What the run handed on, once it ended with a result. */
   result: unknown
   /** The workflow as the run started with it. */
@@ -723,12 +736,16 @@ export function useAdkRunSteps(
 
 type MutationMeta = { meta?: { silent?: boolean; errorTitle?: string } }
 
+/** What a run starts with: its input, and the files its start takes. */
+export type RunStart = { input: unknown; files?: File[] }
+
 /**
- * Run the workflow as it's saved, with an input that fits its start
- * (the API answers 422 with why when it doesn't, or when the workflow
- * doesn't build). The run is queued at once; a worker takes it seconds
- * later. Errors are the caller's to show: the run dialog shows them by the
- * input.
+ * Run the workflow as it's saved, with an input that fits its start, and
+ * files when it takes them (sent as a multipart form; the API saves each
+ * as an artifact of the run's session). The API answers 422 with why when
+ * they don't fit, or when the workflow doesn't build. The run is queued at
+ * once; a worker takes it seconds later. Errors are the caller's to show:
+ * the run dialog shows them by the input.
  */
 export function useRunAdkWorkflow(
   organizationId: string,
@@ -738,14 +755,34 @@ export function useRunAdkWorkflow(
 ) {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (input: unknown) =>
-      api.post<AdkRun>(`${agentPath(organizationId, agentId)}/runs`, {
-        input,
-        ...(version !== undefined ? { version } : {}),
-      }),
+    mutationFn: ({ input, files = [] }: RunStart) => {
+      const path = `${agentPath(organizationId, agentId)}/runs`
+      if (!files.length)
+        return api.post<AdkRun>(path, {
+          input,
+          ...(version !== undefined ? { version } : {}),
+        })
+      const form = new FormData()
+      form.append("input", JSON.stringify(input ?? null))
+      if (version !== undefined) form.append("version", String(version))
+      for (const file of files) form.append("files", file, file.name)
+      return api.post<AdkRun, FormData>(path, form)
+    },
     meta: { silent: true },
     onSuccess: (run) => void refreshAdkRuns(client, organizationId, run.id),
   })
+}
+
+/** A file a run started with, as it was sent. */
+export function downloadAdkRunFile(
+  organizationId: string,
+  runId: string,
+  name: string
+) {
+  return api.get<Blob>(
+    `${runPath(organizationId, runId)}/files/${encodeURIComponent(name)}`,
+    { responseType: "blob", silent: true }
+  )
 }
 
 /**

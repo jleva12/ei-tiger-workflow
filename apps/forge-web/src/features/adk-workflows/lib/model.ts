@@ -25,6 +25,7 @@ import {
   type StepData,
   type ThinkingLevel,
 } from "@/features/steps/lib/model"
+import type { FileTypeId } from "./files"
 
 /*
  * An organization's agent: a Google ADK graph workflow (`google.adk.Workflow`)
@@ -163,6 +164,10 @@ export type AgentConfigs = {
   start: {
     /** A JSON Schema of what a run starts with; `{}` takes anything. */
     input_schema: Record<string, unknown>
+    /** Whether a run may start with files: artifacts of its session. */
+    allow_files: boolean
+    /** The types of files it takes (`files.ts`); none takes any type. */
+    file_types: FileTypeId[]
   }
   llm: LlmSettings & {
     /** `single_turn`: it answers once; `task`: it may ask back until it's done. */
@@ -268,7 +273,7 @@ export const AGENT_KINDS: { [K in AgentKind]: AgentKindInfo<K> } = {
     keywords: "start input begin entry",
     terminal: true,
     idPrefix: "start",
-    defaults: () => ({ input_schema: {} }),
+    defaults: () => ({ input_schema: {}, allow_files: false, file_types: [] }),
   },
   llm: {
     label: "LLM agent",

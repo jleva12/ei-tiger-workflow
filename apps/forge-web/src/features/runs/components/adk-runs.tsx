@@ -1,3 +1,4 @@
+import type { FilesRule } from "@/features/adk-workflows/lib/files"
 import { RunDialog } from "@/features/runs/components/run-dialog"
 import { RunsMenu } from "@/features/runs/components/runs-menu"
 import {
@@ -42,6 +43,7 @@ export function AdkRunDialog({
   agentId,
   name,
   inputSchema,
+  files,
   version,
   onStarted,
 }: {
@@ -52,6 +54,8 @@ export function AdkRunDialog({
   name: string
   /** The start's input schema; `{}` declares none. */
   inputSchema: Record<string, unknown>
+  /** The files the start takes. */
+  files?: FilesRule
   /** Which version runs: a published one, or the draft. */
   version?: number | "draft"
   onStarted: (run: AdkRun) => void
@@ -82,6 +86,7 @@ export function AdkRunDialog({
         },
       }}
       inputSchema={inputSchema}
+      files={files}
       onStarted={onStarted}
     />
   )

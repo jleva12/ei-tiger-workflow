@@ -4,7 +4,12 @@ import { cn } from "cn"
 import { Icon } from "@/components/forge/icon"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldLabel,
+} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -13,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { IssueMessages } from "./field-issues"
 import { useFieldIssues, useIssueLookup } from "./field-issues-context"
@@ -305,6 +311,43 @@ export function CheckField({
         </FieldLabel>
         {description && <FieldDescription>{description}</FieldDescription>}
       </div>
+    </Field>
+  )
+}
+
+/** An on/off setting: its label and description, the switch beside them. */
+export function SwitchField({
+  label,
+  checked,
+  onChange,
+  description,
+  issue,
+}: {
+  label: string
+  checked: boolean
+  onChange: (checked: boolean) => void
+  description?: React.ReactNode
+  /** The setting it holds, for its issues. */
+  issue?: string
+}) {
+  const id = React.useId()
+  const { issues, invalid, key } = useFieldIssues(issue)
+  return (
+    <Field
+      orientation="horizontal"
+      data-invalid={invalid || undefined}
+      data-field={key}
+    >
+      <FieldContent>
+        <FieldLabel htmlFor={id}>{label}</FieldLabel>
+        <Below issues={issues} description={description} />
+      </FieldContent>
+      <Switch
+        id={id}
+        checked={checked}
+        onCheckedChange={(on) => onChange(on)}
+        aria-invalid={invalid || undefined}
+      />
     </Field>
   )
 }

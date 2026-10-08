@@ -40,7 +40,7 @@ from forge_agent_runtime import (
 from forge_agent_runtime.document import DocumentError
 from forge_agent_runtime.executor import check_state
 from forge_agent_runtime.templating import REQUEST_KEY
-from forge_codegraph import Repository, WorkerError, code_passages, interleave
+from forge_codegraph import Repository, WorkerError, code_passages, interleave, system_summary
 from google.adk import Context, Event
 from google.adk.agents import BaseAgent, LlmAgent
 from google.adk.agents.callback_context import CallbackContext
@@ -166,9 +166,10 @@ class AgentServices:
 class SnapshotKnowledgeBases:
     """The organization's knowledge bases a run carries (checked as it
     started), searched with the worker's search: the runtime's ``KnowledgeBases``.
-    A RAG knowledge base's documents with the documents task's search; a graph
-    one's code, of the repositories the run carries for it, with the code
-    graph worker's API. Their passages are taken in turn, best first."""
+    A RAG knowledge base's documents with the documents task's search; a
+    system design one's code, of the repositories the run carries for it,
+    with the code graph worker's API, described with how its applications
+    connect. Their passages are taken in turn, best first."""
 
     def __init__(self, known: Mapping[str, dict[str, Any]], search: KnowledgeSearch | None, code: Any = None) -> None:
         self.known = known
@@ -184,7 +185,8 @@ class SnapshotKnowledgeBases:
         return str(self.known[knowledge_base_id].get("name") or knowledge_base_id)
 
     def _graph(self, knowledge_base_id: str) -> bool:
-        return self.known[knowledge_base_id].get("kind") == "graph"
+        # A system design knowledge base; runs from before the rename say graph.
+        return self.known[knowledge_base_id].get("kind") in ("system", "graph")
 
     def _repositories(self, knowledge_base_id: str) -> list[Any]:
         listed = self.known[knowledge_base_id].get("repositories")
@@ -198,9 +200,13 @@ class SnapshotKnowledgeBases:
         description = str(self.known[knowledge_base_id].get("description") or "")
         if not self._graph(knowledge_base_id):
             return description
-        names = [r.name for r in self._repositories(knowledge_base_id)]
-        code = f"code of {', '.join(names)}" if names else "code repositories"
-        return "; ".join(p for p in (description.strip(), code) if p)
+        listed = self.known[knowledge_base_id].get("connections")
+        connections = [
+            {k: str(c.get(k) or "") for k in ("source", "kind", "target", "description")}
+            for c in (listed if isinstance(listed, list) else [])
+            if isinstance(c, dict)
+        ]
+        return system_summary(description, [r.name for r in self._repositories(knowledge_base_id)], connections)
 
     async def describe(
         self, knowledge_base_ids: Sequence[str], *, organization_id: str | None

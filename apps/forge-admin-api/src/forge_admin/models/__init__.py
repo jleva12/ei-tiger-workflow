@@ -15,6 +15,8 @@ from forge_admin.models.code_repositories import CodeIngestionJob, CodeRepositor
 from forge_admin.models.hierarchy import Organization
 from forge_admin.models.knowledge import (
     KnowledgeBase,
+    KnowledgeBaseCodeLink,
+    KnowledgeBaseConnection,
     KnowledgeBaseRepository,
     KnowledgeCollection,
     KnowledgeDocument,
@@ -28,6 +30,8 @@ __all__ = [
     "CodeIngestionJob",
     "CodeRepository",
     "KnowledgeBase",
+    "KnowledgeBaseCodeLink",
+    "KnowledgeBaseConnection",
     "KnowledgeBaseRepository",
     "KnowledgeCollection",
     "KnowledgeDocument",

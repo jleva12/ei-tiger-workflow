@@ -14,7 +14,9 @@ Agents: ADK's own, with their sub-agents built the same way inside them.
 An LLM agent's ``tools`` are the Agents builder's (an MCP server, a knowledge
 base, an HTTP tool, an OpenAPI spec, an agent from the Agents page, a
 workflow), each built the first time the agent asks the model
-(``graph.agent_tools.LazyToolset``). An ``llm`` node whose ``source`` is
+(``graph.agent_tools.LazyToolset``). In a run started with files, every one
+also has ADK's ``load_artifacts`` tool: it's told the files' names, and
+reads the ones it asks for (``forge_task_adk_workflows.files``). An ``llm`` node whose ``source`` is
 ``agent`` is an agent from the Agents page instead, used whole
 (``graph.agent_tools.agent_node``): sent its ``message`` (what it's handed
 by default), its input schema's fields set from its ``inputs``.
@@ -47,6 +49,7 @@ from google.adk.agents import (
 )
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.platform import time as platform_time
+from google.adk.tools.load_artifacts_tool import LoadArtifactsTool
 from google.adk.workflow import BaseNode
 from google.genai import types
 from pydantic import PrivateAttr
@@ -206,6 +209,7 @@ def _llm(
         "sub_agents": _sub_agents(config, where, label, ctx, step),
         "tools": _tools(config, where, ctx, step),
     }
+    toolsets = settings["tools"]
     if mode:
         settings["mode"] = mode
     else:
@@ -218,10 +222,13 @@ def _llm(
         settings["generate_content_config"] = types.GenerateContentConfig(max_output_tokens=config["max_output_tokens"])
     # The thinking level is the model callbacks' part.
     callback = services.model_callbacks(config) if services.model_callbacks is not None else None
-    if settings["tools"]:
-        settings["before_model_callback"] = failing_tools_first(settings["tools"], callback)
+    if toolsets:
+        settings["before_model_callback"] = failing_tools_first(toolsets, callback)
     elif callback is not None:
         settings["before_model_callback"] = callback
+    if services.files:
+        # The run's files: it reads them as Excel's too, as tables.
+        settings["tools"] = [*toolsets, LoadArtifactsTool(enable_spreadsheet_parsing=True)]
     return ForgeLlmAgent(**settings)
 
 

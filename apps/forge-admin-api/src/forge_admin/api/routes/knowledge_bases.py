@@ -2,7 +2,7 @@
 An organization's knowledge bases: named sets its chat agents search with a
 knowledge base tool (``forge_admin.knowledge``). A RAG knowledge base holds
 documents, filed in collections (``knowledge_documents`` and
-``knowledge_collections``); a graph knowledge base holds code repositories
+``knowledge_collections``); a system design knowledge base holds code repositories
 (``knowledge_base_repositories``, see ``knowledge_repositories``), searched
 in the code graph.
 
@@ -38,6 +38,7 @@ from forge_admin.auth.access import (
     authorize,
 )
 from forge_admin.knowledge.access import MANAGE, NOT_FOUND, READ, knowledge_base_of
+from forge_admin.knowledge.connections import commit_synced, has_code_links
 from forge_admin.knowledge.graph import (
     codegraph_of,
     graph_ids,
@@ -54,8 +55,12 @@ from forge_admin.knowledge.search import (
     SearchError,
 )
 from forge_admin.knowledge.storage import DocumentStore, StorageError
-from forge_admin.models import KnowledgeBase, KnowledgeDocument
-from forge_admin.models.knowledge import GRAPH, RAG, Kind
+from forge_admin.models import (
+    KnowledgeBase,
+    KnowledgeBaseConnection,
+    KnowledgeDocument,
+)
+from forge_admin.models.knowledge import RAG, SYSTEM, Kind
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +75,7 @@ Query = Annotated[
 class KnowledgeBaseCreate(BaseModel):
     name: Name
     description: str = Field(default="", max_length=4000)
-    # rag: documents uploaded to it; graph: the organization's code
+    # rag: documents uploaded to it; system: some of the organization's code
     # repositories. It never changes.
     kind: Kind = "rag"
 
@@ -85,12 +90,14 @@ class KnowledgeBaseRead(Audited):
     organization_id: str
     name: str
     description: str
-    # rag (documents) or graph (code repositories).
+    # rag (documents) or system (applications: code repositories).
     kind: str = RAG
-    # A graph knowledge base's repositories, and how many of them an
+    # A system design knowledge base's repositories, and how many of them an
     # ingestion of succeeded: those its searches find code in.
     repositories: int = 0
     ingested: int = 0
+    # A system design knowledge base's connections between its applications.
+    connections: int = 0
     # A RAG knowledge base's documents: how many, how many are searchable
     # (SUCCEEDED) and how many FAILED, their chunks and their bytes.
     documents: int = 0
@@ -128,7 +135,7 @@ class SearchHit(BaseModel):
     # meaning to the query's (-1 to 1); higher is better. Hits are in their
     # ranked order, which also weighs their words.
     score: float
-    # A graph knowledge base's code: the repository (Forge's ID) and the
+    # A system design knowledge base's code: the repository (Forge's ID) and the
     # node in its code graph; the filename is the repository and the file,
     # the section path the declaration.
     repository_id: str | None = None
@@ -192,7 +199,7 @@ NO_DOCUMENTS = {
     "stale": 0,
 }
 # The counts of a knowledge base without repositories.
-NO_REPOSITORIES = {"repositories": 0, "ingested": 0}
+NO_REPOSITORIES = {"repositories": 0, "ingested": 0, "connections": 0}
 
 
 def _search_model(request: Request) -> str | None:
@@ -246,16 +253,25 @@ async def _counts(
 async def _repository_counts(
     session: AsyncSession, knowledge_base_ids: list[str]
 ) -> dict[str, dict[str, int]]:
-    """:return: Each graph knowledge base's repositories, and how many have a
-    graph, by its ID."""
+    """:return: Each system design knowledge base's repositories, how many
+    have a graph, and its connections, by its ID."""
+    if not knowledge_base_ids:
+        return {}
     repositories = await linked(session, knowledge_base_ids)
     graphs = await graph_ids(
         session, list({r.id for rs in repositories.values() for r in rs})
     )
+    rows = await session.execute(
+        select(KnowledgeBaseConnection.knowledge_base_id, func.count())
+        .where(KnowledgeBaseConnection.knowledge_base_id.in_(knowledge_base_ids))
+        .group_by(KnowledgeBaseConnection.knowledge_base_id)
+    )
+    connections = {kb_id: count for kb_id, count in rows}
     return {
         kb_id: {
             "repositories": len(rs),
             "ingested": sum(1 for r in rs if r.id in graphs),
+            "connections": connections.get(kb_id, 0),
         }
         for kb_id, rs in repositories.items()
     }
@@ -265,10 +281,10 @@ async def _reads(
     session: AsyncSession, knowledge_bases: list[KnowledgeBase], model: str | None
 ) -> list[KnowledgeBaseRead]:
     documents = await _counts(
-        session, [kb.id for kb in knowledge_bases if kb.kind != GRAPH], model
+        session, [kb.id for kb in knowledge_bases if kb.kind != SYSTEM], model
     )
     repositories = await _repository_counts(
-        session, [kb.id for kb in knowledge_bases if kb.kind == GRAPH]
+        session, [kb.id for kb in knowledge_bases if kb.kind == SYSTEM]
     )
     return [
         as_read(
@@ -327,7 +343,7 @@ async def create_knowledge_base(
 ) -> KnowledgeBaseRead:
     """
     Add a knowledge base to the organization, empty: of documents (``rag``,
-    the default) or of code repositories (``graph``).
+    the default) or a system design one, of code repositories (``system``).
     \f
     :raises HTTPException: 403 without knowledge_bases:manage in the
         organization; 409 when the name is taken.
@@ -427,8 +443,9 @@ async def delete_knowledge_base(
     the async worker), then its records and collections. Each step is safe to
     repeat, so a deletion that fails part way leaves the knowledge base with
     the documents not yet removed, and deleting it again finishes the job.
-    A graph knowledge base's repositories stay in the organization, and their
-    code graphs with them. Agents that use it no longer find anything in it.
+    A system design knowledge base's repositories stay in the organization,
+    and their code graphs with them; its connections' code links leave the
+    code graph. Agents that use it no longer find anything in it.
     \f
     :raises HTTPException: 403 without knowledge_bases:manage in the
         organization; 404 for another organization's knowledge base, or none;
@@ -464,8 +481,16 @@ async def delete_knowledge_base(
         for document in documents:
             await _remove(session, store, queue, search, document)
     name = knowledge_base.name
+    # A system design one's code links leave the code graph with it.
+    coded = knowledge_base.kind == SYSTEM and await has_code_links(
+        session, knowledge_base_id
+    )
     await session.delete(knowledge_base)
-    await session.commit()
+    await commit_synced(
+        session,
+        getattr(request.app.state, "codegraph", None),
+        [knowledge_base_id] if coded else [],
+    )
     logger.info(
         "%s deleted knowledge base %s (%s) with %d documents",
         user,
@@ -546,7 +571,7 @@ async def search_knowledge_base(
     knowledge_base = await knowledge_base_of(
         session, enforcer, user, organization_id, knowledge_base_id, kind=None
     )
-    if knowledge_base.kind == GRAPH:
+    if knowledge_base.kind == SYSTEM:
         return await _search_code(request, session, knowledge_base, body)
     search: KnowledgeSearch | None = request.app.state.knowledge_search
     if search is None:
@@ -634,7 +659,7 @@ async def search_knowledge_bases(
     \f
     :raises HTTPException: 403 without organizations:read in the
         organization; 404 for a knowledge base it doesn't have; 409 for a
-        graph knowledge base; 503 when searching isn't set up, or the store
+        system design knowledge base; 503 when searching isn't set up, or the store
         or the embedding model is unavailable.
     """
     await authorize(session, enforcer, user, READ, Scope(Level.ORG, organization_id))
@@ -649,15 +674,15 @@ async def search_knowledge_bases(
     }
     if missing := [i for i in wanted if i not in found]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"{NOT_FOUND}: {missing[0]}")
-    if graphs := [i for i in wanted if found[i].kind == GRAPH]:
+    if graphs := [i for i in wanted if found[i].kind == SYSTEM]:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            f"{found[graphs[0]].name} is a graph knowledge base: search it on its own",
+            f"{found[graphs[0]].name} is a system design knowledge base: search it on its own",
         )
     searched = (
         [found[i] for i in wanted]
         if wanted
-        else [kb for kb in found.values() if kb.kind != GRAPH]
+        else [kb for kb in found.values() if kb.kind != SYSTEM]
     )
     if not searched:
         return OrganizationSearchResults(searched=[], hits=[])

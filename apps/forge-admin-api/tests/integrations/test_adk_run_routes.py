@@ -21,6 +21,7 @@ from casbin.persist.adapters.asyncio import AsyncAdapter
 from embedding_fake import FakeEmbedding
 from fastapi.testclient import TestClient
 from forge_task_adk_workflows.run_store import Actor, RunStore, metadata
+from google.adk.artifacts import InMemoryArtifactService
 from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
@@ -84,6 +85,7 @@ RUN_FIELDS = {
 }
 DETAIL_FIELDS = RUN_FIELDS | {
     "input",
+    "files",
     "result",
     "document",
     "trigger",
@@ -131,6 +133,7 @@ def end(node_id: str) -> dict[str, Any]:
 SHIP = "ag_ship000001"
 OUTER = "ag_outer00001"
 BROKEN = "ag_broken0001"
+PAPERS = "ag_papers0001"
 SHIPPING = document(
     SHIP,
     "Ship",
@@ -350,10 +353,24 @@ def workspace(settings: Settings) -> Iterator[Workspace]:
     app.state.adk_runs = runs
     app.state.embedding = queue
     app.state.adk_run_sessions = sessions
+    app.state.workflow_artifacts = InMemoryArtifactService()
     app.state.organization_agents = Agents(
         SHIPPING,
         running(OUTER, SHIP, "Outer"),
         running(BROKEN, "ag_nosuchthing", "Broken"),
+        document(
+            PAPERS,
+            "Papers",
+            [
+                node(
+                    "start",
+                    "start",
+                    {"input_schema": {}, "allow_files": True, "file_types": ["pdf"]},
+                ),
+                end("done"),
+            ],
+            [("start", "next", "done")],
+        ),
     )
     enforcer = new_enforcer(Grants())
     app.dependency_overrides[get_session] = Directory
@@ -416,6 +433,7 @@ def test_a_run_starts_queued_with_its_job_as_its_adk_workflow_is_saved(
         "chat_agents": {},
         "knowledge_bases": {},
         "input": {"n": 1},
+        "files": [],
         "session_id": run["session_id"],
         "run_as": MEMBER,
         "run_as_name": "Mia Member",
@@ -890,3 +908,66 @@ def test_a_run_store_that_isnt_answering_is_a_503(workspace: Workspace) -> None:
     ):
         assert answer.status_code == 503
         assert answer.json()["detail"] == UNAVAILABLE
+
+
+# ------------------------------------------------------------------ files
+
+
+def test_a_run_started_with_files_lists_them_and_each_downloads(
+    workspace: Workspace,
+) -> None:
+    pdf = b"%PDF-1.7 the quarter"
+    started = workspace.client.post(
+        f"{API}/organizations/{ORG}/agents/{PAPERS}/runs",
+        headers=workspace._as(MEMBER),
+        data={"input": json.dumps({"quarter": 3})},
+        files=[("files", ("Q3 report.pdf", pdf, "application/pdf"))],
+    )
+    assert started.status_code == 202, started.json()
+    run = started.json()
+    detail = workspace.get(f"{RUNS}/{run['id']}").json()
+    assert detail["input"] == {"quarter": 3}
+    assert detail["files"] == [
+        {
+            "name": "Q3 report.pdf",
+            "media_type": "application/pdf",
+            "size_bytes": len(pdf),
+            "type": "pdf",
+            "version": 0,
+        }
+    ]
+    path = f"{RUNS}/{run['id']}/files/Q3 report.pdf"
+    # Anyone who reads the organization's runs downloads it, as it was sent.
+    for reader in (MEMBER, VIEWER):
+        got = workspace.get(path, reader)
+        assert got.status_code == 200
+        assert got.content == pdf
+        assert got.headers["content-type"] == "application/pdf"
+        assert got.headers["content-disposition"] == (
+            "attachment; filename=\"Q3 report.pdf\"; filename*=UTF-8''Q3%20report.pdf"
+        )
+        assert got.headers["x-content-type-options"] == "nosniff"
+    assert workspace.get(path, OUTSIDER).status_code == 403
+    missing = workspace.get(f"{RUNS}/{run['id']}/files/other.pdf")
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "The run didn't start with such a file"
+
+
+def test_files_a_start_doesnt_take_are_refused(workspace: Workspace) -> None:
+    def send(agent_id: str, name: str) -> Any:
+        return workspace.client.post(
+            f"{API}/organizations/{ORG}/agents/{agent_id}/runs",
+            headers=workspace._as(MEMBER),
+            data={"input": json.dumps({"key": "k-1"})},
+            files=[("files", (name, b"data", "application/octet-stream"))],
+        )
+
+    wrong_type = send(PAPERS, "notes.txt")
+    assert wrong_type.status_code == 422
+    assert wrong_type.json()["detail"] == (
+        "notes.txt: the workflow's start takes pdf files only"
+    )
+    none_taken = send(SHIP, "report.pdf")
+    assert none_taken.status_code == 422
+    assert none_taken.json()["detail"] == "The workflow's start doesn't take files"
+    assert workspace.queue.queued == []

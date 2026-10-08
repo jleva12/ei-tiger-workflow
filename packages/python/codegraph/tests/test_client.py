@@ -98,3 +98,16 @@ async def test_an_unreachable_worker_is_status_zero() -> None:
     with pytest.raises(WorkerError) as refused:
         await graph(handler).search(["repo:a"], "signing")
     assert (refused.value.status, refused.value.code) == (0, "unreachable")
+
+
+async def test_put_cross_links_replaces_the_owners_set() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"owner": "kb:1", "links": 1})
+
+    link = {"id": "l1", "owner": "kb:1", "kind": "calls_api"}
+    assert await graph(handler).put_cross_links("kb:1", [link]) == 1
+    assert (seen[0].method, seen[0].url.path) == ("PUT", "/v1/cross-links/kb:1")
+    assert json.loads(seen[0].content) == {"links": [link]}

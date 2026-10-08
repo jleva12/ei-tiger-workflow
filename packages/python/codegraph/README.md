@@ -1,9 +1,9 @@
 # forge-codegraph
 
 The [code graph worker](../../../apps/forge-codegraph-worker/README.md)'s read
-and search API, for the admin API (graph knowledge bases, the code graph
-explorer) and the async worker (workflow LLM nodes searching graph knowledge
-bases).
+and search API, for the admin API (system design knowledge bases, the code
+graph explorer, their cross-repository links) and the async worker (workflow
+LLM nodes searching system design knowledge bases).
 
 | Module | Owns |
 |---|---|

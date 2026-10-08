@@ -46,9 +46,11 @@ Dockerfile copies the package directory before `uv sync --package <app>`.
 - [`python/codegraph/`](python/codegraph/README.md) (`forge-codegraph`,
   `forge_codegraph`) is the code graph worker's read and search API: a
   client, and code search hits as the knowledge base tool's passages (cited
-  like documents'). The admin API (graph knowledge bases, the code graph
-  explorer) and the ADK workflows task (LLM nodes searching a graph
-  knowledge base) both use it (`make codegraph-check`).
+  like documents'), cross-repository links, and a system design knowledge
+  base described for its agents. The admin API (system design knowledge
+  bases, the code graph explorer) and the ADK workflows task (LLM nodes
+  searching a system design knowledge base) both use it (`make
+  codegraph-check`).
 
 [`go/code-graph/`](go/code-graph/README.md) holds the Go modules the code
 graph ingestion worker (`apps/forge-codegraph-worker`) links: the graph's

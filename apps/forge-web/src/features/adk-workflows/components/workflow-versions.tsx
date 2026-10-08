@@ -2,6 +2,7 @@ import { Copyable } from "@/components/forge/copyable"
 import { RuntimeAccess } from "@/features/api-keys/components/runtime-access"
 import { VersionChip } from "@/features/builder/components/versions"
 import type { AgentRecord } from "@/features/adk-workflows/lib/api"
+import { acceptOf } from "@/features/adk-workflows/lib/files"
 import { sampleInput } from "@/features/adk-workflows/lib/samples"
 import { a2aCardAddress, runtimeAddress } from "@/lib/runtime"
 import { useAgentBuilder } from "./agent-store"
@@ -19,10 +20,13 @@ export function WorkflowRunInfo({
   /** A published version open read-only. */
   viewing?: number
 }) {
-  const schema = useAgentBuilder((s) => {
-    const start = s.nodes.find((n) => n.data.kind === "start")?.data
-    return start?.kind === "start" ? (start.config.input_schema ?? {}) : {}
-  })
+  const start = useAgentBuilder(
+    (s) => s.nodes.find((n) => n.data.kind === "start")?.data
+  )
+  const schema =
+    start?.kind === "start" ? (start.config.input_schema ?? {}) : {}
+  const files = start?.kind === "start" && start.config.allow_files
+  const example = `report${acceptOf(start?.kind === "start" ? start.config.file_types : []).split(",")[0] || ".pdf"}`
   // The reference it's called by: the version shown, else the latest published, else the draft.
   const ref =
     viewing !== undefined
@@ -31,12 +35,23 @@ export function WorkflowRunInfo({
         ? record.id
         : `${record.id}@draft`
   const runs = runtimeAddress(`/workflows/${ref}/runs`)
-  const curl = [
-    `curl ${runs} \\`,
-    "  -H 'Authorization: Bearer fk_…' \\",
-    "  -H 'Content-Type: application/json' \\",
-    `  -d '${JSON.stringify({ input: sampleInput(schema), wait: 30 })}'`,
-  ].join("\n")
+  // With files, a multipart form: the input as JSON text, each file a part.
+  const curl = (
+    files
+      ? [
+          `curl ${runs} \\`,
+          "  -H 'Authorization: Bearer fk_…' \\",
+          `  -F 'input=${JSON.stringify(sampleInput(schema))}' \\`,
+          "  -F wait=30 \\",
+          `  -F files=@${example}`,
+        ]
+      : [
+          `curl ${runs} \\`,
+          "  -H 'Authorization: Bearer fk_…' \\",
+          "  -H 'Content-Type: application/json' \\",
+          `  -d '${JSON.stringify({ input: sampleInput(schema), wait: 30 })}'`,
+        ]
+  ).join("\n")
   return (
     <section className="flex flex-col gap-2.5 border-b px-4 py-3.5">
       <div className="flex items-center justify-between gap-2">
@@ -52,6 +67,15 @@ export function WorkflowRunInfo({
         at there. <code className="font-mono">{record.id}</code> runs the latest
         published version; <code className="font-mono">@3</code> pins one,{" "}
         <code className="font-mono">@draft</code> runs the draft.
+        {files && (
+          <>
+            {" "}
+            It takes files: send each as a{" "}
+            <code className="font-mono">files</code> part of a multipart form
+            (or base64 in JSON&apos;s <code className="font-mono">files</code>),
+            and its steps read them from the run&apos;s artifact store.
+          </>
+        )}
       </p>
       <RuntimeAccess organizationId={record.organization_id} />
       <Copyable label="Runs" value={runs} />

@@ -3,7 +3,7 @@ import {
   type KnowledgePassage,
 } from "@/components/forge/assistant/index"
 
-/** A graph knowledge base's passage: code, at a node of its repository's graph. */
+/** A system design knowledge base's passage: code, at a node of its repository's graph. */
 type CodePassage = KnowledgePassage & {
   repository_id?: string
   node_id?: string
@@ -11,7 +11,7 @@ type CodePassage = KnowledgePassage & {
 
 /**
  * Where a cited passage's document opens in Forge: its knowledge base's
- * page with the document open in the viewer, or, for a graph knowledge
+ * page with the document open in the viewer, or, for a system design knowledge
  * base's code, its repository's code graph open at the declaration. None
  * without its organization (a chat agent's tool doesn't say; the agent's
  * own organization is then given), knowledge base or document.

@@ -13,7 +13,11 @@ repository added shows within that long.
 Each tool then reads only those repositories (:class:`RepositoryScope`): the
 graph has one repository per GitHub URL, whose ID follows from the URL, so an
 organization reads the graphs of its repositories' URLs and nothing else,
-cross-repository links included.
+cross-repository links included. The same answer carries how the
+organization's repositories connect, as people drew them on its system
+design knowledge bases' maps (``repository_connections``), and who keeps its
+cross-repository links in the graph (``kb:<id>``): a graph shared with
+another organization holds that one's links too, which are left out.
 
 - A credential the admin API refuses: 401, as for a missing one.
 - One that names no organization, or lacks ``repositories:read`` in it: 403
@@ -25,7 +29,7 @@ import asyncio
 import hashlib
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -67,21 +71,37 @@ class RepositoryScope:
         or ``apikey:<id>``).
     :ivar organization_id: Their organization.
     :ivar repository_ids: The graph's IDs of the organization's repositories.
+    :ivar link_owners: Who keeps the organization's cross-repository links
+        (``kb:<id>``); None follows every link, as before the admin API said.
+    :ivar connections: How its repositories connect, as drawn on its system
+        maps: each ``{id, knowledge_base_id, knowledge_base, kind,
+        description, source, target, code_links}``, the ends with their
+        graph ``repository_id``.
     """
 
     subject: str
     organization_id: str
     repository_ids: frozenset[str]
+    link_owners: frozenset[str] | None = field(default=None, compare=False)
+    connections: tuple[dict[str, Any], ...] = field(default=(), compare=False)
 
     @classmethod
     def of(cls, token: AccessToken) -> "RepositoryScope":
         """The scope :class:`ForgeAccessVerifier` put in a token's claims."""
         claims = token.claims or {}
+        owners = claims.get("link_owners")
         return cls(
             subject=str(token.subject or token.client_id),
             organization_id=str(claims.get("org_id") or ""),
             repository_ids=frozenset(claims.get("repository_ids") or ()),
+            link_owners=frozenset(owners) if owners is not None else None,
+            connections=tuple(claims.get("connections") or ()),
         )
+
+    def owns(self, owner: str) -> bool:
+        """Whether a cross-repository link is the organization's: drawn on
+        one of its system maps."""
+        return self.link_owners is None or owner in self.link_owners
 
     def readable(self, repository: str) -> bool:
         """Whether the caller reads a repository; for following links out of
@@ -205,16 +225,18 @@ class ForgeAccessVerifier(TokenVerifier):
     def _granted(self, token: str, body: dict[str, Any]) -> AccessToken:
         urls = [str(repository["url"]) for repository in body.get("repositories") or ()]
         subject = str(body["subject"])
+        claims: dict[str, Any] = {
+            "sub": subject,
+            "org_id": str(body["organization_id"]),
+            "repository_ids": sorted(repository_id(url) for url in urls),
+            "connections": [_connection(c) for c in body.get("connections") or ()],
+        }
+        # An admin API from before system maps doesn't say; then every link
+        # is followed, as it was.
+        if "link_owners" in body:
+            claims["link_owners"] = sorted(str(o) for o in body["link_owners"] or ())
         return AccessToken(
-            token=token,
-            client_id=subject,
-            subject=subject,
-            scopes=[READ],
-            claims={
-                "sub": subject,
-                "org_id": str(body["organization_id"]),
-                "repository_ids": sorted(repository_id(url) for url in urls),
-            },
+            token=token, client_id=subject, subject=subject, scopes=[READ], claims=claims
         )
 
     def _keep(self, key: str, access: AccessToken) -> None:
@@ -240,6 +262,36 @@ class ForgeAccessVerifier(TokenVerifier):
 
     async def aclose(self) -> None:
         await self._http.aclose()
+
+
+def _connection(found: dict[str, Any]) -> dict[str, Any]:
+    """A connection as the admin API answered it, each application with its
+    graph's repository ID."""
+
+    def end(application: dict[str, Any]) -> dict[str, str]:
+        url = str(application["url"])
+        return {
+            "repository_id": repository_id(url),
+            "name": f"{application.get('owner', '')}/{application.get('name', '')}",
+        }
+
+    return {
+        "id": str(found["id"]),
+        "knowledge_base_id": str(found.get("knowledge_base_id") or ""),
+        "knowledge_base": str(found.get("knowledge_base") or ""),
+        "kind": str(found["kind"]),
+        "description": str(found.get("description") or ""),
+        "source": end(found["source"]),
+        "target": end(found["target"]),
+        "code_links": [
+            {
+                "label": str(link.get("label") or ""),
+                "source": dict(link["source"]),
+                "target": dict(link["target"]),
+            }
+            for link in found.get("code_links") or ()
+        ],
+    }
 
 
 def _detail(response: httpx.Response) -> str:

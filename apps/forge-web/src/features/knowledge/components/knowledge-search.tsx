@@ -27,7 +27,7 @@ const SEARCH_LIMIT = 8
  * Tries a search of the knowledge base as its agents would: a question in,
  * the chunks that answer it best out, each with its document, where in the
  * document it is (its headings) and how closely it matched. A hit opens its
- * document in the viewer. A graph knowledge base's hits are its code: each
+ * document in the viewer. A system design knowledge base's hits are its code: each
  * a declaration, with its repository and file, opening it in the code graph.
  */
 export function KnowledgeSearchDialog({
@@ -42,7 +42,7 @@ export function KnowledgeSearchDialog({
   onOpenChange: (open: boolean) => void
   scope: KnowledgeScope
   baseName: string
-  /** A graph knowledge base's: it searches code. */
+  /** A system design knowledge base's: it searches code. */
   code?: boolean
   /** Opens the hit: its document in the viewer, or its node in the code graph. */
   onOpenHit: (hit: SearchHit) => void

@@ -68,6 +68,13 @@ services:
       # stack's network, with its token from .env.common.
       HYBRID_ADK_WORKFLOWS__CODEGRAPH_URL: http://worker:8080
       HYBRID_ADK_WORKFLOWS__CODEGRAPH_TOKEN: ${FORGE_CODEGRAPH_ADMISSION_TOKEN:-}
+      # The files runs start with: ADK artifacts the admin API saved in the
+      # stack's RustFS.
+      HYBRID_ADK_WORKFLOWS__ARTIFACTS: ${FORGE_WORKFLOW_ARTIFACTS:-s3://forge-artifacts/workflows}
+      HYBRID_ADK_WORKFLOWS__S3_ENDPOINT_URL: http://knowledge-s3:9000
+      HYBRID_ADK_WORKFLOWS__S3_REGION: us-east-1
+      HYBRID_ADK_WORKFLOWS__S3_ACCESS_KEY_ID: ${FORGE_S3_ACCESS_KEY_ID:-forge-local}
+      HYBRID_ADK_WORKFLOWS__S3_SECRET_ACCESS_KEY: ${FORGE_S3_SECRET_ACCESS_KEY:-local-forge-secret}
     healthcheck:
       test: ["CMD", "forge-async-worker", "worker", "--check", "--queues=adk_workflows"]
       interval: 10s

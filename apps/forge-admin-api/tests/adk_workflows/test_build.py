@@ -88,7 +88,12 @@ def agent(
     }
 
 
-START_NODE = node("start", "start", "Start", {"input_schema": {}})
+START_NODE = node(
+    "start",
+    "start",
+    "Start",
+    {"input_schema": {}, "allow_files": False, "file_types": []},
+)
 
 
 def function(node_id: str, name: str, expression: str) -> dict[str, Any]:

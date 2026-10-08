@@ -76,7 +76,7 @@ import { DocumentsView, type BulkActions } from "./knowledge-documents"
 import { KnowledgeNav } from "./knowledge-nav"
 import { CollectionShelf, KindStrip } from "./knowledge-overview"
 import { KnowledgeRail } from "./knowledge-rail"
-import { GraphKnowledge } from "./graph-knowledge"
+import { SystemKnowledge } from "./system-knowledge"
 import { KnowledgeSearchDialog } from "./knowledge-search"
 
 export type SearchChange = (
@@ -217,9 +217,9 @@ export function KnowledgePage({
       </PageEmpty>
     )
   }
-  if (base.data.kind === "graph") {
+  if (base.data.kind === "system") {
     return (
-      <GraphKnowledge
+      <SystemKnowledge
         organizationId={organizationId}
         organizationName={organization.name}
         base={base.data}

@@ -31,6 +31,7 @@ from forge_codegraph_mcp.graph.embedding import DEFAULT_DIMENSIONS, DEFAULT_MAX_
 
 INSTRUCTIONS = """Tools over a code graph whose relationships come from the compiler, not from guesses.
 Call list_repositories first when you don't know a repository id: it names every repository you can read.
+For how repositories, services or projects interact (what calls what, what sends messages to what), call repository_connections first: the connections people drew between them on your organization's system design maps, each with its kind, a note, and code links whose node ids callers, callees, impact and read_source follow in that repository.
 Start with explore_code for any question in plain language: it returns the best-matching declarations (seeds) with their file and line, one hop of callers, callees, type uses and inheritance around the strongest seeds, and the files involved. Then read_source for the exact code of any node id, callers or callees to keep walking, impact before changing a declaration, path to see how two declarations connect, hubs for the most depended-on declarations of a repository, find_symbol when you already know a name, and search_code for ranked hits only.
 Answers are compact by default: id, kind, qualified name, file and line per node. Pass full: true to any of them for complete records with spans, content hashes and properties, or call get_node for one node.
 Repository ids are required on every call. Node ids and content hashes come from earlier results; never invent them.

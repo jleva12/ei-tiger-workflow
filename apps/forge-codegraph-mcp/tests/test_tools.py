@@ -17,6 +17,7 @@ from forge_codegraph_mcp.tools import CodeGraphTools
 
 TOOLS = {
     "list_repositories",
+    "repository_connections",
     "explore_code",
     "search_code",
     "find_symbol",
@@ -41,12 +42,21 @@ def server_over(
     store: MemStore,
     embedder: FakeEmbedder | None = None,
     readable: Iterable[str] | None = None,
+    link_owners: Iterable[str] | None = None,
+    connections: Iterable[dict[str, Any]] = (),
 ) -> FastMCP:
     """The tools over a store, for a caller who reads ``readable``: by
-    default every repository in it."""
+    default every repository in it; with ``link_owners``, only those owners'
+    cross-repository links."""
     settings = make_settings()
     ids = frozenset(readable if readable is not None else (store.repo, *store.others))
-    scope = RepositoryScope("apikey:k1", "3f6c0000-0000-4000-8000-000000000001", ids)
+    scope = RepositoryScope(
+        "apikey:k1",
+        "3f6c0000-0000-4000-8000-000000000001",
+        ids,
+        link_owners=frozenset(link_owners) if link_owners is not None else None,
+        connections=tuple(connections),
+    )
     return McpServerFactory(settings).create(
         [CodeGraphTools(settings, store, embedder, scope=lambda: scope)]
     )
@@ -309,3 +319,54 @@ async def test_unexpected_failures_are_masked(shop: Shop) -> None:
         with pytest.raises(ToolError) as raised:
             await client.call_tool("repository_state", {"repository": REPO})
     assert "internal" not in str(raised.value)
+
+
+async def test_only_the_organizations_own_links_are_followed() -> None:
+    store, repos, nodes = services()
+    # The test graph's links are team:test's: another organization's here.
+    foreign = server_over(store, link_owners=["kb:mine"])
+    callers = await call(foreign, "callers", repository=repos["orders"], id=nodes["handler"]["id"])
+    assert "across_repositories" not in callers
+    links = await call(
+        foreign, "cross_repository_links", repository=repos["checkout"], id=nodes["client"]["id"]
+    )
+    assert links == {"links": []}
+    impact = await call(
+        foreign,
+        "impact",
+        repository=repos["billing"],
+        id=nodes["listener"]["id"],
+        change="body",
+        depth=6,
+    )
+    assert "across" not in impact
+    own = server_over(store, link_owners=["team:test"])
+    callers = await call(own, "callers", repository=repos["orders"], id=nodes["handler"]["id"])
+    assert len(callers["across_repositories"]) == 1
+
+
+async def test_repository_connections_answer_the_system_maps() -> None:
+    store, repos, _ = services()
+
+    def connection(id: str, source: str, target: str) -> dict[str, Any]:
+        return {
+            "id": id,
+            "knowledge_base_id": "1",
+            "knowledge_base": "Checkout",
+            "kind": "calls",
+            "description": "",
+            "source": {"repository_id": repos[source], "name": f"acme/{source}"},
+            "target": {"repository_id": repos[target], "name": f"acme/{target}"},
+            "code_links": [],
+        }
+
+    drawn = [connection("c1", "checkout", "orders"), connection("c2", "orders", "billing")]
+    server = server_over(store, connections=drawn)
+    every = await call(server, "repository_connections")
+    assert [c["id"] for c in every["connections"]] == ["c1", "c2"]
+    touching = await call(server, "repository_connections", repositories=[repos["billing"]])
+    assert [c["id"] for c in touching["connections"]] == ["c2"]
+    # A repository the caller can't read is refused as if it weren't there.
+    narrow = server_over(store, readable=[repos["orders"]], connections=drawn)
+    with pytest.raises(ToolError, match="not found: repository"):
+        await call(narrow, "repository_connections", repositories=[repos["checkout"]])

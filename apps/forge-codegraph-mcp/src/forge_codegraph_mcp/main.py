@@ -159,8 +159,16 @@ def graph_lifespan(
 
 
 def closing(verifier: ForgeAccessVerifier) -> Any:
-    """A lifespan that closes the verifier's connections to the admin API
-    when the app stops."""
+    """
+    This function creates an asynchronous context manager for managing the lifespan
+    of an application in a FastAPI environment. It uses the provided verifier to
+    perform asynchronous cleanup upon shutdown.
+
+    :param verifier: An instance of `ForgeAccessVerifier` used to perform specific
+        cleanup operations when the application shuts down.
+    :return: An asynchronous context manager that yields control to manage the
+        application's lifespan.
+    """
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:

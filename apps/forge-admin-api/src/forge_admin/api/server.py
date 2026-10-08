@@ -19,6 +19,7 @@ from starlette.middleware.cors import CORSMiddleware
 from forge_admin import env_files
 from forge_admin.adk_workflows import runtime as workflow_runtime
 from forge_admin.adk_workflows.documents import AgentStore
+from forge_admin.adk_workflows.files import workflow_artifacts
 from forge_admin.adk_workflows.queue import Embedding
 from forge_admin.api.routes import health, info
 from forge_admin.assistant.runtime import AgentRuntime
@@ -182,6 +183,11 @@ class ApiServer:
         # Tests set their own.
         if getattr(app.state, "adk_run_sessions", None) is None:
             app.state.adk_run_sessions = DatabaseSessionService(db_engine=engine)
+        # The files workflow runs start with: ADK artifacts of their sessions,
+        # where the async worker's runs keep theirs; None when not set up.
+        # Tests set their own.
+        if getattr(app.state, "workflow_artifacts", None) is None:
+            app.state.workflow_artifacts = workflow_artifacts(self.settings)
         if self.settings.local_user_id:
             logger.warning(
                 "LOCAL DEVELOPMENT IDENTITY: API requests without a bearer token "

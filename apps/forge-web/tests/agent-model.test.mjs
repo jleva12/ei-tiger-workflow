@@ -25,6 +25,7 @@ const { AGENT_ADAPTER } = await load("/src/features/adk-workflows/lib/adapter.ts
 const { createBuilderStore, documentOf } = await load("/src/features/builder/components/store.ts")
 const tools = await load("/src/features/adk-workflows/lib/tools.ts")
 const { AGENT_JSON_SCHEMA } = await load("/src/features/adk-workflows/lib/schema.ts")
+const files = await load("/src/features/adk-workflows/lib/files.ts")
 await server.close()
 
 const ORG = "org-1"
@@ -554,4 +555,50 @@ test("the JSON Schema knows an LLM agent's settings and its tools'", () => {
     const config = AGENT_JSON_SCHEMA.$defs[`tool_config_${kind}`]
     assert.deepEqual(Object.keys(config.properties).sort(), Object.keys(tools.toolDefaults(kind)).sort(), kind)
   }
+})
+
+test("a start can take files: of the types picked, read back, and listed in the state", () => {
+  // None by default.
+  assert.deepEqual(model.newNode("start", [], "Start").config, {
+    input_schema: {},
+    allow_files: false,
+    file_types: [],
+  })
+  const doc = agent(
+    [
+      ["start", "start", "Start", { allow_files: true, file_types: ["pdf", "word"] }],
+      ["names", "transform", "Names", { expression: "state.files.name" }],
+    ],
+    [["start", "next", "names"]]
+  )
+  // Types Forge doesn't know are dropped on import, the rest kept.
+  doc.nodes[0].config.file_types = ["word", "exe", "pdf", "pdf"]
+  const read = parseAgent(doc, { organizationId: ORG })
+  assert.deepEqual(read.notes, ["nodes[0].config.file_types names types Forge doesn't know; dropped."])
+  assert.deepEqual(read.doc.nodes[0].config, { input_schema: {}, allow_files: true, file_types: ["word", "pdf"] })
+  // Steps read the run's files in the state.
+  const graph = toGraph(read.doc)
+  const type = (expression) => typeLabel(resolveExpression(expression, agentTypes(graph).scopeOf("names")))
+  assert.equal(type("state.files[0].name"), "string")
+  assert.equal(type("state.files[0].size_bytes"), "number")
+  assert.deepEqual(issuesOf(read.doc), [])
+  // A start that takes none has none in its state.
+  read.doc.nodes[0].config.allow_files = false
+  assert.equal("files" in stateType(toGraph(read.doc)).properties, false)
+  // The schema knows the settings and every type.
+  const start = AGENT_JSON_SCHEMA.$defs.config_start
+  assert.deepEqual(Object.keys(start.properties).sort(), Object.keys(model.AGENT_KINDS.start.defaults()).sort())
+  assert.deepEqual(start.properties.file_types.items.enum, files.FILE_TYPE_IDS)
+})
+
+test("a start's file types say what they take, by extension", () => {
+  const rule = { allowed: true, types: ["word", "pdf"] }
+  assert.equal(files.describeTypes(rule.types), "PDF and Word")
+  assert.equal(files.describeTypes([]), "any type")
+  assert.equal(files.acceptOf(rule.types), ".pdf,.docx,.doc")
+  assert.equal(files.takesFile(rule, "Q3.PDF"), true)
+  assert.equal(files.takesFile(rule, "notes.txt"), false)
+  assert.equal(files.takesFile(rule, "pdf"), false)
+  assert.equal(files.takesFile({ allowed: true, types: [] }, "anything.bin"), true)
+  assert.equal(files.takesFile({ allowed: false, types: [] }, "a.pdf"), false)
 })

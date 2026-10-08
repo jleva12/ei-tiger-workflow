@@ -28,6 +28,7 @@ import {
   type LlmTool,
   type SubAgent,
 } from "./model"
+import { isFileType } from "./files"
 import { TOOL_ID, TOOL_KINDS } from "./tools"
 
 /*
@@ -292,6 +293,16 @@ function readSettings(
         config[key] = value
       else {
         notes.push(`${path} should be an object of expressions.`)
+        config[key] = fallback
+      }
+    } else if (key === "file_types") {
+      if (Array.isArray(value)) {
+        const known = value.filter(isFileType)
+        if (known.length < value.length)
+          notes.push(`${path} names types Forge doesn't know; dropped.`)
+        config[key] = [...new Set(known)]
+      } else {
+        notes.push(`${path} should be a list of file types.`)
         config[key] = fallback
       }
     } else if (LISTS.has(key)) {

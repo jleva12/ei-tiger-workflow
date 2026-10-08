@@ -212,6 +212,16 @@ class Settings(BaseSettings):
     # pause or end in one request ({api_prefix}/runtime/workflows, "wait"),
     # and an A2A task follows its run before answering it's still working.
     workflow_runtime_wait: float = Field(default=60.0, ge=0, le=300)
+    # The files a workflow run starts with (when its start allows files): ADK
+    # artifacts of the run's session, saved here before the run is queued,
+    # where the async worker's runs read theirs (its
+    # HYBRID_ADK_WORKFLOWS__ARTIFACTS, the same place): s3://bucket/prefix on
+    # the S3 service above (s3_*, s3_create_bucket), or a folder both reach.
+    # Unset, a run sent files answers that they aren't set up.
+    workflow_artifacts: str | None = None
+    # The most files one run starts with, and the most bytes each may be.
+    workflow_files_max_count: int = Field(default=10, ge=1, le=100)
+    workflow_files_max_bytes: int = Field(default=20 * 1024 * 1024, gt=0)
     # What chat agents' HTTP tools may reach besides the internet: private
     # networks (local development only), or these hosts.
     agent_tools_allow_private: bool = False
@@ -285,6 +295,7 @@ class Settings(BaseSettings):
         "site_admin_first_name",
         "site_admin_last_name",
         "site_admin_msid",
+        "workflow_artifacts",
         mode="before",
     )
     @classmethod

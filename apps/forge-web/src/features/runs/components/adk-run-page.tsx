@@ -77,6 +77,7 @@ import {
   stepTiming,
   triggerLabel,
   useAbandonAdkRun,
+  downloadAdkRunFile,
   useAdkRun,
   useAdkRunSteps,
   useAnswerAdkRun,
@@ -85,13 +86,21 @@ import {
   useRetryAdkRun,
   versionLabel,
   type AdkRunDetail,
+  type AdkRunFile,
   type AdkRunPause,
   type AdkRunStep,
   type AdkRunTab,
   type AdkToolCall,
 } from "@/features/runs/lib/runs"
 import type { ChipTone } from "@/components/forge/variants"
-import { formatDateTime, formatDuration, formatRelative } from "@/lib/format"
+import { toApiError } from "@/lib/api/index"
+import {
+  formatBytes,
+  formatDateTime,
+  formatDuration,
+  formatRelative,
+} from "@/lib/format"
+import { downloadBlob } from "@/features/builder/components/utils"
 import { WORKSPACE_VIEWS } from "@/features/organizations/lib/organization-workspace"
 import { usePageContext } from "@/features/assistant/lib/page-context"
 import { isLiveRun, runStatusDisplay } from "@/features/runs/lib/display"
@@ -314,9 +323,65 @@ function Endings({ endings }: { endings: Ending[] }) {
   )
 }
 
+/** The files a run started with, each downloadable as it was sent. */
+function RunFiles({
+  organizationId,
+  runId,
+  files,
+}: {
+  organizationId: string
+  runId: string
+  files: AdkRunFile[]
+}) {
+  const [fetching, setFetching] = React.useState<string>()
+  const download = async (file: AdkRunFile) => {
+    setFetching(file.name)
+    try {
+      const blob = await downloadAdkRunFile(organizationId, runId, file.name)
+      downloadBlob(blob, file.name)
+    } catch (error) {
+      toast.add({
+        title: `Couldn't download ${file.name}`,
+        description: toApiError(error).message,
+        type: "error",
+      })
+    } finally {
+      setFetching(undefined)
+    }
+  }
+  return (
+    <ul className="flex flex-col divide-y divide-border rounded-(--radius-control) border">
+      {files.map((file) => (
+        <li
+          key={file.name}
+          className="flex min-w-0 items-center gap-2.5 px-3 py-2"
+        >
+          <Icon icon="file" className="shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+            {file.name}
+          </span>
+          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+            {file.media_type} · {formatBytes(file.size_bytes)}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Download ${file.name}`}
+            disabled={fetching === file.name}
+            onClick={() => void download(file)}
+          >
+            {fetching === file.name ? <Spinner /> : <Icon icon="download" />}
+          </Button>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 /**
  * The Overview tab: what the run waits for or why it failed, what it was
- * given and what it handed on, and its record, with its timing beside them.
+ * given (its input and files) and what it handed on, and its record, with
+ * its timing beside them.
  */
 function AdkRunOverview({
   organizationId,
@@ -362,6 +427,18 @@ function AdkRunOverview({
       >
         <JsonView value={run.input ?? null} className="max-h-[28rem]" />
       </PageSection>
+      {run.files?.length ? (
+        <PageSection
+          title="Files it started with"
+          description="Saved in the run's artifact store, where its steps read them by name (state.files lists them)."
+        >
+          <RunFiles
+            organizationId={organizationId}
+            runId={run.id}
+            files={run.files}
+          />
+        </PageSection>
+      ) : null}
       {(hasResult || (ended && run.status === "succeeded")) && (
         <PageSection
           title="What it handed on"

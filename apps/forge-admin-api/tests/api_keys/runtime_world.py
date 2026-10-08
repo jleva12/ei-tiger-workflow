@@ -1,12 +1,14 @@
 """The workflow runtime's world: the API-keys world (key_world), with a run
-store on SQLite, the async worker's queue stood in, and the organizations'
-workflows: Ship (published v1, with a draft), Drafty (never published) and
-Theirs (another organization's, published)."""
+store on SQLite, the async worker's queue stood in, runs' files kept in
+memory, and the organizations' workflows: Ship (published v1, with a draft),
+Drafty (never published), Theirs (another organization's, published) and
+Papers (published, its start taking PDF and text files)."""
 
 from collections.abc import Callable
 from typing import Any
 
 from forge_task_adk_workflows.run_store import RunStore, metadata
+from google.adk.artifacts import InMemoryArtifactService
 from key_world import ORG, OTHER_ORG, RUNTIME, World
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -14,6 +16,8 @@ from sqlalchemy.pool import StaticPool
 from forge_admin.adk_workflows.versioned_store import versioned
 
 SHIP, DRAFTY, THEIRS = "ag_ship000001", "ag_drafty0001", "ag_theirs0001"
+PAPERS = "ag_papers0001"
+PAPER_TYPES = ["pdf", "text"]
 INPUT = {
     "type": "object",
     "required": ["key"],
@@ -26,13 +30,13 @@ QUESTION = {
 }
 
 
-def workflow(agent_id: str, name: str) -> dict[str, Any]:
+def workflow(agent_id: str, name: str, **start: Any) -> dict[str, Any]:
     nodes = [
         {
             "id": "start",
             "kind": "start",
             "name": "Start",
-            "config": {"input_schema": INPUT},
+            "config": {"input_schema": INPUT, **start},
             "outputs": ["next"],
         },
         {
@@ -79,10 +83,15 @@ class Workflows:
                 DRAFTY, ORG, workflow(DRAFTY, "Drafty"), published=None
             ),
             THEIRS: self.record(THEIRS, OTHER_ORG, None, published=1),
+            PAPERS: self.record(PAPERS, ORG, None, published=1),
         }
         self.versions = {
             (SHIP, 1): {**workflow(SHIP, "Ship"), "version": 1},
             (THEIRS, 1): {**workflow(THEIRS, "Theirs"), "version": 1},
+            (PAPERS, 1): {
+                **workflow(PAPERS, "Papers", allow_files=True, file_types=PAPER_TYPES),
+                "version": 1,
+            },
         }
 
     @staticmethod
@@ -133,10 +142,12 @@ class Runtime:
         self.call(tables)
         self.runs = RunStore(engine)
         self.queue = FakeEmbedding()
+        self.artifacts = InMemoryArtifactService()
         state = world.client.app.state  # type: ignore[attr-defined]
         state.adk_runs = self.runs
         state.embedding = self.queue
         state.organization_agents = Workflows()
+        state.workflow_artifacts = self.artifacts
 
     def call(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         assert self.world.client.portal is not None

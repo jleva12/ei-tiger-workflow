@@ -208,7 +208,7 @@ function KnowledgeBaseFields({
                 >
                   <span className="truncate">{found.name}</span>
                   <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                    {found.kind === "graph"
+                    {found.kind === "system"
                       ? `${found.ready} of ${found.documents} ${found.documents === 1 ? "repository" : "repositories"} ingested`
                       : `${found.ready} of ${found.documents} searchable`}
                   </span>
@@ -239,9 +239,9 @@ function KnowledgeBaseFields({
         )}
         <FieldDescription>
           The agent searches their documents (parsed, chunked and embedded when
-          uploaded), or a graph knowledge base's code (each declaration of its
-          repositories' code graphs), by meaning and by their words, and reads
-          the passages that match best.
+          uploaded), or a system design knowledge base's code (each declaration
+          of its repositories' code graphs), by meaning and by their words, and
+          reads the passages that match best.
         </FieldDescription>
         <IssueMessages issues={issues} />
       </div>

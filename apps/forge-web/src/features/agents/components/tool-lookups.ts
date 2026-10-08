@@ -20,7 +20,7 @@ export type ToolChecks = {
   >
   knowledgeBases?: Map<
     string,
-    { name: string; kind: "rag" | "graph"; ready: number }
+    { name: string; kind: "rag" | "system"; ready: number }
   >
 }
 
@@ -53,9 +53,9 @@ export function useToolLookups(organizationId: string): {
               name: kb.name,
               description: kb.description,
               kind: kb.kind,
-              // A graph knowledge base's repositories, and those ingested.
-              documents: kb.kind === "graph" ? kb.repositories : kb.documents,
-              ready: kb.kind === "graph" ? kb.ingested : kb.ready,
+              // A system design knowledge base's repositories, and those ingested.
+              documents: kb.kind === "system" ? kb.repositories : kb.documents,
+              ready: kb.kind === "system" ? kb.ingested : kb.ready,
             },
           ])
         ),
@@ -80,7 +80,7 @@ export function useToolLookups(organizationId: string): {
                 {
                   name: kb.name,
                   kind: kb.kind,
-                  ready: kb.kind === "graph" ? kb.ingested : kb.ready,
+                  ready: kb.kind === "system" ? kb.ingested : kb.ready,
                 },
               ])
             )

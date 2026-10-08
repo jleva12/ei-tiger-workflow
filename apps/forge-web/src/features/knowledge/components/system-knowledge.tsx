@@ -71,9 +71,11 @@ import {
   useKnowledgeBaseRepositories,
   useKnowledgeBaseRepositoryMutations,
 } from "../lib/repositories"
+import { SYSTEM_ICON } from "../lib/system"
 import { IncludeRepositoryDialog } from "./include-repository-dialog"
 import type { SearchChange } from "./knowledge-page"
 import { KnowledgeSearchDialog } from "./knowledge-search"
+import { SystemMap } from "./system-map"
 
 const FEATURES: Partial<DataTableFeatureConfig> = {
   ...ADMIN_TABLE_FEATURES,
@@ -111,10 +113,10 @@ const helper = createColumnHelper<CodeRepository>()
 const COLUMNS = helper.columns([
   helper.accessor((repository) => fullName(repository), {
     id: "repository",
-    header: "Repository",
+    header: "Application",
     size: 300,
     enableHiding: false,
-    meta: { label: "Repository" },
+    meta: { label: "Application" },
     cell: ({ row: { original: repository } }) => (
       <span className="flex min-w-0 flex-col">
         <span className="truncate text-[0.8125rem] font-medium text-foreground">
@@ -193,7 +195,7 @@ function RepositoryMenu({ repository }: { repository: CodeRepository }) {
       editLabel="Open code graph"
       editIcon="layers"
       onDelete={actions.remove && (() => actions.remove?.(repository))}
-      deleteLabel="Remove from knowledge base…"
+      deleteLabel="Remove from the system…"
     >
       {actions.ingest && (
         <DropdownMenuItem
@@ -209,11 +211,15 @@ function RepositoryMenu({ repository }: { repository: CodeRepository }) {
 }
 
 /**
- * A graph knowledge base's page: the code repositories it includes, which
- * its agents search in their code graphs. Its own sub nav lists them, each
- * with how its latest ingestion stands; the overview tables them with their
- * graphs' sizes. A repository opens its code graph to explore (`?repository=`,
- * at `node`) and its Ingestion tab (`section=ingestion`), auditing what its
+ * A system design knowledge base's page: a system's applications (some of
+ * the organization's code repositories), how they connect, and their code
+ * graphs, which its agents search. It opens on the system map, where those
+ * who manage knowledge bases draw the connections between applications
+ * (what calls what, what sends messages to what) and say where in the code
+ * each happens; All applications (`show=applications`) tables them with
+ * their graphs' sizes. Its own sub nav lists them, each with how its latest
+ * ingestion stands; one opens its code graph to explore (`?repository=`, at
+ * `node`) and its Ingestion tab (`section=ingestion`), auditing what its
  * ingestions put in the graph. Those who manage knowledge bases add the
  * organization's repositories, or a GitHub repository it doesn't have yet
  * (adding it to the organization, with its first ingestion queued), and
@@ -221,7 +227,7 @@ function RepositoryMenu({ repository }: { repository: CodeRepository }) {
  * `repositories:manage`. Everyone tries a search as agents would. The list
  * reads itself again every few seconds while an ingestion runs.
  */
-export function GraphKnowledge({
+export function SystemKnowledge({
   organizationId,
   organizationName,
   base,
@@ -296,6 +302,24 @@ export function GraphKnowledge({
       }),
     [onSearch]
   )
+  const openAt = React.useCallback(
+    (repositoryId: string, nodeId?: string) =>
+      onSearch({
+        repository: repositoryId,
+        section: undefined,
+        node: nodeId,
+        show: undefined,
+      }),
+    [onSearch]
+  )
+  const openView = (view: KnowledgeSearch["show"]) =>
+    onSearch({
+      repository: undefined,
+      section: undefined,
+      node: undefined,
+      show: view,
+    })
+  const tabled = !open && search.show === "applications"
   const actions = React.useMemo<RowActions>(
     () => ({
       open: openRepository,
@@ -324,12 +348,19 @@ export function GraphKnowledge({
             <span className="truncate">Knowledge bases</span>
           </NavItem>
           <NavItem
-            icon={KNOWLEDGE_ICON}
-            active={!open}
-            meta={repositories.length || undefined}
-            onClick={() => openRepository(undefined)}
+            icon={SYSTEM_ICON}
+            active={!open && !tabled}
+            onClick={() => openView(undefined)}
           >
-            All repositories
+            System map
+          </NavItem>
+          <NavItem
+            icon={KNOWLEDGE_ICON}
+            active={tabled}
+            meta={repositories.length || undefined}
+            onClick={() => openView("applications")}
+          >
+            All applications
           </NavItem>
         </SidebarSection>
       </ShellSidebarHeader>
@@ -343,7 +374,7 @@ export function GraphKnowledge({
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      aria-label="Add a repository"
+                      aria-label="Add an application"
                     />
                   }
                   organizationName={organizationName}
@@ -354,7 +385,7 @@ export function GraphKnowledge({
               ) : undefined
             }
           >
-            Repositories
+            Applications
           </NavSectionHeading>
           {list.isPending ? (
             <div className="grid gap-1.5 px-2.5 py-1" aria-busy="true">
@@ -363,7 +394,7 @@ export function GraphKnowledge({
             </div>
           ) : repositories.length === 0 ? (
             <p className="px-2.5 py-1 text-xs text-subtle">
-              No repositories yet.
+              No applications yet.
             </p>
           ) : (
             repositories.map((repository) => (
@@ -397,14 +428,14 @@ export function GraphKnowledge({
             organizationName={organizationName}
             onPick={setAdding}
           >
-            Repository
+            Application
           </AddMenu>
         )}
       </ShellHeaderActions>
 
       {list.error ? (
         <ErrorCallout
-          title="Couldn't load the knowledge base's repositories"
+          title="Couldn't load the knowledge base's applications"
           action={
             <Button
               variant="outline"
@@ -435,21 +466,21 @@ export function GraphKnowledge({
       ) : search.repository && !list.isPending ? (
         <PageEmpty
           illustration="search"
-          title="This repository isn't in the knowledge base anymore"
+          title="This application isn't in the knowledge base anymore"
           description="It was removed, or the link is wrong."
         >
           <Button variant="outline" onClick={() => openRepository(undefined)}>
-            All repositories
+            System map
           </Button>
         </PageEmpty>
       ) : !list.isPending && repositories.length === 0 ? (
         <EmptyWorkspace
           illustration={<EmptyIllustration name="tasks" />}
-          title={`Give ${base.name} some code`}
+          title={`Map ${base.name}'s applications`}
           description={
             canManage
-              ? `A graph knowledge base holds code repositories, ingested into the code graph: each declaration, what it calls and uses, and its source. Agents searching ${base.name} find the code that answers their question. Add ${organizationName}'s repositories, or a GitHub repository.`
-              : `${base.name} has no repositories yet. Those who manage ${organizationName}'s knowledge bases add them.`
+              ? `A system design knowledge base holds a system's applications — code repositories ingested into the code graph — and how they connect: what calls what, what sends messages to what. Agents searching ${base.name} are told the system and find the code that answers their question. Add ${organizationName}'s repositories, or a GitHub repository, then connect them.`
+              : `${base.name} has no applications yet. Those who manage ${organizationName}'s knowledge bases add them.`
           }
           actions={
             canManage ? (
@@ -458,17 +489,29 @@ export function GraphKnowledge({
                 organizationName={organizationName}
                 onPick={setAdding}
               >
-                Add a repository
+                Add an application
                 <Icon icon="down" data-icon="inline-end" />
               </AddMenu>
             ) : undefined
           }
           steps={[
-            { icon: CODE_REPOSITORIES_ICON, label: "Add repositories" },
-            { icon: "layers", label: "Ingest them into the code graph" },
+            { icon: CODE_REPOSITORIES_ICON, label: "Add applications" },
+            { icon: "link", label: "Connect them on the map" },
             { icon: "robot", label: "Attach it to agents" },
           ]}
         />
+      ) : !tabled ? (
+        list.isPending ? (
+          <Skeleton className="m-4 h-[30rem] rounded-(--radius-card)" />
+        ) : (
+          <SystemMap
+            scope={scope}
+            baseName={base.name}
+            applications={repositories}
+            canManage={canManage}
+            onOpen={openAt}
+          />
+        )
       ) : (
         <ActionsContext.Provider value={actions}>
           <DataTable
@@ -476,7 +519,7 @@ export function GraphKnowledge({
             title={base.name}
             description={
               base.description ||
-              `The code ${organizationName}'s agents search in ${base.name}: ${repositories.length} ${repositories.length === 1 ? "repository" : "repositories"}, ${repositories.filter((r) => r.last_success).length} ingested.`
+              `The applications in ${base.name}, whose code ${organizationName}'s agents search: ${repositories.length} ${repositories.length === 1 ? "application" : "applications"}, ${repositories.filter((r) => r.last_success).length} ingested into the code graph.`
             }
             columns={COLUMNS}
             data={repositories}
@@ -484,9 +527,9 @@ export function GraphKnowledge({
             getRowId={(repository) => repository.id}
             features={FEATURES}
             initialState={INITIAL_STATE}
-            stateKey="graph-knowledge-repositories"
-            exportFileName="knowledge-base-repositories"
-            labels={{ rows: "repositories", rowSingular: "repository" }}
+            stateKey="system-knowledge-applications"
+            exportFileName="knowledge-base-applications"
+            labels={{ rows: "applications", rowSingular: "application" }}
             onRowClick={(row) => openRepository(row.original)}
           />
         </ActionsContext.Provider>
@@ -510,7 +553,7 @@ export function GraphKnowledge({
         open={adding === "new"}
         onOpenChange={(next) => !next && setAdding(undefined)}
         organizationName={organizationName}
-        description={`A GitHub repository for ${base.name}: ${organizationName} gets it too (on its Code repositories page) when it doesn't have it, and ingests it into the code graph, so agents searching ${base.name} search its code.`}
+        description={`A GitHub repository for ${base.name}: ${organizationName} gets it too (under Knowledge bases → Code repositories) when it doesn't have it, and ingests it into the code graph, so agents searching ${base.name} search its code.`}
         onSubmit={async (input) => {
           const added = await include.mutateAsync(input)
           openRepository(added)
@@ -520,8 +563,8 @@ export function GraphKnowledge({
         open={removing !== undefined}
         onClose={() => setRemoving(undefined)}
         title={`Remove ${removing ? fullName(removing) : "the repository"} from ${base.name}?`}
-        description={`Agents searching ${base.name} stop finding its code. It stays in ${organizationName}, with its code graph, and in any other knowledge base that has it.`}
-        confirmLabel="Remove repository"
+        description={`Its connections on ${base.name}'s system map go with it, and agents searching ${base.name} stop finding its code. It stays in ${organizationName}, with its code graph, and in any other knowledge base that has it.`}
+        confirmLabel="Remove application"
         onConfirm={async () => {
           await remove.mutateAsync(removing!.id)
           if (open?.id === removing?.id) openRepository(undefined)
@@ -562,7 +605,7 @@ function AddMenu({
       <DropdownMenuTrigger render={trigger}>{children}</DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80">
         <DropdownMenuGroup>
-          <DropdownMenuLabel>Add a repository…</DropdownMenuLabel>
+          <DropdownMenuLabel>Add an application…</DropdownMenuLabel>
           <DropdownMenuItem
             onClick={() => onPick("existing")}
             className="items-start"
@@ -573,7 +616,7 @@ function AddMenu({
                 From {organizationName}'s repositories
               </span>
               <span className="text-2xs text-muted-foreground">
-                One on its Code repositories page
+                One under Knowledge bases → Code repositories
               </span>
             </span>
           </DropdownMenuItem>

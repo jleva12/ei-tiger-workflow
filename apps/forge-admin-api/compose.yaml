@@ -77,6 +77,9 @@ services:
       FORGE_ADMIN_S3_ACCESS_KEY_ID: ${FORGE_S3_ACCESS_KEY_ID:-forge-local}
       FORGE_ADMIN_S3_SECRET_ACCESS_KEY: ${FORGE_S3_SECRET_ACCESS_KEY:-local-forge-secret}
       FORGE_ADMIN_S3_CREATE_BUCKET: "true"
+      # Workflow runs' files: ADK artifacts in the same RustFS, which the
+      # async worker's runs read.
+      FORGE_ADMIN_WORKFLOW_ARTIFACTS: ${FORGE_WORKFLOW_ARTIFACTS:-s3://forge-artifacts/workflows}
       FORGE_ADMIN_KNOWLEDGE_DATABASE: ${FORGE_KNOWLEDGE_DATABASE:-forge_knowledge}
       # Where the ready-made code explorer MCP server is on the stack's network
       # (apps/forge-codegraph-mcp), for servers added from it: the admin API

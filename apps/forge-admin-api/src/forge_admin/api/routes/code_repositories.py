@@ -18,7 +18,7 @@ removing repositories and starting and retrying their ingestions need
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, StringConstraints
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +46,7 @@ from forge_admin.code_repositories.github import (
 )
 from forge_admin.db.audit import UtcDateTime
 from forge_admin.db.clock import database_now
+from forge_admin.knowledge.connections import commit_synced, knowledge_bases_linking
 from forge_admin.models import CodeIngestionJob, CodeRepository
 from forge_admin.models.code_repositories import (
     ACTIVE,
@@ -344,23 +345,29 @@ async def get_code_repository(
 async def remove_code_repository(
     organization_id: NodeId,
     repository_id: NodeId,
+    request: Request,
     user: CurrentUser,
     session: Session,
     enforcer: Enforcer,
 ) -> None:
     """
-    Remove a repository from the organization, and its ingestions. One the
-    worker is running stops at its next write. The code graph itself stays:
-    other organizations may have the repository.
+    Remove a repository from the organization, and its ingestions, and from
+    its knowledge bases with their connections to it. One the worker is
+    running stops at its next write. The code graph itself stays: other
+    organizations may have the repository.
     \f
     :raises HTTPException: 403 without ``repositories:manage``; 404 for
-        another organization's repository, or none.
+        another organization's repository, or none; 503 when code links to
+        it can't be taken out of the code graph.
     """
     repository = await repository_of(
         session, enforcer, user, organization_id, repository_id, manage=True
     )
+    # It leaves its knowledge bases, with their connections to it; their
+    # code links leave the code graph.
+    linking = await knowledge_bases_linking(session, repository_id)
     await session.delete(repository)
-    await session.commit()
+    await commit_synced(session, getattr(request.app.state, "codegraph", None), linking)
     logger.info(
         "%s removed code repository %s (%s) from organization %s",
         user,

@@ -110,19 +110,24 @@ the **assistant** (the AI helper on every page).
   It analyses Java (javac, with Maven or Gradle), TypeScript/JavaScript (the
   TypeScript compiler) and Python (Pyright). The graph is in Spanner (the
   emulator locally) and is the engine for making codebases a knowledge
-  base. An organization adds its GitHub repositories on its **Code
-  repositories** page (or `/api/v1/organizations/{org}/code-repositories`),
+  base. An organization adds its GitHub repositories on the **Code
+  repositories** tab of its Knowledge bases page (or
+  `/api/v1/organizations/{org}/code-repositories`),
   each on one branch; the admin API queues each ingestion as a row of
   `code_ingestion_jobs` in its MySQL, and the worker claims it there, builds
   the graph and writes how it went back. A repository's graph is one per
-  GitHub URL, shared by the organizations that have it. A **graph knowledge
-  base** (Knowledge bases → Knowledge base → Graph knowledge base) holds some
-  of the organization's repositories: its page adds them (one of the
-  organization's, or a GitHub URL), ingests them, explores each one's code
+  GitHub URL, shared by the organizations that have it. A **system design
+  knowledge base** (Knowledge bases → Knowledge base → System design
+  knowledge base) holds a system's applications, some of the organization's
+  repositories, and how they connect: its page adds them (one of the
+  organization's, or a GitHub URL), ingests them, draws them on a system map
+  where people connect them (calls, sends events to, depends on, shares data
+  with) and say where in the code each connection happens (code links, which
+  the code graph follows across repositories), explores each one's code
   graph and audits its ingestions; chat agents and workflow LLM nodes search
   it with their knowledge base tool, as they search a RAG one's documents,
-  through the worker's search API, and cite the declarations they answer
-  from. The code graph MCP server
+  through the worker's search API, are told its applications and
+  connections, and cite the declarations they answer from. The code graph MCP server
   ([forge-codegraph-mcp](apps/forge-codegraph-mcp/README.md)) serves the
   published graphs to agents: read-only tools to explore a question, search,
   walk callers and callees, assess a change's impact and read exact source.

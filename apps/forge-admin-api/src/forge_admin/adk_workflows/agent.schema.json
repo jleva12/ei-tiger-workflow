@@ -659,13 +659,47 @@
       "type": "object",
       "description": "Where every run starts: what the person or system sends in.",
       "required": [
-        "input_schema"
+        "input_schema",
+        "allow_files",
+        "file_types"
       ],
       "additionalProperties": false,
       "properties": {
         "input_schema": {
           "type": "object",
           "description": "A JSON Schema of what a run starts with; {} takes anything."
+        },
+        "allow_files": {
+          "type": "boolean",
+          "description": "Whether a run may start with files: each is saved as an ADK artifact of the run's session, its steps read it there (ctx.load_artifact, an LLM agent's load_artifacts tool), and state.files lists them."
+        },
+        "file_types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "pdf",
+              "word",
+              "powerpoint",
+              "text",
+              "markdown",
+              "html",
+              "excel",
+              "csv",
+              "json",
+              "xml",
+              "png",
+              "jpeg",
+              "gif",
+              "webp",
+              "mp3",
+              "wav",
+              "mp4",
+              "zip"
+            ]
+          },
+          "uniqueItems": true,
+          "description": "The types of files it takes, by their extension; none takes any type."
         }
       }
     },

@@ -6,6 +6,7 @@ import {
   type AgentStep,
   type SubAgent,
 } from "@/features/adk-workflows/lib/model"
+import { describeTypes } from "@/features/adk-workflows/lib/files"
 import type { StepData } from "@/features/steps/lib/model"
 import { inputFields } from "@/features/steps/lib/scope"
 import { AgentDataSection } from "./agent-data-section"
@@ -27,9 +28,12 @@ function detailOf(step: AgentStep, lookups: AgentLookups): string {
   switch (step.kind) {
     case "start": {
       const { names } = inputFields(step.config.input_schema)
-      return names.length
+      const input = names.length
         ? `Needs ${plural(names.length, "input field")}`
         : "Takes any input"
+      return step.config.allow_files
+        ? `${input} · files: ${describeTypes(step.config.file_types)}`
+        : input
     }
     case "llm": {
       const config = step.config

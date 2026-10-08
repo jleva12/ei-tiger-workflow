@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge_admin.auth.access import Level, Scope, authorize
 from forge_admin.models import KnowledgeBase
-from forge_admin.models.knowledge import GRAPH, RAG
+from forge_admin.models.knowledge import RAG, SYSTEM
 
 # Reading an organization's knowledge bases and their documents.
 READ = "organizations:read"
@@ -15,8 +15,8 @@ READ = "organizations:read"
 MANAGE = "knowledge_bases:manage"
 NOT_FOUND = "The organization has no such knowledge base"
 NOT_OF_KIND = {
-    RAG: "A graph knowledge base holds code repositories, not documents",
-    GRAPH: "A RAG knowledge base holds documents, not code repositories",
+    RAG: "A system design knowledge base holds code repositories, not documents",
+    SYSTEM: "A RAG knowledge base holds documents, not code repositories",
 }
 
 

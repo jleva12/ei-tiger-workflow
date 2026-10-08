@@ -11,8 +11,8 @@ import { api } from "@/lib/api-instance"
 import { organizationKnowledgeBases, type KnowledgeScope } from "./api"
 
 /*
- * A graph knowledge base's code repositories: some of the organization's
- * (its Code repositories page), each in any number of knowledge bases.
+ * A system design knowledge base's code repositories: some of the organization's
+ * (its Code repositories tab), each in any number of knowledge bases.
  * Including one adds a GitHub URL to the organization first when it doesn't
  * have it (queuing its first ingestion); removing one leaves it in the
  * organization, with its code graph. The list is keyed under the

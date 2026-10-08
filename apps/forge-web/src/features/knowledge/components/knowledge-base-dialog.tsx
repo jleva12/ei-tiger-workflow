@@ -44,7 +44,7 @@ export function KnowledgeBaseDialog({
   onOpenChange: (open: boolean) => void
   /** The knowledge base to edit; without one the dialog creates one. */
   base?: KnowledgeBase
-  /** What a new one holds: documents (`rag`) or code repositories (`graph`). */
+  /** What a new one holds: documents (`rag`) or a system's applications (`system`). */
   kind?: KnowledgeBaseKind
   organizationName: string
   /** Saves; rejects with the API's error, which the dialog shows. */
@@ -83,11 +83,11 @@ const COPY: Record<
       `A set of ${organization}'s documents its agents can search: runbooks, specs, policies. Upload them once it's made.`,
     placeholder: "Engineering handbook",
   },
-  graph: {
-    title: "New graph knowledge base",
+  system: {
+    title: "New system design knowledge base",
     about: (organization) =>
-      `A set of ${organization}'s code repositories its agents can search, ingested into the code graph: each declaration, how it connects, and its source. Add the repositories once it's made.`,
-    placeholder: "Payments services",
+      `A system of ${organization}'s applications its agents can reason about: the code repositories in it, how they call, message and depend on each other, and their code, ingested into the code graph. Add the applications and connect them once it's made.`,
+    placeholder: "Payments platform",
   },
 }
 

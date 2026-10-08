@@ -115,6 +115,26 @@ class CodeGraph:
             [h for h in hits if isinstance(h, dict)] if isinstance(hits, list) else []
         )
 
+    async def put_cross_links(self, owner: str, links: list[dict[str, Any]]) -> int:
+        """
+        Replace an owner's cross-repository links with these: edges from a
+        node of one repository's graph to a node of another's, which the
+        graph's queries follow across.
+
+        :param owner: Who keeps the links, a short token such as ``kb:<id>``;
+            its whole set is replaced.
+        :param links: Each ``{id, owner, kind, source, target, label,
+            provenance, created_by}``, the ends ``{repository_id, node_id,
+            qualified_name, kind}``; empty clears the set.
+        :return: How many links the owner has now.
+        :raises WorkerError: 400 for a link the worker refuses; it can't be
+            reached.
+        """
+        answer = await self._call(
+            "PUT", f"/v1/cross-links/{owner}", json={"links": links}
+        )
+        return int(answer.get("links", len(links)))
+
     async def aclose(self) -> None:
         await self._http.aclose()
 

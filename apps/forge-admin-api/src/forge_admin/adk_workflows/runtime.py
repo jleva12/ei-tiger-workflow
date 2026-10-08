@@ -3,9 +3,11 @@ The organizations' workflows for outside apps, over REST
 (``{api_prefix}/runtime/workflows``; A2A is ``a2a.py``):
 
 - ``GET /workflows/{ref}``: the workflow at that version: its name, what it
-  does, the input its start takes, and where to run it.
-- ``POST /workflows/{ref}/runs``: run it with an input; ``wait`` seconds for
-  it to pause or end (``workflow_runtime_wait`` at most), else answer at once.
+  does, the input (and files) its start takes, and where to run it.
+- ``POST /workflows/{ref}/runs``: run it with an input, and files when its
+  start takes them (a multipart form, or base64 in JSON; ``files.py``);
+  ``wait`` seconds for it to pause or end (``workflow_runtime_wait`` at
+  most), else answer at once.
 - ``GET /workflows/{ref}/runs/{run}``: the run, waiting as long again.
 - ``POST …/answers``: answer the question it waits at; ``…/decisions``:
   approve or reject the approval (or tool call) it waits at; ``…/cancel``:
@@ -29,12 +31,23 @@ from datetime import UTC
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request, Response, status
+from forge_task_adk_workflows.files import FILE_TYPES, RunFile, files_rule
 from forge_task_adk_workflows.run_store import ABANDONABLE, PAUSED, Actor
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo.errors import PyMongoError
 from starlette.routing import NoMatchFound
 
 from forge_admin.adk_workflows.documents import AgentStore
+from forge_admin.adk_workflows.files import (
+    FileContent,
+    Limits,
+    SentFile,
+    artifacts_of,
+    read_run_body,
+    run_body,
+    run_files,
+    storage_errors,
+)
 from forge_admin.adk_workflows.resources import RunResources
 from forge_admin.adk_workflows.runs import (
     AdkRunError,
@@ -103,6 +116,9 @@ class RunStart(BaseModel):
     #: What the run starts with: it must fit the start's input schema.
     input: Any = None
     wait: Wait = 0
+    #: The files it starts with, when its start takes files; a multipart
+    #: form sends them as ``files`` parts instead.
+    files: list[FileContent] = []
 
 
 class AnswerSend(BaseModel):
@@ -125,6 +141,19 @@ class DecisionSend(BaseModel):
     wait: Wait = 0
 
 
+class FilesTaken(BaseModel):
+    """The files a workflow's start takes."""
+
+    #: Whether a run may start with files.
+    allowed: bool
+    #: Their types (``pdf``, ``word``, …), each with its extensions; none
+    #: takes any type.
+    types: dict[str, list[str]]
+    #: The most files a run starts with, and bytes each may be.
+    max_count: int
+    max_bytes: int
+
+
 class WorkflowInfo(BaseModel):
     """A workflow at a version, as outside apps call it."""
 
@@ -136,6 +165,8 @@ class WorkflowInfo(BaseModel):
     description: str
     #: The JSON Schema of the input its start takes; ``{}`` takes anything.
     input_schema: dict[str, Any]
+    #: The files it takes.
+    files: FilesTaken
     runs_url: str
     a2a_card_url: str
 
@@ -191,6 +222,8 @@ class RuntimeRun(BaseModel):
     result: Any = None
     error: RuntimeFailure | None
     pause: RuntimePause | None
+    #: The files it started with.
+    files: list[RunFile] = []
     #: Where to follow it, and act on it: ``self``, ``answers``,
     #: ``decisions``, ``cancel``.
     links: dict[str, str]
@@ -260,6 +293,7 @@ def runtime_run(request: Request, run: dict[str, Any]) -> RuntimeRun:
         if isinstance(error, dict)
         else None,
         pause=pause,
+        files=run_files(run.get("payload")),
         links=links,
     )
 
@@ -361,15 +395,18 @@ async def start_runtime_run(
     protocol: Literal["rest", "a2a"],
     run_id: str | None = None,
     trigger: dict[str, Any] | None = None,
+    files: list[SentFile] | None = None,
 ) -> dict[str, Any]:
     """
-    Start a run of a workflow for an outside caller, as them.
+    Start a run of a workflow for an outside caller, as them, with the files
+    it's sent saved as artifacts of its session.
 
-    :raises HTTPException: 422 for input that doesn't fit, or a workflow that
-        doesn't build (naming the node); 503.
+    :raises HTTPException: 422 for input or a file that doesn't fit, or a
+        workflow that doesn't build (naming the node); 503.
     """
     record = resolved.run_record
     organization_id = record["organization_id"]
+    artifacts = artifacts_of(request, files or [])
     queue = run_queue(request)
     with mongo_errors():
         try:
@@ -382,13 +419,14 @@ async def start_runtime_run(
                     chat_agents=getattr(request.app.state, "chat_agents", None),
                     sessions=request.app.state.sessionmaker,
                 ),
+                files,
             )
         except AdkRunError as error:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)
             ) from None
     actor = await caller_actor(request, caller)
-    with store_errors():
+    with store_errors(), storage_errors():
         run = await start_adk_run(
             run_store(request),
             queue,
@@ -406,12 +444,14 @@ async def start_runtime_run(
             },
             version=resolved.version,
             run_id=run_id,
+            artifacts=artifacts,
         )
     logger.info(
-        "%s ran workflow %s over %s: run %s",
+        "%s ran workflow %s over %s with %d files: run %s",
         actor.id,
         resolved.ref,
         protocol,
+        len(files or []),
         run["id"],
     )
     return run
@@ -566,8 +606,25 @@ async def get_workflow(request: Request, ref: WorkflowRef) -> WorkflowInfo:
         name=str(document.get("name") or workflow_id),
         description=str(document.get("description") or ""),
         input_schema=start_schema(document) or {},
+        files=files_taken(request, document),
         runs_url=_url(request, "start_workflow_run", ref=ref),
         a2a_card_url=_card_url(request, ref),
+    )
+
+
+def files_taken(request: Request, document: dict[str, Any]) -> FilesTaken:
+    """:return: The files a workflow's start takes, and how many and big."""
+    rule = files_rule(document)
+    limits = Limits.of(request.app.state.settings)
+    return FilesTaken(
+        allowed=rule.allowed,
+        types={
+            t: [ext.removeprefix(".") for ext in FILE_TYPES[t].extensions]
+            for t in rule.types
+            if t in FILE_TYPES
+        },
+        max_count=limits.count,
+        max_bytes=limits.size,
     )
 
 
@@ -583,25 +640,34 @@ def _card_url(request: Request, ref: str) -> str:
     "/{ref}/runs",
     status_code=status.HTTP_201_CREATED,
     summary="Run a workflow",
+    openapi_extra=run_body(
+        RunStart,
+        "The input, how long to wait, and the files it starts with when its "
+        "start takes files: JSON (files base64), or a multipart form with the "
+        "input as JSON text and each file a files part.",
+    ),
 )
 async def start_workflow_run(
     request: Request,
     response: Response,
     ref: WorkflowRef,
-    body: RunStart,
     caller: Caller,
 ) -> RuntimeRun:
     """
     Run the workflow at the version named, as the caller, with an input that
-    fits its start. With ``wait``, the answer comes once the run pauses or
-    ends, or the wait runs out.
+    fits its start, and files when it takes them. With ``wait``, the answer
+    comes once the run pauses or ends, or the wait runs out.
     \f
-    :raises HTTPException: 404; 422 for input that doesn't fit, or a workflow
-        that doesn't build; 503 when runs aren't set up.
+    :raises HTTPException: 404; 413 for a file too big; 422 for input or a
+        file that doesn't fit, or a workflow that doesn't build; 503 when runs
+        or files aren't set up.
     """
     resolved = await found_workflow(request, ref)
+    body, files = await read_run_body(
+        request, RunStart, Limits.of(request.app.state.settings)
+    )
     run = await start_runtime_run(
-        request, caller, resolved, body.input, protocol="rest"
+        request, caller, resolved, body.input, protocol="rest", files=files
     )
     run = await _settled(request, run, body.wait)
     shown = runtime_run(request, run)

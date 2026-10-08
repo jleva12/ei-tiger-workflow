@@ -214,6 +214,7 @@ def test_a_run_is_kept_with_its_documents_session_and_member_and_queued() -> Non
         "chat_agents": {},
         "knowledge_bases": {},
         "input": {"n": 1},
+        "files": [],
         "session_id": session_id,
         "run_as": "member-1",
         "run_as_name": "Ada Lovelace",

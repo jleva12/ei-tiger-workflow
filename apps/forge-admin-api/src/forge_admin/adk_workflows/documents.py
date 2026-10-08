@@ -71,6 +71,8 @@ ADDED_SETTINGS: dict[str, dict[str, Any]] = {
     "saved": {"version": None},
     # 2026-10-07: whether a match takes the first rule that holds, or every one.
     "match": {"mode": "first"},
+    # 2026-10-07: whether a run may start with files, and of which types.
+    "start": {"allow_files": False, "file_types": []},
 }
 # The same for sub-agents, in a node's settings.
 ADDED_SUB_AGENT_SETTINGS: dict[str, dict[str, Any]] = {"llm": {"tools": []}}

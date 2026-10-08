@@ -7,7 +7,8 @@ It serves read-only tools to agents over streamable HTTP:
 `explore_code` for a question in plain language, `search_code`,
 `find_symbol`, `get_node`, `neighbors`, `callers`, `callees`, `impact`,
 `path`, `hubs`, `changes`, `change_impact`, `history`, `read_source`,
-`read_file`, `repository_state` and `cross_repository_links`.
+`read_file`, `repository_state`, `cross_repository_links` and
+`repository_connections`.
 
 It is a Python rewrite of `forge-aidlc-parent`'s Go server
 (`apps/forge-codegraph-mcp` there), on the design of the `template-mcp`
@@ -30,9 +31,10 @@ answers as the Go server did: same queries, same ranking, same JSON.
 | `graph/query/` | The operations the tools serve: search, explore, impact with its assessment, changes, path, hubs, source, cross-repository hops |
 
 Not ported: the Go server's commit search, document search, repository wikis,
-`code_owners`, `pr_impact` and `repository_connections`, whose data (the
-commits and wiki tasks, the admin API's owners, pull request and project-map
-endpoints) this repository doesn't have; and its Prometheus `/metrics`.
+`code_owners` and `pr_impact`, whose data (the commits and wiki tasks, the
+admin API's owners and pull request endpoints) this repository doesn't have;
+and its Prometheus `/metrics`. `repository_connections` is back, over the
+system design knowledge bases' maps rather than teams' project maps.
 
 ## Tools
 
@@ -76,7 +78,16 @@ another over the network (`CGCrossLinks`, beside the graphs): `callers`,
 their first page, `impact` continues into the linked repositories under
 `across`, and `cross_repository_links` lists one node's links. A link finds
 its far node by id, or by qualified name after a re-ingestion renumbered it;
-otherwise it's `stale`.
+otherwise it's `stale`. People draw them as code links on a system design
+knowledge base's map in the web console, which writes each knowledge base's
+set as owner `kb:<id>`.
+
+**How repositories connect.** `repository_connections` answers the
+connections people drew between the organization's repositories on its
+system design knowledge bases' maps (calls, events, depends_on, shares_data,
+connects_to), each with its knowledge base, note and code links, whose node
+ids the other tools follow; with `repositories`, only those touching them.
+They come with the caller's access answer, so they're as fresh as it is.
 
 Failures the model can act on (an argument out of range, a node that isn't
 there at the generation, a stale cursor) come back as tool errors with their
@@ -101,7 +112,9 @@ it, its ID following from the URL; a caller reads the graphs of its
 organization's repositories' URLs. `list_repositories` lists only those;
 every tool refuses any other repository as if it weren't there; and links
 into other repositories (`across_repositories`, `impact`'s `across`) are
-followed only into those the caller reads.
+followed only into those the caller reads, and only when the caller's
+organization drew them (the access answer's `link_owners`): a graph shared
+with another organization holds that one's links too.
 
 - No credential, or one the admin API refuses: 401.
 - A credential that names no organization (a sign-in token not minted for

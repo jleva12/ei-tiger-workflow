@@ -14,7 +14,7 @@ import { KNOWLEDGE_BASE_KINDS } from "../lib/kinds"
 
 /**
  * The menu a new knowledge base starts from: a RAG one, of documents, or a
- * graph one, of code repositories. `trigger` is the button that opens it.
+ * system design one, of applications and how they connect. `trigger` is the button that opens it.
  */
 export function NewKnowledgeBaseMenu({
   trigger,
@@ -31,7 +31,7 @@ export function NewKnowledgeBaseMenu({
       <DropdownMenuContent align="end" className="w-80">
         <DropdownMenuGroup>
           <DropdownMenuLabel>A knowledge base of…</DropdownMenuLabel>
-          {(["rag", "graph"] as const).map((kind) => {
+          {(["rag", "system"] as const).map((kind) => {
             const info = KNOWLEDGE_BASE_KINDS[kind]
             return (
               <DropdownMenuItem

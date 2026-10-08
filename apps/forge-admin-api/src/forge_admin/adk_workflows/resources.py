@@ -7,8 +7,9 @@ once and the run carries what the worker needs:
   tool): their documents at the version named, with the saved agents they
   use bundled in, as the hosted runtime would run them;
 - knowledge bases: their names and descriptions, which their search tools
-  describe themselves by, and their kinds; a graph knowledge base's
-  repositories with a code graph, which the worker searches;
+  describe themselves by, and their kinds; a system design knowledge base's
+  repositories with a code graph, which the worker searches, and how they
+  connect;
 - MCP servers: that they're the organization's (the worker connects to them
   itself, with their credentials, as they're kept then).
 """
@@ -21,9 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from forge_admin.chat_agents.bundle import bundle
 from forge_admin.chat_agents.store import ChatAgentStore
+from forge_admin.knowledge.connections import connections_of
 from forge_admin.knowledge.graph import searchable
 from forge_admin.models import KnowledgeBase, McpServer
-from forge_admin.models.knowledge import GRAPH, RAG
+from forge_admin.models.knowledge import RAG, SYSTEM
 
 
 class RunResources:
@@ -88,8 +90,10 @@ class RunResources:
     async def knowledge_bases(self, ids: Sequence[str]) -> dict[str, dict[str, Any]]:
         """
         :return: The organization's knowledge bases of those, by ID: name,
-            description and kind (``rag`` or ``graph``); a graph one's
-            repositories with a code graph too, ``{id, graph_id, name}``.
+            description and kind (``rag`` or ``system``); a system design one's
+            repositories with a code graph too, ``{id, graph_id, name}``, and
+            how its applications connect, ``{source, kind, target,
+            description}``.
         """
         async with self.sessions() as session:
             found = list(
@@ -100,9 +104,9 @@ class RunResources:
                     )
                 )
             )
-            repositories = await searchable(
-                session, [kb.id for kb in found if kb.kind == GRAPH]
-            )
+            systems = [kb.id for kb in found if kb.kind == SYSTEM]
+            repositories = await searchable(session, systems)
+            connections = await connections_of(session, systems)
         snapshot: dict[str, dict[str, Any]] = {}
         for kb in found:
             snapshot[kb.id] = {
@@ -110,11 +114,12 @@ class RunResources:
                 "description": kb.description,
                 "kind": kb.kind or RAG,
             }
-            if kb.kind == GRAPH:
+            if kb.kind == SYSTEM:
                 snapshot[kb.id]["repositories"] = [
                     {"id": r.id, "graph_id": r.graph_id, "name": r.name}
                     for r in repositories.get(kb.id, [])
                 ]
+                snapshot[kb.id]["connections"] = connections.get(kb.id, [])
         return snapshot
 
     async def mcp_servers(self, ids: Sequence[str]) -> set[str]:

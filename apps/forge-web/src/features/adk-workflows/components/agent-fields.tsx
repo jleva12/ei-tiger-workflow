@@ -8,6 +8,7 @@ import {
   ChoiceField,
   NumberField,
   OptionalNumberField,
+  SwitchField,
   TextField,
 } from "@/features/builder/components/fields/basic-fields"
 import { ModelFields } from "@/features/builder/components/fields/model-fields"
@@ -91,6 +92,7 @@ import {
 import { ExpressionField } from "@/features/builder/components/fields/expression-field"
 import { StepFields } from "@/features/adk-workflows/components/step-fields"
 import { subAgentLine, toolLine } from "./agent-lines"
+import { FileTypesField } from "./file-types-field"
 import { useAgentBuilder } from "./agent-store"
 
 /*
@@ -1420,21 +1422,45 @@ type Props<K extends AgentKind> = {
 function StartFields({ id, config }: Props<"start">) {
   const { set } = useNodeBind<"start">(id, config)
   return (
-    <SchemaField
-      issue="input_schema"
-      label="Input fields"
-      title="What a run starts with"
-      description={
-        <>
-          The values every run starts with: each field, its type and whether
-          it&apos;s required. Every node reads them as {code("input")}.
-        </>
-      }
-      schema={config.input_schema}
-      onChange={(schema) => set("input_schema", schema)}
-      empty="Not declared: a run can start with anything."
-      subject={{ one: "input", many: "inputs" }}
-    />
+    <>
+      <SchemaField
+        issue="input_schema"
+        label="Input fields"
+        title="What a run starts with"
+        description={
+          <>
+            The values every run starts with: each field, its type and whether
+            it&apos;s required. Every node reads them as {code("input")}.
+          </>
+        }
+        schema={config.input_schema}
+        onChange={(schema) => set("input_schema", schema)}
+        empty="Not declared: a run can start with anything."
+        subject={{ one: "input", many: "inputs" }}
+      />
+      <SwitchField
+        issue="allow_files"
+        label="Allow files"
+        checked={config.allow_files}
+        onChange={(on) => set("allow_files", on)}
+        description="Whoever starts a run can send files with its input. Each is saved in the run's artifact store for its steps to read."
+      />
+      {config.allow_files && (
+        <FileTypesField
+          value={config.file_types}
+          onChange={(types) => set("file_types", types)}
+          description={
+            <>
+              Files of other types are refused. Steps find the run&apos;s files
+              in {code("state.files")} (each one&apos;s {code("name")},{" "}
+              {code("media_type")} and {code("size_bytes")}) and load them by
+              name from the artifact service; LLM agents get a tool that
+              loads them.
+            </>
+          }
+        />
+      )}
+    </>
   )
 }
 

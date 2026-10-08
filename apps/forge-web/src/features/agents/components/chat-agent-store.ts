@@ -51,9 +51,9 @@ export type KnowledgeBaseLookup = {
   name: string
   description: string
   /** `rag` holds documents; `graph` holds code repositories. */
-  kind: "rag" | "graph"
+  kind: "rag" | "system"
   /**
-   * Its documents (a graph one's repositories), and how many of them are
+   * Its documents (a system design one's repositories), and how many of them are
    * searchable (ingested).
    */
   documents: number

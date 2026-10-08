@@ -5,6 +5,11 @@ hidden input node, which keeps it as the run's ``input``: the message's text
 (coerced; a run whose input doesn't fit fails). A run's input is kept in the
 session's state as ``input`` too, for LLM agents' ``{input}``; a saved
 agent's is its own, read from its graph's events, and leaves the run's alone.
+
+A start that allows files lists the run's in the state too, as ``files``
+(``forge_task_adk_workflows.files.RunFile``: each artifact's ``name``,
+``media_type``, ``size_bytes``, ``type`` and ``version``), empty when it
+started without any.
 """
 
 from typing import Any
@@ -32,6 +37,11 @@ def start(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
     model = input_model(node)
     top = ctx.top
     misfit = ctx.input_misfit
+    files = (
+        [as_data(file) for file in ctx.services.files]
+        if top and settings_of(node, EntryConfig).allow_files
+        else None
+    )
 
     def run(adk: Context, node_input: Any) -> Any:
         value = as_data(node_input)
@@ -42,6 +52,8 @@ def start(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
                 raise RunFailed(f"{misfit}: {problems(error, 'input')}", step=node["id"]) from None
         if top:
             adk.state["input"] = value
+        if files is not None:
+            adk.state["files"] = files
         return value
 
     return FunctionNode(name=INPUT_NODE, func=run)

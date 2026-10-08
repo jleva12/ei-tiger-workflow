@@ -1,22 +1,34 @@
-"""Organizations' knowledge bases: named sets of documents (RAG) or code
-repositories (graph) their chat agents search, the documents uploaded to
-each, the collections they're filed in, and the repositories a graph
-knowledge base includes."""
+"""Organizations' knowledge bases: named sets of documents (RAG) or of a
+system's applications (system design) their chat agents search, the
+documents uploaded to each, the collections they're filed in, and a system
+design knowledge base's applications (code repositories), how they connect
+and where in their code."""
 
 from datetime import datetime
 from typing import Literal
 from uuid import uuid4
 
-from sqlalchemy import BigInteger, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Float,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from forge_admin.db.base import AUDIT_TIMESTAMP, AuditBase, ascii_string
 
 #: A knowledge base of uploaded documents, chunked and embedded by the async
-#: worker; and one of code repositories, searched in the code graph.
+#: worker; and a system design one: applications (code repositories), the
+#: connections between them, and their code, searched in the code graph.
 RAG = "rag"
-GRAPH = "graph"
-Kind = Literal["rag", "graph"]
+SYSTEM = "system"
+Kind = Literal["rag", "system"]
 
 
 def new_id() -> str:
@@ -27,15 +39,17 @@ def new_id() -> str:
 class KnowledgeBase(AuditBase):
     """
     A named set of an organization's documents, e.g. "HR policies", or of its
-    code repositories: its chat agents search it with a knowledge base tool.
-    A RAG one is the async worker's tenant for its documents' chunks, so a
-    search of it finds only its own; a graph one searches the code graph of
-    the repositories it includes (:class:`KnowledgeBaseRepository`).
+    applications: its chat agents search it with a knowledge base tool. A
+    RAG one is the async worker's tenant for its documents' chunks, so a
+    search of it finds only its own; a system design one searches the code
+    graph of the repositories it includes (:class:`KnowledgeBaseRepository`),
+    and tells its agents how they connect (:class:`KnowledgeBaseConnection`).
 
     :ivar organization_id: The organization.
-    :ivar kind: :data:`RAG` or :data:`GRAPH`; it never changes.
+    :ivar kind: :data:`RAG` or :data:`SYSTEM`; it never changes.
     :ivar name: Unique in the organization.
     :ivar description: What it holds, optionally; agents' tools describe it so.
+    :ivar map_layout: A system design one's map layout, as last picked.
     """
 
     __tablename__ = "knowledge_bases"
@@ -48,17 +62,24 @@ class KnowledgeBase(AuditBase):
     kind: Mapped[str] = mapped_column(ascii_string(16), default=RAG, server_default=RAG)
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
+    # A system design one's map layout (:data:`MAP_LAYOUTS`), as last
+    # picked; None until someone arranges it.
+    map_layout: Mapped[str | None] = mapped_column(ascii_string(16), nullable=True)
 
 
 class KnowledgeBaseRepository(AuditBase):
     """
-    A code repository a graph knowledge base includes: the organization's
-    (``code_repositories``), which other knowledge bases may include too.
-    Removing either removes the link; unlinking leaves the repository in the
-    organization.
+    An application a system design knowledge base includes: one of the
+    organization's code repositories (``code_repositories``), which other
+    knowledge bases may include too. Removing either removes the link, and
+    the knowledge base's connections to and from it; unlinking leaves the
+    repository in the organization.
 
-    :ivar knowledge_base_id: The graph knowledge base.
+    :ivar knowledge_base_id: The system design knowledge base.
     :ivar repository_id: The repository.
+    :ivar map_x: Where it is on the knowledge base's system map, as people
+        left it; None until it's placed.
+    :ivar map_y: The same, down.
     """
 
     __tablename__ = "knowledge_base_repositories"
@@ -74,6 +95,124 @@ class KnowledgeBaseRepository(AuditBase):
         primary_key=True,
         index=True,
     )
+    map_x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    map_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+#: How a system map arranges applications it has no place for: force-directed,
+#: in layers along the connections, or in a circle.
+MAP_LAYOUTS = ("cose", "breadthfirst", "circle")
+MapLayout = Literal["cose", "breadthfirst", "circle"]
+
+
+class KnowledgeBaseConnection(AuditBase):
+    """
+    How one of a system design knowledge base's applications connects to
+    another: calling its API, depending on it, sending it events or sharing
+    its data. People draw them on the knowledge base's system map; ingestion
+    doesn't find them. Both ends must be in the knowledge base: removing
+    either from it removes the connection.
+
+    :ivar knowledge_base_id: The system design knowledge base.
+    :ivar source_repository_id: The application it's from, e.g. the caller.
+    :ivar target_repository_id: The application it's to, e.g. the one called.
+    :ivar kind: One of :data:`CONNECTION_KINDS`.
+    :ivar description: A note on it, e.g. which API; may be empty.
+    """
+
+    __tablename__ = "knowledge_base_connections"
+    __table_args__ = (
+        UniqueConstraint(
+            "knowledge_base_id",
+            "source_repository_id",
+            "target_repository_id",
+            "kind",
+            name="uq_knowledge_base_connections_ends",
+        ),
+        ForeignKeyConstraint(
+            ["knowledge_base_id", "source_repository_id"],
+            [
+                "knowledge_base_repositories.knowledge_base_id",
+                "knowledge_base_repositories.repository_id",
+            ],
+            name="fk_knowledge_base_connections_source",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["knowledge_base_id", "target_repository_id"],
+            [
+                "knowledge_base_repositories.knowledge_base_id",
+                "knowledge_base_repositories.repository_id",
+            ],
+            name="fk_knowledge_base_connections_target",
+            ondelete="CASCADE",
+        ),
+        # The unique key covers the source's foreign key; this, the target's.
+        Index(
+            "ix_knowledge_base_connections_target",
+            "knowledge_base_id",
+            "target_repository_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(ascii_string(36), primary_key=True, default=new_id)
+    knowledge_base_id: Mapped[str] = mapped_column(ascii_string(36))
+    source_repository_id: Mapped[str] = mapped_column(ascii_string(36))
+    target_repository_id: Mapped[str] = mapped_column(ascii_string(36))
+    kind: Mapped[str] = mapped_column(ascii_string(32))
+    description: Mapped[str] = mapped_column(String(1000), default="")
+
+
+#: How one application connects to another: unspecified, calling its API,
+#: using it as a library, sending it events or messages, or sharing a
+#: database or storage with it.
+CONNECTION_KINDS = ("connects_to", "calls", "depends_on", "events", "shares_data")
+ConnectionKind = Literal["connects_to", "calls", "depends_on", "events", "shares_data"]
+
+
+class KnowledgeBaseCodeLink(AuditBase):
+    """
+    Where a connection happens in the code: a node of each application's
+    code graph, such as the client method that calls an API and the handler
+    serving it. The knowledge base's code links are written into the code
+    graph as cross-repository links (owner ``kb:<id>``), which its queries
+    follow from one repository into the other. Each end keeps the node's
+    kind, names and file as read when it was linked.
+
+    :ivar connection_id: The connection.
+    :ivar label: What connects them, e.g. ``POST /v1/orders``; may be empty.
+    """
+
+    __tablename__ = "knowledge_base_code_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "connection_id",
+            "source_node_id",
+            "target_node_id",
+            name="uq_knowledge_base_code_links_nodes",
+        ),
+        # The convention's name is longer than MySQL's 64 characters.
+        ForeignKeyConstraint(
+            ["connection_id"],
+            ["knowledge_base_connections.id"],
+            name="fk_knowledge_base_code_links_connection",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(ascii_string(36), primary_key=True, default=new_id)
+    connection_id: Mapped[str] = mapped_column(ascii_string(36))
+    source_node_id: Mapped[str] = mapped_column(ascii_string(256))
+    source_kind: Mapped[str] = mapped_column(String(64), default="")
+    source_name: Mapped[str] = mapped_column(String(255), default="")
+    source_qualified_name: Mapped[str] = mapped_column(Text, default="")
+    source_path: Mapped[str] = mapped_column(String(1000), default="")
+    target_node_id: Mapped[str] = mapped_column(ascii_string(256))
+    target_kind: Mapped[str] = mapped_column(String(64), default="")
+    target_name: Mapped[str] = mapped_column(String(255), default="")
+    target_qualified_name: Mapped[str] = mapped_column(Text, default="")
+    target_path: Mapped[str] = mapped_column(String(1000), default="")
+    label: Mapped[str] = mapped_column(String(500), default="")
 
 
 class KnowledgeCollection(AuditBase):

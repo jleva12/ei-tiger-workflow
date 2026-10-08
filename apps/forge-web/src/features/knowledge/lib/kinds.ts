@@ -1,5 +1,5 @@
 import type { IconProp } from "@/components/forge/icons"
-import { CODE_REPOSITORIES_ICON } from "@/features/code-repositories/lib/display"
+import { SYSTEM_ICON } from "./system"
 import type { KnowledgeBaseKind } from "./api"
 import { KNOWLEDGE_ICON } from "./knowledge"
 
@@ -14,10 +14,10 @@ export const KNOWLEDGE_BASE_KINDS: Record<
     summary: "Documents your agents read: runbooks, specs, policies",
     icon: KNOWLEDGE_ICON,
   },
-  graph: {
-    label: "Graph knowledge base",
-    short: "Graph",
-    summary: "Code repositories your agents search, as a code graph",
-    icon: CODE_REPOSITORIES_ICON,
+  system: {
+    label: "System design knowledge base",
+    short: "System",
+    summary: "Your applications, how they connect, and their code graphs",
+    icon: SYSTEM_ICON,
   },
 }

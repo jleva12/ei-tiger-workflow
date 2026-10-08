@@ -7,7 +7,9 @@ was when the run started (a run is pinned to that revision), the saved ADK
 workflows it runs, the input, the member it acts as and the ID of its ADK
 session, and queues it on the ``adk_workflows`` queue. The worker runs the
 job on the run, under a control backed by it; people decide its approvals
-and answer its questions on the run's page (``runs.AdkRun``).
+and answer its questions on the run's page (``runs.AdkRun``). The files a
+run starts with are ADK artifacts the admin API saved where this worker's
+runs keep theirs (``artifacts``; ``files``).
 """
 
 from __future__ import annotations
@@ -18,10 +20,12 @@ from typing import Any
 
 import httpx
 from forge_common.model_provider import ModelProviderConfigError
+from google.adk.artifacts import BaseArtifactService
 from google.adk.sessions import BaseSessionService
 from pydantic_settings import SettingsError
 
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
+from forge_task_adk_workflows.files import artifact_service
 from forge_task_adk_workflows.graph import RunServices
 from forge_task_adk_workflows.graph.agent_tools import AgentServices, DocumentsSearch, WorkerMcpServers
 from forge_task_adk_workflows.models import NOT_SET_UP, NoModels, load_models
@@ -36,8 +40,11 @@ RUN = "run"
 #: Test doubles a TaskContext's extras may carry.
 SERVICES = "adk_workflows.services"
 SESSIONS = "adk_workflows.sessions"
-#: The process's session service, among the TaskContext's shared resources.
+ARTIFACTS = "adk_workflows.artifacts"
+#: The process's session and artifact services, among the TaskContext's
+#: shared resources.
 SESSIONS_RESOURCE = "forge_task_adk_workflows.sessions"
+ARTIFACTS_RESOURCE = "forge_task_adk_workflows.artifacts"
 NO_SESSIONS = (
     "ADK workflow runs aren't set up on this worker: set HYBRID_ADK_WORKFLOWS__SESSION_DATABASE_URL "
     "(the admin MySQL, mysql+aiomysql://...)"
@@ -48,6 +55,7 @@ __all__ = [
     "AdkWorkflowsTaskFactory",
     "RunAdkWorkflowJob",
     "RunPayload",
+    "build_artifacts",
     "build_services",
     "build_sessions",
 ]
@@ -78,6 +86,8 @@ class RunAdkWorkflowJob:
             services=self.task.services,
             sessions=self.task.sessions,
             settings=self.task.settings,
+            artifacts=self.task.artifacts,
+            artifacts_unavailable=self.task.artifacts_unavailable,
         )
         return await run.run()
 
@@ -93,11 +103,15 @@ class AdkWorkflowsTask:
         sessions: BaseSessionService | None,
         *,
         sessions_unavailable: str | None = None,
+        artifacts: BaseArtifactService | None = None,
+        artifacts_unavailable: str | None = None,
     ) -> None:
         self.settings = settings
         self.services = services
         self.sessions = sessions
         self.sessions_unavailable = sessions_unavailable
+        self.artifacts = artifacts
+        self.artifacts_unavailable = artifacts_unavailable
         self._jobs = {RUN: RunAdkWorkflowJob(self)}
 
     @property
@@ -235,6 +249,27 @@ def build_sessions(settings: AdkWorkflowsSettings) -> tuple[BaseSessionService |
         return None, f"ADK workflow runs can't keep their sessions: {error}"
 
 
+def build_artifacts(settings: AdkWorkflowsSettings) -> tuple[BaseArtifactService | None, str | None]:
+    """
+    :return: Where runs keep their ADK artifacts (``artifacts``, with the S3
+        service's settings), or None and why: then a run started with files
+        fails.
+    """
+    if settings.artifacts is None:
+        return None, None
+    secret = settings.s3_secret_access_key
+    try:
+        return artifact_service(
+            settings.artifacts,
+            endpoint_url=settings.s3_endpoint_url,
+            region=settings.s3_region,
+            access_key_id=settings.s3_access_key_id,
+            secret_access_key=secret.get_secret_value() if secret else None,
+        ), None
+    except (ValueError, ImportError) as error:
+        return None, f"runs' artifacts can't be kept: {error}"
+
+
 class AdkWorkflowsTaskFactory:
     name = TASK_NAME
     queue = TASK_NAME
@@ -255,4 +290,17 @@ class AdkWorkflowsTaskFactory:
             sessions, unavailable = ctx.shared(SESSIONS_RESOURCE, lambda: build_sessions(settings))
         if sessions is None:
             log.warning("adk_workflows: runs will fail: %s", unavailable or NO_SESSIONS)
-        return AdkWorkflowsTask(settings, services, sessions, sessions_unavailable=unavailable)
+        if ARTIFACTS in ctx.extras:
+            artifacts, no_artifacts = ctx.extras[ARTIFACTS], None
+        else:
+            artifacts, no_artifacts = ctx.shared(ARTIFACTS_RESOURCE, lambda: build_artifacts(settings))
+        if artifacts is None:
+            log.warning("adk_workflows: runs started with files will fail: %s", no_artifacts or "no artifacts are kept")
+        return AdkWorkflowsTask(
+            settings,
+            services,
+            sessions,
+            sessions_unavailable=unavailable,
+            artifacts=artifacts,
+            artifacts_unavailable=no_artifacts,
+        )

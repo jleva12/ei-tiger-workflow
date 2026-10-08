@@ -1,4 +1,4 @@
-"""Graph knowledge bases: the code repositories a knowledge base includes
+"""System design knowledge bases: the code repositories a knowledge base includes
 (``knowledge_base_repositories``) and searching their code in the code graph
 (the worker's API, ``forge_codegraph``).
 
@@ -129,7 +129,7 @@ async def search_code(
     limit: int,
 ) -> list[dict[str, Any]]:
     """
-    Search graph knowledge bases' code, ranked together: one search of the
+    Search system design knowledge bases' code, ranked together: one search of the
     worker over their repositories, each hit cited as from the first of the
     knowledge bases that includes its repository.
 

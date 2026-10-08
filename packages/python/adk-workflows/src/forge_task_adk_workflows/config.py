@@ -47,6 +47,19 @@ class AdkWorkflowsSettings(BaseModel):
     # answer, to its end or its next pause) before it fails.
     run_timeout: float = Field(default=3600.0, gt=0)
 
+    # Where runs' ADK artifacts are kept, among them the files a run starts
+    # with, which the admin API saves there (its FORGE_ADMIN_WORKFLOW_ARTIFACTS,
+    # the same place): s3://bucket/prefix on the S3 service below, or a folder
+    # both reach. Unset, a run started with files fails saying so.
+    artifacts: str | None = None
+    # The S3 service: an S3-compatible endpoint such as the local RustFS
+    # (knowledge-s3); unset for AWS. Unset credentials fall back to boto3's
+    # own (AWS_* variables, an instance role).
+    s3_endpoint_url: str | None = Field(default=None, pattern=r"^https?://\S+$")
+    s3_region: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: SecretStr | None = None
+
     # LLM agents' tools (the Agents builder's: MCP servers, knowledge bases,
     # HTTP tools, OpenAPI specs, agents, workflows). The key the organization's
     # MCP servers' credentials are encrypted with: the admin API's
@@ -74,6 +87,11 @@ class AdkWorkflowsSettings(BaseModel):
         "secrets_key",
         "codegraph_url",
         "codegraph_token",
+        "artifacts",
+        "s3_endpoint_url",
+        "s3_region",
+        "s3_access_key_id",
+        "s3_secret_access_key",
         mode="before",
     )
     @classmethod

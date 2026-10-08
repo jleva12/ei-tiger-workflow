@@ -1,4 +1,4 @@
-"""Graph knowledge bases without MySQL or the code graph worker: the tables on
+"""System design knowledge bases without MySQL or the code graph worker: the tables on
 SQLite (foreign keys enforced, as MySQL does), the organization's access in
 memory (the default grants), the worker's queue played by writing to its
 rows, and its API by a fake (``app.state.codegraph``).
@@ -123,6 +123,10 @@ class FakeCodeGraph:
     refuse: WorkerError | None = None
     reads: list[tuple[str, str, dict[str, Any]]] = field(default_factory=list)
     searches: list[dict[str, Any]] = field(default_factory=list)
+    # Each graph's live nodes, by graph and node ID, for its node reads.
+    nodes: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
+    # Each owner's cross-repository links, as last put.
+    cross_links: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     async def read(
         self, repository_id: str, what: str, params: dict[str, Any] | None = None
@@ -130,7 +134,18 @@ class FakeCodeGraph:
         self.reads.append((repository_id, what, dict(params or {})))
         if self.refuse is not None:
             raise self.refuse
+        if what == "node" and self.nodes:
+            node = self.nodes.get((repository_id, str((params or {})["node"])))
+            if node is None:
+                raise WorkerError(404, "not_found", "node not found")
+            return {"fact": {"node": node}, "gen_from": 3}
         return self.answers.get(what, {"what": what})
+
+    async def put_cross_links(self, owner: str, links: list[dict[str, Any]]) -> int:
+        if self.refuse is not None:
+            raise self.refuse
+        self.cross_links[owner] = links
+        return len(links)
 
     async def search(
         self,
@@ -190,7 +205,7 @@ class Workspace:
             params=params,
         )
 
-    def knowledge_base(self, name: str = "Code", kind: str = "graph") -> str:
+    def knowledge_base(self, name: str = "Code", kind: str = "system") -> str:
         made = self.call("POST", KBS, MEMBER, {"name": name, "kind": kind})
         assert made.status_code == 201, made.json()
         return str(made.json()["id"])
@@ -245,6 +260,8 @@ def sqlite_tables() -> MetaData:
         "code_ingestion_jobs",
         "knowledge_bases",
         "knowledge_base_repositories",
+        "knowledge_base_connections",
+        "knowledge_base_code_links",
         "knowledge_collections",
         "knowledge_documents",
     ):
@@ -324,19 +341,19 @@ def widgets_hit(**extra: Any) -> dict[str, Any]:
 # ------------------------------------------------------------ knowledge bases
 
 
-def test_a_graph_knowledge_base_is_made_and_listed_with_its_kind(
+def test_a_system_design_knowledge_base_is_made_and_listed_with_its_kind(
     workspace: Workspace,
 ) -> None:
     kb = workspace.knowledge_base("Code")
     workspace.knowledge_base("Policies", kind="rag")
     listed = workspace.call("GET", KBS, VIEWER).json()
     assert [(k["name"], k["kind"]) for k in listed] == [
-        ("Code", "graph"),
+        ("Code", "system"),
         ("Policies", "rag"),
     ]
     read = workspace.call("GET", f"{KBS}/{kb}", VIEWER).json()
     assert (read["repositories"], read["ingested"], read["documents"]) == (0, 0, 0)
-    # The kind is fixed; anything but rag or graph is refused.
+    # The kind is fixed; anything but rag or system is refused.
     assert (
         workspace.call("POST", KBS, MEMBER, {"name": "X", "kind": "wiki"}).status_code
         == 422
@@ -346,7 +363,7 @@ def test_a_graph_knowledge_base_is_made_and_listed_with_its_kind(
     assert made["kind"] == "rag"
 
 
-def test_a_graph_knowledge_base_holds_no_documents_or_collections(
+def test_a_system_design_knowledge_base_holds_no_documents_or_collections(
     workspace: Workspace,
 ) -> None:
     kb = workspace.knowledge_base()
@@ -541,7 +558,7 @@ def test_the_stats_say_what_the_worker_can_tell(workspace: Workspace) -> None:
 # -------------------------------------------------------------------- search
 
 
-def test_searching_a_graph_knowledge_base_answers_its_code(
+def test_searching_a_system_design_knowledge_base_answers_its_code(
     workspace: Workspace,
 ) -> None:
     kb = workspace.knowledge_base()
@@ -652,7 +669,7 @@ def test_agents_search_documents_and_code_together(workspace: Workspace) -> None
     assert passages[1]["section"] == "class widgets.sign.Signer"
     assert passages[1]["node_id"] == "entity:signer"
 
-    # Without the worker, a graph knowledge base's search says so.
+    # Without the worker, a system design knowledge base's search says so.
     without = OrganizationKnowledgeBases(workspace.sessions, search, None)  # type: ignore[arg-type]
 
     async def ask_without() -> Any:
@@ -660,3 +677,331 @@ def test_agents_search_documents_and_code_together(workspace: Workspace) -> None
 
     with pytest.raises(RuntimeError, match="FORGE_ADMIN_CODEGRAPH_URL"):
         workspace.client.portal.call(ask_without)
+
+
+# ---------------------------------------------------------------- connections
+
+ORDERS = "https://github.com/acme/orders"
+ORDERS_GRAPH = "repo:orders-graph"
+
+
+def node(node_id: str, name: str, path: str, kind: str = "method") -> dict[str, Any]:
+    return {
+        "id": node_id,
+        "kind": kind,
+        "name": name,
+        "qualified_name": f"acme.{name}",
+        "properties": {"file_path": {"string": path}},
+    }
+
+
+def system(workspace: Workspace) -> tuple[str, str, str]:
+    """A system design knowledge base with two applications: its ID, then
+    the widgets one's and the orders one's."""
+    kb = workspace.knowledge_base("Checkout")
+    widgets = workspace.include(kb, {"url": WIDGETS, "branch": "main"}).json()["id"]
+    orders = workspace.include(kb, {"url": ORDERS, "branch": "main"}).json()["id"]
+    return kb, widgets, orders
+
+
+def connect(
+    workspace: Workspace, kb: str, source: str, target: str, **extra: Any
+) -> Response:
+    return workspace.call(
+        "POST",
+        f"{KBS}/{kb}/connections",
+        MEMBER,
+        {"source_repository_id": source, "target_repository_id": target, **extra},
+    )
+
+
+def test_applications_are_connected_and_listed(workspace: Workspace) -> None:
+    kb, widgets, orders = system(workspace)
+    made = connect(
+        workspace, kb, widgets, orders, kind="calls", description=" POST /v1/orders "
+    )
+    assert made.status_code == 201, made.json()
+    connection = made.json()
+    assert (
+        connection["kind"],
+        connection["description"],
+        connection["code_links"],
+    ) == (
+        "calls",
+        "POST /v1/orders",
+        0,
+    )
+    listed = workspace.call("GET", f"{KBS}/{kb}/connections", VIEWER).json()
+    assert [(c["source_repository_id"], c["target_repository_id"]) for c in listed] == [
+        (widgets, orders)
+    ]
+    assert workspace.call("GET", f"{KBS}/{kb}", VIEWER).json()["connections"] == 1
+    # The same way again is a conflict; another way, or back, is another.
+    assert connect(workspace, kb, widgets, orders, kind="calls").status_code == 409
+    assert connect(workspace, kb, widgets, orders, kind="events").status_code == 201
+    assert connect(workspace, kb, orders, widgets).status_code == 201
+    # Not to itself, nor to an application the knowledge base doesn't have.
+    assert connect(workspace, kb, widgets, widgets).status_code == 422
+    other = workspace.call(
+        "POST", REPOS, MEMBER, {"url": GADGETS, "branch": "main", "ingest": False}
+    ).json()["id"]
+    assert connect(workspace, kb, widgets, other).status_code == 422
+    # A changed kind or note.
+    changed = workspace.call(
+        "PATCH",
+        f"{KBS}/{kb}/connections/{connection['id']}",
+        MEMBER,
+        {"kind": "depends_on", "description": "the SDK"},
+    ).json()
+    assert (changed["kind"], changed["description"]) == ("depends_on", "the SDK")
+    # Removing one.
+    path = f"{KBS}/{kb}/connections/{connection['id']}"
+    assert workspace.call("DELETE", path).status_code == 204
+    assert workspace.call("DELETE", path).status_code == 404
+
+
+def test_only_those_who_manage_knowledge_bases_draw_connections(
+    workspace: Workspace,
+) -> None:
+    kb, widgets, orders = system(workspace)
+    body = {"source_repository_id": widgets, "target_repository_id": orders}
+    for user in (VIEWER, NEIGHBOUR, OUTSIDER):
+        refused = workspace.call("POST", f"{KBS}/{kb}/connections", user, body)
+        assert refused.status_code in (401, 403), (user, refused.json())
+    assert (
+        workspace.call("GET", f"{KBS}/{kb}/connections", NEIGHBOUR).status_code == 403
+    )
+    # A RAG knowledge base has no applications to connect.
+    docs = workspace.knowledge_base("Docs", kind="rag")
+    assert workspace.call("GET", f"{KBS}/{docs}/connections").status_code == 409
+
+
+def test_removing_an_application_removes_its_connections(
+    workspace: Workspace,
+) -> None:
+    kb, widgets, orders = system(workspace)
+    connect(workspace, kb, widgets, orders)
+    connect(workspace, kb, orders, widgets, kind="events")
+    removed = workspace.call("DELETE", f"{KBS}/{kb}/repositories/{orders}")
+    assert removed.status_code == 204
+    assert workspace.call("GET", f"{KBS}/{kb}/connections").json() == []
+    # Nothing was linked in the code, so the code graph wasn't asked.
+    assert workspace.graph.cross_links == {}
+
+
+def code_linked(workspace: Workspace) -> tuple[str, str, str, str]:
+    """Checkout's two applications ingested and connected, with their
+    nodes in the graph: the knowledge base, the two, and the connection."""
+    kb, widgets, orders = system(workspace)
+    workspace.ingested(widgets, GRAPH_ID)
+    workspace.ingested(orders, ORDERS_GRAPH)
+    workspace.graph.nodes = {
+        (GRAPH_ID, "entity:client"): node(
+            "entity:client", "OrdersClient.create", "src/client.py"
+        ),
+        (ORDERS_GRAPH, "entity:handler"): node(
+            "entity:handler", "create_order", "app/routes.py", "function"
+        ),
+    }
+    connection = connect(workspace, kb, widgets, orders, kind="calls").json()["id"]
+    return kb, widgets, orders, connection
+
+
+def test_code_links_say_where_and_reach_the_code_graph(workspace: Workspace) -> None:
+    kb, widgets, orders, connection = code_linked(workspace)
+    path = f"{KBS}/{kb}/connections/{connection}/code-links"
+    made = workspace.call(
+        "POST",
+        path,
+        MEMBER,
+        {
+            "source_node_id": "entity:client",
+            "target_node_id": "entity:handler",
+            "label": "POST /v1/orders",
+        },
+    )
+    assert made.status_code == 201, made.json()
+    code = made.json()
+    assert code["source"] == {
+        "node_id": "entity:client",
+        "kind": "method",
+        "name": "OrdersClient.create",
+        "qualified_name": "acme.OrdersClient.create",
+        "path": "src/client.py",
+    }
+    assert code["target"]["path"] == "app/routes.py"
+    assert workspace.call("GET", path, VIEWER).json()[0]["id"] == code["id"]
+    listed = workspace.call("GET", f"{KBS}/{kb}/connections").json()
+    assert listed[0]["code_links"] == 1
+    # The knowledge base's set, in the code graph.
+    assert workspace.graph.cross_links[f"kb:{kb}"] == [
+        {
+            "id": code["id"],
+            "owner": f"kb:{kb}",
+            "kind": "calls_api",
+            "source": {
+                "repository_id": GRAPH_ID,
+                "node_id": "entity:client",
+                "qualified_name": "acme.OrdersClient.create",
+                "kind": "method",
+            },
+            "target": {
+                "repository_id": ORDERS_GRAPH,
+                "node_id": "entity:handler",
+                "qualified_name": "acme.create_order",
+                "kind": "function",
+            },
+            "label": "POST /v1/orders",
+            "provenance": "manual",
+            "created_by": MEMBER,
+        }
+    ]
+    # Linking them again is a conflict; a node the graph lacks is refused.
+    again = {"source_node_id": "entity:client", "target_node_id": "entity:handler"}
+    assert workspace.call("POST", path, MEMBER, again).status_code == 409
+    missing = {"source_node_id": "entity:gone", "target_node_id": "entity:handler"}
+    assert workspace.call("POST", path, MEMBER, missing).status_code == 422
+    # A new kind changes the link's kind in the graph.
+    workspace.call(
+        "PATCH", f"{KBS}/{kb}/connections/{connection}", MEMBER, {"kind": "events"}
+    )
+    assert workspace.graph.cross_links[f"kb:{kb}"][0]["kind"] == "sends_event"
+    # Removing it takes it out.
+    removed = workspace.call("DELETE", f"{path}/{code['id']}")
+    assert removed.status_code == 204
+    assert workspace.graph.cross_links[f"kb:{kb}"] == []
+
+
+def test_code_links_wait_for_both_applications_to_be_ingested(
+    workspace: Workspace,
+) -> None:
+    kb, widgets, orders = system(workspace)
+    workspace.ingested(widgets, GRAPH_ID)
+    connection = connect(workspace, kb, widgets, orders).json()["id"]
+    early = workspace.call(
+        "POST",
+        f"{KBS}/{kb}/connections/{connection}/code-links",
+        MEMBER,
+        {"source_node_id": "entity:client", "target_node_id": "entity:handler"},
+    )
+    assert early.status_code == 409
+    assert "acme/orders isn't in the code graph yet" in early.json()["detail"]
+
+
+def test_a_refusing_code_graph_changes_nothing(workspace: Workspace) -> None:
+    kb, widgets, orders, connection = code_linked(workspace)
+    path = f"{KBS}/{kb}/connections/{connection}/code-links"
+    workspace.call(
+        "POST",
+        path,
+        MEMBER,
+        {"source_node_id": "entity:client", "target_node_id": "entity:handler"},
+    )
+    workspace.graph.refuse = WorkerError(0, "unreachable", "connection refused")
+    for method, target in (
+        ("DELETE", f"{KBS}/{kb}/connections/{connection}"),
+        ("DELETE", f"{KBS}/{kb}/repositories/{orders}"),
+        ("DELETE", f"{KBS}/{kb}"),
+        ("DELETE", f"{REPOS}/{widgets}"),
+    ):
+        answer = workspace.call(method, target)
+        assert answer.status_code == 503, (target, answer.json())
+    workspace.graph.refuse = None
+    assert len(workspace.call("GET", path).json()) == 1
+
+
+def test_removing_what_has_code_links_takes_them_out_of_the_code_graph(
+    workspace: Workspace,
+) -> None:
+    def linked() -> tuple[str, str, str]:
+        kb, widgets, orders, connection = code_linked(workspace)
+        workspace.call(
+            "POST",
+            f"{KBS}/{kb}/connections/{connection}/code-links",
+            MEMBER,
+            {"source_node_id": "entity:client", "target_node_id": "entity:handler"},
+        )
+        assert len(workspace.graph.cross_links[f"kb:{kb}"]) == 1
+        return kb, widgets, connection
+
+    kb, _, connection = linked()
+    workspace.call("DELETE", f"{KBS}/{kb}/connections/{connection}")
+    assert workspace.graph.cross_links[f"kb:{kb}"] == []
+    workspace.call("DELETE", f"{KBS}/{kb}")
+
+    kb, widgets, _ = linked()
+    workspace.call("DELETE", f"{KBS}/{kb}/repositories/{widgets}")
+    assert workspace.graph.cross_links[f"kb:{kb}"] == []
+    workspace.call("DELETE", f"{KBS}/{kb}")
+    assert workspace.graph.cross_links[f"kb:{kb}"] == []
+
+
+def test_agents_are_told_how_the_applications_connect(workspace: Workspace) -> None:
+    kb, widgets, orders = system(workspace)
+    connect(workspace, kb, widgets, orders, kind="calls", description="POST /orders")
+    tools = OrganizationKnowledgeBases(workspace.sessions, None, workspace.graph)  # type: ignore[arg-type]
+
+    async def ask() -> list[tuple[str, str]]:
+        return await tools.describe([kb], organization_id=ORG)
+
+    assert workspace.client.portal is not None
+    assert workspace.client.portal.call(ask) == [
+        (
+            "Checkout",
+            "code of acme/orders, Acme/Widgets; how they connect: Acme/Widgets "
+            "calls the API of acme/orders (POST /orders)",
+        )
+    ]
+
+
+# ----------------------------------------------------------------- system map
+
+
+def test_the_system_map_is_the_same_for_everyone(workspace: Workspace) -> None:
+    kb, widgets, orders = system(workspace)
+    path = f"{KBS}/{kb}/map"
+    assert workspace.call("GET", path, VIEWER).json() == {
+        "layout": None,
+        "positions": {},
+    }
+    moved = workspace.call(
+        "PATCH",
+        path,
+        MEMBER,
+        {
+            "layout": "breadthfirst",
+            "positions": {widgets: {"x": -120.5, "y": 40}, orders: {"x": 200, "y": 0}},
+        },
+    )
+    assert moved.status_code == 200, moved.json()
+    # Someone else moves one: only that one moves, and the layout stays.
+    workspace.call("PATCH", path, ADMIN, {"positions": {orders: {"x": 10, "y": 90}}})
+    assert workspace.call("GET", path, VIEWER).json() == {
+        "layout": "breadthfirst",
+        "positions": {
+            widgets: {"x": -120.5, "y": 40.0},
+            orders: {"x": 10.0, "y": 90.0},
+        },
+    }
+    # An application it doesn't include is ignored; removing one forgets
+    # its place.
+    workspace.call("PATCH", path, MEMBER, {"positions": {MISSING: {"x": 1, "y": 1}}})
+    workspace.call("DELETE", f"{KBS}/{kb}/repositories/{orders}")
+    assert list(workspace.call("GET", path).json()["positions"]) == [widgets]
+
+
+def test_only_those_who_manage_knowledge_bases_move_the_map(
+    workspace: Workspace,
+) -> None:
+    kb, widgets, _ = system(workspace)
+    path = f"{KBS}/{kb}/map"
+    body = {"positions": {widgets: {"x": 1, "y": 2}}}
+    for user in (VIEWER, NEIGHBOUR):
+        assert workspace.call("PATCH", path, user, body).status_code == 403
+    assert workspace.call("GET", path, NEIGHBOUR).status_code == 403
+    # Nonsense is refused: an unknown layout, a place off the map.
+    assert workspace.call("PATCH", path, MEMBER, {"layout": "grid"}).status_code == 422
+    far = {"positions": {widgets: {"x": 1e12, "y": 0}}}
+    assert workspace.call("PATCH", path, MEMBER, far).status_code == 422
+    docs = workspace.knowledge_base("Docs", kind="rag")
+    assert workspace.call("GET", f"{KBS}/{docs}/map").status_code == 409

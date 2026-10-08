@@ -59,11 +59,11 @@ type RowActions = {
 const ActionsContext = React.createContext<RowActions | undefined>(undefined)
 
 // What a knowledge base holds, and how much of it is searchable: its
-// documents, or a graph one's repositories.
+// documents, or a system design one's repositories.
 const contentsOf = (base: KnowledgeBase) =>
-  base.kind === "graph" ? base.repositories : base.documents
+  base.kind === "system" ? base.repositories : base.documents
 const readyOf = (base: KnowledgeBase) =>
-  base.kind === "graph" ? base.ingested : base.ready
+  base.kind === "system" ? base.ingested : base.ready
 
 const helper = createColumnHelper<KnowledgeBase>()
 const COLUMNS = helper.columns([
@@ -104,8 +104,8 @@ const COLUMNS = helper.columns([
     meta: { label: "Contents", align: "right" },
     cell: ({ row: { original: base } }) => (
       <span className="tabular-nums">
-        {base.kind === "graph"
-          ? plural(base.repositories, "repository", "repositories")
+        {base.kind === "system"
+          ? plural(base.repositories, "application")
           : plural(base.documents, "document")}
       </span>
     ),
@@ -117,7 +117,7 @@ const COLUMNS = helper.columns([
     meta: { label: "Ready", align: "right" },
     cell: ({ row: { original: base } }) => (
       <span className="text-muted-foreground tabular-nums">
-        {base.kind === "graph" ? (
+        {base.kind === "system" ? (
           base.repositories ? (
             `${formatCount(base.ingested)} ingested`
           ) : (
@@ -148,7 +148,7 @@ const COLUMNS = helper.columns([
     },
     cell: ({ row: { original: base }, getValue }) => (
       <span className="tabular-nums">
-        {base.kind === "graph" ? "–" : formatCount(getValue())}
+        {base.kind === "system" ? "–" : formatCount(getValue())}
       </span>
     ),
   }),
@@ -162,7 +162,7 @@ const COLUMNS = helper.columns([
     },
     cell: ({ row: { original: base }, getValue }) => (
       <span className="tabular-nums">
-        {base.kind === "graph" ? "–" : formatBytes(getValue())}
+        {base.kind === "system" ? "–" : formatBytes(getValue())}
       </span>
     ),
   }),
@@ -286,7 +286,7 @@ export function OrganizationKnowledgeBases({
           title={`Give ${organizationName}'s agents something to read`}
           description={
             canManage
-              ? "A knowledge base is what agents search: a set of documents — runbooks, specs, policies — split into chunks and embedded (RAG), or code repositories ingested into the code graph (graph). Make one, fill it, then attach it to the agents that need it."
+              ? "A knowledge base is what agents search: a set of documents — runbooks, specs, policies — split into chunks and embedded (RAG), or a system's design — its applications, how they connect, and their code, ingested into the code graph (system design). Make one, fill it, then attach it to the agents that need it."
               : `${organizationName} has no knowledge bases yet. Those who manage its knowledge bases make them and upload their documents.`
           }
           actions={
@@ -311,7 +311,7 @@ export function OrganizationKnowledgeBases({
           <DataTable
             className="rounded-none border-0"
             title="Knowledge bases"
-            description={`What ${organizationName}'s agents can search, in ${plural(bases.length, "knowledge base")}: documents, and code.`}
+            description={`What ${organizationName}'s agents can search, in ${plural(bases.length, "knowledge base")}: documents, and systems' applications and code.`}
             columns={COLUMNS}
             data={bases}
             isLoading={list.isPending}
@@ -352,9 +352,9 @@ export function OrganizationKnowledgeBases({
         onClose={() => setRemoving(undefined)}
         title={`Delete ${removing?.name ?? "the knowledge base"}?`}
         description={
-          removing?.kind === "graph"
+          removing?.kind === "system"
             ? removing.repositories
-              ? `Its ${plural(removing.repositories, "repository", "repositories")} stay in ${organizationName}, with their code graphs; agents that use it stop searching them. This can't be undone.`
+              ? `Its system map goes with it. Its ${plural(removing.repositories, "repository", "repositories")} stay in ${organizationName}, with their code graphs; agents that use it stop searching them. This can't be undone.`
               : "It's empty. Agents that use it lose it. This can't be undone."
             : removing?.documents
               ? `Its ${plural(removing.documents, "document")} and their ${plural(removing.chunks, "chunk")} are deleted with it, and agents that use it stop finding them. This can't be undone.`

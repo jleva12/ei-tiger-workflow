@@ -19,7 +19,9 @@ are checked to be the organization's. It acts as the member who started it.
 
 Before it's created, the input is checked against the start's
 ``input_schema`` and the document is built (``build_agent``), so a mistake is
-answered at once; the worker checks both again.
+answered at once; the worker checks both again. The files it's sent are
+held to its start (``files.py``) and saved as ADK artifacts of its session,
+where the worker reads them, before it's queued.
 
 The run's state is its ADK session, which the worker keeps in the admin
 database (ADK's ``DatabaseSessionService``, app ``adk_workflows``, user the
@@ -44,6 +46,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from forge_task_adk_workflows.files import save_run_files
 from forge_task_adk_workflows.graph.uses import (
     AgentUse,
     agents_in,
@@ -52,10 +55,17 @@ from forge_task_adk_workflows.graph.uses import (
     workflows_in,
 )
 from forge_task_adk_workflows.run_store import Actor, RunStore
+from google.adk.artifacts import BaseArtifactService
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
 from forge_admin.adk_workflows.build import AgentBuildError, build_agent
+from forge_admin.adk_workflows.files import (
+    CheckedFile,
+    FilesRefused,
+    SentFile,
+    checked_files,
+)
 from forge_admin.adk_workflows.queue import Embedding, EmbeddingError
 
 if TYPE_CHECKING:
@@ -202,11 +212,13 @@ class PreparedRun:
     :ivar chat_agents: The agents from the Agents page its LLM agents are or
         call, by reference (``ca_x``, ``ca_x@3``, ``ca_x@draft``).
     :ivar knowledge_bases: The knowledge bases they search: name and description, by ID.
+    :ivar files: The files it starts with, held to its start; saved as it starts.
     """
 
     saved: dict[str, dict[str, Any]]
     chat_agents: dict[str, dict[str, Any]] = field(default_factory=dict)
     knowledge_bases: dict[str, dict[str, str]] = field(default_factory=dict)
+    files: list[CheckedFile] = field(default_factory=list)
 
 
 async def prepare_run(
@@ -214,30 +226,36 @@ async def prepare_run(
     input: Any,
     find: FindAgent,
     resources: "RunResources | None" = None,
+    files: list[SentFile] | None = None,
 ) -> PreparedRun:
     """
-    Check a run can start: its input fits the start, its document, with the
-    saved ADK workflows it runs, builds, and what its LLM agents use is the
-    organization's.
+    Check a run can start: its input fits the start, and its files too, its
+    document, with the saved ADK workflows it runs, builds, and what its LLM
+    agents use is the organization's.
 
     :param record: The ADK workflow's record (``AgentStore``).
     :param input: What the run starts with.
     :param find: Finds the organization's other ADK workflows' records.
     :param resources: The organization's agents, knowledge bases and MCP
         servers; None when there are none to use.
+    :param files: The files it starts with, as they were sent.
     :return: What the run carries.
-    :raises AdkRunError: The input doesn't fit, the document doesn't build,
-        or something it uses isn't there (naming the node).
+    :raises AdkRunError: The input or a file doesn't fit, the document
+        doesn't build, or something it uses isn't there (naming the node).
     :raises PyMongoError: The store isn't answering.
     """
     document = snapshot(record["document"])
     check_input(document, input)
+    try:
+        checked = checked_files(document, files or [])
+    except FilesRefused as error:
+        raise AdkRunError(str(error)) from None
     saved = await saved_documents(document, find)
     check_builds(document, saved)
     chat_agents, knowledge_bases = await used_resources(
         [document, *saved.values()], resources
     )
-    return PreparedRun(saved, chat_agents, knowledge_bases)
+    return PreparedRun(saved, chat_agents, knowledge_bases, checked)
 
 
 async def used_resources(
@@ -309,10 +327,12 @@ async def start_adk_run(
     trigger: dict[str, Any],
     version: int | str | None = None,
     run_id: str | None = None,
+    artifacts: BaseArtifactService | None = None,
 ) -> dict[str, Any]:
     """
     Start a run of an ADK workflow, as its record is now: the run, queued,
-    in a new ADK session, and a job to take it.
+    in a new ADK session (its files saved as artifacts of it), and a job to
+    take it.
 
     :param runs: The run store.
     :param queue: The async worker's queues.
@@ -326,13 +346,27 @@ async def start_adk_run(
     :param trigger: What started it: ``{"type": "manual", "by": <user>}``.
     :param version: Which version runs: ``"draft"`` or a published one's number.
     :param run_id: Its ID, when the caller has one for it (an A2A task's).
+    :param artifacts: Where its files are saved, when it has any (the
+        worker's runs' artifacts).
     :return: The run, as the store has it.
     :raises SQLAlchemyError: The run store's database isn't answering.
+    :raises botocore.exceptions.BotoCoreError: Its files' storage isn't
+        answering (an S3 artifact service's; ``OSError`` a folder's).
     """
     agent_id = record["_id"]
     session_id = str(uuid4())
     document = snapshot(record["document"])
     name = str(document.get("name") or "")
+    files = []
+    if prepared.files:
+        assert artifacts is not None, "a run with files needs where to save them"
+        files = await save_run_files(
+            artifacts,
+            app_name=APP_NAME,
+            user_id=run_as,
+            session_id=session_id,
+            files=[file.saved() for file in prepared.files],
+        )
     # What the worker runs (forge_task_adk_workflows.runs.RunPayload).
     payload = {
         "tenant_id": record["organization_id"],
@@ -345,6 +379,7 @@ async def start_adk_run(
         "chat_agents": prepared.chat_agents,
         "knowledge_bases": prepared.knowledge_bases,
         "input": input,
+        "files": [file.model_dump(mode="json") for file in files],
         "session_id": session_id,
         "run_as": run_as,
         "run_as_name": run_as_name,

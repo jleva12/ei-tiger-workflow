@@ -10,13 +10,16 @@ anything else is logged and masked.
 
 Each caller reads only its organization's repositories (access.py): every
 repository asked for is checked, and links into other repositories are
-followed only into those it reads.
+followed only into those it reads, and only when its organization drew them
+(another organization sharing a repository's graph may have drawn others).
+repository_connections answers how its repositories connect, from its system
+maps.
 """
 
 import functools
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
@@ -35,6 +38,8 @@ from forge_codegraph_mcp.graph.model import (
     NODE,
     OUT,
     SEMANTIC_EDGE_KINDS,
+    CrossLink,
+    CrossLinkQuery,
     NeighborQuery,
     to_json,
 )
@@ -81,6 +86,21 @@ def split_kinds(kinds: list[str] | None) -> list[str]:
     return [part.strip() for kind in kinds or () for part in kind.split(",") if part.strip()]
 
 
+class _OwnedLinks:
+    """A store whose cross-repository links are only those one organization
+    drew; everything else is the store's."""
+
+    def __init__(self, store: GraphStore, owns: Callable[[str], bool]) -> None:
+        self._store = store
+        self._owns = owns
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._store, name)
+
+    async def cross_links(self, query: CrossLinkQuery) -> list[CrossLink]:
+        return [link for link in await self._store.cross_links(query) if self._owns(link.owner)]
+
+
 class CodeGraphTools(Toolset):
     """Explore, search and walk the code graph, and read exact source."""
 
@@ -110,6 +130,38 @@ class CodeGraphTools(Toolset):
         if more:
             out["truncated"] = True
         return out
+
+    def _linked(self) -> GraphStore:
+        """The store, with only the caller's organization's cross-repository links."""
+        scope = self.scope()
+        if scope.link_owners is None:
+            return self.store
+        return cast(GraphStore, _OwnedLinks(self.store, scope.owns))
+
+    @mcp_tool(annotations=_read_only("Repository connections"))
+    @_answers
+    async def repository_connections(
+        self,
+        repositories: Annotated[
+            list[str] | None,
+            Field(
+                description="repository ids: only the connections touching any of them; "
+                "all of your organization's when absent"
+            ),
+        ] = None,
+    ) -> Answer:
+        """How repositories connect, as people drew them on your organization's system design maps: what calls what, what sends messages to what. Each connection has its knowledge_base (the system it's drawn in), its source and target repository (repository_id and owner/name), its kind: calls (calls the target's API: HTTP, gRPC, GraphQL), events (publishes events or messages the target consumes), depends_on (uses it as a library), shares_data (the same database or storage) or connects_to (unspecified), a description (such as POST /v1/orders or a topic), and its code_links: where in the code it happens, a node in each repository (the client method and the handler it reaches, the publisher and the listener) with node_id, kind, qualified_name and path. Follow a code link's node ids with callers, callees, impact and read_source in its repository. Use this first for how projects, services or repositories interact. A connection without code links says only that the two connect; search both repositories for where."""  # noqa: E501
+        scope = self.scope()
+        wanted = set(repositories or ())
+        scope.check(*wanted)
+        found = [
+            connection
+            for connection in scope.connections
+            if not wanted
+            or connection["source"]["repository_id"] in wanted
+            or connection["target"]["repository_id"] in wanted
+        ]
+        return {"connections": found}
 
     @mcp_tool(annotations=_read_only("Explore code"))
     @_answers
@@ -346,7 +398,7 @@ class CodeGraphTools(Toolset):
         if version.node is None:
             return []
         readable = self.scope().readable
-        hops = await ops.cross_hops(self.store, repository, version.node, direction, readable)
+        hops = await ops.cross_hops(self._linked(), repository, version.node, direction, readable)
         named = {kind for kind in kinds if kind in CROSS_KINDS}
         return [hop for hop in hops if hop.link.kind in named] if named else hops
 
@@ -401,7 +453,7 @@ class CodeGraphTools(Toolset):
         """Everything that would be affected by changing a declaration: dependants walked backwards up to depth hops. change selects what matters: body (callers, including through dispatch), signature (every direct user), remove (everything touching it), contract (implementors and their callers) or any (default). Each impacted node appears once with its module, source root and the number of dependency edges that reach it, plus an assessment: counts per module and root, the entry points nothing else depends on, the test classes to run and a Maven command per module; full: true returns records. Where code in another repository you can read is linked to an impacted node (it calls the API or consumes the events), across lists that code and its own dependants there, within the same depth."""  # noqa: E501
         self.scope().check(repository)
         result = await ops.impact(
-            self.store,
+            self._linked(),
             repository_id=repository,
             node_id=id,
             generation=generation,

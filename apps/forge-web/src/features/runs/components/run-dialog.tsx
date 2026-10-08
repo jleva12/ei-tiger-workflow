@@ -16,18 +16,22 @@ import {
 } from "@/components/ui/dialog"
 import { Spinner } from "@/components/ui/spinner"
 import type { ApiError } from "@/lib/api/index"
+import { NO_FILES, type FilesRule } from "@/features/adk-workflows/lib/files"
+import type { RunStart } from "@/features/runs/lib/runs"
 import { useSchemaValue } from "@/features/runs/lib/schema-value"
+import { RunFilesField } from "./run-files-field"
 import { SchemaValueEditor } from "./schema-value-editor"
 
 /*
  * Running a workflow by hand: its input, as the fields
  * its start declares (nested objects as groups; lists and free-form objects
- * as JSON), or as JSON outright. The API checks the input against the start
- * and answers why it doesn't fit, which shows here.
+ * as JSON), or as JSON outright, and the files it starts with when its start
+ * takes files. The API checks both against the start and answers why they
+ * don't fit, which shows here.
  */
 
-/** Starting a run with an input: what it answers once it's queued. */
-export type RunMutation<T> = UseMutationResult<T, ApiError, unknown>
+/** Starting a run with an input and files: what it answers once it's queued. */
+export type RunMutation<T> = UseMutationResult<T, ApiError, RunStart>
 
 /** What the dialog says about what it runs. */
 export type RunDialogWords = {
@@ -47,20 +51,26 @@ function RunForm<T>({
   run,
   words,
   inputSchema,
+  files: rule,
   onDone,
 }: {
   run: RunMutation<T>
   words: RunDialogWords
   inputSchema: Record<string, unknown>
+  files: FilesRule
   onDone: (run: T) => void
 }) {
   const input = useSchemaValue(inputSchema)
+  const [files, setFiles] = React.useState<File[]>([])
 
   const submit = (event: React.SubmitEvent<HTMLFormElement>) => {
     event.preventDefault()
     const read = input.read()
     if (!read.ok) return
-    run.mutate(read.value, { onSuccess: onDone })
+    run.mutate(
+      { input: read.value, files: rule.allowed ? files : [] },
+      { onSuccess: onDone }
+    )
   }
 
   const busy = run.isPending
@@ -79,6 +89,14 @@ function RunForm<T>({
           jsonPlaceholder="Optional: any JSON the steps read as input"
           noFields="The start step declares no fields, so steps read this as it is."
         />
+        {rule.allowed && (
+          <RunFilesField
+            rule={rule}
+            files={files}
+            onChange={setFiles}
+            disabled={busy}
+          />
+        )}
         {run.error && (
           <ErrorCallout
             title={
@@ -121,6 +139,7 @@ export function RunDialog<T>({
   run,
   words,
   inputSchema,
+  files = NO_FILES,
   onStarted,
 }: {
   open: boolean
@@ -129,6 +148,8 @@ export function RunDialog<T>({
   words: RunDialogWords
   /** The start's input schema; `{}` declares none. */
   inputSchema: Record<string, unknown>
+  /** The files the start takes; none by default. */
+  files?: FilesRule
   onStarted: (run: T) => void
 }) {
   const close = () => {
@@ -142,6 +163,7 @@ export function RunDialog<T>({
           run={run}
           words={words}
           inputSchema={inputSchema}
+          files={files}
           onDone={(started) => {
             close()
             onStarted(started)

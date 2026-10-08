@@ -168,6 +168,21 @@ env:
 	      echo "Added $$setting to $$dir/.env"; }; \
 	  done; \
 	done
+	@# Workflow runs' files (ADK artifacts in S3): a .env.common, admin .env or
+	@# worker .env from before them takes the template's lines.
+	@grep -q '^FORGE_WORKFLOW_ARTIFACTS=' .env.common || { \
+	  { [ -z "$$(tail -c1 .env.common)" ] || echo; echo; \
+	    sed -n '/^# Workflow runs. files:/,/^FORGE_WORKFLOW_ARTIFACTS=/p' .env.common.example; } >> .env.common; \
+	  echo "Added FORGE_WORKFLOW_ARTIFACTS to .env.common"; }
+	@for entry in $(ADMIN_DIR):FORGE_ADMIN_WORKFLOW_ARTIFACTS \
+	  $(ASYNC_WORKER_DIR):HYBRID_ADK_WORKFLOWS__ARTIFACTS $(ASYNC_WORKER_DIR):HYBRID_ADK_WORKFLOWS__S3_ENDPOINT_URL \
+	  $(ASYNC_WORKER_DIR):HYBRID_ADK_WORKFLOWS__S3_REGION $(ASYNC_WORKER_DIR):HYBRID_ADK_WORKFLOWS__S3_ACCESS_KEY_ID \
+	  $(ASYNC_WORKER_DIR):HYBRID_ADK_WORKFLOWS__S3_SECRET_ACCESS_KEY; do \
+	  dir=$${entry%%:*}; setting=$${entry#*:}; \
+	  grep -q "^$$setting=" $$dir/.env || { \
+	    { [ -z "$$(tail -c1 $$dir/.env)" ] || echo; grep "^$$setting=" $$dir/.env.example; } >> $$dir/.env; \
+	    echo "Added $$setting to $$dir/.env"; }; \
+	done
 	@# The embedding model every app shares: a .env.common from before it
 	@# takes the template's lines, keeping the code graph's model and
 	@# dimensions (its database was made for them) in place of the old names.

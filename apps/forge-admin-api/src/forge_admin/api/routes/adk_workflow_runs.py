@@ -9,8 +9,11 @@ sessions.
 
 - Running one needs ``agents:run`` in the organization (its admins and members
   by default). The run takes the ADK workflow as it's saved then, and acts as
-  the member who ran it.
-- Listing and reading runs, and their steps, needs ``organizations:read``.
+  the member who ran it. When its start allows files, the run is sent them as
+  a multipart form (or base64 in JSON; ``forge_admin.adk_workflows.files``),
+  and they're saved as artifacts of its session for its steps to read.
+- Listing and reading runs, their steps and the files they started with,
+  needs ``organizations:read``.
 - An approval a run waits at is decided by whom its step names:
   ``agents:approve`` (the organization's admins) when they're its admins,
   ``agents:run`` (every member) when any member may.
@@ -30,7 +33,8 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request, status
+from fastapi import APIRouter, HTTPException, Path, Query, Request, Response, status
+from forge_task_adk_workflows.files import RunFile
 from forge_task_adk_workflows.run_store import (
     ABANDONABLE,
     FAILED,
@@ -49,6 +53,17 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from forge_admin.adk_workflows.documents import ID_PATTERN
+from forge_admin.adk_workflows.files import (
+    NOT_SET_UP,
+    FileContent,
+    Limits,
+    artifacts_of,
+    attachment,
+    read_run_body,
+    run_body,
+    run_files,
+    storage_errors,
+)
 from forge_admin.adk_workflows.queue import Embedding
 from forge_admin.adk_workflows.resources import RunResources
 from forge_admin.adk_workflows.runs import (
@@ -86,6 +101,7 @@ MANAGE_RUNS = "agents:manage_runs"
 APPROVERS = {"org:admin": APPROVE, "org:member": RUN}
 HUMAN_INPUT = "human_input"
 NO_SUCH_RUN = "The organization has no such ADK workflow run"
+NO_SUCH_FILE = "The run didn't start with such a file"
 NOT_OPEN = "The run doesn't wait at that approval or question any more"
 RUNS_UNAVAILABLE = "The ADK workflow runs' database isn't answering; try again shortly"
 SESSIONS_UNAVAILABLE = (
@@ -111,6 +127,9 @@ class AdkRunCreate(BaseModel):
     #: what the builder shows: its draft when it has one, else its latest
     #: published.
     version: Annotated[int, Field(ge=1)] | Literal["draft"] | None = None
+    #: The files it starts with, when its start takes files; a multipart
+    #: form sends them as ``files`` parts instead.
+    files: list[FileContent] = []
 
 
 class DecisionCreate(BaseModel):
@@ -238,6 +257,8 @@ class AdkRunDetail(AdkRun):
     """An ADK workflow run with what it runs, its result and its activity."""
 
     input: Any = None
+    #: The files it started with: artifacts of its session (``…/files/{name}``).
+    files: list[RunFile] = []
     #: The graph's result, once it ended (succeeded, or failed with one).
     result: Any = None
     #: The ADK workflow as it ran.
@@ -387,6 +408,7 @@ def as_detail(run: dict[str, Any], events: list[dict[str, Any]]) -> AdkRunDetail
         {
             **_summary(run),
             "input": payload.get("input"),
+            "files": run_files(payload),
             "result": run.get("result"),
             "document": document if isinstance(document, dict) else None,
             "trigger": trigger if isinstance(trigger, dict) else None,
@@ -495,11 +517,15 @@ async def _actor(session: AsyncSession, user: str) -> Actor:
 @router.post(
     "/organizations/{organization_id}/agents/{agent_id}/runs",
     status_code=status.HTTP_202_ACCEPTED,
+    openapi_extra=run_body(
+        AdkRunCreate,
+        "The input, which version, and the files it starts with: JSON, or a "
+        "multipart form with the input as JSON text and each file a files part.",
+    ),
 )
 async def run_adk_workflow(
     organization_id: NodeId,
     agent_id: AgentId,
-    body: AdkRunCreate,
     request: Request,
     user: CurrentUser,
     session: Session,
@@ -508,18 +534,23 @@ async def run_adk_workflow(
     """
     Run an ADK workflow, at the version named (its draft, by default, when it
     has one; else its latest published), with the saved ADK workflows it
-    runs, as the caller: the run, queued for a worker.
+    runs, as the caller: the run, queued for a worker. Files it's sent, when
+    its start takes files, are saved as artifacts of its session.
     \f
     :param organization_id: The organization.
     :param agent_id: The ADK workflow.
-    :param body: The input, and which version.
     :return: The run.
     :raises HTTPException: 403 without agents:run in the organization; 404 when
-        the organization has no such ADK workflow; 422 for input that doesn't
-        fit its start, or a document that doesn't build (the reason naming the
-        node); 503 when runs or MongoDB aren't set up or answering.
+        the organization has no such ADK workflow; 413 for a file too big; 422
+        for input or a file that doesn't fit its start, or a document that
+        doesn't build (the reason naming the node); 503 when runs, files or
+        MongoDB aren't set up or answering.
     """
     await authorize(session, enforcer, user, RUN, Scope(Level.ORG, organization_id))
+    body, files = await read_run_body(
+        request, AdkRunCreate, Limits.of(request.app.state.settings)
+    )
+    artifacts = artifacts_of(request, files)
     store = agent_store(request)
     queue = run_queue(request)
     find = workflow_finder(store, organization_id)
@@ -548,6 +579,7 @@ async def run_adk_workflow(
                 chat_agents=getattr(request.app.state, "chat_agents", None),
                 sessions=request.app.state.sessionmaker,
             ),
+            files,
         )
     except AdkRunError as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from None
@@ -555,7 +587,7 @@ async def run_adk_workflow(
         logger.warning("The agents' MongoDB failed: %s", error)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, UNAVAILABLE) from None
     run_as_name = await name_of(session, user)
-    with store_errors():
+    with store_errors(), storage_errors():
         run = await start_adk_run(
             run_store(request),
             queue,
@@ -566,13 +598,15 @@ async def run_adk_workflow(
             run_as_name=run_as_name,
             trigger={"type": "manual", "by": user},
             version=resolved.version,
+            artifacts=artifacts,
         )
     logger.info(
-        "%s ran ADK workflow %s (version %s) in organization %s: run %s",
+        "%s ran ADK workflow %s (version %s) in organization %s with %d files: run %s",
         user,
         agent_id,
         resolved.version,
         organization_id,
+        len(files),
         run["id"],
     )
     return as_run(run)
@@ -674,6 +708,61 @@ async def get_adk_run_steps(
         ) from None
     steps = [AdkRunStep.model_validate(step) for step in run_steps(found, document)]
     return AdkRunSteps(steps=steps, session_id=session_id)
+
+
+@router.get(
+    "/organizations/{organization_id}/adk-runs/{run_id}/files/{name}",
+    response_class=Response,
+    responses={200: {"content": {"application/octet-stream": {}}}},
+)
+async def get_adk_run_file(
+    organization_id: NodeId,
+    run_id: RunId,
+    name: Annotated[str, Path(min_length=1, max_length=255)],
+    request: Request,
+    user: CurrentUser,
+    session: Session,
+    enforcer: Enforcer,
+) -> Response:
+    """
+    Download a file the run started with, as it was sent (the artifact of
+    its session its steps read).
+    \f
+    :raises HTTPException: 403 without organizations:read; 404 for a run or
+        file that isn't there; 503 when files aren't set up or their storage
+        isn't answering.
+    """
+    run = await _read(request, session, enforcer, user, organization_id, run_id)
+    payload = run.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+    file = next((f for f in run_files(payload) if f.name == name), None)
+    if file is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NO_SUCH_FILE)
+    artifacts = getattr(request.app.state, "workflow_artifacts", None)
+    if artifacts is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, NOT_SET_UP)
+    with storage_errors():
+        part = await artifacts.load_artifact(
+            app_name=APP_NAME,
+            user_id=str(payload.get("run_as") or ""),
+            session_id=str(payload.get("session_id") or run["session_id"]),
+            filename=file.name,
+            version=file.version,
+        )
+    data = part.inline_data.data if part is not None and part.inline_data else None
+    if data is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "The run's file isn't kept any more"
+        )
+    return Response(
+        content=data,
+        media_type=file.media_type,
+        headers={
+            "Content-Disposition": attachment(file.name),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 @router.post(

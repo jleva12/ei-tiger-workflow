@@ -16,7 +16,7 @@ import {
 /**
  * An organization workspace's sub nav: Overview on top, then its sections:
  * Workflows and agents (Workflows, Agents), Integrations (MCP servers,
- * Knowledge bases) and Settings: Members, for those who may see them, and API
+ * Knowledge bases, with Code repositories as its second tab) and Settings: Members, for those who may see them, and API
  * keys, for those who manage them. Render it anywhere in the page: it goes
  * in the shell's pinned `ShellSidebarHeader`.
  */
@@ -55,8 +55,7 @@ export function OrganizationWorkspaceNav({
   const sections = WORKSPACE_SECTIONS.map((section) => ({
     ...section,
     views: section.views.filter(
-      (key) =>
-        (key !== "config" || members) && (key !== "api-keys" || apiKeys)
+      (key) => (key !== "config" || members) && (key !== "api-keys" || apiKeys)
     ),
   })).filter((section) => section.views.length > 0)
 

@@ -52,7 +52,13 @@ def test_on_mysql_it_makes_the_models_table_and_column() -> None:
     with Operations.context(context):
         revision().upgrade()
     table = KnowledgeBaseRepository.__table__
-    expected = statements(str(CreateTable(table).compile(dialect=mysql.dialect())))  # type: ignore[arg-type]
+    # Without the columns later revisions add (0018system_maps).
+    expected = {
+        re.sub(r", map_[xy] FLOAT", "", statement)
+        for statement in statements(
+            str(CreateTable(table).compile(dialect=mysql.dialect()))  # type: ignore[arg-type]
+        )
+    }
     for index in table.indexes:  # type: ignore[attr-defined]
         expected |= statements(str(CreateIndex(index).compile(dialect=mysql.dialect())))
     made = statements(output.getvalue())

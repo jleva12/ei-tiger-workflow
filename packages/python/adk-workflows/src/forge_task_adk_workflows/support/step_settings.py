@@ -18,6 +18,10 @@ class _Config(BaseModel):
 
 class EntryConfig(_Config):
     input_schema: dict[str, Any] = Field(default_factory=dict)
+    # Whether a run may start with files, and of which types (ids of
+    # forge_task_adk_workflows.files.FILE_TYPES); none takes any type.
+    allow_files: bool = False
+    file_types: list[str] = Field(default_factory=list)
 
 
 class ApprovalConfig(_Config):

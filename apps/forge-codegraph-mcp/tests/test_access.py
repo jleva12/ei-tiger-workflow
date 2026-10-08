@@ -150,3 +150,43 @@ async def test_an_unreachable_admin_api_is_unavailable() -> None:
 def test_outside_a_request_there_is_no_scope() -> None:
     with pytest.raises(PermissionError):
         current_scope()
+
+
+async def test_the_scope_carries_the_organizations_system_maps() -> None:
+    other = "https://github.com/acme/billing"
+    end = {
+        "node_id": "entity:1",
+        "kind": "method",
+        "name": "charge",
+        "qualified_name": "shop.charge",
+        "path": "shop.py",
+    }
+    answer = granted(SHOP_URL, other) | {
+        "link_owners": ["kb:1"],
+        "connections": [
+            {
+                "id": "c1",
+                "knowledge_base_id": "1",
+                "knowledge_base": "Checkout",
+                "kind": "calls",
+                "description": "POST /charges",
+                "source": {"url": SHOP_URL, "owner": "acme", "name": "shop"},
+                "target": {"url": other, "owner": "acme", "name": "billing"},
+                "code_links": [{"source": end, "target": end, "label": "POST /charges"}],
+            }
+        ],
+    }
+    access = await verifier(lambda _: httpx.Response(200, json=answer)).verify_token("fk_x")
+    assert access is not None
+    scope = RepositoryScope.of(access)
+    assert scope.link_owners == frozenset({"kb:1"})
+    assert scope.owns("kb:1") and not scope.owns("kb:2")
+    [connection] = scope.connections
+    assert connection["source"] == {"repository_id": REPO, "name": "acme/shop"}
+    assert connection["target"]["repository_id"] == repository_id(other)
+    assert connection["code_links"][0]["label"] == "POST /charges"
+    # An admin API from before system maps names no owners: every link is followed.
+    old = await verifier(lambda _: httpx.Response(200, json=granted(SHOP_URL))).verify_token("fk_y")
+    assert old is not None
+    scope = RepositoryScope.of(old)
+    assert scope.link_owners is None and scope.owns("kb:2") and scope.connections == ()

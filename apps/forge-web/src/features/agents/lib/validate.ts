@@ -40,7 +40,7 @@ export type ChatAgentValidationContext = {
    */
   knowledgeBases?: Map<
     string,
-    { name: string; kind: "rag" | "graph"; ready: number }
+    { name: string; kind: "rag" | "system"; ready: number }
   >
 }
 
@@ -237,7 +237,7 @@ function settingsIssues(
           out.push([
             "knowledge_bases",
             "warning",
-            found.kind === "graph"
+            found.kind === "system"
               ? `${found.name} has no ingested repositories yet: add one, or wait for its ingestion, on its knowledge base page.`
               : `${found.name} has no searchable documents yet: upload some on the Knowledge bases page.`,
             "knowledge_bases",

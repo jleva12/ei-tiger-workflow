@@ -34,9 +34,9 @@ import {
 import { toApiError, type ApiError } from "@/lib/api/index"
 
 /**
- * Includes one of the organization's code repositories in a graph
- * knowledge base: those it doesn't include yet, from the organization's
- * Code repositories page.
+ * Includes one of the organization's code repositories in a system
+ * design knowledge base: those it doesn't include yet, from the organization's
+ * Code repositories tab (Knowledge bases → Code repositories).
  */
 export function IncludeRepositoryDialog({
   open,

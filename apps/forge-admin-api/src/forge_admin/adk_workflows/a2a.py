@@ -8,7 +8,9 @@ its REST API (``runtime.py``).
 A task is a run, the task's ID the run's (as hex):
 
 - The first message starts it: its input is the message's data part, or its
-  text as JSON, or its text. Input that doesn't fit the start is rejected.
+  text as JSON, or its text. Its file parts (their bytes: a file's URL
+  isn't fetched) are the files the run starts with, when its start takes
+  them. Input or files that don't fit the start are rejected.
 - The task follows the run for up to ``workflow_runtime_wait`` seconds:
   ``working`` while it goes; ``input-required`` when it waits for someone (a
   question, with what the answer must fit; an approval or a tool call to
@@ -71,9 +73,11 @@ from forge_agent_runtime.a2a import (
     agent_message,
 )
 from forge_agent_runtime.server import CallAction
+from forge_task_adk_workflows.files import FILE_TYPES, files_rule
 from forge_task_adk_workflows.run_store import ABANDONABLE, PAUSED
 from google.protobuf.struct_pb2 import Struct
 
+from forge_admin.adk_workflows.files import Limits, SentFile
 from forge_admin.adk_workflows.runs import GOING, start_schema
 from forge_admin.adk_workflows.runtime import (
     MANAGE_RUNS,
@@ -135,8 +139,32 @@ def workflow_card(
     quoted = _compact(schema)
     if len(quoted) > SCHEMA_IN_DESCRIPTION:
         quoted = quoted[:SCHEMA_IN_DESCRIPTION] + "…"
+    rule = files_rule(document)
     params = Struct()
-    params.update({"input_schema": schema})
+    params.update(
+        {
+            "input_schema": schema,
+            "files": {"allowed": rule.allowed, "types": list(rule.types)},
+        }
+    )
+    # What a task's first message may send: its input, and files of the
+    # types the start takes (any, when it names none).
+    accepted = ["application/json", "text/plain"]
+    if rule.allowed:
+        media = sorted(
+            {
+                m
+                for t in rule.types
+                if t in FILE_TYPES
+                for m in FILE_TYPES[t].extensions.values()
+            }
+        )
+        accepted += [m for m in media if m not in accepted] if media else ["*/*"]
+    files_said = (
+        f"\n\nSend its files as file parts ({rule.describe()}), with their bytes."
+        if rule.allowed
+        else ""
+    )
     card = AgentCard(
         name=name,
         description=about,
@@ -160,20 +188,22 @@ def workflow_card(
                 AgentExtension(
                     uri=INPUT_EXTENSION,
                     description="input_schema: the JSON Schema of what a task's "
-                    "first message sends (as a data part, or JSON text)",
+                    "first message sends (as a data part, or JSON text); files: "
+                    "whether it may send files (as file parts with their bytes), "
+                    "and their types (none: any)",
                     params=params,
                 )
             ],
         ),
-        default_input_modes=["application/json", "text/plain"],
+        default_input_modes=accepted,
         default_output_modes=["application/json", "text/plain"],
         skills=[
             AgentSkill(
                 id=workflow_id,
                 name=name,
-                description=f"{about}\n\nSend its input as JSON fitting: {quoted}",
+                description=f"{about}\n\nSend its input as JSON fitting: {quoted}{files_said}",
                 tags=["workflow"],
-                input_modes=["application/json", "text/plain"],
+                input_modes=accepted,
                 output_modes=["application/json"],
             )
         ],
@@ -187,17 +217,48 @@ def workflow_card(
 
 
 def value_of(message: Message | None) -> Any:
-    """:return: What a message sends: its data part, else its text as JSON, else its text."""
+    """:return: What a message sends: its data part, else its text as JSON,
+    else its text; nothing when it only sends files."""
     if message is None:
         return None
     data = get_data_parts(message.parts)
     if data:
         return data[0]
     text = "\n".join(get_text_parts(message.parts)).strip()
+    if not text and any(_is_file(part) for part in message.parts):
+        return None
     try:
         return json.loads(text)
     except ValueError:
         return text
+
+
+def _is_file(part: Part) -> bool:
+    return part.WhichOneof("content") in ("raw", "url")
+
+
+def files_of(message: Message, limits: Limits) -> list[SentFile]:
+    """
+    :return: The files a message sends: its file parts' bytes, names and media types.
+    :raises HTTPException: 422 for a file sent by URL (never fetched) or too
+        many files; 413 for one too big.
+    """
+    sent: list[SentFile] = []
+    for part in message.parts:
+        kind = part.WhichOneof("content")
+        if kind == "url":
+            raise HTTPException(
+                422,
+                f"{part.filename or part.url}: send a file's bytes, not its URL: "
+                "the workflow doesn't fetch files",
+            )
+        if kind == "raw":
+            limits.check_size(part.filename or None, len(part.raw))
+            sent.append(
+                SentFile(part.filename or None, part.media_type or None, part.raw)
+            )
+    limits.check_count(len(sent))
+    return sent
 
 
 def _going_text(run: dict[str, Any]) -> str:
@@ -353,10 +414,11 @@ class WorkflowA2aExecutor(AgentExecutor):
                 protocol="a2a",
                 run_id=run_id,
                 trigger={"task_id": updater.task_id, "context_id": context_id},
+                files=files_of(message, Limits.of(request.app.state.settings)),
             )
         except HTTPException as error:
             text = str(error.detail)
-            if error.status_code == 422:
+            if error.status_code in (413, 422):
                 await updater.reject(agent_message(text))
             else:
                 await updater.failed(agent_message(text))

@@ -22,7 +22,7 @@ import {
  * its own documents (`…/knowledge-bases/:kb/documents`) and nested
  * collections (`…/knowledge-bases/:kb/document-collections`): each upload is
  * stored, then the embedding worker parses, chunks and embeds it; its
- * `phase` is that job as last read. A graph one holds some of the
+ * `phase` is that job as last read. A system design one holds some of the
  * organization's code repositories (`…/knowledge-bases/:kb/repositories`),
  * searched in their code graphs. Reading takes `organizations:read`;
  * everything else `knowledge_bases:manage`.
@@ -32,8 +32,8 @@ import {
 /* Knowledge bases                                                            */
 /* -------------------------------------------------------------------------- */
 
-/** `rag`: documents uploaded to it. `graph`: code repositories. */
-export type KnowledgeBaseKind = "rag" | "graph"
+/** `rag`: documents uploaded to it. `system`: a system design one, of applications (code repositories), how they connect and their code. */
+export type KnowledgeBaseKind = "rag" | "system"
 
 export type KnowledgeBase = {
   id: string
@@ -41,9 +41,11 @@ export type KnowledgeBase = {
   name: string
   description: string
   kind: KnowledgeBaseKind
-  /** A graph one's repositories, and how many have a code graph to search. */
+  /** A system design one's repositories, and how many have a code graph to search. */
   repositories: number
   ingested: number
+  /** A system design one's connections between its applications. */
+  connections: number
   /** A RAG one's documents, how many are searchable and how many failed. */
   documents: number
   ready: number
@@ -121,14 +123,14 @@ export type SearchHit = {
   /** What an answer cites it by, e.g. "KQM4821". */
   ref: string
   document_id: string
-  /** A graph knowledge base's: the repository and the file. */
+  /** A system design knowledge base's: the repository and the file. */
   filename: string
   section_path: string[]
   /** Where in the document (or the file) it is, in words. */
   location: string
   text: string
   score: number
-  /** A graph knowledge base's code: the repository and its graph's node. */
+  /** A system design knowledge base's code: the repository and its graph's node. */
   repository_id: string | null
   node_id: string | null
 }

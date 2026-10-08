@@ -2,6 +2,7 @@ import { CONFIGS as CHAT_CONFIGS } from "@/features/agents/lib/schema"
 import { THINKING_LEVELS } from "@/features/steps/lib/model"
 import { CONFIGS as STEP_CONFIGS } from "@/features/steps/lib/schema"
 import { AGENT_FORMAT } from "./document"
+import { FILE_TYPE_IDS } from "./files"
 import {
   AGENT_KINDS,
   FORGE_KINDS,
@@ -98,6 +99,18 @@ const CONFIGS: Record<AgentKind, Record<string, unknown>> = {
     input_schema: jsonSchema(
       "A JSON Schema of what a run starts with; {} takes anything."
     ),
+    allow_files: {
+      type: "boolean",
+      description:
+        "Whether a run may start with files: each is saved as an ADK artifact of the run's session, its steps read it there (ctx.load_artifact, an LLM agent's load_artifacts tool), and state.files lists them.",
+    },
+    file_types: {
+      type: "array",
+      items: oneOf(...FILE_TYPE_IDS),
+      uniqueItems: true,
+      description:
+        "The types of files it takes, by their extension; none takes any type.",
+    },
   },
   llm: {
     ...LLM_SETTINGS,

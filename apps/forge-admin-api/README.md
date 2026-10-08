@@ -252,7 +252,7 @@ for, which its `org_id` claim names (`forge-admin-token --organization`).
 
 | Method | Path | What | Needs |
 |---|---|---|---|
-| GET | `/code-graph/access` | `{"subject", "organization_id", "repositories": [{"url", "owner", "name", "branch"}]}`: the organization's code repositories, by URL. 403 for a credential that names no organization | `repositories:read` in the credential's organization |
+| GET | `/code-graph/access` | `{"subject", "organization_id", "repositories": [{"url", "owner", "name", "branch"}], "connections": [...], "link_owners": [...]}`: the organization's code repositories, by URL; the connections on its system design knowledge bases' maps (`{id, knowledge_base_id, knowledge_base, kind, description, source, target, code_links}`, the ends `{url, owner, name}`); and the owners (`kb:<id>`) of its cross-repository links. 403 for a credential that names no organization | `repositories:read` in the credential's organization |
 
 ### Code repositories
 
@@ -292,18 +292,29 @@ repository succeeded, 503 when the worker isn't set up or doesn't answer, and
 
 An organization's knowledge bases, of two kinds (`kind`, fixed when made):
 `rag`, documents uploaded to it (`…/documents`, `…/document-collections`),
-and `graph`, code repositories (`knowledge_base_repositories`), searched in
-the code graph. A graph one's reads count `repositories` and those `ingested`;
-document and collection routes answer 409 for it. Chat agents and workflow
-LLM nodes search both kinds with the knowledge base tool; a search of RAG and
-graph knowledge bases together takes their passages in turn.
+and `system`, a system design one: applications, the organization's code
+repositories (`knowledge_base_repositories`), searched in the code graph,
+and the connections between them (`knowledge_base_connections`), with code
+links saying where in each one's code graph a connection happens
+(`knowledge_base_code_links`, written into the code graph as the knowledge
+base's cross-repository links, owner `kb:<id>`). A system design one's reads
+count `repositories`, those `ingested` and its `connections`; document and
+collection routes answer 409 for it. Chat agents and workflow LLM nodes
+search both kinds with the knowledge base tool, whose description tells them
+a system's applications and connections; a search of RAG and system design
+knowledge bases together takes their passages in turn.
 
 | Method | Path | What | Needs |
 |---|---|---|---|
 | GET, POST | `/organizations/{id}/knowledge-bases` | The knowledge bases, by name; make one, `{"name", "description"?, "kind"?}` (`rag` by default) | `organizations:read`; `knowledge_bases:manage` to make |
-| POST | `/organizations/{id}/knowledge-bases/{kb}/search` | Search it as its agents do, `{"query", "limit"?}`: a RAG one's passages, or a graph one's code (each hit a declaration, with `repository_id`, `node_id` and its source) | `organizations:read` |
-| GET, POST | `/organizations/{id}/knowledge-bases/{kb}/repositories` | A graph knowledge base's repositories, each with its latest ingestion and latest success; add one, `{"repository_id"}` (one of the organization's) or `{"url", "branch", "ingest"?}` (a GitHub repository, added to the organization when it doesn't have it): 201, or 200 when it has it already | `organizations:read`; `knowledge_bases:manage` to add, and `repositories:manage` to add a repository to the organization |
-| DELETE | `/organizations/{id}/knowledge-bases/{kb}/repositories/{repository_id}` | Remove it from the knowledge base; it stays in the organization, with its code graph | `knowledge_bases:manage` |
+| POST | `/organizations/{id}/knowledge-bases/{kb}/search` | Search it as its agents do, `{"query", "limit"?}`: a RAG one's passages, or a system design one's code (each hit a declaration, with `repository_id`, `node_id` and its source) | `organizations:read` |
+| GET, POST | `/organizations/{id}/knowledge-bases/{kb}/repositories` | A system design knowledge base's applications (repositories), each with its latest ingestion and latest success; add one, `{"repository_id"}` (one of the organization's) or `{"url", "branch", "ingest"?}` (a GitHub repository, added to the organization when it doesn't have it): 201, or 200 when it has it already | `organizations:read`; `knowledge_bases:manage` to add, and `repositories:manage` to add a repository to the organization |
+| DELETE | `/organizations/{id}/knowledge-bases/{kb}/repositories/{repository_id}` | Remove it from the knowledge base, with its connections; it stays in the organization, with its code graph | `knowledge_bases:manage` |
+| GET, PATCH | `/organizations/{id}/knowledge-bases/{kb}/map` | Its system map as people left it, the same for everyone: `{"layout", "positions": {repository_id: {"x", "y"}}}`; PATCH moves the applications given (the others keep their places) or picks `layout` (`cose`, `breadthfirst`, `circle`) | `organizations:read`; `knowledge_bases:manage` to change |
+| GET, POST | `/organizations/{id}/knowledge-bases/{kb}/connections` | Its connections, each with its `code_links` count; draw one, `{"source_repository_id", "target_repository_id", "kind", "description"?}`, `kind` one of `connects_to`, `calls`, `depends_on`, `events`, `shares_data`: 409 when they're connected that way already, 422 for an application it doesn't include | `organizations:read`; `knowledge_bases:manage` to draw |
+| PATCH, DELETE | `/organizations/{id}/knowledge-bases/{kb}/connections/{connection_id}` | Change its `kind` or `description`; remove it, with its code links | `knowledge_bases:manage` |
+| GET, POST | `/organizations/{id}/knowledge-bases/{kb}/connections/{connection_id}/code-links` | Where it happens in the code; add one, `{"source_node_id", "target_node_id", "label"?}`, nodes of each application's live code graph: 409 before both are ingested | `organizations:read`; `knowledge_bases:manage` to add |
+| DELETE | `/organizations/{id}/knowledge-bases/{kb}/connections/{connection_id}/code-links/{code_link_id}` | Remove a code link, and take it out of the code graph | `knowledge_bases:manage` |
 
 ### ADK workflow runs
 

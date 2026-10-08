@@ -41,6 +41,10 @@ person's answer, the timer), and every retry.
   runs again. If ADK can't carry it on, the run starts over in a new session
   (``<session ID>-r<n>``, kept with the job and noted), and its side effects
   may repeat.
+- **Files.** The files a run started with are artifacts of its session,
+  which the admin API saved there (``files``); the runner keeps artifacts in
+  the same place, so its nodes read them. Starting over in a new session
+  takes them along.
 """
 
 from __future__ import annotations
@@ -61,6 +65,7 @@ import httpx
 from forge_common.adk.usage import Attribution, UsagePlugin, current_sink, price_from
 from google.adk import Event
 from google.adk.apps import App
+from google.adk.artifacts import BaseArtifactService
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, Session
@@ -68,6 +73,7 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
+from forge_task_adk_workflows.files import RunFile, copy_run_files
 from forge_task_adk_workflows.graph import (
     AgentBuildError,
     Pause,
@@ -105,6 +111,10 @@ MAX_SESSION_ID = 128
 #: Seconds an approval's timeout waits past its deadline, so it's past it on
 #: every worker's clock.
 DEADLINE_MARGIN = 1
+NO_ARTIFACTS = (
+    "set HYBRID_ADK_WORKFLOWS__ARTIFACTS to where the admin API keeps them "
+    "(its FORGE_ADMIN_WORKFLOW_ARTIFACTS), with the S3 service's settings"
+)
 
 
 class RunPayload(BaseModel):
@@ -133,6 +143,11 @@ class RunPayload(BaseModel):
         description="The organization's knowledge bases its LLM agents search, by ID: each one's name and description",
     )
     input: Any = None
+    files: list[RunFile] = Field(
+        default_factory=list,
+        description="The files it starts with: artifacts of its session (the first one: session_id), "
+        "saved by the admin API",
+    )
     session_id: str = Field(
         min_length=1,
         max_length=MAX_SESSION_ID,
@@ -158,6 +173,9 @@ class AdkRun:
     :param services: What its nodes use.
     :param sessions: Where its ADK session is.
     :param settings: The task's settings.
+    :param artifacts: Where its ADK artifacts are (the files it starts with
+        among them); None when the worker keeps none, and a run with files
+        fails.
     """
 
     def __init__(
@@ -168,12 +186,16 @@ class AdkRun:
         services: RunServices,
         sessions: BaseSessionService,
         settings: AdkWorkflowsSettings,
+        artifacts: BaseArtifactService | None = None,
+        artifacts_unavailable: str | None = None,
     ) -> None:
         self.payload = payload
         self.control = control
         self.services = services
         self.sessions = sessions
         self.settings = settings
+        self.artifacts = artifacts
+        self.artifacts_unavailable = artifacts_unavailable
         self.steps = Steps.of(payload.document, payload.saved)
         self.workflow_name = payload.name or text(payload.document.get("name")) or payload.agent_id
         stored = control.load(STATE_KEY) or {}
@@ -207,6 +229,14 @@ class AdkRun:
         """
         if self.state["finished"] is not None:
             return self._succeeded(self.state["finished"])
+        if self.payload.files and self.artifacts is None:
+            return JobResult.failed(
+                "The run started with files, and this worker can't read them: "
+                + (self.artifacts_unavailable or NO_ARTIFACTS),
+                outcome="failed",
+            )
+        if self.payload.files:
+            self.services = self.services.but(files=tuple(self.payload.files))
         agents = self._agents()
         if agents is not None:
             self.services = self.services.but(agents=agents)
@@ -215,7 +245,7 @@ class AdkRun:
         except AgentBuildError as error:
             return JobResult.failed(f"The ADK workflow can't run: {error}", outcome="failed")
         app = App.model_construct(name=APP_NAME, root_agent=graph, plugins=self._plugins())
-        runner = self.runner = Runner(app=app, session_service=self.sessions)
+        runner = self.runner = Runner(app=app, session_service=self.sessions, artifact_service=self.artifacts)
         try:
             await self._save("The run goes on")
             finished = await self._carry_on()
@@ -345,7 +375,27 @@ class AdkRun:
             session_id=new_id,
         )
         await self._save("The run starts over")
+        await self._take_files(new_id)
         await self._begin(await self._open())
+
+    async def _take_files(self, session_id: str) -> None:
+        """The run's files, to the new session it starts over in."""
+        if not self.payload.files:
+            return
+        assert self.artifacts is not None
+        try:
+            await copy_run_files(
+                self.artifacts,
+                app_name=APP_NAME,
+                user_id=self.payload.run_as,
+                from_session=self.payload.session_id,
+                to_session=session_id,
+                files=self.payload.files,
+            )
+        except FileNotFoundError as error:
+            raise RunFailed(f"The run can't start over: {error}") from None
+        except Exception as error:
+            raise _classified(error) from error
 
     async def _drive(self, message: types.Content | None) -> None:
         """

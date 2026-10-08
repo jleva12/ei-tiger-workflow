@@ -121,10 +121,12 @@ def worker(
     *,
     model: Any = None,
     answer: Callable[[httpx.Request], httpx.Response] | None = None,
+    artifacts: Any = None,
     **settings: Any,
 ) -> Worker:
     """The task, with HTTP answered by ``answer`` (200 ``{"ok": true}`` by
-    default), recording each request."""
+    default), recording each request, and runs' artifacts in ``artifacts``
+    (none by default)."""
     clock = Clock()
     sent: list[httpx.Request] = []
 
@@ -140,7 +142,7 @@ def worker(
         sleep=clock.sleep,
         model=model or NoModels(),
     )
-    task = AdkWorkflowsTask(options, services, sessions)
+    task = AdkWorkflowsTask(options, services, sessions, artifacts=artifacts)
     return Worker(task, sessions, clock, sent)
 
 

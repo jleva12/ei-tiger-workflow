@@ -1,5 +1,5 @@
 """
-A graph knowledge base's code repositories (``knowledge_base_repositories``):
+A system design knowledge base's code repositories (``knowledge_base_repositories``):
 the organization's code repositories (``code_repositories``) it includes,
 whose code its agents search in the code graph. A repository may be in any
 number of knowledge bases; removing it from one leaves it in the
@@ -14,7 +14,7 @@ import logging
 from typing import Annotated, Self
 
 import casbin
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, StringConstraints, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,9 +39,10 @@ from forge_admin.auth.access import (
 from forge_admin.code_repositories import access as repositories
 from forge_admin.code_repositories.github import InvalidRepository, parse_github_url
 from forge_admin.knowledge.access import knowledge_base_of
+from forge_admin.knowledge.connections import commit_synced, has_code_links
 from forge_admin.knowledge.graph import linked
 from forge_admin.models import CodeRepository, KnowledgeBaseRepository
-from forge_admin.models.knowledge import GRAPH
+from forge_admin.models.knowledge import SYSTEM
 
 logger = logging.getLogger(__name__)
 
@@ -84,14 +85,14 @@ async def list_knowledge_base_repositories(
     enforcer: Enforcer,
 ) -> list[RepositoryRead]:
     """
-    The graph knowledge base's repositories, by URL, each with its latest
+    The system design knowledge base's repositories, by URL, each with its latest
     ingestion and its latest successful one. Poll it to follow ingestions.
     \f
     :raises HTTPException: 403 without ``organizations:read``; 404 for
         another organization's knowledge base, or none; 409 for a RAG one.
     """
     await knowledge_base_of(
-        session, enforcer, user, organization_id, knowledge_base_id, kind=GRAPH
+        session, enforcer, user, organization_id, knowledge_base_id, kind=SYSTEM
     )
     found = await linked(session, [knowledge_base_id])
     return await _reads(session, found[knowledge_base_id])
@@ -111,7 +112,7 @@ async def add_knowledge_base_repository(
     enforcer: Enforcer,
 ) -> RepositoryRead:
     """
-    Include a repository in the graph knowledge base: one of the
+    Include a repository in the system design knowledge base: one of the
     organization's, or a GitHub repository, which the organization gets
     (with its first ingestion queued, unless ``ingest`` is false) when it
     doesn't have it already. Including one it includes already answers 200.
@@ -130,7 +131,7 @@ async def add_knowledge_base_repository(
         organization_id,
         knowledge_base_id,
         manage=True,
-        kind=GRAPH,
+        kind=SYSTEM,
     )
     repository = await _repository(session, enforcer, user, organization_id, body)
     included = await session.get(
@@ -218,14 +219,16 @@ async def remove_knowledge_base_repository(
     organization_id: NodeId,
     knowledge_base_id: NodeId,
     repository_id: NodeId,
+    request: Request,
     user: CurrentUser,
     session: Session,
     enforcer: Enforcer,
 ) -> None:
     """
-    Remove a repository from the graph knowledge base. It stays in the
-    organization, with its ingestions and code graph, and in other knowledge
-    bases that include it.
+    Remove a repository from the system design knowledge base, with its
+    connections to and from the knowledge base's other applications. It
+    stays in the organization, with its ingestions and code graph, and in
+    other knowledge bases that include it.
     \f
     :raises HTTPException: 403 without ``knowledge_bases:manage``; 404 for
         another organization's knowledge base, or none, or a repository it
@@ -238,15 +241,23 @@ async def remove_knowledge_base_repository(
         organization_id,
         knowledge_base_id,
         manage=True,
-        kind=GRAPH,
+        kind=SYSTEM,
     )
     included = await session.get(
         KnowledgeBaseRepository, (knowledge_base_id, repository_id)
     )
     if included is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_INCLUDED)
+    # Its connections go with it, and their code links leave the code graph.
+    coded = await has_code_links(
+        session, knowledge_base_id, repository_id=repository_id
+    )
     await session.delete(included)
-    await session.commit()
+    await commit_synced(
+        session,
+        getattr(request.app.state, "codegraph", None),
+        [knowledge_base_id] if coded else [],
+    )
     logger.info(
         "%s removed code repository %s from knowledge base %s",
         user,

@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
   "forge-tasks",
   "forge-jsonata",                    # every expression in a document is JSONata, evaluated here in Python
-  "forge-common[adk,adk-models]",     # ADK, and the models of the shared model_provider.yaml
+  "forge-common[adk,adk-models,adk-artifacts-s3]",  # ADK, the models of the shared model_provider.yaml, and artifacts in S3 (runs' files)
   "google-adk>=2.9.2",
   "pydantic>=2.7",
   "jsonschema>=4.23",

@@ -85,6 +85,7 @@ import {
   usesOf,
   type AgentDocument,
 } from "@/features/adk-workflows/lib/document"
+import { NO_FILES, type FilesRule } from "@/features/adk-workflows/lib/files"
 import { AGENTS_ICON } from "@/features/adk-workflows/lib/model"
 import { useToolLookups } from "@/features/agents/components/tool-lookups"
 import {
@@ -450,7 +451,11 @@ function Builder({
   const [discarding, setDiscarding] = React.useState(false)
   const [problems, setProblems] = React.useState<string[]>([])
   // The start's input schema while the run dialog is open.
-  const [running, setRunning] = React.useState<Record<string, unknown>>()
+  // What the run dialog asks for: the start's input, and its files.
+  const [running, setRunning] = React.useState<{
+    schema: Record<string, unknown>
+    files: FilesRule
+  }>()
   const [detailsWidth, setDetailsWidth] = useDetailsWidth(
     "forge.agents.detailsWidth"
   )
@@ -540,7 +545,17 @@ function Builder({
   const startRun = () => {
     const doc = agentDocumentOf(api.getState())
     const start = doc.nodes.find((node) => node.kind === "start")
-    setRunning(start?.kind === "start" ? (start.config.input_schema ?? {}) : {})
+    setRunning(
+      start?.kind === "start"
+        ? {
+            schema: start.config.input_schema ?? {},
+            files: {
+              allowed: start.config.allow_files,
+              types: start.config.file_types,
+            },
+          }
+        : { schema: {}, files: NO_FILES }
+    )
   }
   const started = (run: AdkRun) =>
     toast.add({
@@ -730,7 +745,8 @@ function Builder({
           organizationId={organization.id}
           agentId={record.id}
           name={name}
-          inputSchema={running ?? {}}
+          inputSchema={running?.schema ?? {}}
+          files={running?.files}
           version={runVersion}
           onStarted={started}
         />

@@ -231,8 +231,9 @@ async def test_a_knowledge_base_tool_searches_a_graph_knowledge_bases_code(sessi
         "kb_code": {
             "name": "Widgets",
             "description": "",
-            "kind": "graph",
+            "kind": "system",
             "repositories": [{"id": "r1", "graph_id": "repo:widgets", "name": "acme/widgets"}],
+            "connections": [{"source": "acme/web", "kind": "calls", "target": "acme/widgets", "description": ""}],
         }
     }
 
@@ -241,7 +242,10 @@ async def test_a_knowledge_base_tool_searches_a_graph_knowledge_bases_code(sessi
     assert result.detail["result"] == "With HMAC."
     assert code.asked == [(["repo:widgets"], "How are tokens signed?", 3)]
     declared = llm.requests[0].config.tools[0].function_declarations  # type: ignore[index, union-attr]
-    assert "Widgets (code of acme/widgets)" in (declared[0].description or "")
+    # The tool tells the model the system: its applications and how they connect.
+    assert "Widgets (code of acme/widgets; how they connect: acme/web calls the API of acme/widgets)" in (
+        declared[0].description or ""
+    )
     answered = llm.requests[1].contents[-1].parts[0].function_response.response  # type: ignore[index, union-attr]
     passage = answered["payload"]["passages"][0]
     assert passage["ref"] == code_ref("repo:widgets:entity:signer")
