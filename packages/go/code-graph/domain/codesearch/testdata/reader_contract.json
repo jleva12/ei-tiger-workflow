@@ -1,0 +1,291 @@
+{
+  "document_version": 1,
+  "documents": [
+    {
+      "node": {
+        "id": "entity:6lnyk7XR7NHfHp9KOmYXVg",
+        "kind": "method",
+        "name": "placeOrder",
+        "qualified_name": "shop.OrderService.placeOrder(shop.Cart)",
+        "source": {
+          "lineage": "file:a40b3JEQS8QDsty1WjutIw",
+          "content_sha256": "abababababababababababababababababababababababababababababababab",
+          "span": {
+            "start": {
+              "byte_offset": 120,
+              "line": 9,
+              "column": 5
+            },
+            "end": {
+              "byte_offset": 260,
+              "line": 13,
+              "column": 6
+            }
+          }
+        },
+        "properties": {
+          "canonical_signature": {
+            "string": "shop.OrderService.placeOrder(shop.Cart)"
+          },
+          "docstring": {
+            "string": "Places an order \u0026 reserves its stock \u003catomically\u003e."
+          },
+          "file_path": {
+            "string": "core/src/main/java/shop/OrderService.java"
+          },
+          "language": {
+            "string": "java"
+          },
+          "modifiers": {
+            "strings": [
+              "public"
+            ]
+          },
+          "owner_key": {
+            "string": "shop.OrderService"
+          },
+          "signature": {
+            "string": "public Order placeOrder(Cart cart)"
+          },
+          "source_text": {
+            "string": "public Order placeOrder(Cart cart) {\n    inventory.reserve(cart);\n    return orders.save(cart);\n}"
+          },
+          "start_line": {
+            "int64": 9
+          },
+          "static": {
+            "bool": false
+          }
+        }
+      },
+      "document": {
+        "node_id": "entity:6lnyk7XR7NHfHp9KOmYXVg",
+        "text": "method placeOrder\nQualified name: shop.OrderService.placeOrder(shop.Cart)\nFile:\ncore/src/main/java/shop/OrderService.java\nLanguage:\njava\nOwner:\nshop.OrderService\nSignature:\npublic Order placeOrder(Cart cart)\nResolved signature:\nshop.OrderService.placeOrder(shop.Cart)\nDocumentation:\nPlaces an order \u0026 reserves its stock \u003catomically\u003e.\nCode:\npublic Order placeOrder(Cart cart) {\n    inventory.reserve(cart);\n    return orders.save(cart);\n}",
+        "hash": "2476e9e6d6d2c62867f1d2f92db3e02e5ee203388dfb01d5ded80831850c14af"
+      }
+    },
+    {
+      "node": {
+        "id": "entity:ebzzfgcsxpqzwAWkeri5Wg",
+        "kind": "class",
+        "name": "OrderService",
+        "qualified_name": "shop.OrderService",
+        "properties": {
+          "docstring": {
+            "string": ""
+          },
+          "file_path": {
+            "string": "core/src/main/java/shop/OrderService.java"
+          },
+          "language": {
+            "string": "java"
+          },
+          "members": {
+            "string": "method placeOrder\nfield inventory\nfield orders"
+          }
+        }
+      },
+      "document": {
+        "node_id": "entity:ebzzfgcsxpqzwAWkeri5Wg",
+        "text": "class OrderService\nQualified name: shop.OrderService\nFile:\ncore/src/main/java/shop/OrderService.java\nLanguage:\njava\nMembers:\nmethod placeOrder\nfield inventory\nfield orders",
+        "hash": "c084fe4cc41c6157a7d3da9ea612a3039537c1019d914a4d165dffc5d7f8aac0"
+      }
+    },
+    {
+      "node": {
+        "id": "python-symbol:B5LRo1cRjEZcqagxEfxOeA",
+        "kind": "function",
+        "name": "grüßen",
+        "qualified_name": "app.grüße.grüßen",
+        "properties": {
+          "docstring": {
+            "string": "Begrüßt die 世界 — λ ✓\u2028zweite Zeile"
+          },
+          "file_path": {
+            "string": "app/grüße.py"
+          },
+          "language": {
+            "string": "python"
+          },
+          "source_text": {
+            "string": "def grüßen(name: str) -\u003e str:\n    return f\"👋 {name}\""
+          }
+        }
+      },
+      "document": {
+        "node_id": "python-symbol:B5LRo1cRjEZcqagxEfxOeA",
+        "text": "function grüßen\nQualified name: app.grüße.grüßen\nFile:\napp/grüße.py\nLanguage:\npython\nDocumentation:\nBegrüßt die 世界 — λ ✓\u2028zweite Zeile\nCode:\ndef grüßen(name: str) -\u003e str:\n    return f\"👋 {name}\"",
+        "hash": "84d2cbfadda130ff3c4589bb1c6ed42159dad9688bd353dcad340d9e1c077120"
+      }
+    },
+    {
+      "node": {
+        "id": "entity:KnAeS-ZjNqf5bl7UhPiZ_A",
+        "kind": "variable",
+        "properties": {
+          "signature": {
+            "strings": [
+              "int",
+              "count"
+            ]
+          }
+        }
+      },
+      "document": {
+        "node_id": "entity:KnAeS-ZjNqf5bl7UhPiZ_A",
+        "text": "variable \nQualified name: ",
+        "hash": "3fb69f300ff786e58f04902bd62e69fe55b74e3cea5dbfc0bbfb5fd638567ea9"
+      }
+    },
+    {
+      "node": {
+        "id": "code_chunk:xDjRgeJFmtjnj8B4D-BzFQ",
+        "kind": "code_chunk",
+        "name": "placeOrder#0",
+        "qualified_name": "shop.OrderService.placeOrder(shop.Cart)#0",
+        "properties": {
+          "file_path": {
+            "string": "core/src/main/java/shop/OrderService.java"
+          },
+          "source_text": {
+            "string": "inventory.reserve(cart);"
+          }
+        }
+      },
+      "document": {
+        "node_id": "code_chunk:xDjRgeJFmtjnj8B4D-BzFQ",
+        "text": "code_chunk placeOrder#0\nQualified name: shop.OrderService.placeOrder(shop.Cart)#0\nFile:\ncore/src/main/java/shop/OrderService.java\nCode:\ninventory.reserve(cart);",
+        "hash": "bbdebada27cab4586d126841efd197c1b7a987f2e01a9aac82bf367d62fd4de6"
+      }
+    },
+    {
+      "node": {
+        "id": "file:a40b3JEQS8QDsty1WjutIw",
+        "kind": "source_file",
+        "name": "core/src/main/java/shop/OrderService.java",
+        "properties": {
+          "file_path": {
+            "string": "core/src/main/java/shop/OrderService.java"
+          },
+          "language": {
+            "string": "java"
+          }
+        }
+      },
+      "document": null
+    },
+    {
+      "node": {
+        "id": "external:xRXuOTZjYvVVLItRVVfMhQ",
+        "kind": "external_symbol",
+        "name": "List",
+        "qualified_name": "java.util.List"
+      },
+      "document": null
+    }
+  ],
+  "graph_ids": [
+    {
+      "kind": "repo",
+      "parts": [
+        "https://github.com/acme/shop"
+      ],
+      "id": "repo:V_H5zxTl25Hcy8dEepu1NA"
+    },
+    {
+      "kind": "file",
+      "parts": [
+        "repo:V_H5zxTl25Hcy8dEepu1NA",
+        "core",
+        "main",
+        "core/src/main/java/shop/OrderService.java"
+      ],
+      "id": "file:a40b3JEQS8QDsty1WjutIw"
+    },
+    {
+      "kind": "edge",
+      "parts": [
+        "calls",
+        "entity:DrW41vgbxnfaighWfMT6mg",
+        "entity:qJUPBdNEPnkh5-xvvgbI_g",
+        ""
+      ],
+      "id": "edge:tgA5xI31kLAzq57A61V00A"
+    },
+    {
+      "kind": "entity",
+      "parts": [
+        "List\u003cString\u003e \u0026 Map\u003cK,V\u003e"
+      ],
+      "id": "entity:hZBwsDDgqUnXSiW_wbhxmA"
+    },
+    {
+      "kind": "sym",
+      "parts": [
+        "grüßen",
+        "世界",
+        "line\u2028separator",
+        "para\u2029graph"
+      ],
+      "id": "sym:EJfbYUwbMkgsrCMtgGHhsQ"
+    },
+    {
+      "kind": "lookup",
+      "parts": [
+        "quote\" backslash\\ newline\n tab\t control\u0001 bell\b feed\f"
+      ],
+      "id": "lookup:P4Bimeo8c8uXIZVVIxSG3w"
+    },
+    {
+      "kind": "code_chunk",
+      "parts": [
+        "entity:DrW41vgbxnfaighWfMT6mg",
+        "0"
+      ],
+      "id": "code_chunk:Gfwvw_ZL0JeJ6Dlw-14Eyg"
+    }
+  ],
+  "embedding": {
+    "max_input_bytes": 64,
+    "dimensions": 4,
+    "text": "Grüße aus 世界: λ-Kalkül → ✓; Grüße aus 世界: λ-Kalkül → ✓; Grüße aus 世界: λ-Kalkül → ✓; Grüße aus 世界: λ-Kalkül → ✓; Grüße aus 世界: λ-Kalkül → ✓; ",
+    "windows": [
+      "Grüße aus 世界: λ-Kalkül → ✓; Grüße aus 世界: λ-K",
+      "alkül → ✓; Grüße aus 世界: λ-Kalkül → ✓; Grüße ",
+      "aus 世界: λ-Kalkül → ✓; Grüße aus 世界: λ-Kalkül ",
+      "→ ✓; "
+    ],
+    "window_vectors": [
+      [
+        0.841,
+        0.909,
+        0.141,
+        -0.757
+      ],
+      [
+        -0.959,
+        -0.279,
+        0.657,
+        0.989
+      ],
+      [
+        0.412,
+        -0.544,
+        -1,
+        -0.537
+      ],
+      [
+        0.42,
+        0.991,
+        0.65,
+        -0.288
+      ]
+    ],
+    "vector": [
+      0.6356311511824076,
+      0.3012729808144376,
+      -0.3115527234519583,
+      -0.6388603377792195
+    ]
+  }
+}

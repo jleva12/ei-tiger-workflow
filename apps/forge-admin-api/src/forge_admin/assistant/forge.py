@@ -2,7 +2,9 @@
 
 A supervisor talks with the person. It has no tools of its own: it hands
 each request to a specialist, an agent with one toolset (the access tools in
-``access_tools.py``, the administration tools in ``admin_tools.py``), and
+``access_tools.py``, the administration tools in ``admin_tools.py``, the
+knowledge base tools in ``knowledge_tools.py``, the code graph's tools in
+``code_tools.py``), and
 answers from what the specialist reports. With a few tools
 each, the specialists pick the right one more reliably than one agent
 offered all of them. Each specialist runs as an ADK
@@ -32,6 +34,7 @@ from pydantic import Field
 from forge_admin.assistant import (
     access_tools,
     admin_tools,
+    code_tools,
     knowledge_tools,
     language_models,
     screens,
@@ -53,8 +56,10 @@ models and other systems, and a person approves the steps that need one.
 
 What Forge is made of:
 - A hierarchy: the site, then organizations. The work happens in \
-organizations: their ADK workflows and their runs, their agents, and their \
-knowledge bases, named sets of documents their agents search.
+organizations: their ADK workflows and their runs, their agents, their \
+knowledge bases, named sets of documents their agents search, and their \
+code repositories, ingested into a code graph of their declarations and \
+how they call and use each other.
 - Role-based access: a role is assigned in a scope, the site or an \
 organization; a site role applies in every organization too. Permissions are \
 keyed resource:action.
@@ -422,6 +427,27 @@ def toolsets(settings: Settings, app: FastAPI | None = None) -> list[AssistantTo
                 "documents; answering questions from what the documents say, with "
                 "the passages cited by ref; which documents are searchable, failed "
                 "or stale, and retrying or re-indexing them."
+            ),
+        ),
+        AssistantToolset(
+            name="code",
+            title="Code",
+            description=(
+                "Explores your organization's code repositories as a code graph: "
+                "finds the declarations that answer a question, walks callers, "
+                "callees and impact, reads exact source, and shows how repositories "
+                "and systems connect. It only reads."
+            ),
+            toolset=code_tools.toolset(app) if app is not None else None,
+            instruction=code_tools.INSTRUCTION,
+            tools=code_tools.TOOL_NAMES,
+            delegate=(
+                "Code: an organization's code repositories, ingested into a code "
+                "graph; how the code works and where (declarations by question, "
+                "symbol or path), what calls or uses what, what a change would "
+                "affect, exact source, what an ingestion changed, and how "
+                "repositories, services and systems connect. The same tools as the "
+                "code graph MCP server."
             ),
         ),
     ]

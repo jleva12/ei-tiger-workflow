@@ -1,0 +1,17 @@
+ClaimsCenter release notes
+
+Version 8.4.0 - released 2026-09-22
+- CC-4821: Duplicate payments could be issued when an adjuster double-clicked "Approve". Fixed.
+- CC-4877: The DriveWise telematics score now shows on the auto claim summary.
+- CC-4902: The FNOL web form now accepts photos up to 25 MB each (the limit was 10 MB).
+
+Version 8.3.2 - released 2026-08-30
+- CC-4790: Fixed a timeout when exporting more than 10,000 claims to CSV.
+- CC-4795: The SIU referral button is hidden on closed claims.
+
+Version 8.3.0 - released 2026-08-04
+- CC-4702: Every claim shows a fraud score from the Shift model; a score above 80 triggers an automatic SIU review.
+- CC-4733: Claims Managers can bulk-reassign claims between adjusters.
+
+Known issues
+- CC-4911: The reserve history chart does not render in Safari 17. Workaround: use Chrome or Edge.

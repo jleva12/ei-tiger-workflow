@@ -5,7 +5,7 @@ import {
   type EdgeTone,
 } from "@/features/builder/lib/connections"
 import type { StepGraph } from "./document"
-import { outputsOf, type StepData, type StepOutput } from "./model"
+import { BODY_KINDS, outputsOf, type StepData, type StepOutput } from "./model"
 
 /*
  * What a workflow's connections mean, for drawing them: the tone each way
@@ -35,8 +35,8 @@ export function toneOf(step: StepData, output: StepOutput, index: number): EdgeT
 }
 
 /**
- * Each loop's body, by the loop's ID: the steps its Each item way reaches
- * before coming back to it (as the runner reads it).
+ * Each loop's (and for-each's) body, by its ID: the steps its Each item
+ * way reaches before coming back to it (as the runner reads it).
  */
 export function loopBodies(graph: StepGraph): Map<string, Set<string>> {
   const targets = new Map<string, string[]>()
@@ -47,7 +47,7 @@ export function loopBodies(graph: StepGraph): Map<string, Set<string>> {
   }
   const bodies = new Map<string, Set<string>>()
   for (const step of graph.steps) {
-    if (step.data.kind !== "loop") continue
+    if (!BODY_KINDS.has(step.data.kind)) continue
     const way = outputsOf(step.data).find((o) => o.body)?.id
     const body = new Set<string>()
     const stack = graph.connections

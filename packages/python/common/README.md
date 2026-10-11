@@ -9,8 +9,12 @@ what it imports.
 | `forge_common.adk` | `adk` | `ForgeBaseToolset`: a Google ADK toolset whose tools never raise and never flood the model's context |
 | `forge_common.model_provider` | `model-provider` | The shared `model_provider.yaml` files and their loader: the model providers and models the apps may use |
 | `forge_common.adk.models` | `adk-models` | `ProviderModels`: an ADK model that runs each turn on one of `model_provider.yaml`'s models |
+| `forge_common.adk.context_window` | `adk` | `ContextWindowPlugin`: each agent's context window kept in the session's state, and compacted in the middle of a turn, branch by branch |
 | `forge_common.logging`, `forge_common.middleware` | `logging` | Structured logs for every logger (structlog), and `RequestContextMiddleware`: request ids and access lines |
 | `forge_common.adk.memory` | `adk-memory` | `AtlasVectorMemoryService`: ADK memory in MongoDB Atlas, embedded by OpenAI and searched with Atlas Vector Search |
+| `forge_common.templates` | `templates` | `TemplateEngine`: Jinja templates in a directory rendered to HTML with a dictionary, as a service apps inject |
+| `forge_common.patterns` | `patterns` | Documents' regular expressions (JSON Schema's, JSONata's) on the `regex` engine, bounded in time and off the interpreter lock; `schema_errors`: a value held to a document's JSON Schema that way |
+| `forge_common.mcp` | `mcp` | `bound_tool_results`: MCP tools' results held to their output schemas with `schema_errors`, rather than by the `mcp` client's own check |
 
 A codebase depends on it with a path source, as on any shared package:
 
@@ -206,6 +210,52 @@ agent = LlmAgent(name="helper", model=models, before_model_callback=choose)
 - **Limits.** `maxTokens` caps each reply on the OpenAI and Anthropic APIs;
   Gemini keeps the model's own limit.
 
+## Context windows
+
+ADK compacts a session between invocations (an `App`'s
+`EventsCompactionConfig`). Inside one it only checks the prompt the model last
+reported, which leaves out what tools returned since, so a turn that reads many
+files or pages can outgrow the model's window first.
+`forge_common.adk.context_window.ContextWindowPlugin` goes on the `App`:
+
+```python
+from forge_common.adk.context_window import ContextWindowPlugin, context_of, windows_from
+
+app = App(name="ca_x", root_agent=root, plugins=[ContextWindowPlugin(window=windows_from(models))])
+
+context_of(session.state, "researcher")
+# {"tokens": 152340, "limit": 272000, "threshold": 217600, "model": "openai/gpt-5.2", ...}
+```
+
+- **Counting.** Before each model call it measures the request (instructions,
+  tool declarations, messages) and keeps it in the state under
+  `forge:context:<agent>`, with what the model may read (`contextWindow` less
+  `maxTokens`, from `windows_from`). Characters per token start at 3.5 and
+  follow what the provider reported; once the model answers, the count is the
+  provider's.
+- **Compacting.** At `threshold` (0.8 of what it may read), or when a tool or
+  callback asks (`request_compaction(tool_context)`), it summarizes the older
+  part of what the agent sees and rebuilds the request before it goes out.
+  What started the turn and the agent's last step (`keep_steps`) stay word for
+  word; before the turn and within it are summarized apart; a later
+  compaction folds the earlier summaries in. `auto=False` only counts.
+- **Branches.** Summaries are ADK compaction events only their agent reads:
+  kept in the state by agent, branch and isolation scope
+  (`summaries_of(state, agent, branch, scope)`) and added to that agent's view
+  for each request, where ADK's contents step applies them. They're never
+  appended to the session: ADK hides a compaction's whole time range from
+  every agent that sees it, and an agent on no branch sees every branch, so a
+  branch's summary would hide its siblings' events. Branches side by side
+  (`fan.a`, `fan.b`), workflow steps and agents after them see the events as
+  they were, and compact their own view when they need to.
+- **Summaries** come from ADK's `LlmEventSummarizer` on the agent's own model,
+  with a prompt that keeps findings, paths and what's left to do (`prompt`,
+  or your own `summarizer`). Their model call isn't seen by other plugins.
+- **Failures** never fail a turn: the request goes out as it was.
+
+It relies on ADK 2.10's contents step (`google.adk.flows.llm_flows.contents`);
+its tests check it against the ADK this workspace locks.
+
 ## Logging
 
 `configure_logging` routes every logger, the app's, uvicorn's and every
@@ -237,6 +287,119 @@ to every line logged while the request runs, returns it in `X-Request-ID`, and
 writes one `http.request` line per request with its status and duration. An
 unhandled exception is logged once, with its traceback, and answers a JSON 500
 carrying the request id.
+
+## Templates
+
+`TemplateEngine` renders the Jinja templates in a directory to HTML. An app
+builds one at startup and hands it to the services that need it; each render
+takes a template's path in the directory and a dictionary:
+
+```python
+from forge_common.templates import TemplateEngine
+
+templates = TemplateEngine("templates")  # or [overrides, shared], or from_package("my_app")
+html = templates.render("emails/welcome.html", {"user": {"name": "Ana"}, "items": items})
+html = await templates.render_async("emails/welcome.html", data)  # in a thread, off the loop
+```
+
+Templates `{% extends %}` and `{% include %}` each other by their path; no name
+reaches outside the directory. The defaults are safe for data from users: HTML
+is autoescaped (`|safe` opts a trusted value out; `.txt` and `.md` templates
+aren't escaped), a value the dictionary lacks raises `InvalidDataError` naming
+it and the line that read it (`{{ x | default('') }}` marks optional ones), and
+templates run in Jinja's immutable sandbox. Every failure is a
+`TemplateRenderError`: `TemplateNotFoundError`, `InvalidTemplateError` (syntax)
+or `InvalidDataError`, each with the `template` and `line` it happened at.
+`filters=` and `template_globals=` add to every template; `environment` is the
+Jinja environment for anything else.
+
+Inject it as any shared service. In FastAPI, build it in the lifespan from a
+`TemplateSettings` section of the app's settings (`<PREFIX>TEMPLATES__DIRECTORY`,
+`__AUTO_RELOAD`, `__STRICT`, `__SANDBOXED`) and read it with a dependency:
+
+```python
+from typing import Annotated
+
+from fastapi import Depends, Request
+from forge_common.templates import TemplateEngine, TemplateSettings
+
+class Settings(BaseSettings):
+    templates: TemplateSettings = TemplateSettings()
+
+# in the lifespan
+app.state.templates = TemplateEngine.from_settings(settings.templates)
+
+def get_templates(request: Request) -> TemplateEngine:
+    return request.app.state.templates
+
+Templates = Annotated[TemplateEngine, Depends(get_templates)]
+
+
+class InvoiceMailer:
+    def __init__(self, templates: TemplateEngine) -> None:
+        self.templates = templates
+
+    async def body(self, invoice: dict) -> str:
+        return await self.templates.render_async("emails/invoice.html", {"invoice": invoice})
+```
+
+Tests inject one over a `jinja2.DictLoader({"emails/invoice.html": "..."})`
+instead of a directory. A directory that doesn't exist fails at construction,
+so a misconfigured path stops the app at startup rather than at the first render.
+
+## Regular expressions from documents
+
+Python's `re` matches in C holding the interpreter lock for as long as a
+pattern backtracks: `^(a|aa)+$` on sixty `a`s and a `b` never finishes, and
+nothing else of the process runs meanwhile, neither its event loop nor its
+other threads. A pattern a document brings, a JSON Schema's or a JSONata
+`/.../`, runs on the `regex` engine instead, through `forge_common.patterns`:
+
+```python
+from forge_common.patterns import compiled, schema_errors
+
+pattern = compiled(r"^[A-Z]{2}\d{4}$", seconds=0.5)  # BoundedPattern: search, finditer, sub, split
+pattern.search(text)  # lets go of the lock while it matches; PatternTimeout past half a second
+
+problems = [error.message for error in schema_errors(document_schema, value)]
+```
+
+Each use of a `BoundedPattern` stops once it has taken its time, raising
+`PatternTimeout` (a `ValueError`). Compiling isn't bounded so, and takes the
+engine time in proportion to a pattern's repeats (`((a{1000}){1000}){1000}`
+takes minutes, holding the lock): one that comes to more than
+`MAX_COMPILED_SIZE` parts is refused before it's compiled, as is one that turns
+on verbose mode or VERSION1. Both are `InvalidPattern`, as is one that doesn't
+compile.
+
+`schema_errors(schema, value)` holds a value to a JSON Schema that comes with a
+document (draft 2020-12) with `SchemaValidator`: every keyword that matches a
+pattern (`pattern`, `patternProperties`, and the properties
+`additionalProperties` and `unevaluatedProperties` leave to it) matches on the
+bounded engine, a subschema naming another draft (`$schema`) included, and all
+of the value's patterns take `SCHEMA_SECONDS` (half a second) at most. Its
+references (`$ref`, `$dynamicRef`) are looked up in the schema, and in the
+drafts' meta-schemas, only: never fetched. A pattern that couldn't be run, or
+a reference that can't be resolved, refuses the value, even under `not`,
+`anyOf` or `if`. jsonschema's own validators match with `re`, fetch a
+reference from wherever it points (with no timeout), raise for one they can't
+resolve, and hand a subschema that names its draft to that draft's validator:
+use them only for schemas of your own.
+
+An MCP server's tools come with output schemas of its own (`outputSchema`),
+and the `mcp` client checks every result against one with jsonschema
+(`ClientSession.validate_tool_result`). `forge_common.mcp` (extra `mcp`) swaps
+that check, for every session of the process, ADK's `McpToolset`'s among them,
+for `schema_errors` on a worker thread, so the event loop goes on meanwhile. A
+result that doesn't fit, can't be checked in time, or is missing answers the
+call as the tool's error (`isError`), saying why, where the client raises. The
+agent runtime and `forge_mcp_servers` swap it as they make an MCP toolset:
+
+```python
+from forge_common.mcp import bound_tool_results
+
+bound_tool_results()  # before an MCP tool's first call; calling it again does nothing
+```
 
 ## ADK memory in Atlas
 

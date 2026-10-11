@@ -18,7 +18,13 @@ import {
   syntaxHighlighting,
 } from "@codemirror/language"
 import { forceLinting, linter } from "@codemirror/lint"
-import { EditorState, Prec, type Extension } from "@codemirror/state"
+import {
+  EditorState,
+  Prec,
+  RangeSetBuilder,
+  StateEffect,
+  type Extension,
+} from "@codemirror/state"
 import {
   Decoration,
   drawSelection,
@@ -29,6 +35,7 @@ import {
   placeholder as placeholderText,
   tooltips,
   ViewPlugin,
+  WidgetType,
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view"
@@ -36,6 +43,7 @@ import { tags } from "@lezer/highlight"
 import { cn } from "cn"
 
 import { Icon } from "@/components/forge/icon"
+import { Button } from "@/components/ui/button"
 import { resolveIcon } from "@/components/forge/icons"
 import { IssueMessages } from "@/features/builder/components/fields/field-issues"
 import { FieldsReadOnly } from "@/features/builder/components/fields/read-only"
@@ -44,13 +52,15 @@ import type { BuilderIssue } from "@/features/builder/lib/types"
 import {
   checkField,
   completeField,
+  stepReferences,
   typeAt,
   type Completion,
+  type CompletionResult,
   type FieldCheck,
   type FieldMode,
 } from "@/features/steps/lib/expressions"
 import { normalizeReferences } from "@/features/steps/lib/references"
-import type { Scope, StepMark } from "@/features/steps/lib/scope"
+import type { Scope, StepInfo, StepMark } from "@/features/steps/lib/scope"
 import "./expression-field.css"
 
 /* -------------------------------------------------------------------------- */
@@ -184,6 +194,15 @@ const floating = EditorView.theme({
     fontSize: "0.75rem",
     color: "var(--muted-foreground)",
   },
+  // A step: its name leads, in the UI face; its ID (what's written) beside it.
+  "li:has(.cm-completionMark) .cm-completionLabel": {
+    fontFamily: "var(--font-sans)",
+    fontWeight: "500",
+  },
+  "li:has(.cm-completionMark) .cm-completionNote": {
+    fontFamily: "var(--font-mono)",
+    fontSize: "0.6875rem",
+  },
   // A step's mark: its glyph on a small tile, or an agent's orb, as on the canvas.
   ".cm-completionMark": {
     alignSelf: "center",
@@ -215,6 +234,20 @@ const floating = EditorView.theme({
   },
   ".cm-completionMark svg": { width: "0.6875rem", height: "0.6875rem" },
   ".cm-completionMatchedText": { textDecoration: "none", fontWeight: "600" },
+  // A group's name: lists to go through, fields that match, where to start.
+  ".cm-tooltip.cm-tooltip-autocomplete > ul > completion-section": {
+    display: "block",
+    border: "0",
+    padding: "0.5rem 0.5rem 0.25rem",
+    fontFamily: "var(--font-sans)",
+    fontSize: "0.6875rem",
+    fontWeight: "500",
+    color: "var(--subtle)",
+    opacity: "1",
+  },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul > completion-section:first-child": {
+    paddingTop: "0.25rem",
+  },
   ".cm-completionDetail": {
     marginLeft: "auto",
     maxWidth: "14rem",
@@ -267,6 +300,57 @@ const templateChips = ViewPlugin.fromClass(
   { decorations: (plugin) => plugin.decorations }
 )
 
+// `{name}` in text, not `{{` or `${`: an argument the model fills in (an HTTP tool's).
+const argumentChips = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet
+    matcher = new MatchDecorator({
+      regexp: /(?<![{$])\{[A-Za-z_][A-Za-z0-9_]*\}(?!\})/g,
+      decoration: Decoration.mark({ class: "cm-argument" }),
+    })
+    constructor(view: EditorView) {
+      this.decorations = this.matcher.createDeco(view)
+    }
+    update(update: ViewUpdate) {
+      this.decorations = this.matcher.updateDeco(update, this.decorations)
+    }
+  },
+  { decorations: (plugin) => plugin.decorations }
+)
+
+/** An argument a template's `{name}` may name: an HTTP tool's parameter. */
+export type TemplateArgument = {
+  name: string
+  /** Its type, as the list shows it. */
+  type?: string
+  description?: string
+}
+
+/** The arguments `{` offers at `pos`, outside a `{{ }}`; null where none goes. */
+function completeArgument(
+  text: string,
+  pos: number,
+  args: readonly TemplateArgument[]
+): CompletionResult | null {
+  const typed = /(?:^|[^{$])\{([A-Za-z_][A-Za-z0-9_]*)?$/.exec(
+    text.slice(0, pos)
+  )
+  if (!typed || !args.length) return null
+  const closed = text[pos] === "}"
+  return {
+    from: pos - (typed[1]?.length ?? 0),
+    to: pos,
+    options: args.map((arg) => ({
+      label: arg.name,
+      apply: closed ? arg.name : `${arg.name}}`,
+      skipAfter: closed ? 1 : 0,
+      detail: arg.type,
+      info: arg.description,
+      kind: "argument",
+    })),
+  }
+}
+
 // One line only: a pasted or typed newline becomes a space.
 const oneLine = EditorState.transactionFilter.of((tr) =>
   tr.docChanged && tr.newDoc.lines > 1
@@ -283,6 +367,99 @@ const oneLine = EditorState.transactionFilter.of((tr) =>
       ]
     : tr
 )
+
+/* -------------------------------------------------------------------------- */
+/* Steps by name                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A step a path names (`steps.<id>`), shown as its mark and name over its
+ * ID. The text keeps the ID: that's what's saved and what a run reads.
+ */
+class StepChip extends WidgetType {
+  readonly step: StepInfo
+  constructor(step: StepInfo) {
+    super()
+    this.step = step
+  }
+  eq(other: StepChip) {
+    return (
+      other.step.id === this.step.id &&
+      other.step.name === this.step.name &&
+      other.step.mark.label === this.step.mark.label &&
+      other.step.mark.orb === this.step.mark.orb
+    )
+  }
+  toDOM() {
+    const dom = document.createElement("span")
+    dom.className = "cm-stepRef"
+    dom.dataset.step = this.step.id
+    dom.append(stepMark(this.step.mark))
+    const name = dom.appendChild(document.createElement("span"))
+    name.className = "cm-stepRef-name"
+    name.textContent = this.step.name.trim() || this.step.id
+    return dom
+  }
+  ignoreEvent() {
+    return false
+  }
+}
+
+/** What the step can read changed: the chips' names may have too. */
+const stepsChanged = StateEffect.define<null>()
+
+/**
+ * Each step a path names, as a chip: one unit to the cursor and to
+ * Backspace. Not the one being typed while the list is open (it's still
+ * being picked), nor one the field can't read (its underline says why).
+ */
+function stepChips(read: () => { scope: Scope; mode: FieldMode }) {
+  const build = (view: EditorView) => {
+    const { scope, mode } = read()
+    const { state } = view
+    const caret = view.hasFocus ? state.selection.main.head : null
+    const picking = completionStatus(state) === "active"
+    const chips = new RangeSetBuilder<Decoration>()
+    for (const ref of stepReferences(state.doc.toString(), mode, scope)) {
+      if (picking && caret !== null && caret >= ref.from && caret <= ref.to)
+        continue
+      chips.add(
+        ref.from,
+        ref.to,
+        Decoration.replace({ widget: new StepChip(ref.step) })
+      )
+    }
+    return chips.finish()
+  }
+  const plugin = ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet
+      constructor(view: EditorView) {
+        this.decorations = build(view)
+      }
+      update(update: ViewUpdate) {
+        if (
+          update.docChanged ||
+          update.selectionSet ||
+          update.focusChanged ||
+          completionStatus(update.startState) !==
+            completionStatus(update.state) ||
+          update.transactions.some((tr) =>
+            tr.effects.some((e) => e.is(stepsChanged))
+          )
+        )
+          this.decorations = build(update.view)
+      }
+    },
+    { decorations: (chips) => chips.decorations }
+  )
+  return [
+    plugin,
+    EditorView.atomicRanges.of(
+      (view) => view.plugin(plugin)?.decorations ?? Decoration.none
+    ),
+  ]
+}
 
 /** A completion carrying Forge's extras for rendering. */
 type Marked = CMCompletion & { forge?: Pick<Completion, "step" | "note"> }
@@ -359,6 +536,11 @@ type Props = {
    */
   issues?: Pick<BuilderIssue, "id" | "level" | "message">[]
   field?: string
+  /**
+   * A template's own arguments (an HTTP tool's): `{` offers them, and
+   * `{name}` shows as one. Without them, `{name}` is plain text.
+   */
+  args?: readonly TemplateArgument[]
 }
 
 /**
@@ -385,6 +567,7 @@ export function ExpressionField({
   className,
   issues = [],
   field,
+  args,
 }: Props) {
   const host = React.useRef<HTMLDivElement>(null)
   const view = React.useRef<EditorView | null>(null)
@@ -392,10 +575,11 @@ export function ExpressionField({
   const messagesId = React.useId()
   // The editor reads these when it runs, not when it's made.
   const readOnly = React.useContext(FieldsReadOnly)
-  const latest = React.useRef({ onChange, scope, check, mode })
+  const latest = React.useRef({ onChange, scope, check, mode, args })
   React.useEffect(() => {
-    latest.current = { onChange, scope, check, mode }
+    latest.current = { onChange, scope, check, mode, args }
   })
+  const takesArgs = args !== undefined
 
   // Where the cursor is while the field has focus, and whether completions are open:
   // what's being typed isn't judged yet, and the list mustn't cover the messages.
@@ -424,14 +608,25 @@ export function ExpressionField({
   React.useEffect(() => {
     if (!host.current) return
     const complete = (context: CompletionContext) => {
-      const { scope: now, mode: kind } = latest.current
+      const {
+        scope: now,
+        mode: kind,
+        check: wanted,
+        args: own,
+      } = latest.current
       const text = context.state.doc.toString()
-      const result = completeField(text, context.pos, kind, now)
+      const result =
+        completeField(text, context.pos, kind, now, wanted) ??
+        (kind === "template" && own
+          ? completeArgument(text, context.pos, own)
+          : null)
       if (!result?.options.length) return null
       if (!context.explicit && result.from === context.pos) {
-        // Nothing typed yet: open only right after `.`, `$`, `{{`, `= "` or a new argument.
+        // Nothing typed yet: open only right after `.`, `$`, `{{`, `= "` or a new argument;
+        // a one-line template's arguments right after `{` (in JSON it opens objects too).
         const before = text.slice(0, context.pos)
         const opens =
+          (!multiline && own && /(?:^|[^{$])\{$/.test(before)) ||
           /[^.]\.$/.test(before) ||
           /\$$/.test(before) ||
           /\{\{\s*$/.test(before) ||
@@ -441,14 +636,17 @@ export function ExpressionField({
       return {
         from: result.from,
         to: result.to,
-        validFor: /^[\w$]*$/,
+        // Steps come matched by ID or name: asked again as it's typed.
+        ...(result.filtered ? { filter: false } : { validFor: /^[\w$]*$/ }),
         options: result.options.map((option): Marked => ({
           forge: { step: option.step, note: option.note },
           label: option.label,
+          displayLabel: option.display,
           detail: option.detail,
           info: option.info,
           type: COMPLETION_TYPE[option.kind],
           boost: option.boost,
+          section: option.section,
           apply: (editor, _completion, from, to) => {
             const insert = option.apply ?? option.label
             const start = from - (option.replaceBefore ?? 0)
@@ -484,6 +682,8 @@ export function ExpressionField({
       mode === "template" ? [] : jsonata,
       syntaxHighlighting(highlight),
       mode === "template" ? templateChips : [],
+      mode === "template" && takesArgs ? argumentChips : [],
+      stepChips(() => latest.current),
       multiline ? EditorView.lineWrapping : oneLine,
       autocompletion({
         override: [complete],
@@ -617,6 +817,17 @@ export function ExpressionField({
               ? now
               : { caret, completing }
           )
+          // An empty list to go through, come into: the lists it could be.
+          if (
+            update.focusChanged &&
+            update.view.hasFocus &&
+            !update.state.doc.length &&
+            latest.current.check?.expect === "list"
+          ) {
+            requestAnimationFrame(() => {
+              if (update.view.hasFocus) startCompletion(update.view)
+            })
+          }
           // Underlines follow the cursor: what it leaves is judged.
           if (
             !update.docChanged &&
@@ -642,7 +853,7 @@ export function ExpressionField({
     }
     // The editor is made once per mode; later values arrive through the sync below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, multiline, readOnly])
+  }, [mode, multiline, readOnly, takesArgs])
 
   // Follow the value when it changes from outside (undo, a rename, import).
   React.useEffect(() => {
@@ -654,10 +865,32 @@ export function ExpressionField({
     })
   }, [value])
 
-  // Recheck when what the step can read changes.
+  // Recheck when what the step can read changes, and rename its chips.
   React.useEffect(() => {
-    if (view.current) forceLinting(view.current)
+    if (!view.current) return
+    view.current.dispatch({ effects: stepsChanged.of(null) })
+    forceLinting(view.current)
   }, [scope, check])
+
+  // The list of what the field can read, at the cursor: in text, in a new
+  // {{ }} there unless the cursor is in one already.
+  const insertField = () => {
+    const editor = view.current
+    if (!editor) return
+    editor.focus()
+    if (mode === "template") {
+      const { from, to } = editor.state.selection.main
+      const before = editor.state.sliceDoc(0, from)
+      if (before.lastIndexOf("{{") <= before.lastIndexOf("}}")) {
+        editor.dispatch({
+          changes: { from, to, insert: "{{  }}" },
+          selection: { anchor: from + 3 },
+          userEvent: "input.type",
+        })
+      }
+    }
+    startCompletion(editor)
+  }
 
   return (
     <div
@@ -671,13 +904,31 @@ export function ExpressionField({
       }
       className={cn("forge-expression flex flex-col gap-1.5", className)}
     >
-      <FieldLabel
-        id={labelId}
-        className={cn(labelHidden && "sr-only")}
-        onClick={() => view.current?.focus()}
+      <div
+        className={cn(
+          "flex min-h-6 items-center justify-between gap-2",
+          labelHidden && "sr-only"
+        )}
       >
-        {label}
-      </FieldLabel>
+        <FieldLabel id={labelId} onClick={() => view.current?.focus()}>
+          {label}
+        </FieldLabel>
+        {!readOnly && !labelHidden && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            // The editor keeps its cursor: the field goes in where it is.
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={insertField}
+            aria-label={`Insert a field into ${label}`}
+            className="-my-1 text-muted-foreground"
+          >
+            <Icon icon="code" data-icon="inline-start" />
+            Insert field
+          </Button>
+        )}
+      </div>
       <div
         ref={host}
         data-rows={multiline && rows ? rows : undefined}

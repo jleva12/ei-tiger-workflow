@@ -21,7 +21,6 @@ import (
 	"ei-aitiger-codegraph/pkg/codesearch"
 	"ei-aitiger-codegraph/pkg/deployment"
 	"ei-aitiger-codegraph/pkg/graph"
-	spannerstore "ei-aitiger-codegraph/storage/spanner"
 	"ei-aitiger-codegraph/worker/internal/languages/builtin"
 	"ei-aitiger-codegraph/worker/internal/repository/github"
 	"ei-aitiger-codegraph/worker/internal/workerapp"
@@ -233,6 +232,7 @@ func TestPipelineGenerations(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest := workerapp.ConfigurationDigest(c, deps)
+	rows := openGraphRows(ctx, t, c.Spanner.Database, repoID)
 
 	run := func(sha string, seq uint64) deployment.Run {
 		t.Helper()
@@ -262,11 +262,22 @@ func TestPipelineGenerations(t *testing.T) {
 	}
 	edgesOfKind := func(kind string, generation uint64) []graph.Version {
 		t.Helper()
-		page, e := store.ListEdges(ctx, graph.ListQuery{RepositoryID: repoID, Kind: kind, Generation: generation, Limit: 500})
-		if e != nil {
-			t.Fatal(e)
+		return rows.open(ctx, graph.RecordEdge, kind, generation)
+	}
+	// liveVersion reads a record through the store's batch reads, as the
+	// next ingestion's baseline does: the version open at live, or the last
+	// one of a record retired by then.
+	liveVersion := func(key graph.Key) graph.Version {
+		t.Helper()
+		read := store.GetNodes
+		if key.Kind == graph.RecordEdge {
+			read = store.GetEdges
 		}
-		return page.Edges
+		versions, e := read(ctx, repoID, []string{key.ID}, 0)
+		if e != nil || len(versions) != 1 {
+			t.Fatalf("read %s %s: %v %v", key.Kind, key.ID, versions, e)
+		}
+		return versions[key.ID]
 	}
 
 	// Generation 1: initial full run.
@@ -385,9 +396,8 @@ func TestPipelineGenerations(t *testing.T) {
 	for _, n := range nodes.Nodes {
 		if n.Fact.Node.Name == "added" {
 			found = true
-			history, e := store.History(ctx, repoID, n.Fact.Key())
-			if e != nil || len(history) != 1 || history[0].GenFrom != 2 || history[0].CommitFrom != second {
-				t.Fatalf("history of added(): %+v %v", history, e)
+			if history := rows.history(ctx, n.Fact.Key()); len(history) != 1 || history[0].GenFrom != 2 || history[0].CommitFrom != second {
+				t.Fatalf("history of added(): %+v", history)
 			}
 		}
 	}
@@ -411,16 +421,16 @@ func TestPipelineGenerations(t *testing.T) {
 			t.Fatal("Main is still live after deletion")
 		}
 	}
-	history, err := store.History(ctx, repoID, mainCall.Fact.Key())
-	if err != nil || len(history) == 0 {
-		t.Fatalf("history of the app call edge: %v %v", history, err)
+	history := rows.history(ctx, mainCall.Fact.Key())
+	if len(history) == 0 {
+		t.Fatal("no history of the app call edge")
 	}
 	last := history[len(history)-1]
 	if !last.Retired || last.GenTo != 3 || last.CommitTo != third {
 		t.Fatalf("app call edge should be retired at generation 3 by %s: %+v", third, last)
 	}
-	asOf, err := store.GetEdge(ctx, repoID, mainCall.Fact.Edge.ID, 2)
-	if err != nil || !asOf.OpenAt(2) {
+	asOf, err := store.GetEdges(ctx, repoID, []string{mainCall.Fact.Edge.ID}, 2)
+	if err != nil || !asOf[mainCall.Fact.Edge.ID].OpenAt(2) {
 		t.Fatalf("as-of read at generation 2 should still see the edge: %+v %v", asOf, err)
 	}
 
@@ -432,9 +442,8 @@ func TestPipelineGenerations(t *testing.T) {
 	if r4.Metrics.Reopened == 0 {
 		t.Fatalf("restored file should reopen its records: %+v", r4.Metrics)
 	}
-	history, err = store.History(ctx, repoID, mainCall.Fact.Key())
-	if err != nil || len(history) != 2 || history[1].GenFrom != 4 || history[1].GenTo != 0 {
-		t.Fatalf("reopened edge history: %+v %v", history, err)
+	if history = rows.history(ctx, mainCall.Fact.Key()); len(history) != 2 || history[1].GenFrom != 4 || history[1].GenTo != 0 {
+		t.Fatalf("reopened edge history: %+v", history)
 	}
 
 	// Generation 5: the same commit deployed again publishes an empty generation.
@@ -470,9 +479,9 @@ func TestPipelineGenerations(t *testing.T) {
 	if pingID == "" {
 		t.Fatal("Helper.ping not projected")
 	}
-	pingBefore, err := store.GetNode(ctx, repoID, pingID, 0)
-	if err != nil {
-		t.Fatal(err)
+	pingBefore := liveVersion(graph.Key{Kind: graph.RecordNode, ID: pingID})
+	if !pingBefore.OpenAt(6) {
+		t.Fatalf("ping at live: %+v", pingBefore)
 	}
 	var pingCall graph.Version
 	for _, e := range edgesOfKind(graph.EdgeCalls, 0) {
@@ -510,23 +519,21 @@ func TestPipelineGenerations(t *testing.T) {
 	fx.git(fx.remote, "mv", "util/src/main/java/util/Helper.java", "util/src/main/java/util/Helpers.java")
 	seventh := fx.commit("rename helper")
 	r7 := run(seventh, 7)
-	pingAfter, err := store.GetNode(ctx, repoID, pingID, 0)
-	if err != nil || pingAfter.GenFrom != 7 || pingAfter.Lineage == pingBefore.Lineage {
-		t.Fatalf("ping must continue its ID under the new lineage: %+v %v", pingAfter, err)
+	if pingAfter := liveVersion(graph.Key{Kind: graph.RecordNode, ID: pingID}); !pingAfter.OpenAt(7) || pingAfter.GenFrom != 7 || pingAfter.Lineage == pingBefore.Lineage {
+		t.Fatalf("ping must continue its ID under the new lineage: %+v", pingAfter)
 	}
 	if _, ok = sourceFile("Helpers.java"); !ok {
 		t.Fatal("no source_file node for Helpers.java")
 	}
-	if _, err = store.GetNode(ctx, repoID, helperFile.Fact.Node.ID, 0); !errors.Is(err, graph.ErrNotFound) {
-		t.Fatalf("old file node must be retired: %v", err)
+	if old := liveVersion(helperFile.Fact.Key()); old.OpenAt(7) || !old.Retired || old.GenTo != 7 {
+		t.Fatalf("old file node must be retired: %+v", old)
 	}
-	callAfter, err := store.GetEdge(ctx, repoID, pingCall.Fact.Edge.ID, 0)
-	if err != nil || !callAfter.OpenAt(7) || callAfter.GenFrom != pingCall.GenFrom {
-		t.Fatalf("call edge into the renamed class must survive unchanged: %+v %v", callAfter, err)
+	if callAfter := liveVersion(pingCall.Fact.Key()); !callAfter.OpenAt(7) || callAfter.GenFrom != pingCall.GenFrom {
+		t.Fatalf("call edge into the renamed class must survive unchanged: %+v", callAfter)
 	}
-	pingHistory, err := store.History(ctx, repoID, graph.Key{Kind: graph.RecordNode, ID: pingID})
-	if err != nil || len(pingHistory) != 2 || pingHistory[0].GenTo != 7 || pingHistory[0].Retired || pingHistory[1].GenFrom != 7 || pingHistory[1].GenTo != 0 {
-		t.Fatalf("continued method must be replaced, never retired: %+v %v", pingHistory, err)
+	pingHistory := rows.history(ctx, graph.Key{Kind: graph.RecordNode, ID: pingID})
+	if len(pingHistory) != 2 || pingHistory[0].GenTo != 7 || pingHistory[0].Retired || pingHistory[1].GenFrom != 7 || pingHistory[1].GenTo != 0 {
+		t.Fatalf("continued method must be replaced, never retired: %+v", pingHistory)
 	}
 	if r7.Metrics.Retired != 2 {
 		t.Fatalf("a pure rename retires only the old file node and its contains edge: %+v", r7.Metrics)
@@ -635,56 +642,74 @@ func TestPipelineGenerations(t *testing.T) {
 		t.Fatalf("unchanged inputs must not recompute anything: %+v", r12.Metrics)
 	}
 
-	// Lexical search needs no embedding provider: the exact name tier, the
-	// identifier tokens and the graph rerank all come from the search index
-	// the loader maintains.
-	lexical, err := store.HybridSearch(ctx, spannerstore.SearchRequest{RepositoryIDs: []string{repoID}, Text: "ping"})
-	if err != nil || len(lexical) == 0 || lexical[0].Node.Fact.Node.Name != "ping" || !lexical[0].ExactMatch || lexical[0].Callers != 1 || lexical[0].Snippet == "" {
-		t.Fatalf("lexical search for an exact method name: %+v %v", lexical, err)
-	}
-	if lexical, err = store.HybridSearch(ctx, spannerstore.SearchRequest{RepositoryIDs: []string{repoID}, Text: "Helper", Kinds: []string{"class"}}); err != nil || len(lexical) != 1 || lexical[0].Node.Fact.Node.Name != "Helper" || !lexical[0].ExactMatch {
-		t.Fatalf("lexical search for a class: %+v %v", lexical, err)
-	}
-	if lexical, err = store.HybridSearch(ctx, spannerstore.SearchRequest{RepositoryIDs: []string{repoID}, Text: "handle string", Mode: spannerstore.SearchLexical, NearPath: "util/src/main/java/util/Service.java"}); err != nil || len(lexical) == 0 || lexical[0].Callers == 0 {
-		t.Fatalf("lexical natural-language search with rerank: %+v %v", lexical, err)
-	}
-	symbols, err := store.FindNodes(ctx, repoID, "", "com.google.adk.agents.LlmAgent", nil, 0, 10)
-	if err != nil || len(symbols) != 0 {
-		t.Fatalf("unknown qualified name: %+v %v", symbols, err)
-	}
-	if symbols, err = store.FindNodes(ctx, repoID, "ping", "", nil, 0, 10); err != nil || len(symbols) != 1 || symbols[0].Fact.Node.ID != pingID {
-		t.Fatalf("find by name: %+v %v", symbols, err)
-	}
-
-	// Search documents carry method text; embeddings and hybrid search work.
-	docs, err := store.SearchDocuments(ctx, repoID, "fixture-model", 2, "")
-	if err != nil || len(docs.Documents) == 0 {
-		t.Fatalf("documents: %+v %v", docs, err)
-	}
+	// The loader wrote a search document for every document-bearing node open
+	// at live, matching the record's search hash, with the name and
+	// identifier forms that lexical search and exact-name lookups use. Rows
+	// of nodes no longer open may remain: readers drop rows whose hash no
+	// open record carries.
+	hashes := rows.searchHashes(ctx)
+	documents := rows.searchDocuments(ctx)
 	withCode := 0
-	rows := make([]codesearch.Embedding, 0, len(docs.Documents))
-	for _, d := range docs.Documents {
-		if strings.Contains(d.Text, "Code:") {
+	for _, n := range rows.open(ctx, graph.RecordNode, "", 0) {
+		want, ok := codesearch.FromNode(*n.Fact.Node)
+		got, written := documents[n.Fact.Node.ID]
+		if !ok {
+			if _, carries := hashes[n.Fact.Node.ID]; carries {
+				t.Fatalf("%s %s carries a search hash without a document", n.Fact.Node.Kind, n.Fact.Node.Name)
+			}
+			continue
+		}
+		if !written || got.Hash != want.Hash || hashes[n.Fact.Node.ID] != want.Hash || got.Text != want.Text || got.Version != int64(codesearch.DocumentVersion) ||
+			got.Kind != n.Fact.Node.Kind || got.Name != n.Fact.Node.Name || got.NameLower != strings.ToLower(n.Fact.Node.Name) || got.QualifiedName != n.Fact.Node.QualifiedName ||
+			got.FilePath != graph.Text(n.Fact.Node.Properties, "file_path") || got.Identifiers != codesearch.IdentifierTerms(n.Fact.Node.Name, n.Fact.Node.QualifiedName) {
+			t.Fatalf("search document of %s %s: %+v (written %v), want %+v", n.Fact.Node.Kind, n.Fact.Node.Name, got, written, want)
+		}
+		if strings.Contains(got.Text, "Code:") {
 			withCode++
 		}
-		rows = append(rows, codesearch.Embedding{Document: d, Vector: []float64{1, 0}})
 	}
-	if withCode == 0 {
-		t.Fatal("no document carries source text")
+	if len(hashes) == 0 || withCode == 0 {
+		t.Fatalf("%d documents at live, %d with source text", len(hashes), withCode)
 	}
-	if err = store.PutEmbeddings(ctx, repoID, "fixture-model", docs.Generation, rows); err != nil {
+	if named := rows.named(ctx, "ping"); len(named) != 1 || named[0] != pingID {
+		t.Fatalf("exact-name lookup of ping: %v", named)
+	}
+	// The runs' index passes embedded every live document with the
+	// configured model: each vector is stored against its document's hash.
+	if pending, err := store.PendingDocuments(ctx, repoID, c.Embedding.Model, 2); err != nil || pending != 0 {
+		t.Fatalf("documents left to embed: %d %v", pending, err)
+	}
+	vectors := rows.embeddings(ctx, c.Embedding.Model, 2)
+	for id, hash := range hashes {
+		e, ok := vectors[id]
+		norm := 0.0
+		for _, x := range e.Vector {
+			norm += float64(x) * float64(x)
+		}
+		if !ok || e.Hash != hash || e.Version != int64(codesearch.DocumentVersion) || len(e.Vector) != 2 || norm < 0.999 || norm > 1.001 {
+			t.Fatalf("embedding of %s: %+v (stored %v)", id, e, ok)
+		}
+	}
+	// Another model's pass starts from every document and stores its own.
+	docs, err := store.SearchDocuments(ctx, repoID, "fixture-model", 2, "")
+	if err != nil || len(docs.Documents) != len(hashes) {
+		t.Fatalf("documents for another model: %d of %d, %v", len(docs.Documents), len(hashes), err)
+	}
+	embeddingRows := make([]codesearch.Embedding, 0, len(docs.Documents))
+	for _, d := range docs.Documents {
+		embeddingRows = append(embeddingRows, codesearch.Embedding{Document: d, Vector: []float64{1, 0}})
+	}
+	if err = store.PutEmbeddings(ctx, repoID, "fixture-model", docs.Generation, embeddingRows); err != nil {
 		t.Fatal(err)
 	}
-	hits, err := store.HybridSearch(ctx, spannerstore.SearchRequest{RepositoryIDs: []string{repoID}, Model: "fixture-model", Text: "Service call", Vector: []float64{1, 0}, Limit: 5})
-	if err != nil || len(hits) == 0 {
-		t.Fatalf("hybrid search: %+v %v", hits, err)
+	if stored := rows.embeddings(ctx, "fixture-model", 2); len(stored) != len(hashes) {
+		t.Fatalf("stored %d embeddings for another model, want %d", len(stored), len(hashes))
 	}
-	// Source evidence round-trips through the content store.
+	// Source evidence is retained in the content store.
 	for _, n := range nodes.Nodes {
 		if n.Fact.Node.Source != nil {
-			data, e := store.GetSource(ctx, repoID, n.Fact.Node.Source.ContentSHA256)
-			if e != nil || len(data) == 0 {
-				t.Fatalf("source evidence: %v", e)
+			if data := rows.content(ctx, n.Fact.Node.Source.ContentSHA256); len(data) == 0 {
+				t.Fatalf("no source evidence for %s", n.Fact.Node.Name)
 			}
 			break
 		}

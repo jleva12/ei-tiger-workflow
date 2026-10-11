@@ -1,0 +1,48 @@
+[project]
+name = "forge-codegraph-query"
+version = "0.1.0"
+description = "Every read of the code graph the worker writes to Spanner — search, the explorer, the agents' graph operations, the ingestion audit — and the cross-repository links people draw, for the admin API, ADK workflows and the code graph MCP server"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    # The graph, read from the worker's Spanner database.
+    "google-cloud-spanner>=3.70,<4",
+    # Questions embedded with the worker's model, for the semantic branch.
+    "openai>=1.40",
+    "pydantic>=2.7",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"
+
+# Tests run in the workspace environment: make codegraph-query-check (unit),
+# make codegraph-query-test-spanner (the store against the emulator).
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = ["spanner: reads and writes the Spanner emulator (SPANNER_EMULATOR_HOST)"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM", "RUF"]
+ignore = ["RUF012"]
+
+[tool.ruff.lint.pycodestyle]
+max-line-length = 120
+
+[tool.ruff.lint.isort]
+known-first-party = ["forge_codegraph_query"]
+
+[tool.ruff.lint.flake8-bugbear]
+# dataclasses.field with the result's JSON rendering.
+extend-immutable-calls = ["forge_codegraph_query.model.jfield"]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+check_untyped_defs = true

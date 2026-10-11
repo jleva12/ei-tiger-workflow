@@ -15,13 +15,25 @@ import {
 import { IssueMessages } from "@/features/builder/components/fields/field-issues"
 import { useFieldIssues } from "@/features/builder/components/fields/field-issues-context"
 import { SchemaField } from "@/features/builder/components/fields/schema-field"
+import {
+  ExpressionField,
+  type TemplateArgument,
+} from "@/features/builder/components/fields/expression-field"
 import { Icon } from "@/components/forge/icon"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import type { ChatConfigs } from "@/features/agents/lib/model"
+import {
+  editedParameters,
+  takesBody,
+} from "@/features/agents/lib/http-template"
+import { CredentialField } from "@/features/credentials/components/credential-field"
+import type { CredentialLookup } from "@/features/credentials/lib/display"
+import { OpenApiOperations } from "./openapi-operations"
 import { HTTP_METHODS, uid, type HeaderRow } from "@/features/steps/lib/model"
+import type { Scope } from "@/features/steps/lib/scope"
 import type { KnowledgeBaseLookup, McpServerLookup } from "./chat-agent-store"
 
 /*
@@ -55,6 +67,8 @@ export type ToolLookups = {
   workflowVersions: Record<string, VersionChoice>
   knowledgeBases: Record<string, KnowledgeBaseLookup>
   mcpServers: Record<string, McpServerLookup>
+  /** API credentials: what HTTP and OpenAPI tools sign in with. */
+  credentials: Record<string, CredentialLookup>
 }
 
 /** A tool's settings, and how to change them: each change one step of undo by its key. */
@@ -70,10 +84,16 @@ export type ToolBind<K extends ToolKind> = {
 
 type ToolProps<K extends ToolKind> = ToolBind<K> & {
   lookups: ToolLookups
+  /** The organization it's in: whose credentials and specs it reads. */
+  organizationId: string
   /** The agent or workflow it's in, which it can't call. */
   self?: string
   /** What a person confirming each call means where it runs. */
   confirmAbout: string
+  /** What `{{ }}` in an HTTP tool's URL and body reads where it runs. */
+  scope: Scope
+  /** That in words: `{{ }}` puts in …. */
+  valuesAbout: React.ReactNode
 }
 
 function SavedAgentFields({
@@ -289,6 +309,10 @@ function HeaderRows({
       className="flex flex-col gap-2"
     >
       <span className="text-xs font-medium text-foreground">Headers</span>
+      <FieldDescription>
+        Sent as they are, and shown to everyone who can open it: put keys and
+        tokens in a credential.
+      </FieldDescription>
       {headers.map((header) => (
         <div
           key={header.id}
@@ -347,7 +371,54 @@ function HeaderRows({
 
 const CONFIRM = "A person confirms each call"
 
-function HttpToolFields({ config, set, confirmAbout }: ToolProps<"http_tool">) {
+/** One of an HTTP tool's templates: its URL or its body. */
+function TemplateSetting({
+  setting,
+  ...field
+}: Omit<React.ComponentProps<typeof ExpressionField>, "mode" | "field"> & {
+  setting: "url" | "body"
+}) {
+  // Its issues, but for its template's: it checks those itself.
+  const { issues, key } = useFieldIssues(setting, { whole: true })
+  return (
+    <ExpressionField
+      {...field}
+      mode="template"
+      issues={issues.filter((i) => !i.id.includes(":field:"))}
+      field={key}
+    />
+  )
+}
+
+const typeOf = (schema: unknown): string | undefined => {
+  const type = (schema as { type?: unknown } | undefined)?.type
+  return typeof type === "string" ? type : undefined
+}
+
+function HttpToolFields({
+  config,
+  set,
+  lookups,
+  organizationId,
+  confirmAbout,
+  scope,
+  valuesAbout,
+}: ToolProps<"http_tool">) {
+  // The arguments its URL and body name, with what's declared of each.
+  const parameters = React.useMemo(() => editedParameters(config), [config])
+  const args = React.useMemo<TemplateArgument[]>(() => {
+    const properties = (parameters.properties ?? {}) as Record<
+      string,
+      { description?: unknown }
+    >
+    return Object.entries(properties).map(([name, schema]) => ({
+      name,
+      type: typeOf(schema),
+      description:
+        typeof schema.description === "string" ? schema.description : undefined,
+    }))
+  }, [parameters])
+  const body = takesBody(config.method)
   return (
     <>
       <TextField
@@ -367,33 +438,71 @@ function HttpToolFields({ config, set, confirmAbout }: ToolProps<"http_tool">) {
           options={HTTP_METHODS.map((m) => ({ value: m, label: m }))}
           onChange={(value) => set("method", value)}
         />
-        <TextField
-          issue="url"
+        <TemplateSetting
+          setting="url"
           label="URL"
           value={config.url}
-          code
-          placeholder="https://api.example.com/orders/{order_id}"
+          scope={scope}
+          check={{ textual: true }}
+          args={args}
+          placeholder="https://api.example.com/orders/{order_id}?status={status}"
           onChange={(value) => set("url", value)}
         />
       </div>
+      <p className="-mt-1 text-xs/[1.6] text-muted-foreground">
+        {code("{name}")} puts in an argument the model fills in; {code("{{ }}")}{" "}
+        puts in {valuesAbout}. A query parameter that&apos;s one argument (
+        {code("?status={status}")}) is left out when the model doesn&apos;t send
+        it.
+      </p>
+      <CredentialField
+        organizationId={organizationId}
+        value={config.credential}
+        onChange={(value) => set("credential", value)}
+        credentials={lookups.credentials}
+        url={config.url}
+      />
       <HeaderRows
         headers={config.headers}
         onChange={(value) => set("headers", value)}
       />
+      {body && (
+        <TemplateSetting
+          setting="body"
+          label="Body"
+          value={config.body}
+          scope={scope}
+          args={args}
+          multiline
+          rows={5}
+          placeholder={
+            '{\n  "order_id": {order_id},\n  "note": "Deliver to {name}"\n}'
+          }
+          onChange={(value) => set("body", value)}
+          description={
+            <>
+              JSON, sent as the request&apos;s body. A placeholder that&apos;s a
+              whole value goes in as it is ({code("{count}")} sends {code("2")},
+              not {code('"2"')}), and its key is left out when the model
+              doesn&apos;t send it; one inside a string is written in.
+            </>
+          }
+        />
+      )}
       <SchemaField
         issue="parameters"
         label="What the model sends"
         title="The arguments the model fills in"
         description={
           <>
-            Its fields and their types. A field named in the URL as{" "}
-            {code("{name}")} goes there; the rest go in the query (GET, DELETE)
-            or the JSON body.
+            The arguments its URL{body ? " and body" : ""} name, as{" "}
+            {code("{name}")}: give each its type and say what it is. Only these
+            are sent.
           </>
         }
-        schema={config.parameters}
+        schema={parameters}
         onChange={(schema) => set("parameters", schema)}
-        empty="Not declared: the model calls it with no arguments."
+        empty={`None yet: put {name} in its URL${body ? " or body" : ""} for the model to fill in.`}
         subject={{ one: "argument", many: "arguments" }}
       />
       <CheckField
@@ -406,7 +515,13 @@ function HttpToolFields({ config, set, confirmAbout }: ToolProps<"http_tool">) {
   )
 }
 
-function OpenApiFields({ config, set, confirmAbout }: ToolProps<"openapi">) {
+function OpenApiFields({
+  config,
+  set,
+  lookups,
+  organizationId,
+  confirmAbout,
+}: ToolProps<"openapi">) {
   return (
     <>
       <ChoiceField
@@ -441,14 +556,23 @@ function OpenApiFields({ config, set, confirmAbout }: ToolProps<"openapi">) {
           description="An OpenAPI 3 spec, JSON or YAML."
         />
       )}
-      <TextField
-        issue="operations"
-        label="Operations it may call"
+      <CredentialField
+        organizationId={organizationId}
+        value={config.credential}
+        onChange={(value) => set("credential", value)}
+        credentials={lookups.credentials}
+        url={config.source === "url" ? config.url : ""}
+      />
+      <OpenApiOperations
+        organizationId={organizationId}
+        source={{
+          source: config.source,
+          url: config.url,
+          spec: config.spec,
+          credential: config.credential,
+        }}
         value={config.operations}
-        code
-        placeholder="getInvoice, listCharges"
         onChange={(value) => set("operations", value)}
-        description="Their operation IDs, separated by commas; empty for every one. Each is a tool, named after it."
       />
       <CheckField
         label={CONFIRM}
@@ -640,16 +764,33 @@ export function ToolFields<K extends ToolKind>({
   kind,
   bind,
   lookups,
+  organizationId,
   self,
   confirmAbout,
+  scope,
+  valuesAbout,
 }: {
   kind: K
   bind: ToolBind<K>
   lookups: ToolLookups
+  /** The organization it's in: whose credentials and specs it reads. */
+  organizationId: string
   self?: string
   confirmAbout: string
+  /** What `{{ }}` in an HTTP tool's URL and body reads where it runs. */
+  scope: Scope
+  /** That in words: `{{ }}` puts in …. */
+  valuesAbout: React.ReactNode
 }) {
-  const props = { ...bind, lookups, self, confirmAbout }
+  const props = {
+    ...bind,
+    lookups,
+    organizationId,
+    self,
+    confirmAbout,
+    scope,
+    valuesAbout,
+  }
   switch (kind) {
     case "saved_agent":
       return (

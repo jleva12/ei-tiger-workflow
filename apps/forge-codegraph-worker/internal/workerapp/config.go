@@ -19,12 +19,11 @@ import (
 	"ei-aitiger-codegraph/worker/internal/languages"
 )
 
-// The Spanner, embedding and search settings are the shared service
-// configuration; the worker adds its own on top.
+// The Spanner and embedding settings are the shared service configuration;
+// the worker adds its own on top.
 type (
 	SpannerConfig   = serviceconfig.Spanner
 	EmbeddingConfig = serviceconfig.Embedding
-	SearchConfig    = serviceconfig.Search
 )
 
 type LoaderConfig struct {
@@ -34,19 +33,16 @@ type LoaderConfig struct {
 
 // Config is local worker configuration. Task payloads cannot change
 // credentials, paths, parsers or budgets. The embedded shared configuration
-// contributes Spanner, Embedding, Search and Queue.
+// contributes Spanner, Embedding and Queue.
 type Config struct {
 	serviceconfig.Config `mapstructure:",squash"`
 	TaskConcurrency      int           `mapstructure:"task_concurrency"`
 	ShutdownTimeout      time.Duration `mapstructure:"shutdown_timeout"`
 	StartupTimeout       time.Duration `mapstructure:"startup_timeout"`
 	CleanupTimeout       time.Duration `mapstructure:"cleanup_timeout"`
-	HealthAddr           string        `mapstructure:"health_addr"`
-	// AdmissionToken turns on the worker's API (graph reads, runs, the audit
-	// and cross-repository links) on the health listener; callers present it
-	// as a bearer token. Empty leaves the API off. Named for when the API
-	// also admitted ingestions, which the Forge admin API now queues.
-	AdmissionToken string `mapstructure:"admission_token"`
+	// HealthAddr serves the unauthenticated /livez and /readyz probes; the
+	// worker serves nothing else.
+	HealthAddr string `mapstructure:"health_addr"`
 	// JobsMySQLDSN is the Forge admin API's MySQL, whose code_ingestion_jobs
 	// table is the queue the worker claims ingestions from: a go-sql-driver
 	// DSN, user:password@tcp(host:port)/database (internal/jobqueue).
@@ -133,14 +129,6 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.JobsMySQLDSN) == "" {
 		return errors.New("worker: CODEGRAPH_JOBS_MYSQL_DSN is required: the Forge admin API's MySQL, where ingestions are queued")
-	}
-	if c.AdmissionToken != "" {
-		if len(c.AdmissionToken) < 32 {
-			return errors.New("worker: CODEGRAPH_ADMISSION_TOKEN must be at least 32 characters")
-		}
-		if c.HealthAddr == "" {
-			return errors.New("worker: the admission API needs CODEGRAPH_HEALTH_ADDR")
-		}
 	}
 	if c.TaskConcurrency < 1 || c.TaskConcurrency > 16 {
 		return errors.New("worker: task concurrency must be between 1 and 16")

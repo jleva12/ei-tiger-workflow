@@ -64,10 +64,18 @@ services:
       <<: *async-worker-environment
       HYBRID_ADK_WORKFLOWS__SESSION_DATABASE_URL: mysql+aiomysql://${ADMIN_MYSQL_USER:-forge_admin}:${ADMIN_MYSQL_PASSWORD:-local-admin}@admin-mysql:3306/${ADMIN_MYSQL_DATABASE:-forge_admin}
       HYBRID_ADK_WORKFLOWS__GOOGLE_API_KEY: ${FORGE_GOOGLE_API_KEY:-}
-      # Graph knowledge bases' search: the code graph worker's API on the
-      # stack's network, with its token from .env.common.
-      HYBRID_ADK_WORKFLOWS__CODEGRAPH_URL: http://worker:8080
-      HYBRID_ADK_WORKFLOWS__CODEGRAPH_TOKEN: ${FORGE_CODEGRAPH_ADMISSION_TOKEN:-}
+      # System design knowledge bases' search: the code graph in the
+      # worker's database (worker-spanner, or WORKER_SPANNER_DATABASE),
+      # searched as every app searches it (packages/python/codegraph-query).
+      HYBRID_ADK_WORKFLOWS__CODEGRAPH__SPANNER__DATABASE: ${WORKER_SPANNER_DATABASE:-projects/codegraph-local/instances/codegraph/databases/codegraph}
+      HYBRID_ADK_WORKFLOWS__CODEGRAPH__SPANNER__SCOPE: ${WORKER_SCOPE:-codegraph}
+      HYBRID_ADK_WORKFLOWS__CODEGRAPH__SPANNER__CURSOR_SIGNING_KEY: ${FORGE_CODEGRAPH_CURSOR_SIGNING_KEY:-}
+      HYBRID_ADK_WORKFLOWS__CODEGRAPH__EMBEDDING__MODEL: ${FORGE_EMBEDDING_MODEL:-text-embedding-3-large}
+      HYBRID_ADK_WORKFLOWS__CODEGRAPH__EMBEDDING__DIMENSIONS: ${FORGE_EMBEDDING_DIMENSIONS:-1024}
+      HYBRID_ADK_WORKFLOWS__CODEGRAPH__EMBEDDING__BASE_URL: ${FORGE_EMBEDDING_BASE_URL:-}
+      HYBRID_ADK_WORKFLOWS__CODEGRAPH__EMBEDDING__API_KEY: ${OPENAI_API_KEY:-}
+      HYBRID_ADK_WORKFLOWS__CODEGRAPH__SEARCH__ENHANCE_QUERY: ${CODEGRAPH_SEARCH_ENHANCE_QUERY:-false}
+      SPANNER_EMULATOR_HOST: worker-spanner:9010
       # The files runs start with: ADK artifacts the admin API saved in the
       # stack's RustFS.
       HYBRID_ADK_WORKFLOWS__ARTIFACTS: ${FORGE_WORKFLOW_ARTIFACTS:-s3://forge-artifacts/workflows}

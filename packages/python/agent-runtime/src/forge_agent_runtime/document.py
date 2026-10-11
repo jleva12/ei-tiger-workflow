@@ -27,6 +27,7 @@ from typing import Any, Literal
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field
 
+from forge_agent_runtime.http_templates import upgraded_http_tool
 from forge_agent_runtime.names import RESERVED_NAMES, adk_name
 
 FORMAT: Literal["forge.chat_agent/v1"] = "forge.chat_agent/v1"
@@ -77,9 +78,18 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "url": "",
         "headers": [],
         "parameters": {},
+        "body": "",
+        "credential": "",
         "confirm": False,
     },
-    "openapi": {"source": "url", "url": "", "spec": "", "operations": "", "confirm": False},
+    "openapi": {
+        "source": "url",
+        "url": "",
+        "spec": "",
+        "operations": "",
+        "credential": "",
+        "confirm": False,
+    },
     "mcp": {
         "server": "",
         "transport": "streamable_http",
@@ -178,7 +188,8 @@ def _validator() -> Draft202012Validator:
 def with_defaults(raw: Mapping[str, Any]) -> dict[str, Any]:
     """
     :return: A copy whose nodes have every setting their kind has, the
-        missing ones (older documents') at their defaults.
+        missing ones (older documents') at their defaults; an HTTP tool from
+        before its body with its arguments written in (``upgraded_http_tool``).
     """
     doc = copy.deepcopy(dict(raw))
     for node in doc.get("nodes") or []:
@@ -186,6 +197,8 @@ def with_defaults(raw: Mapping[str, Any]) -> dict[str, Any]:
             continue
         defaults = DEFAULTS.get(str(node.get("kind")))
         config = node.get("config")
+        if node.get("kind") == "http_tool" and isinstance(config, dict):
+            config = upgraded_http_tool(config)
         if defaults is not None and isinstance(config, dict):
             node["config"] = {**copy.deepcopy(defaults), **config}
         node.setdefault("outputs", [TOOLS, HANDS_OFF] if node.get("kind") in AGENT_LIKE else [])

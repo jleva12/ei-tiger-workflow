@@ -44,6 +44,7 @@ import {
   type McpServerRecord,
 } from "@/features/mcp-servers/lib/api"
 import {
+  defaultsOf,
   MCP_SERVERS_ICON,
   plural,
   STATUS_DISPLAY,
@@ -304,14 +305,6 @@ const draftId = () => Math.random().toString(36).slice(2, 10)
 
 const URL_PATTERN = /^https?:\/\/[^\s/?#]+\S*$/
 const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
-
-function defaultsOf(method: AuthMethodInfo | undefined) {
-  return Object.fromEntries(
-    (method?.fields ?? [])
-      .filter((f) => !f.secret)
-      .map((f) => [f.name, f.default])
-  )
-}
 
 function McpServerForm({
   server,
@@ -747,7 +740,13 @@ function McpServerForm({
 /* Authentication                                                             */
 /* -------------------------------------------------------------------------- */
 
-function AuthFields({
+/**
+ * An auth method's form: the method, then its fields as the admin API
+ * describes them (a select for a field with a few values; a secret written
+ * only, its saved value never shown). The MCP servers' and the API
+ * credentials' forms both use it.
+ */
+export function AuthFields({
   id,
   methods,
   kind,
@@ -765,7 +764,10 @@ function AuthFields({
   readOnly,
 }: {
   id: string
-  methods: ReturnType<typeof useAuthMethods>
+  methods: Pick<
+    ReturnType<typeof useAuthMethods>,
+    "isPending" | "error" | "refetch" | "data"
+  >
   kind: string
   method: AuthMethodInfo | undefined
   onKind: (kind: string) => void
@@ -856,32 +858,57 @@ function AuthFields({
               )}
             </FieldLabel>
             <div className="flex gap-2">
-              <Input
-                id={fieldId}
-                type={field.secret ? "password" : "text"}
-                className={field.secret ? "font-mono text-xs" : undefined}
-                autoComplete={field.secret ? "new-password" : "off"}
-                spellCheck={false}
-                disabled={readOnly}
-                value={
-                  field.secret
-                    ? (secrets[field.name] ?? "")
-                    : (settings[field.name] ?? "")
-                }
-                placeholder={
-                  isSaved && !isCleared
-                    ? "Saved · type to replace"
-                    : isCleared
-                      ? "Removed on save"
-                      : field.placeholder
-                }
-                aria-invalid={Boolean(problem)}
-                onChange={(event) =>
-                  field.secret
-                    ? onSecret(field.name, event.target.value)
-                    : onSetting(field.name, event.target.value)
-                }
-              />
+              {field.choices?.length && !field.secret ? (
+                <Select
+                  items={field.choices.map((choice) => ({
+                    value: choice,
+                    label: choice,
+                  }))}
+                  value={settings[field.name] || field.default || null}
+                  disabled={readOnly}
+                  onValueChange={(value) =>
+                    typeof value === "string" && onSetting(field.name, value)
+                  }
+                >
+                  <SelectTrigger id={fieldId} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger={false}>
+                    {field.choices.map((choice) => (
+                      <SelectItem key={choice} value={choice}>
+                        {choice}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  id={fieldId}
+                  type={field.secret ? "password" : "text"}
+                  className={field.secret ? "font-mono text-xs" : undefined}
+                  autoComplete={field.secret ? "new-password" : "off"}
+                  spellCheck={false}
+                  disabled={readOnly}
+                  value={
+                    field.secret
+                      ? (secrets[field.name] ?? "")
+                      : (settings[field.name] ?? "")
+                  }
+                  placeholder={
+                    isSaved && !isCleared
+                      ? "Saved · type to replace"
+                      : isCleared
+                        ? "Removed on save"
+                        : field.placeholder
+                  }
+                  aria-invalid={Boolean(problem)}
+                  onChange={(event) =>
+                    field.secret
+                      ? onSecret(field.name, event.target.value)
+                      : onSetting(field.name, event.target.value)
+                  }
+                />
+              )}
               {isSaved && !isCleared && !field.required && !readOnly && (
                 <Button
                   type="button"

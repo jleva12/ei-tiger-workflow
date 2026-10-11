@@ -13,12 +13,16 @@ The control an ADK workflow run's job gets on the worker
   again, and its next attempt reads the decision from the same call.
 - **Waits.** ``wait_until`` raises :class:`WaitRun`, which the worker makes
   the run's wait, queueing ``run_adk`` for the time.
-- **Notes** go on the run's activity. There are no other runs to find, and
-  nobody asks a run to stop: it's abandoned only while it isn't running.
+- **Notes** go on the run's activity. There are no other runs to find.
+- **Stopping.** Abandoned while it runs, a run stops at its next checkpoint,
+  which raises :class:`StopRun` (and ``should_stop`` says so once the worker
+  learns it renewing the lease, which stops the job too); the worker
+  abandons it.
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import copy
 import json
@@ -29,7 +33,7 @@ from typing import Any, NoReturn
 
 from sqlalchemy import exc as db
 
-from forge_task_adk_workflows.run_store import Actor, RunStore
+from forge_task_adk_workflows.run_store import Actor, CancelRequested, RunStore, new_id
 from forge_tasks.control import ControlSignal, Decision, RunState
 from forge_tasks.errors import TransientError
 
@@ -49,6 +53,13 @@ class PauseRun(ControlSignal):
         self.reason = reason
         self.details = details
         self.deadline = deadline
+
+
+class StopRun(ControlSignal):
+    """Someone abandoned the run while it ran: it stops, and is abandoned."""
+
+    def __init__(self) -> None:
+        super().__init__("abandoned while it ran")
 
 
 class WaitRun(ControlSignal):
@@ -78,10 +89,22 @@ class RunControl:
         self.queue = queue
         self.state: dict[str, Any] = copy.deepcopy(run.get("state") or {})
         self.decisions: dict[str, Any] = dict(run.get("decisions") or {})
+        #: Someone abandoned the run while it runs (the lease's renewal says so).
+        self.stopping = False
+        # Checkpoints one at a time, each of all there is to keep: steps and
+        # tool calls going at once keep things together, and a write of less
+        # must never land after one of more.
+        self._writing = asyncio.Lock()
 
     @property
     def run_id(self) -> str:
         return str(self.run["id"])
+
+    @property
+    def lease_epoch(self) -> int:
+        """Which taking of the run this attempt is: one more each time a worker
+        takes it, for the keys that make the attempt's effects happen once."""
+        return int(self.run.get("lease_epoch") or 0)
 
     @property
     def instance_id(self) -> str:
@@ -97,20 +120,29 @@ class RunControl:
         self.state[key] = json.loads(json.dumps(value, default=str))
 
     async def checkpoint(self, message: str = "") -> None:
-        """:raises LostLease: The worker lost the run. :raises TransientError: The store can't be reached."""
+        """
+        :raises LostLease: The worker lost the run.
+        :raises StopRun: Someone abandoned the run: it stops here.
+        :raises TransientError: The store can't be reached.
+        """
         with _hiccups("keep what it did"):
-            await self.store.checkpoint(self.run_id, owner=self.owner, state=self.state)
+            try:
+                async with self._writing:
+                    await self.store.checkpoint(self.run_id, owner=self.owner, state=self.state)
+            except CancelRequested:
+                self.stopping = True
+                raise StopRun() from None
 
     async def note(self, message: str, **attributes: Any) -> None:
         await self.store.note(self.run_id, message, attributes=attributes or None)
 
     def should_stop(self) -> bool:
-        return False
+        return self.stopping
 
     @property
     def children(self) -> ChildRuns:
         """Runs the run starts: the workflows its LLM agents call as tools."""
-        return ChildRuns(self.store, self.queue)
+        return ChildRuns(self.store, self.queue, parent=self.run_id, owner=self.owner)
 
     async def find_run(self, labels: dict[str, str]) -> RunState | None:
         return None
@@ -133,6 +165,8 @@ class RunControl:
                 actor_id=decided.get("actor_id"),
                 actor_name=str(decided.get("actor_name") or ""),
                 request_id=decided.get("request_id"),
+                # When it was made, not when the run reads it: its job may have waited past the deadline.
+                decided_at=_decided_at(decided.get("decided_at")),
             )
         details = dict(details or {})
         kind = HUMAN_INPUT if details.get("kind") == HUMAN_INPUT else APPROVAL
@@ -150,25 +184,53 @@ class ChildRuns:
     """
     Starts runs in the run store, and reads them
     (``forge_task_adk_workflows.graph.agent_tools.ChildRuns``): a workflow an
-    LLM agent calls as a tool runs as a run of its own, queued like any other.
+    LLM agent calls as a tool runs as a run of its own, queued like any other,
+    linked to the run that started it (``parent``) while ``owner`` has that.
+
+    :param parent: The run that starts them; None for runs of their own.
+    :param owner: Its worker: runs are started only while it has the parent.
     """
 
-    def __init__(self, store: RunStore, queue: Callable[[str], Awaitable[None]] | None) -> None:
+    def __init__(
+        self,
+        store: RunStore,
+        queue: Callable[[str], Awaitable[None]] | None,
+        *,
+        parent: str | None = None,
+        owner: str | None = None,
+    ) -> None:
         self.store = store
         self.queue = queue
+        self.parent = parent
+        self.owner = owner
 
-    async def start(self, payload: dict[str, Any]) -> str:
+    async def start(self, payload: dict[str, Any], *, run_id: str | None = None) -> str:
+        """
+        :param run_id: The ID its call makes for it: started already (the
+            call answered again), it's that run, not another.
+        :return: The run's ID.
+        :raises NotAllowed: The parent isn't running (this worker's), or is
+            being abandoned.
+        """
+        known = {
+            "organization_id": str(payload["tenant_id"]),
+            "agent_id": str(payload["agent_id"]),
+            "agent_name": str(payload.get("name") or payload["agent_id"]),
+            "revision": int(payload.get("revision") or 0),
+            "session_id": str(payload["session_id"]),
+            "payload": payload,
+            "requested_by": Actor(str(payload["run_as"]), str(payload.get("run_as_name") or "")),
+            "version": None if payload.get("version") is None else str(payload["version"]),
+        }
         with _hiccups("start a run"):
-            run = await self.store.create(
-                organization_id=str(payload["tenant_id"]),
-                agent_id=str(payload["agent_id"]),
-                agent_name=str(payload.get("name") or payload["agent_id"]),
-                revision=int(payload.get("revision") or 0),
-                session_id=str(payload["session_id"]),
-                payload=payload,
-                requested_by=Actor(str(payload["run_as"]), str(payload.get("run_as_name") or "")),
-                version=None if payload.get("version") is None else str(payload["version"]),
-            )
+            if self.parent is not None:
+                run, created = await self.store.create_child(
+                    run_id=run_id or new_id(), parent_run_id=self.parent, owner=self.owner, **known
+                )
+            else:
+                run, created = await self.store.create(run_id=run_id, **known), True
+        if not created:
+            return str(run["id"])
         if self.queue is not None:
             try:
                 await self.queue(run["id"])
@@ -183,6 +245,14 @@ class ChildRuns:
 
 def _utc(when: datetime) -> datetime:
     return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
+
+
+def _decided_at(value: Any) -> datetime | None:
+    """:return: When a decision was made, as the run store keeps it (ISO 8601); None when it doesn't say."""
+    try:
+        return _utc(datetime.fromisoformat(value)) if isinstance(value, str) and value else None
+    except ValueError:
+        return None
 
 
 def is_hiccup(error: BaseException) -> bool:

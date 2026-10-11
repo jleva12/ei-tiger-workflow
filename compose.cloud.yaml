@@ -1,4 +1,5 @@
-# The code graph worker, and the MCP server reading its graph, on managed
+# The code graph worker, and every reader of its graph (the admin API, ADK
+# workflows and the MCP server, packages/python/codegraph-query), on managed
 # Cloud Spanner instead of the emulator.
 # Overlay on compose.yaml, which make adds with SPANNER=cloud:
 #   make up SPANNER=cloud
@@ -7,44 +8,54 @@
 # that can read and write that database at CLOUD_SPANNER_KEY_FILE (default
 # ./.secrets/spanner-sa.json), and the codegraph schema already in it
 # (make worker-spanner-cloud): nothing provisions managed Spanner on its own.
-# Neither needs the emulator, so it isn't started. Changing the set
+# None needs the emulator, so it isn't started. Changing the set
 # of compose files can make Compose recreate the project's network and every
 # container on it, the emulator and its in-memory data included, so switch
 # modes when that data is disposable.
+
+# Every container on the managed database: empty counts as unset for the
+# Spanner client, so it dials the managed API; the client exports its metrics
+# to Cloud Monitoring by default, which a credential scoped to Spanner can't
+# write.
+x-cloud-spanner: &cloud-spanner
+  SPANNER_EMULATOR_HOST: ""
+  GOOGLE_APPLICATION_CREDENTIALS: /run/codegraph-secrets/spanner-credentials.json
+  SPANNER_DISABLE_BUILTIN_METRICS: "true"
+x-cloud-database: &cloud-database ${WORKER_CLOUD_SPANNER_DATABASE:?Set WORKER_CLOUD_SPANNER_DATABASE in .env.compose}
+# Query enhancement (spelling, synonyms, plurals, IDF scoring) works on
+# managed Spanner; every reader has it alike.
+x-enhance-query: &enhance-query ${CODEGRAPH_SEARCH_ENHANCE_QUERY:-true}
+x-cloud-credentials: &cloud-credentials
+  - type: bind
+    source: ${CLOUD_SPANNER_KEY_FILE:-./.secrets/spanner-sa.json}
+    target: /run/codegraph-secrets/spanner-credentials.json
+    read_only: true
+    bind:
+      create_host_path: false
+
 services:
   worker:
     depends_on: !reset {}
     environment:
-      # Empty counts as unset for the Spanner client and for the
-      # auto-provision guard, so the client dials the managed API.
-      SPANNER_EMULATOR_HOST: ""
-      CODEGRAPH_SPANNER_DATABASE: ${WORKER_CLOUD_SPANNER_DATABASE:?Set WORKER_CLOUD_SPANNER_DATABASE in .env.compose}
+      <<: *cloud-spanner
+      CODEGRAPH_SPANNER_DATABASE: *cloud-database
       CODEGRAPH_SPANNER_AUTO_PROVISION: "false"
-      GOOGLE_APPLICATION_CREDENTIALS: /run/codegraph-secrets/spanner-credentials.json
-      # The client exports its metrics to Cloud Monitoring by default, which a
-      # credential scoped to Spanner can't write.
-      SPANNER_DISABLE_BUILTIN_METRICS: "true"
-      # Query enhancement (spelling, synonyms, plurals, IDF scoring) works on
-      # managed Spanner; the emulator ignores it.
-      CODEGRAPH_SEARCH_ENHANCE_QUERY: ${WORKER_SEARCH_ENHANCE_QUERY:-true}
-    volumes:
-      - type: bind
-        source: ${CLOUD_SPANNER_KEY_FILE:-./.secrets/spanner-sa.json}
-        target: /run/codegraph-secrets/spanner-credentials.json
-        read_only: true
-        bind:
-          create_host_path: false
+    volumes: *cloud-credentials
   codegraph-mcp:
     environment:
-      SPANNER_EMULATOR_HOST: ""
-      CODEGRAPH_SPANNER__DATABASE: ${WORKER_CLOUD_SPANNER_DATABASE:?Set WORKER_CLOUD_SPANNER_DATABASE in .env.compose}
-      GOOGLE_APPLICATION_CREDENTIALS: /run/codegraph-secrets/spanner-credentials.json
-      SPANNER_DISABLE_BUILTIN_METRICS: "true"
-      CODEGRAPH_SEARCH__ENHANCE_QUERY: ${CODEGRAPH_MCP_SEARCH_ENHANCE_QUERY:-true}
-    volumes:
-      - type: bind
-        source: ${CLOUD_SPANNER_KEY_FILE:-./.secrets/spanner-sa.json}
-        target: /run/codegraph-secrets/spanner-credentials.json
-        read_only: true
-        bind:
-          create_host_path: false
+      <<: *cloud-spanner
+      CODEGRAPH_SPANNER__DATABASE: *cloud-database
+      CODEGRAPH_SEARCH__ENHANCE_QUERY: *enhance-query
+    volumes: *cloud-credentials
+  admin:
+    environment:
+      <<: *cloud-spanner
+      FORGE_ADMIN_CODEGRAPH__SPANNER__DATABASE: *cloud-database
+      FORGE_ADMIN_CODEGRAPH__SEARCH__ENHANCE_QUERY: *enhance-query
+    volumes: *cloud-credentials
+  async-worker-adk-workflows:
+    environment:
+      <<: *cloud-spanner
+      HYBRID_ADK_WORKFLOWS__CODEGRAPH__SPANNER__DATABASE: *cloud-database
+      HYBRID_ADK_WORKFLOWS__CODEGRAPH__SEARCH__ENHANCE_QUERY: *enhance-query
+    volumes: *cloud-credentials

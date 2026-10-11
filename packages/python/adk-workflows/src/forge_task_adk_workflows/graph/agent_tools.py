@@ -17,7 +17,11 @@ carries (its payload's snapshots, ``graph.uses``), when they're first used.
   the organization's MCP servers), knowledge base search, and the run's
   snapshots; and the toolsets a run opened, closed when it stops.
 - :class:`ChildRuns` and :class:`RunWorkflows`: a workflow called as a tool
-  is a run of its own, started and waited for, as the hosted runtime's are.
+  is a run of its own, started and waited for, as the hosted runtime's are,
+  under an ID its call makes for it (:func:`child_run_id`): a call answered
+  after its worker stopped is answered with the run it started.
+- :func:`reads_only` and :func:`note_tool_calls`: which tools only read, and
+  the run's note of each other call, made before it runs.
 """
 
 import asyncio
@@ -31,6 +35,7 @@ from typing import Any, Protocol
 import httpx
 from forge_agent_runtime import (
     BuildError,
+    RequestAuth,
     RuntimeServices,
     StateRefused,
     build_root_agent,
@@ -39,28 +44,52 @@ from forge_agent_runtime import (
 )
 from forge_agent_runtime.document import DocumentError
 from forge_agent_runtime.executor import check_state
+from forge_agent_runtime.services import ToolValues
 from forge_agent_runtime.templating import REQUEST_KEY
-from forge_codegraph import Repository, WorkerError, code_passages, interleave, system_summary
+from forge_agent_runtime.tools import HttpTool, KnowledgeBaseTool, SystemDesignTool, WorkflowTool
+from forge_codegraph import (
+    Repository,
+    Searched,
+    design_summary,
+    design_view,
+    interleave,
+    search_passages,
+    system_summary,
+)
+from forge_codegraph_query import GraphError
+from forge_common.patterns import schema_errors
 from google.adk import Context, Event
 from google.adk.agents import BaseAgent, LlmAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.agents.readonly_context import ReadonlyContext
+from google.adk.models.llm_response import LlmResponse
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.base_toolset import BaseToolset
+from google.adk.tools.load_artifacts_tool import LoadArtifactsTool
+from google.adk.tools.transfer_to_agent_tool import TransferToAgentTool
 from google.adk.workflow import BaseNode, FunctionNode
 from google.genai import types
-from jsonschema import Draft202012Validator
 
+from forge_task_adk_workflows.files import file_tools
 from forge_task_adk_workflows.graph.data import as_data
 from forge_task_adk_workflows.graph.errors import RunFailed
 from forge_task_adk_workflows.support.errors import StepFailed
 
 log = logging.getLogger(__name__)
 
+#: Seconds a run waits for each thing it opened to finish closing (an MCP
+#: session, its runner), as ADK's own runner waits for a toolset.
+CLOSE_SECONDS = 10.0
 #: How long a workflow called as a tool is polled for its end.
 _POLL = 0.5
 #: A run that's still going (the run store's open statuses, but paused).
 _GOING = frozenset({"queued", "running", "waiting"})
+#: What the IDs of the runs a run's calls start are made in (:func:`child_run_id`).
+_CHILDREN = uuid.UUID("5f0e6a2c-8f53-4c3e-9a4e-0d7b3c1f2a61")
+#: Tools that only read: calling one again does nothing it didn't.
+_READING = (KnowledgeBaseTool, SystemDesignTool, LoadArtifactsTool, TransferToAgentTool)
+#: HTTP methods that only read.
+_READING_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 class KnowledgeSearch(Protocol):
@@ -77,8 +106,11 @@ class KnowledgeSearch(Protocol):
 class ChildRuns(Protocol):
     """Starts another run, and reads it: what the worker's run control offers a run."""
 
-    async def start(self, payload: dict[str, Any]) -> str:
-        """:return: The new run's ID, queued with a job to take it."""
+    async def start(self, payload: dict[str, Any], *, run_id: str | None = None) -> str:
+        """
+        :param run_id: Its ID; started already, it's that run, not another.
+        :return: The run's ID, queued with a job to take it.
+        """
         ...
 
     async def get(self, run_id: str) -> dict[str, Any] | None:
@@ -95,8 +127,8 @@ class AgentServices:
     :ivar runtime: The runtime's services: the environment ``${NAME}`` comes
         from, where HTTP tools may go, the organization's MCP servers.
     :ivar search: Searches knowledge bases; None when the worker can't.
-    :ivar code: The code graph worker's API, which searches graph knowledge
-        bases (``forge_codegraph.CodeGraph``); None when it isn't set up.
+    :ivar code: The code graph, which system design knowledge bases' code is
+        searched in (``forge_codegraph_query.CodeGraph``); None when it isn't set up.
     :ivar workflow_wait: Seconds a workflow called as a tool is waited for.
     :ivar organization_id: The run's organization (per run).
     :ivar chat_agents: The agents from the Agents page the run carries, by reference (per run).
@@ -154,11 +186,16 @@ class AgentServices:
         self.opened.extend(item for item in built if isinstance(item, BaseToolset))
 
     async def close(self) -> None:
-        """Close what the run opened (MCP sessions)."""
+        """Close what the run opened (MCP sessions), waiting CLOSE_SECONDS at most for each."""
         while self.opened:
             toolset = self.opened.pop()
             try:
-                await toolset.close()
+                async with asyncio.timeout(CLOSE_SECONDS):
+                    await toolset.close()
+            except TimeoutError:
+                log.warning(
+                    "adk_workflows: closing a tool took more than %gs; the run goes on without it", CLOSE_SECONDS
+                )
             except Exception:
                 log.warning("adk_workflows: closing a tool failed", exc_info=True)
 
@@ -168,8 +205,10 @@ class SnapshotKnowledgeBases:
     started), searched with the worker's search: the runtime's ``KnowledgeBases``.
     A RAG knowledge base's documents with the documents task's search; a
     system design one's code, of the repositories the run carries for it,
-    with the code graph worker's API, described with how its applications
-    connect. Their passages are taken in turn, best first."""
+    in the code graph (``forge_codegraph.search_passages``, as the admin API
+    searches it), described with its design (its
+    applications, components, groups and how they connect), which the tool
+    beside the search reads. Their passages are taken in turn, best first."""
 
     def __init__(self, known: Mapping[str, dict[str, Any]], search: KnowledgeSearch | None, code: Any = None) -> None:
         self.known = known
@@ -196,10 +235,18 @@ class SnapshotKnowledgeBases:
             if isinstance(r, dict) and r.get("id") and r.get("graph_id")
         ]
 
+    def _design(self, knowledge_base_id: str) -> Mapping[str, Any] | None:
+        # Runs started before designs carry the connections alone.
+        design = self.known[knowledge_base_id].get("design")
+        return design if isinstance(design, Mapping) else None
+
     def _about(self, knowledge_base_id: str) -> str:
         description = str(self.known[knowledge_base_id].get("description") or "")
         if not self._graph(knowledge_base_id):
             return description
+        design = self._design(knowledge_base_id)
+        if design is not None:
+            return design_summary(description, design)
         listed = self.known[knowledge_base_id].get("connections")
         connections = [
             {k: str(c.get(k) or "") for k in ("source", "kind", "target", "description")}
@@ -213,6 +260,25 @@ class SnapshotKnowledgeBases:
     ) -> list[tuple[str, str]]:
         self._check(knowledge_base_ids)
         return [(self._name(i), self._about(i)) for i in knowledge_base_ids]
+
+    async def design(
+        self, knowledge_base_ids: Sequence[str], *, organization_id: str | None, focus: str = ""
+    ) -> dict[str, Any] | None:
+        self._check(knowledge_base_ids)
+        systems = [i for i in dict.fromkeys(knowledge_base_ids) if self._graph(i)]
+        if not systems:
+            return None
+        return design_view(
+            [
+                (
+                    self._name(i),
+                    str(self.known[i].get("description") or ""),
+                    self._design(i) or {"connections": self.known[i].get("connections") or []},
+                )
+                for i in systems
+            ],
+            focus,
+        )
 
     async def search(
         self, knowledge_base_ids: Sequence[str], query: str, *, organization_id: str | None, limit: int
@@ -236,32 +302,16 @@ class SnapshotKnowledgeBases:
     async def _search_code(self, knowledge_base_ids: list[str], query: str, limit: int) -> list[dict[str, Any]]:
         if self.code is None:
             raise RuntimeError(
-                "Graph knowledge bases can't be searched on this worker: set "
-                "HYBRID_ADK_WORKFLOWS__CODEGRAPH_URL and HYBRID_ADK_WORKFLOWS__CODEGRAPH_TOKEN"
+                "System design knowledge bases can't be searched on this worker: set "
+                "HYBRID_ADK_WORKFLOWS__CODEGRAPH__SPANNER__DATABASE and "
+                "HYBRID_ADK_WORKFLOWS__CODEGRAPH__SPANNER__CURSOR_SIGNING_KEY"
             )
-        # Each repository's hits cited as from the first knowledge base that has it.
-        owners: dict[str, tuple[str, Any]] = {}
-        for i in knowledge_base_ids:
-            for repository in self._repositories(i):
-                owners.setdefault(repository.graph_id, (i, repository))
-        if not owners:
-            return []
+        # The admin API's search too (forge_codegraph.search_passages).
+        searched = [Searched(i, self._name(i), self._repositories(i)) for i in knowledge_base_ids]
         try:
-            hits = await self.code.search(list(owners)[:50], query, limit=limit)
-        except WorkerError as error:
-            raise RuntimeError(f"The code graph is unavailable; try again ({error.code}).") from None
-        passages: list[dict[str, Any]] = []
-        for hit in hits:
-            owner = owners.get(str(hit.get("repository_id", "")))
-            if owner is not None:
-                knowledge_base_id, repository = owner
-                passages += code_passages(
-                    [hit],
-                    knowledge_base_id=knowledge_base_id,
-                    knowledge_base=self._name(knowledge_base_id),
-                    repositories=[repository],
-                )
-        return passages
+            return await search_passages(self.code, searched, query, limit=limit)
+        except GraphError as error:
+            raise RuntimeError(f"The code graph couldn't search: {error}.") from None
 
 
 class LazyToolset(BaseToolset):
@@ -273,14 +323,24 @@ class LazyToolset(BaseToolset):
     :param where: Its node and agent, for a failure: ``Node 'Triage', tool 'Docs'``.
     :param step: Its node's ID, for a failure.
     :param services: The run's services.
+    :param values: Fills in ``{{ }}`` in an HTTP tool's URL and body from the run's data.
     """
 
-    def __init__(self, tool: dict[str, Any], *, where: str, step: str | None, services: Any) -> None:
+    def __init__(
+        self,
+        tool: dict[str, Any],
+        *,
+        where: str,
+        step: str | None,
+        services: Any,
+        values: ToolValues | None = None,
+    ) -> None:
         super().__init__()
         self.tool = tool
         self.where = where
         self.step = step
         self.services = services
+        self.values = values
         self._built: list[Any] | None = None
         self._lock = asyncio.Lock()
         #: Why it couldn't be built or listed: ADK runs the agent without a
@@ -302,7 +362,7 @@ class LazyToolset(BaseToolset):
                         str(self.tool.get("kind") or ""),
                         config if isinstance(config, dict) else {},
                         models=agents.models,
-                        services=agents.tool_services(),
+                        services=agents.tool_services().but(tool_values=self.values),
                         http=agents.http,
                         organization_id=agents.organization_id,
                         dependencies=agents.dependencies,
@@ -347,6 +407,86 @@ def failing_tools_first(tools: Sequence[LazyToolset], callback: Any) -> Callable
         return callback(callback_context, llm_request) if callback is not None else None
 
     return check
+
+
+def failing_model_errors(label: str, step: str | None) -> Callable[..., None]:
+    """
+    An LLM agent's ``after_model_callback``: a model that answers with an error
+    instead of an answer fails the agent's step, as a model that raised would.
+    ADK reports some failures that way without raising (``error_code``: a
+    Gemini answer stopped for SAFETY, RECITATION or MAX_TOKENS with nothing
+    said, a blocked prompt); the step would end with no answer, and the steps
+    after it run on without one.
+
+    :param label: How the failure names the step: ``Triage (triage)``.
+    :param step: The step's ID.
+    """
+
+    def check(callback_context: CallbackContext, llm_response: LlmResponse) -> None:
+        if llm_response.error_code and not llm_response.partial:
+            code = getattr(llm_response.error_code, "value", llm_response.error_code)
+            said = f": {llm_response.error_message}" if llm_response.error_message else ""
+            raise RunFailed(f"{label} failed: its model answered with an error ({code}){said}", step=step)
+
+    return check
+
+
+def fail_model_errors(agent: BaseAgent, check: Callable[..., None]) -> None:
+    """Puts ``check`` (:func:`failing_model_errors`) first among the
+    ``after_model_callback`` of an agent and of every agent it hands off to."""
+    if isinstance(agent, LlmAgent):
+        current = agent.after_model_callback
+        agent.after_model_callback = [check, *(current if isinstance(current, list) else [current] if current else [])]
+    for sub in agent.sub_agents:
+        fail_model_errors(sub, check)
+
+
+def add_tools(agent: BaseAgent, tools: list[BaseTool]) -> None:
+    """Gives an agent, and every agent it hands off to, ``tools`` too (an LLM
+    agent that has a tool of the same name keeps its own)."""
+    if isinstance(agent, LlmAgent):
+        names = {getattr(tool, "name", None) for tool in agent.tools}
+        agent.tools = [*agent.tools, *(tool for tool in tools if tool.name not in names)]
+    for sub in agent.sub_agents:
+        add_tools(sub, tools)
+
+
+def note_tool_calls(agent: BaseAgent, note: Callable[..., Any] | None) -> None:
+    """Puts ``note`` (the run's, ``RunServices.tool_calls``) first among the
+    ``before_tool_callback`` of an agent and of every agent it hands off to."""
+    if note is None:
+        return
+    if isinstance(agent, LlmAgent):
+        current = agent.before_tool_callback
+        agent.before_tool_callback = [note, *(current if isinstance(current, list) else [current] if current else [])]
+    for sub in agent.sub_agents:
+        note_tool_calls(sub, note)
+
+
+def reads_only(tool: BaseTool) -> bool:
+    """
+    Whether a tool only reads, so calling it again does nothing it didn't: a
+    knowledge base's search, a system's design, the run's files, a hand-off,
+    an HTTP tool that GETs, an MCP tool its server says only reads
+    (``readOnlyHint``).
+    """
+    if isinstance(tool, _READING):
+        return True
+    if isinstance(tool, HttpTool):
+        return tool.method in _READING_METHODS
+    annotations = getattr(getattr(tool, "_mcp_tool", None), "annotations", None)
+    return getattr(annotations, "readOnlyHint", None) is True
+
+
+def starts_runs(tool: BaseTool) -> bool:
+    """Whether a tool's call starts a run (a workflow): what it does is that run, once."""
+    return isinstance(tool, WorkflowTool)
+
+
+def child_run_id(run_id: str, call_id: str) -> str:
+    """:return: The ID of the run a workflow tool's call (``call_id``, in run
+    ``run_id``) starts: the same each time the call is answered."""
+    return uuid.uuid5(_CHILDREN, f"{run_id}/{call_id}").hex
 
 
 def toolsets_of(agent: BaseAgent) -> list[BaseToolset]:
@@ -414,7 +554,13 @@ def agent_node(
                 except (BuildError, DocumentError) as error:
                     raise fail(f"its agent can't be built: {error}") from None
                 agents.keep(toolsets_of(root))
-                built.append(root.clone(update={"name": name}))
+                agent = root.clone(update={"name": name})
+                if getattr(services, "artifacts", False) or getattr(services, "files", ()):
+                    # It reads the run's files and saves its own, as the run's LLM agents do.
+                    add_tools(agent, file_tools(file.name for file in services.files))
+                fail_model_errors(agent, failing_model_errors(label, step))
+                note_tool_calls(agent, getattr(services, "tool_calls", None))
+                built.append(agent)
             return built[0]
 
     async def run(adk: Context, node_input: Any) -> Any:
@@ -425,10 +571,12 @@ def agent_node(
         evaluator = services.evaluator
         try:
             message = (
-                evaluator.render(source.message, known, what="Its message") if source.message.strip() else node_input
+                await evaluator.render(source.message, known, what="Its message")
+                if source.message.strip()
+                else node_input
             )
             inputs = {
-                key: as_data(evaluator.evaluate(expression, known, what=f"Its input {key}"))
+                key: as_data(await evaluator.evaluate(expression, known, what=f"Its input {key}"))
                 for key, expression in source.inputs.items()
                 if expression.strip()
             }
@@ -472,7 +620,9 @@ class RunWorkflows:
     ``WorkflowRunner``): each a run of its own, of the document the run
     carries, as the member the run acts as, waited for a while. A run that
     pauses (an approval, a person's answer) or takes longer answers with
-    where it got to.
+    where it got to. Each call's run has the ID the call makes for it
+    (:func:`child_run_id`): a call answered after its worker stopped is
+    answered with the run it started (:meth:`attach`), never another.
 
     :param payload: The calling run (its ``RunPayload``, as a dict).
     :param run_id: The calling run's ID.
@@ -506,9 +656,10 @@ class RunWorkflows:
         self, workflow_id: str, workflow_input: dict[str, Any], *, organization_id: str | None, context: Any
     ) -> Any:
         document = self._document(workflow_id)
+        call_id = getattr(context, "function_call_id", None)
         _name, _about, schema = await self.describe(workflow_id, organization_id=organization_id)
         if schema:
-            problems = [error.message for error in Draft202012Validator(schema).iter_errors(workflow_input)]
+            problems = [error.message for error in schema_errors(schema, workflow_input)]
             if problems:
                 raise ValueError("The input doesn't fit the workflow's start: " + "; ".join(problems[:5]))
         payload = {
@@ -529,9 +680,18 @@ class RunWorkflows:
                 "run_id": self.run_id,
                 "agent_id": self.payload.get("agent_id"),
                 "tool_of": getattr(context, "agent_name", None),
+                "call_id": call_id,
             },
         }
-        child = await self.children.start(payload)
+        child = await self.children.start(payload, run_id=child_run_id(self.run_id, call_id) if call_id else None)
+        return await self.attach(child)
+
+    async def attach(self, child: str) -> dict[str, Any]:
+        """
+        :param child: A run a call started.
+        :return: What the call answers: the run's ID and status, and its
+            result or error once it ended; waited for a while first.
+        """
         deadline = asyncio.get_running_loop().time() + self.wait
         current: dict[str, Any] | None = None
         while True:
@@ -557,6 +717,10 @@ __all__ = [
     "RunWorkflows",
     "SnapshotKnowledgeBases",
     "agent_node",
+    "child_run_id",
+    "note_tool_calls",
+    "reads_only",
+    "starts_runs",
     "toolsets_of",
 ]
 
@@ -586,6 +750,50 @@ class WorkerMcpServers:
         if organization_id is None:
             raise LookupError("only an organization's workflows can use its MCP servers")
         return await mcp_toolset(self.servers, self.store, organization_id=organization_id, config=dict(config))
+
+
+#: What a ``${NAME}`` the worker doesn't let tools read adds to its error.
+TOOL_ENVIRONMENT_NOTE = (
+    ": workflow runs fill in only the names HYBRID_ADK_WORKFLOWS__TOOL_ENVIRONMENT lists. "
+    "Use one of the organization's credentials instead"
+)
+
+
+def tool_environment(names: list[str], environment: Mapping[str, str]) -> dict[str, str]:
+    """:return: The variables of ``environment`` that ``names`` lists: what tools may read."""
+    return {name: environment[name] for name in names if name in environment}
+
+
+class WorkerCredentials:
+    """
+    The organization's API credentials, for a run's HTTP steps and its tools
+    (the runtime's ``CredentialProvider``): read from the admin MySQL with the
+    admin's secrets key (``forge_mcp_servers.api_credentials``), each sent only
+    to the URLs it's for, a renewed OAuth grant kept on its row.
+
+    :param credentials: The credentials' service; None when the worker has no key.
+    :param store: Where they're kept: the admin MySQL.
+    :param unavailable: Why they can't be used, when they can't.
+    """
+
+    def __init__(self, credentials: Any, store: Any, *, unavailable: str | None = None) -> None:
+        self.credentials = credentials
+        self.store = store
+        self.unavailable = unavailable
+
+    async def __call__(self, credential_id: str, *, organization_id: str | None, url: str) -> RequestAuth:
+        from forge_mcp_servers import request_credentials
+
+        if self.credentials is None or self.store is None:
+            raise LookupError(self.unavailable or "the organization's credentials can't be used on this worker")
+        found = await request_credentials(
+            self.credentials,
+            self.store,
+            credential_id=credential_id,
+            organization_id=organization_id,
+            url=url,
+        )
+        return RequestAuth(headers=found.headers, params=found.params)
 
 
 class DocumentsSearch:

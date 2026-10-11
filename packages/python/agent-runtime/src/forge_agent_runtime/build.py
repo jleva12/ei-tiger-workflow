@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal
+from typing import Any
 
 import httpx
 from google.adk.agents import LlmAgent
@@ -40,20 +40,31 @@ from forge_agent_runtime.document import (
     Node,
     parse_document,
 )
+from forge_agent_runtime.http_templates import upgraded_http_tool
 from forge_agent_runtime.models import model_selection
 from forge_agent_runtime.names import adk_name
+from forge_agent_runtime.openapi import (
+    SpecError,
+    fetch_spec,
+    guarded_client,
+    load_spec,
+    toolset_of,
+)
 from forge_agent_runtime.refs import AgentRef
-from forge_agent_runtime.services import RuntimeServices
+from forge_agent_runtime.services import RequestAuth, RuntimeServices
 from forge_agent_runtime.templating import instruction_provider
 from forge_agent_runtime.tools import (
     GuardedTools,
     HttpTool,
     KnowledgeBaseTool,
     MissingSetting,
+    SystemDesignTool,
     WorkflowTool,
     fill_references,
     header_dict,
+    http_client,
 )
+from forge_common.adk.context_window import ContextWindowPlugin, windows_from
 from forge_common.adk.models import ProviderModels
 
 
@@ -178,9 +189,26 @@ class _Builder:
             raise BuildError(f"{node.name!r} uses {agent_id}, which isn't one of this organization's agents.")
         return doc
 
+    def _fill(self, text: str, *, where: str) -> str:
+        """``${NAME}`` in a tool's setting, filled in from the environment."""
+        services = self.services
+        return fill_references(text, services.environment, where=where, note=services.environment_note)
+
+    def _credential(self, node: Node) -> str:
+        """
+        :return: The organization's credential a tool signs its requests
+            with; empty for none.
+        :raises BuildError: It names one, and nothing here has credentials.
+        """
+        credential = str(node.config.get("credential") or "")
+        if credential and self.services.credentials is None:
+            raise BuildError(
+                f"{node.name!r} uses one of the organization's credentials, which only the hosted runtime has."
+            )
+        return credential
+
     async def tool(self, node: Node) -> list[BaseTool | BaseToolset]:
         config = node.config
-        env = self.services.environment
         guarded = self.services.tool_timeout
         match node.kind:
             case "sub_agent":
@@ -195,12 +223,21 @@ class _Builder:
                     name=name,
                     description=str(config.get("description") or ""),
                     method=str(config.get("method") or "GET"),
-                    url=fill_references(str(config.get("url") or ""), env, where=f"{node.name!r}'s URL"),
-                    headers=header_dict(config.get("headers"), env, where=f"{node.name!r}'s headers"),
+                    url=str(config.get("url") or ""),
+                    body=str(config.get("body") or ""),
+                    headers=header_dict(
+                        config.get("headers"),
+                        self.services.environment,
+                        where=f"{node.name!r}'s headers",
+                        note=self.services.environment_note,
+                    ),
                     parameters=config.get("parameters") or {},
                     confirm=bool(config.get("confirm")),
                     services=self.services,
                     http=self.http,
+                    credential=self._credential(node),
+                    organization_id=self.organization_id,
+                    label=node.name,
                 )
                 return [GuardedTools([tool], timeout_seconds=guarded)]
             case "openapi":
@@ -214,38 +251,61 @@ class _Builder:
             case "mcp":
                 return [GuardedTools([await self.mcp(node)], timeout_seconds=guarded)]
             case "knowledge_base":
-                return [GuardedTools([await self.knowledge_base(node)], timeout_seconds=guarded)]
+                return [GuardedTools(await self.knowledge_base(node), timeout_seconds=guarded)]
             case "adk_workflow":
                 return [await self.workflow(node)]
         raise BuildError(f"{node.name!r} ({node.kind}) can't be a tool.")
 
     async def openapi(self, node: Node) -> OpenAPIToolset:
         config = node.config
+        credential = self._credential(node)
         operations = _operations(config.get("operations"))
-        if config.get("source") == "inline":
-            spec = str(config.get("spec") or "").strip()
-            if not spec:
-                raise BuildError(f"{node.name!r} has no OpenAPI spec pasted in.")
-        else:
-            url = fill_references(
-                str(config.get("url") or ""), self.services.environment, where=f"{node.name!r}"
-            )
-            if not url:
-                raise BuildError(f"{node.name!r} has no spec URL.")
-            try:
-                response = await self.http.get(url, timeout=self.services.http_timeout)
-                response.raise_for_status()
-            except httpx.HTTPError as exc:
-                raise BuildError(f"{node.name!r} couldn't fetch its spec from {url}: {exc}") from exc
-            spec = response.text
-        kind: Literal["json", "yaml"] = "json" if spec.lstrip().startswith("{") else "yaml"
         try:
-            return OpenAPIToolset(spec_str=spec, spec_str_type=kind, tool_filter=operations)
-        except Exception as exc:  # The parser raises whatever the spec trips it on.
-            raise BuildError(f"{node.name!r}'s OpenAPI spec can't be read: {exc}") from exc
+            if config.get("source") == "inline":
+                text = str(config.get("spec") or "").strip()
+                if not text:
+                    raise BuildError(f"{node.name!r} has no OpenAPI spec pasted in.")
+            else:
+                url = self._fill(str(config.get("url") or ""), where=f"{node.name!r}")
+                if not url:
+                    raise BuildError(f"{node.name!r} has no spec URL.")
+                text = await fetch_spec(
+                    url,
+                    services=self.services,
+                    http=self.http,
+                    auth=await self._spec_auth(credential, url),
+                )
+            return toolset_of(
+                load_spec(text),
+                operations=operations,
+                client=guarded_client(
+                    self.services,
+                    credential=credential,
+                    organization_id=self.organization_id,
+                ),
+            )
+        except SpecError as exc:
+            raise BuildError(f"{node.name!r}'s OpenAPI spec: {exc}") from exc
+
+    async def _spec_auth(self, credential: str, url: str) -> RequestAuth | None:
+        """What fetching a spec sends: the tool's credential, when it may go there."""
+        provider = self.services.credentials
+        if not credential or provider is None:
+            return None
+        try:
+            return await provider(credential, organization_id=self.organization_id, url=url)
+        except LookupError:
+            # Not where it's sent (a spec served elsewhere): fetched without it.
+            return None
 
     async def mcp(self, node: Node) -> BaseToolset:
         config = node.config
+        # Whoever makes the toolset, its sessions check its tools' results
+        # against their output schemas on the bounded engine: the client's own
+        # check can freeze the process.
+        from forge_common.mcp import bound_tool_results
+
+        bound_tool_results()
         if config.get("server"):
             if self.services.mcp_servers is None:
                 raise BuildError(
@@ -265,11 +325,15 @@ class _Builder:
             raise BuildError(
                 f"{node.name!r} is an MCP tool, which needs the mcp package: pip install mcp"
             ) from exc
-        env = self.services.environment
-        url = fill_references(str(config.get("url") or ""), env, where=f"{node.name!r}'s URL")
+        url = self._fill(str(config.get("url") or ""), where=f"{node.name!r}'s URL")
         if not url:
             raise BuildError(f"{node.name!r} has no server URL.")
-        headers = header_dict(config.get("headers"), env, where=f"{node.name!r}'s headers")
+        headers = header_dict(
+            config.get("headers"),
+            self.services.environment,
+            where=f"{node.name!r}'s headers",
+            note=self.services.environment_note,
+        )
         params = (
             SseConnectionParams(url=url, headers=headers)
             if config.get("transport") == "sse"
@@ -281,7 +345,9 @@ class _Builder:
             require_confirmation=bool(config.get("confirm")),
         )
 
-    async def knowledge_base(self, node: Node) -> KnowledgeBaseTool:
+    async def knowledge_base(self, node: Node) -> list[BaseTool | BaseToolset]:
+        """The search, and beside it, when a knowledge base it searches is a
+        system design one, the tool that reads their design."""
         config = node.config
         ids = [str(i) for i in config.get("knowledge_bases") or [] if i]
         if not ids:
@@ -302,15 +368,35 @@ class _Builder:
             max_results = int(config.get("max_results") or 5)
         except (TypeError, ValueError):
             max_results = 5
-        return KnowledgeBaseTool(
-            name=adk_name(node.name) or "search_knowledge_base",
-            description=description,
-            knowledge_base_ids=ids,
-            organization_id=self.organization_id,
-            max_results=max(1, min(max_results, 20)),
-            knowledge_bases=searcher,
-            knowledge_base_names=[name for name, _ in described],
-        )
+        name = adk_name(node.name) or "search_knowledge_base"
+        tools: list[BaseTool | BaseToolset] = [
+            KnowledgeBaseTool(
+                name=name,
+                description=description,
+                knowledge_base_ids=ids,
+                organization_id=self.organization_id,
+                max_results=max(1, min(max_results, 20)),
+                knowledge_bases=searcher,
+                knowledge_base_names=[searched for searched, _ in described],
+            )
+        ]
+        try:
+            designed = await searcher.design(ids, organization_id=self.organization_id)
+        except LookupError as exc:
+            raise BuildError(f"{node.name!r}: {exc}") from exc
+        if designed is not None:
+            systems = [str(s.get("knowledge_base") or "") for s in designed.get("systems") or ()]
+            tools.append(
+                SystemDesignTool(
+                    # Model APIs take names of at most 64 characters.
+                    name=f"{name[: 64 - len(DESIGN_SUFFIX)]}{DESIGN_SUFFIX}",
+                    description=_design_description(systems, name),
+                    knowledge_base_ids=ids,
+                    organization_id=self.organization_id,
+                    knowledge_bases=searcher,
+                )
+            )
+        return tools
 
     async def workflow(self, node: Node) -> BaseToolset:
         workflow_id = str(node.config.get("workflow") or "")
@@ -345,6 +431,25 @@ CITE_PASSAGES = (
 )
 
 
+#: What the tool reading a knowledge base tool's system designs is called
+#: after it.
+DESIGN_SUFFIX = "_system_design"
+
+
+def _design_description(systems: list[str], search: str) -> str:
+    """:return: What the tool reading system designs says it does."""
+    named = ", ".join(s for s in systems if s) or "the system"
+    return (
+        f"Reads the system design of {named}: its applications (code repositories), the other parts "
+        "of the system that aren't code here (databases, queues and topics, caches, storage, external "
+        "systems, services, clients), the groups they're in and what each group is for, and how they "
+        "all connect (calls, depends on, sends events to, reads from, writes to, publishes to, "
+        "consumes from…), as people drew it. Use it for how the system fits together, what a part "
+        "talks to and where data and messages go, before or beside searching the code with "
+        f"{search}. Give focus to read one part (or a group) and what it connects to."
+    )
+
+
 def _knowledge_description(described: list[tuple[str, str]]) -> str:
     """:return: What a knowledge base tool says it does, from the knowledge bases it searches."""
     parts = [f"{name} ({about.strip()})" if about.strip() else name for name, about in described]
@@ -370,9 +475,7 @@ async def build_root_agent(
         it elsewhere (a workflow's step).
     :raises BuildError: Something it uses can't be found or set up.
     """
-    builder = _Builder(
-        doc, models=models, services=services or RuntimeServices(), http=http or httpx.AsyncClient()
-    )
+    builder = _Builder(doc, models=models, services=services or RuntimeServices(), http=http or http_client())
     try:
         return await builder.agent(doc.entry, handed_to=False)
     except MissingSetting as exc:
@@ -408,12 +511,14 @@ async def build_tools(
     """
     if kind not in TOOL_KINDS:
         raise BuildError(f"{name!r} ({kind}) can't be a tool.")
+    if kind == "http_tool":
+        config = upgraded_http_tool(config)
     node = Node(id=adk_name(name) or kind, kind=kind, name=name, config={**DEFAULTS[kind], **config})  # type: ignore[arg-type]
     builder = _Builder(
         None,
         models=models,
         services=services or RuntimeServices(),
-        http=http or httpx.AsyncClient(),
+        http=http or http_client(),
         organization_id=organization_id,
         dependencies=dependencies,
     )
@@ -443,10 +548,15 @@ async def build_app(
     :param http: The client HTTP tools and spec fetches send with; one is made otherwise.
     :param app_name: The app's name: the agent's ID by default. Sessions are kept per app.
     :param plugins: ADK plugins for the app, e.g. one that records what it uses.
+        Its agents' context windows are kept in the state and compacted
+        mid-turn as well (``forge_common.adk.context_window``, at the models'
+        windows), unless one of these does that.
     :return: The app, its root the entry agent.
     :raises BuildError: Something it uses can't be found or set up.
     """
     root = await build_root_agent(doc, models=models, services=services, http=http)
+    if not any(isinstance(plugin, ContextWindowPlugin) for plugin in plugins):
+        plugins = [ContextWindowPlugin(window=windows_from(models)), *plugins]
     return App(name=app_name or doc.id, root_agent=root, plugins=list(plugins))
 
 

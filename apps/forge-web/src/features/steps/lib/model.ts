@@ -1,4 +1,6 @@
 import {
+  ArrowRightDoubleIcon,
+  FilterIcon,
   Flag02Icon,
   FunctionIcon,
   GitForkIcon,
@@ -16,8 +18,8 @@ import type { StepOutput } from "@/features/builder/lib/types"
 
 /*
  * The steps a workflow takes beside its agents: a person approving,
- * actions (an HTTP request, a transform, a delay), logic (if, switch,
- * match, loop, merge) and its ends. Each is a kind from the catalog below,
+ * actions (an HTTP request, a transform, a filter, a delay), logic (if,
+ * switch, match, loop, for each, merge) and its ends. Each is a kind from the catalog below,
  * with that kind's settings (`config`) and the outputs it can leave by:
  * one `next` for most, a named output per branch for the logic steps.
  * adk-workflows/lib builds its node kinds on these.
@@ -38,6 +40,16 @@ export type SwitchCase = { id: string; value: string }
 export type MatchArm = { id: string; label: string; condition: string }
 /** Whether a match takes the first rule that holds, or every one at once. */
 export type MatchMode = "first" | "all"
+/** A loop's or a for-each's: the list it goes through, and how. */
+export type EachConfig = {
+  /** An expression giving the list to go through. */
+  items: string
+  /** What the body calls the current item. */
+  item_name: string
+  max_iterations: number
+  /** How many items run at once; 1 runs them in order. */
+  concurrency: number
+}
 
 export type StepConfigs = {
   approval: {
@@ -57,6 +69,11 @@ export type StepConfigs = {
     retries: number
     /** A JSON Schema of the response's body; `{}` leaves it undeclared. */
     output_schema: Record<string, unknown>
+    /**
+     * One of the organization's credentials, by ID (the Credentials page):
+     * how it signs its requests, sent only to the URLs it's for. Empty for none.
+     */
+    credential: string
   }
   transform: {
     /** A JSONata expression: what it hands on. */
@@ -64,19 +81,22 @@ export type StepConfigs = {
     /** A JSON Schema of what it makes; `{}` leaves it undeclared. */
     output_schema: Record<string, unknown>
   }
+  filter: {
+    /** An expression giving the list to filter. */
+    items: string
+    /** What the condition calls the item it's on. */
+    item_name: string
+    /** An expression read per item: the items it's true for are kept. */
+    condition: string
+  }
   delay: { amount: number; unit: DelayUnit }
   if: { condition: string }
   switch: { value: string; cases: SwitchCase[] }
   match: { arms: MatchArm[]; mode: MatchMode }
-  loop: {
-    /** An expression giving the list to go through. */
-    items: string
-    /** What the body calls the current item. */
-    item_name: string
-    max_iterations: number
-    /** How many items run at once; 1 runs them in order. */
-    concurrency: number
-  }
+  /** Its body comes back to it with each item's result. */
+  loop: EachConfig
+  /** Its body never comes back: each item's way ends where it ends. */
+  for_each: EachConfig
   merge: { mode: "all" | "any" }
   end: {
     outcome: "succeeded" | "failed"
@@ -139,6 +159,7 @@ export function outputsOf(step: StepData): StepOutput[] {
         { id: "otherwise", label: "Otherwise", branch: true, fallback: true },
       ]
     case "loop":
+    case "for_each":
       return [
         { id: "each", label: "Each item", branch: true, body: true },
         { id: "done", label: "Done", branch: true },
@@ -199,6 +220,7 @@ export const STEP_KINDS: { [K in StepKind]: KindInfo<K> } = {
       timeout_seconds: 30,
       retries: 0,
       output_schema: {},
+      credential: "",
     }),
   },
   transform: {
@@ -208,6 +230,14 @@ export const STEP_KINDS: { [K in StepKind]: KindInfo<K> } = {
     keywords: "map reshape jsonata expression object data",
     idPrefix: "transform",
     defaults: () => ({ expression: "", output_schema: {} }),
+  },
+  filter: {
+    label: "Filter",
+    icon: FilterIcon,
+    summary: "Keeps the items of a list its condition holds for.",
+    keywords: "filter where keep select drop list array items condition",
+    idPrefix: "filter",
+    defaults: () => ({ items: "", item_name: "item", condition: "" }),
   },
   delay: {
     label: "Delay",
@@ -256,9 +286,24 @@ export const STEP_KINDS: { [K in StepKind]: KindInfo<K> } = {
   loop: {
     label: "Loop",
     icon: RepeatIcon,
-    summary: "Runs its body once for each item in a list.",
-    keywords: "for each iterate repeat list items",
+    summary:
+      "Runs its body once for each item in a list, collecting what each hands back.",
+    keywords: "for each iterate repeat list items collect results map",
     idPrefix: "loop",
+    defaults: () => ({
+      items: "",
+      item_name: "item",
+      max_iterations: 100,
+      concurrency: 1,
+    }),
+  },
+  for_each: {
+    label: "For each",
+    icon: ArrowRightDoubleIcon,
+    summary:
+      "Runs its steps once for each item in a list; nothing comes back to it.",
+    keywords: "for each foreach iterate list items every fan out process",
+    idPrefix: "for_each",
     defaults: () => ({
       items: "",
       item_name: "item",
@@ -284,6 +329,12 @@ export const STEP_KINDS: { [K in StepKind]: KindInfo<K> } = {
     defaults: () => ({ outcome: "succeeded", result: "" }),
   },
 }
+
+/**
+ * The steps that run a body per item: a loop (its body comes back to it)
+ * and a for-each (its body doesn't).
+ */
+export const BODY_KINDS: ReadonlySet<string> = new Set(["loop", "for_each"])
 
 export const HTTP_METHODS: HttpMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE"]
 

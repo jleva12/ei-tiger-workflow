@@ -32,7 +32,7 @@ import (
 
 // Limits bound page sizes and payloads. Zero fields take the defaults.
 type Limits struct {
-	MaxPageSize     int   // rows per page for readers and ListRuns (default 500)
+	MaxPageSize     int   // rows per page of the paged reads (default 500)
 	MaxRecordBytes  int   // largest stored graph.Fact JSON (default 1 MiB)
 	MaxCursorBytes  int   // longest accepted cursor token (default 8 KiB)
 	MaxContentBytes int64 // largest compressed source row (default 8 MiB)
@@ -82,8 +82,6 @@ type Store struct {
 	limits       Limits
 	cursors      cursorCodec
 }
-
-var _ graph.Reader = (*Store)(nil)
 
 func New(ctx context.Context, c Config, opts ...option.ClientOption) (*Store, error) {
 	if !databaseName.MatchString(c.Database) {

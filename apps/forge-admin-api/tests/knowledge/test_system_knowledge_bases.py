@@ -1,12 +1,14 @@
-"""System design knowledge bases without MySQL or the code graph worker: the tables on
+"""System design knowledge bases without MySQL or Spanner: the tables on
 SQLite (foreign keys enforced, as MySQL does), the organization's access in
 memory (the default grants), the worker's queue played by writing to its
-rows, and its API by a fake (``app.state.codegraph``).
+rows, and the code graph by the real ``CodeGraph`` over an in-memory store
+(``app.state.codegraph``).
 
 The people: an organization admin, a member and a viewer of the
 organization, a member of another, and an outsider.
 """
 
+import hashlib
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -16,7 +18,17 @@ import pytest
 from casbin.persist.adapter import load_policy_line
 from casbin.persist.adapters.asyncio import AsyncAdapter
 from fastapi.testclient import TestClient
-from forge_codegraph import WorkerError, citation_ref
+from forge_codegraph import citation_ref
+from forge_codegraph_query import (
+    CodeGraph,
+    GraphError,
+    InvalidRequest,
+    NotFound,
+    Unavailable,
+    graph_id,
+    to_json,
+)
+from forge_codegraph_query.testing import MemStore, span
 from httpx import Response
 from pydantic import SecretStr
 from sqlalchemy import MetaData, event, select, update
@@ -113,57 +125,99 @@ class Grants(AsyncAdapter):
         pass
 
 
+SIGNER_SOURCE = "class Signer:\n    pass\n"
+
+
 @dataclass
-class FakeCodeGraph:
-    """Answers as the worker's API does, recording what it was asked; set
-    ``refuse`` to make every call fail so."""
+class GraphStore(MemStore):
+    """The widgets' graph (and the others ``add`` gives it) in memory,
+    recording what's written; set ``refuse`` to make every read and write
+    fail so."""
 
-    hits: list[dict[str, Any]] = field(default_factory=list)
-    answers: dict[str, dict[str, Any]] = field(default_factory=dict)
-    refuse: WorkerError | None = None
-    reads: list[tuple[str, str, dict[str, Any]]] = field(default_factory=list)
-    searches: list[dict[str, Any]] = field(default_factory=list)
-    # Each graph's live nodes, by graph and node ID, for its node reads.
-    nodes: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
-    # Each owner's cross-repository links, as last put.
-    cross_links: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    refuse: GraphError | None = None
+    # Each owner's cross-repository links, as last written.
+    written: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
-    async def read(
-        self, repository_id: str, what: str, params: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        self.reads.append((repository_id, what, dict(params or {})))
+    def _check(self) -> None:
         if self.refuse is not None:
             raise self.refuse
-        if what == "node" and self.nodes:
-            node = self.nodes.get((repository_id, str((params or {})["node"])))
-            if node is None:
-                raise WorkerError(404, "not_found", "node not found")
-            return {"fact": {"node": node}, "gen_from": 3}
-        return self.answers.get(what, {"what": what})
 
-    async def put_cross_links(self, owner: str, links: list[dict[str, Any]]) -> int:
-        if self.refuse is not None:
-            raise self.refuse
-        self.cross_links[owner] = links
-        return len(links)
+    async def get_node(self, repo: str, node_id: str, generation: int) -> Any:
+        self._check()
+        return await super().get_node(repo, node_id, generation)
 
-    async def search(
+    async def neighbors(self, query: Any) -> Any:
+        self._check()
+        return await super().neighbors(query)
+
+    async def hybrid_search(self, request: Any) -> Any:
+        self._check()
+        return await super().hybrid_search(request)
+
+    async def stats(self, repo: str, model: str, dimensions: int) -> Any:
+        self._check()
+        return await super().stats(repo, model, dimensions)
+
+    async def replace_cross_links(self, owner: str, links: Any) -> None:
+        self._check()
+        await super().replace_cross_links(owner, links)
+        self.written[owner] = [to_json(link) for link in links]
+
+    def declare(
         self,
-        repository_ids: list[str],
-        query: str,
+        node_id: str,
+        qualified: str,
+        path: str,
         *,
-        limit: int = 8,
-        source: bool = True,
-    ) -> list[dict[str, Any]]:
-        self.searches.append(
-            {"repository_ids": repository_ids, "query": query, "limit": limit}
-        )
-        if self.refuse is not None:
-            raise self.refuse
-        return [h for h in self.hits if h["repository_id"] in repository_ids]
+        kind: str = "class",
+        source: str = "",
+        lines: tuple[int, int] = (0, 0),
+        repo: str = "",
+    ) -> dict[str, Any]:
+        """A node of ``repo`` (this store's by default), with its source when
+        given."""
+        record: dict[str, Any] = {
+            "id": node_id,
+            "kind": kind,
+            "name": qualified.rsplit(".", 1)[-1],
+            "qualified_name": qualified,
+            "properties": {"file_path": {"string": path}},
+        }
+        held: MemStore = self
+        if repo and repo != self.repo:
+            held = self.others.get(repo) or self.add(repo)
+        if source:
+            sha = hashlib.sha256(source.encode()).hexdigest()
+            held.sources[sha] = source.encode()
+            record["source"] = {
+                "lineage": graph_id("file", held.repo, path),
+                "content_sha256": sha,
+                "span": span(0, lines[0], len(source.encode()), lines[1]),
+            }
+        return held.add_node(record)
 
-    async def aclose(self) -> None:
-        pass
+
+def signer(store: GraphStore) -> None:
+    """The widgets' Signer and verify, both found by any search."""
+    store.declare(
+        "entity:signer",
+        "widgets.sign.Signer",
+        "src/widgets/sign.py",
+        source=SIGNER_SOURCE,
+        lines=(10, 11),
+    )
+    store.declare(
+        "entity:verify",
+        "widgets.sign.verify",
+        "src/widgets/sign.py",
+        kind="function",
+        source="def verify():\n    pass\n",
+        lines=(13, 14),
+    )
+    store.hits = [
+        store.hit("entity:signer", 0.8, False),
+        store.hit("entity:verify", 0.7, False),
+    ]
 
 
 @dataclass
@@ -187,7 +241,8 @@ class Workspace:
     client: TestClient
     sessions: async_sessionmaker[AsyncSession]
     tokens: dict[str, str]
-    graph: FakeCodeGraph
+    store: GraphStore
+    graph: CodeGraph
 
     def call(
         self,
@@ -259,6 +314,8 @@ def sqlite_tables() -> MetaData:
         "code_repositories",
         "code_ingestion_jobs",
         "knowledge_bases",
+        "knowledge_base_groups",
+        "knowledge_base_components",
         "knowledge_base_repositories",
         "knowledge_base_connections",
         "knowledge_base_code_links",
@@ -278,7 +335,8 @@ def workspace(settings: Settings) -> Iterator[Workspace]:
         update={"jwt_secret": SecretStr("s" * 40), "local_user_id": None}
     )
     app = ApiServer(configured, routers=ROUTERS).create_app()
-    graph = FakeCodeGraph()
+    store = GraphStore(GRAPH_ID)
+    graph = CodeGraph(store)
     app.state.codegraph = graph
     engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
 
@@ -317,25 +375,8 @@ def workspace(settings: Settings) -> Iterator[Workspace]:
     with TestClient(app) as client:
         assert client.portal is not None
         client.portal.call(create)
-        yield Workspace(client, sessions, tokens, graph)
+        yield Workspace(client, sessions, tokens, store, graph)
         client.portal.call(engine.dispose)
-
-
-def widgets_hit(**extra: Any) -> dict[str, Any]:
-    return {
-        "repository_id": GRAPH_ID,
-        "id": "entity:signer",
-        "kind": "class",
-        "qualified_name": "widgets.sign.Signer",
-        "file": "src/widgets/sign.py",
-        "line": 10,
-        "score": 0.8,
-        "snippet": "class Signer:",
-        "text": "class Signer:\n    pass\n",
-        "text_start_line": 10,
-        "text_end_line": 11,
-        **extra,
-    }
 
 
 # ------------------------------------------------------------ knowledge bases
@@ -474,51 +515,69 @@ def test_graph_reads_wait_for_an_ingestion_to_succeed(workspace: Workspace) -> N
     early = workspace.call("GET", graph, VIEWER)
     assert early.status_code == 409
     assert "ingest it first" in early.json()["detail"]
-    assert workspace.graph.reads == []
 
     workspace.ingested(repository["id"])
+    signer(workspace.store)
+    workspace.store.add_edge("calls", "entity:verify", "entity:signer", line=13)
     read = workspace.call(
         "GET",
         f"{graph}/neighbors",
         VIEWER,
-        params={"node": "entity:1", "generation": 3},
+        params={"node": "entity:signer", "generation": 1},
     )
     assert read.status_code == 200, read.json()
-    assert read.json() == {"what": "neighbors"}
-    assert workspace.graph.reads[-1] == (
-        GRAPH_ID,
-        "neighbors",
-        {
-            "node": "entity:1",
-            "generation": 3,
-            "direction": "both",
-            "limit": 40,
-            "cursor": "",
-        },
+    assert read.json()["generation"] == 1
+    [neighbor] = read.json()["neighbors"]
+    assert neighbor["edge"]["fact"]["edge"]["kind"] == "calls"
+    assert neighbor["node"]["fact"]["node"]["id"] == "entity:verify"
+    view = workspace.call("GET", graph, VIEWER).json()
+    assert {n["fact"]["node"]["id"] for n in view["nodes"]} == {
+        "entity:signer",
+        "entity:verify",
+    }
+    assert len(view["edges"]) == 1
+    symbols = workspace.call(
+        "GET", f"{graph}/symbols", VIEWER, params={"name": " signer "}
+    ).json()
+    assert [n["fact"]["node"]["id"] for n in symbols["nodes"]] == ["entity:signer"]
+    source = workspace.call(
+        "GET", f"{graph}/source", VIEWER, params={"node": "entity:signer"}
+    ).json()
+    assert (source["text"], source["text_start_line"]) == (SIGNER_SOURCE, 10)
+    node = workspace.call(
+        "GET", f"{graph}/node", VIEWER, params={"node": "entity:signer"}
     )
+    assert node.json()["fact"]["node"]["qualified_name"] == "widgets.sign.Signer"
     read = workspace.call("GET", f"{KBS}/{kb}").json()
     assert (read["repositories"], read["ingested"]) == (1, 1)
-    # The worker's answers: its 404 as it is; its refusing the admin API's
-    # token is the deployment's fault; unreachable is unavailable.
+    # The code graph's failures as they are: a node it doesn't have, a read
+    # it refuses, a database that doesn't answer.
+    missing = workspace.call(
+        "GET", f"{graph}/node", VIEWER, params={"node": "entity:gone"}
+    )
+    assert missing.status_code == 404
     for error, expected in (
-        (WorkerError(404, "not_found", "node not found"), 404),
-        (
-            WorkerError(401, "unauthenticated", "a valid admission token is required"),
-            502,
-        ),
-        (WorkerError(0, "unreachable", "connection refused"), 503),
+        (InvalidRequest("cursor"), 400),
+        (Unavailable("the code graph database didn't answer"), 503),
     ):
-        workspace.graph.refuse = error
+        workspace.store.refuse = error
         answer = workspace.call(
-            "GET", f"{graph}/node", VIEWER, params={"node": "entity:1"}
+            "GET", f"{graph}/node", VIEWER, params={"node": "entity:signer"}
         )
         assert answer.status_code == expected, (error, answer.json())
     # Another organization's people read none of it.
-    workspace.graph.refuse = None
+    workspace.store.refuse = None
     assert workspace.call("GET", graph, NEIGHBOUR).status_code == 403
+    # Arguments out of the code graph's range are refused before reading.
+    assert (
+        workspace.call(
+            "GET", f"{graph}/neighbors", VIEWER, params={"node": "x", "limit": 201}
+        ).status_code
+        == 422
+    )
 
 
-def test_the_stats_say_what_the_worker_can_tell(workspace: Workspace) -> None:
+def test_the_stats_say_what_the_code_graph_can_tell(workspace: Workspace) -> None:
     kb = workspace.knowledge_base()
     repository = workspace.include(kb, {"url": WIDGETS, "branch": "main"}).json()
     stats = f"{REPOS}/{repository['id']}/stats"
@@ -526,33 +585,36 @@ def test_the_stats_say_what_the_worker_can_tell(workspace: Workspace) -> None:
     assert first["code_graph"]["status"] == "not_ingested"
 
     workspace.ingested(repository["id"])
-    workspace.graph.answers = {
-        "stats": {"generation": 3, "nodes": 120, "edges": 300, "branch": "main"},
-        "runs": {
-            "runs": [
-                {
-                    "key": {"repository_id": GRAPH_ID, "run_id": "run-1"},
-                    "request": {"branch": "main", "target_commit_sha": "abc"},
-                    "phase": "SUCCEEDED",
-                    "generation": 3,
-                    "metrics": {"files": 4},
-                }
-            ]
-        },
-    }
+    signer(workspace.store)
+    workspace.store.searchable = 2
+    workspace.store.run_records = [
+        {
+            "key": {"repository_id": GRAPH_ID, "run_id": f"run-{i}"},
+            "request": {"branch": "main", "target_commit_sha": "abc"},
+            "phase": "SUCCEEDED",
+            "generation": 1,
+            "metrics": {"files": 4},
+        }
+        for i in range(7)
+    ]
     read = workspace.call("GET", stats, VIEWER, params={"runs": 5}).json()
     graph = read["code_graph"]
     assert graph["status"] == "ok"
-    assert (graph["totals"]["nodes"], graph["totals"]["edges"]) == (120, 300)
+    assert (graph["totals"]["nodes"], graph["totals"]["edges"]) == (2, 0)
+    assert graph["totals"]["node_kinds"] == {"class": 1, "function": 1}
+    assert graph["totals"]["searchable"] == 2
     assert [(r["run_id"], r["phase"], r["commit_sha"]) for r in graph["runs"]] == [
-        ("run-1", "SUCCEEDED", "abc")
+        (f"run-{i}", "SUCCEEDED", "abc") for i in range(5)
     ]
-    assert (GRAPH_ID, "runs", {"limit": 5}) in workspace.graph.reads
-    # A worker that doesn't answer leaves them unavailable, not failing.
-    workspace.graph.refuse = WorkerError(0, "unreachable", "connection refused")
+    # A code graph that doesn't answer leaves them unavailable, not failing.
+    workspace.store.refuse = Unavailable("the code graph database didn't answer")
     down = workspace.call("GET", stats, VIEWER)
     assert down.status_code == 200
     assert down.json()["code_graph"]["status"] == "unavailable"
+    # One that no longer has the repository says so.
+    workspace.store.refuse = NotFound(f"repository {GRAPH_ID}")
+    gone = workspace.call("GET", stats, VIEWER).json()["code_graph"]
+    assert gone["status"] == "not_ingested"
 
 
 # -------------------------------------------------------------------- search
@@ -564,16 +626,16 @@ def test_searching_a_system_design_knowledge_base_answers_its_code(
     kb = workspace.knowledge_base()
     repository = workspace.include(kb, {"url": WIDGETS, "branch": "main"}).json()
     search = f"{KBS}/{kb}/search"
-    # Nothing ingested yet: nothing to find, and the worker isn't asked.
+    # Nothing ingested yet: nothing to find, and the code graph isn't asked.
     assert workspace.call("POST", search, VIEWER, {"query": "signing"}).json() == {
         "hits": []
     }
-    assert workspace.graph.searches == []
+    assert workspace.store.searches == []
 
     workspace.ingested(repository["id"])
-    workspace.graph.hits = [widgets_hit()]
+    signer(workspace.store)
     found = workspace.call(
-        "POST", search, VIEWER, {"query": "how is it signed", "limit": 3}
+        "POST", search, VIEWER, {"query": "how is it signed", "limit": 1}
     )
     assert found.status_code == 200, found.json()
     assert found.json()["hits"] == [
@@ -584,18 +646,20 @@ def test_searching_a_system_design_knowledge_base_answers_its_code(
             "filename": "Acme/Widgets: src/widgets/sign.py",
             "section_path": ["class widgets.sign.Signer"],
             "location": "src/widgets/sign.py, lines 10–11",
-            "text": "class Signer:\n    pass\n",
+            "text": SIGNER_SOURCE,
             "score": 0.8,
             "repository_id": repository["id"],
             "node_id": "entity:signer",
         }
     ]
-    assert workspace.graph.searches[-1] == {
-        "repository_ids": [GRAPH_ID],
-        "query": "how is it signed",
-        "limit": 3,
-    }
-    workspace.graph.refuse = WorkerError(503, "unavailable", "Spanner is down")
+    # The code graph's own search: hybrid, over the knowledge base's graphs.
+    asked = workspace.store.searches[-1]
+    assert (asked.repository_ids, asked.text, asked.limit) == (
+        [GRAPH_ID],
+        "how is it signed",
+        1,
+    )
+    workspace.store.refuse = Unavailable("the code graph database didn't answer")
     assert workspace.call("POST", search, VIEWER, {"query": "x"}).status_code == 503
 
 
@@ -614,12 +678,7 @@ def test_agents_search_documents_and_code_together(workspace: Workspace) -> None
     docs = workspace.knowledge_base("Runbooks", kind="rag")
     repository = workspace.include(code, {"url": WIDGETS, "branch": "main"}).json()
     workspace.ingested(repository["id"])
-    workspace.graph.hits = [
-        widgets_hit(),
-        widgets_hit(
-            id="entity:verify", qualified_name="widgets.sign.verify", kind="function"
-        ),
-    ]
+    signer(workspace.store)
 
     async def upload(session: AsyncSession) -> str:
         document = KnowledgeDocument(
@@ -648,7 +707,7 @@ def test_agents_search_documents_and_code_together(workspace: Workspace) -> None
             )
         ]
     )
-    tools = OrganizationKnowledgeBases(workspace.sessions, search, workspace.graph)  # type: ignore[arg-type]
+    tools = OrganizationKnowledgeBases(workspace.sessions, search, workspace.graph)
 
     async def ask() -> tuple[list[tuple[str, str]], list[dict[str, Any]]]:
         described = await tools.describe([code, docs], organization_id=ORG)
@@ -668,14 +727,15 @@ def test_agents_search_documents_and_code_together(workspace: Workspace) -> None
     ]
     assert passages[1]["section"] == "class widgets.sign.Signer"
     assert passages[1]["node_id"] == "entity:signer"
+    assert passages[2]["node_id"] == "entity:verify"
 
-    # Without the worker, a system design knowledge base's search says so.
+    # Without the code graph, a system design knowledge base's search says so.
     without = OrganizationKnowledgeBases(workspace.sessions, search, None)  # type: ignore[arg-type]
 
     async def ask_without() -> Any:
         return await without.search([code], "signing", organization_id=ORG, limit=3)
 
-    with pytest.raises(RuntimeError, match="FORGE_ADMIN_CODEGRAPH_URL"):
+    with pytest.raises(RuntimeError, match="FORGE_ADMIN_CODEGRAPH__SPANNER__DATABASE"):
         workspace.client.portal.call(ask_without)
 
 
@@ -786,7 +846,7 @@ def test_removing_an_application_removes_its_connections(
     assert removed.status_code == 204
     assert workspace.call("GET", f"{KBS}/{kb}/connections").json() == []
     # Nothing was linked in the code, so the code graph wasn't asked.
-    assert workspace.graph.cross_links == {}
+    assert workspace.store.written == {}
 
 
 def code_linked(workspace: Workspace) -> tuple[str, str, str, str]:
@@ -795,14 +855,12 @@ def code_linked(workspace: Workspace) -> tuple[str, str, str, str]:
     kb, widgets, orders = system(workspace)
     workspace.ingested(widgets, GRAPH_ID)
     workspace.ingested(orders, ORDERS_GRAPH)
-    workspace.graph.nodes = {
-        (GRAPH_ID, "entity:client"): node(
-            "entity:client", "OrdersClient.create", "src/client.py"
-        ),
-        (ORDERS_GRAPH, "entity:handler"): node(
-            "entity:handler", "create_order", "app/routes.py", "function"
-        ),
-    }
+    workspace.store.add_node(
+        node("entity:client", "OrdersClient.create", "src/client.py")
+    )
+    workspace.store.add(ORDERS_GRAPH).add_node(
+        node("entity:handler", "create_order", "app/routes.py", "function")
+    )
     connection = connect(workspace, kb, widgets, orders, kind="calls").json()["id"]
     return kb, widgets, orders, connection
 
@@ -834,7 +892,7 @@ def test_code_links_say_where_and_reach_the_code_graph(workspace: Workspace) -> 
     listed = workspace.call("GET", f"{KBS}/{kb}/connections").json()
     assert listed[0]["code_links"] == 1
     # The knowledge base's set, in the code graph.
-    assert workspace.graph.cross_links[f"kb:{kb}"] == [
+    assert workspace.store.written[f"kb:{kb}"] == [
         {
             "id": code["id"],
             "owner": f"kb:{kb}",
@@ -865,11 +923,11 @@ def test_code_links_say_where_and_reach_the_code_graph(workspace: Workspace) -> 
     workspace.call(
         "PATCH", f"{KBS}/{kb}/connections/{connection}", MEMBER, {"kind": "events"}
     )
-    assert workspace.graph.cross_links[f"kb:{kb}"][0]["kind"] == "sends_event"
+    assert workspace.store.written[f"kb:{kb}"][0]["kind"] == "sends_event"
     # Removing it takes it out.
     removed = workspace.call("DELETE", f"{path}/{code['id']}")
     assert removed.status_code == 204
-    assert workspace.graph.cross_links[f"kb:{kb}"] == []
+    assert workspace.store.written[f"kb:{kb}"] == []
 
 
 def test_code_links_wait_for_both_applications_to_be_ingested(
@@ -897,7 +955,7 @@ def test_a_refusing_code_graph_changes_nothing(workspace: Workspace) -> None:
         MEMBER,
         {"source_node_id": "entity:client", "target_node_id": "entity:handler"},
     )
-    workspace.graph.refuse = WorkerError(0, "unreachable", "connection refused")
+    workspace.store.refuse = Unavailable("the code graph database didn't answer")
     for method, target in (
         ("DELETE", f"{KBS}/{kb}/connections/{connection}"),
         ("DELETE", f"{KBS}/{kb}/repositories/{orders}"),
@@ -906,8 +964,10 @@ def test_a_refusing_code_graph_changes_nothing(workspace: Workspace) -> None:
     ):
         answer = workspace.call(method, target)
         assert answer.status_code == 503, (target, answer.json())
-    workspace.graph.refuse = None
+    workspace.store.refuse = None
     assert len(workspace.call("GET", path).json()) == 1
+    # What's in the code graph is what was there before.
+    assert [link.owner for link in workspace.store.links] == [f"kb:{kb}"]
 
 
 def test_removing_what_has_code_links_takes_them_out_of_the_code_graph(
@@ -921,25 +981,25 @@ def test_removing_what_has_code_links_takes_them_out_of_the_code_graph(
             MEMBER,
             {"source_node_id": "entity:client", "target_node_id": "entity:handler"},
         )
-        assert len(workspace.graph.cross_links[f"kb:{kb}"]) == 1
+        assert len(workspace.store.written[f"kb:{kb}"]) == 1
         return kb, widgets, connection
 
     kb, _, connection = linked()
     workspace.call("DELETE", f"{KBS}/{kb}/connections/{connection}")
-    assert workspace.graph.cross_links[f"kb:{kb}"] == []
+    assert workspace.store.written[f"kb:{kb}"] == []
     workspace.call("DELETE", f"{KBS}/{kb}")
 
     kb, widgets, _ = linked()
     workspace.call("DELETE", f"{KBS}/{kb}/repositories/{widgets}")
-    assert workspace.graph.cross_links[f"kb:{kb}"] == []
+    assert workspace.store.written[f"kb:{kb}"] == []
     workspace.call("DELETE", f"{KBS}/{kb}")
-    assert workspace.graph.cross_links[f"kb:{kb}"] == []
+    assert workspace.store.written[f"kb:{kb}"] == []
 
 
 def test_agents_are_told_how_the_applications_connect(workspace: Workspace) -> None:
     kb, widgets, orders = system(workspace)
     connect(workspace, kb, widgets, orders, kind="calls", description="POST /orders")
-    tools = OrganizationKnowledgeBases(workspace.sessions, None, workspace.graph)  # type: ignore[arg-type]
+    tools = OrganizationKnowledgeBases(workspace.sessions, None, workspace.graph)
 
     async def ask() -> list[tuple[str, str]]:
         return await tools.describe([kb], organization_id=ORG)
@@ -963,6 +1023,7 @@ def test_the_system_map_is_the_same_for_everyone(workspace: Workspace) -> None:
     assert workspace.call("GET", path, VIEWER).json() == {
         "layout": None,
         "positions": {},
+        "groups": {},
     }
     moved = workspace.call(
         "PATCH",
@@ -982,6 +1043,7 @@ def test_the_system_map_is_the_same_for_everyone(workspace: Workspace) -> None:
             widgets: {"x": -120.5, "y": 40.0},
             orders: {"x": 10.0, "y": 90.0},
         },
+        "groups": {},
     }
     # An application it doesn't include is ignored; removing one forgets
     # its place.
@@ -1005,3 +1067,320 @@ def test_only_those_who_manage_knowledge_bases_move_the_map(
     assert workspace.call("PATCH", path, MEMBER, far).status_code == 422
     docs = workspace.knowledge_base("Docs", kind="rag")
     assert workspace.call("GET", f"{KBS}/{docs}/map").status_code == 409
+
+
+# ----------------------------------------------------- components and groups
+
+
+def component(workspace: Workspace, kb: str, **body: Any) -> Response:
+    return workspace.call("POST", f"{KBS}/{kb}/components", MEMBER, body)
+
+
+def group(workspace: Workspace, kb: str, **body: Any) -> Response:
+    return workspace.call("POST", f"{KBS}/{kb}/groups", MEMBER, body)
+
+
+def test_components_are_added_listed_changed_and_removed(
+    workspace: Workspace,
+) -> None:
+    kb, widgets, _ = system(workspace)
+    made = component(
+        workspace,
+        kb,
+        kind="database",
+        name=" orders-db ",
+        technology="PostgreSQL 16",
+        description="Orders and their lines",
+    )
+    assert made.status_code == 201, made.json()
+    db = made.json()
+    assert (db["kind"], db["name"], db["technology"]) == (
+        "database",
+        "orders-db",
+        "PostgreSQL 16",
+    )
+    component(workspace, kb, kind="external", name="Stripe")
+    listed = workspace.call("GET", f"{KBS}/{kb}/components", VIEWER).json()
+    assert [c["name"] for c in listed] == ["Stripe", "orders-db"]
+    assert workspace.call("GET", f"{KBS}/{kb}", VIEWER).json()["components"] == 2
+    # A name is the knowledge base's once; a kind must be one it knows.
+    assert component(workspace, kb, kind="cache", name="orders-db").status_code == 409
+    assert component(workspace, kb, kind="mainframe", name="x").status_code == 422
+    assert component(workspace, kb, kind="cache", name=" ").status_code == 422
+    # Another knowledge base may have its own orders-db.
+    other = workspace.knowledge_base("Back office")
+    assert (
+        component(workspace, other, kind="database", name="orders-db").status_code
+        == 201
+    )
+    changed = workspace.call(
+        "PATCH",
+        f"{KBS}/{kb}/components/{db['id']}",
+        MEMBER,
+        {"kind": "storage", "technology": "S3"},
+    ).json()
+    assert (changed["kind"], changed["name"], changed["technology"]) == (
+        "storage",
+        "orders-db",
+        "S3",
+    )
+    rename = {"name": "Stripe"}
+    path = f"{KBS}/{kb}/components/{db['id']}"
+    assert workspace.call("PATCH", path, MEMBER, rename).status_code == 409
+    # Removing it removes its connections.
+    linked = connect_ends(
+        workspace, kb, ("repository", widgets), ("component", db["id"])
+    )
+    assert linked.status_code == 201, linked.json()
+    assert workspace.call("DELETE", path).status_code == 204
+    assert workspace.call("GET", f"{KBS}/{kb}/connections").json() == []
+    assert workspace.call("DELETE", path).status_code == 404
+    # Another knowledge base's component isn't this one's.
+    theirs = workspace.call("GET", f"{KBS}/{other}/components").json()[0]["id"]
+    assert (
+        workspace.call("DELETE", f"{KBS}/{kb}/components/{theirs}").status_code == 404
+    )
+
+
+def test_only_those_who_manage_knowledge_bases_add_components_and_groups(
+    workspace: Workspace,
+) -> None:
+    kb = workspace.knowledge_base("Checkout")
+    for user in (VIEWER, NEIGHBOUR, OUTSIDER):
+        for path, body in (
+            ("components", {"kind": "queue", "name": "orders"}),
+            ("groups", {"name": "Payments"}),
+        ):
+            refused = workspace.call("POST", f"{KBS}/{kb}/{path}", user, body)
+            assert refused.status_code in (401, 403), (user, path)
+    assert workspace.call("GET", f"{KBS}/{kb}/groups", NEIGHBOUR).status_code == 403
+    docs = workspace.knowledge_base("Docs", kind="rag")
+    assert workspace.call("GET", f"{KBS}/{docs}/components").status_code == 409
+    assert group(workspace, docs, name="Payments").status_code == 409
+
+
+def connect_ends(
+    workspace: Workspace,
+    kb: str,
+    source: tuple[str, str],
+    target: tuple[str, str],
+    **extra: Any,
+) -> Response:
+    """Connect two ends, each ``(repository|component, id)``."""
+    return workspace.call(
+        "POST",
+        f"{KBS}/{kb}/connections",
+        MEMBER,
+        {
+            f"source_{source[0]}_id": source[1],
+            f"target_{target[0]}_id": target[1],
+            **extra,
+        },
+    )
+
+
+def test_applications_and_components_connect(workspace: Workspace) -> None:
+    kb, widgets, orders = system(workspace)
+    db = component(workspace, kb, kind="database", name="orders-db").json()["id"]
+    topic = component(workspace, kb, kind="queue", name="order-events").json()["id"]
+    writes = connect_ends(
+        workspace, kb, ("repository", orders), ("component", db), kind="writes_to"
+    )
+    assert writes.status_code == 201, writes.json()
+    assert {
+        k: writes.json()[k]
+        for k in (
+            "source_repository_id",
+            "source_component_id",
+            "target_repository_id",
+            "target_component_id",
+        )
+    } == {
+        "source_repository_id": orders,
+        "source_component_id": None,
+        "target_repository_id": None,
+        "target_component_id": db,
+    }
+    # A component to an application, and a component to a component.
+    consumed = connect_ends(
+        workspace, kb, ("component", topic), ("repository", widgets), kind="events"
+    )
+    assert consumed.status_code == 201
+    assert (
+        connect_ends(workspace, kb, ("component", topic), ("component", db)).status_code
+        == 201
+    )
+    # The same way again is a conflict, ends that are components too.
+    again = connect_ends(
+        workspace, kb, ("repository", orders), ("component", db), kind="writes_to"
+    )
+    assert again.status_code == 409
+    other_way = connect_ends(
+        workspace, kb, ("repository", orders), ("component", db), kind="reads_from"
+    )
+    assert other_way.status_code == 201
+    renamed = workspace.call(
+        "PATCH",
+        f"{KBS}/{kb}/connections/{other_way.json()['id']}",
+        MEMBER,
+        {"kind": "writes_to"},
+    )
+    assert renamed.status_code == 409
+    # Each end is an application or a component, not both, nor neither.
+    both = {
+        "source_repository_id": orders,
+        "source_component_id": db,
+        "target_repository_id": widgets,
+    }
+    assert (
+        workspace.call("POST", f"{KBS}/{kb}/connections", MEMBER, both).status_code
+        == 422
+    )
+    neither = {"target_repository_id": widgets}
+    assert (
+        workspace.call("POST", f"{KBS}/{kb}/connections", MEMBER, neither).status_code
+        == 422
+    )
+    # Not to itself, nor to another knowledge base's component.
+    assert (
+        connect_ends(workspace, kb, ("component", db), ("component", db)).status_code
+        == 422
+    )
+    elsewhere = workspace.knowledge_base("Back office")
+    theirs = component(workspace, elsewhere, kind="cache", name="redis").json()["id"]
+    assert (
+        connect_ends(
+            workspace, kb, ("repository", orders), ("component", theirs)
+        ).status_code
+        == 422
+    )
+    # A component has no code to link.
+    workspace.ingested(orders, ORDERS_GRAPH)
+    code = workspace.call(
+        "POST",
+        f"{KBS}/{kb}/connections/{writes.json()['id']}/code-links",
+        MEMBER,
+        {"source_node_id": "entity:client", "target_node_id": "entity:handler"},
+    )
+    assert code.status_code == 422
+    assert "component has none" in code.json()["detail"]
+    # Removing the application removes its connections, components' too.
+    workspace.call("DELETE", f"{KBS}/{kb}/repositories/{orders}")
+    left = workspace.call("GET", f"{KBS}/{kb}/connections").json()
+    assert [(c["source_component_id"], c["target_component_id"]) for c in left] == [
+        (topic, None),
+        (topic, db),
+    ]
+
+
+def test_groups_hold_applications_and_components_on_the_map(
+    workspace: Workspace,
+) -> None:
+    kb, widgets, orders = system(workspace)
+    made = group(
+        workspace, kb, name="Payments", description="Charging customers, refunds"
+    )
+    assert made.status_code == 201, made.json()
+    payments = made.json()
+    assert payments["description"] == "Charging customers, refunds"
+    assert group(workspace, kb, name="Payments").status_code == 409
+    edge = group(workspace, kb, name="Edge").json()["id"]
+    db = component(
+        workspace, kb, kind="database", name="ledger", group_id=payments["id"]
+    ).json()["id"]
+    # A group the knowledge base doesn't have.
+    stray = component(workspace, kb, kind="cache", name="redis", group_id=MISSING)
+    assert stray.status_code == 404
+    path = f"{KBS}/{kb}/map"
+    moved = workspace.call(
+        "PATCH",
+        path,
+        MEMBER,
+        {
+            "groups": {orders: payments["id"], widgets: edge},
+            "positions": {db: {"x": 5, "y": 6}, edge: {"x": 300, "y": 20}},
+        },
+    )
+    assert moved.status_code == 200, moved.json()
+    seen = workspace.call("GET", path, VIEWER).json()
+    assert seen["groups"] == {orders: payments["id"], widgets: edge, db: payments["id"]}
+    assert seen["positions"] == {
+        db: {"x": 5.0, "y": 6.0},
+        edge: {"x": 300.0, "y": 20.0},
+    }
+    # Out of its group; into a group the knowledge base doesn't have, refused.
+    workspace.call("PATCH", path, MEMBER, {"groups": {widgets: None}})
+    assert widgets not in workspace.call("GET", path).json()["groups"]
+    refused = workspace.call("PATCH", path, MEMBER, {"groups": {orders: MISSING}})
+    assert refused.status_code == 422
+    elsewhere = workspace.knowledge_base("Back office")
+    theirs = group(workspace, elsewhere, name="Payments").json()["id"]
+    refused = workspace.call("PATCH", path, MEMBER, {"groups": {orders: theirs}})
+    assert refused.status_code == 422
+    # Renamed and described again.
+    changed = workspace.call(
+        "PATCH",
+        f"{KBS}/{kb}/groups/{payments['id']}",
+        MEMBER,
+        {"name": "Billing", "description": "Invoices"},
+    ).json()
+    assert (changed["name"], changed["description"]) == ("Billing", "Invoices")
+    listed = workspace.call("GET", f"{KBS}/{kb}/groups", VIEWER).json()
+    assert [g["name"] for g in listed] == ["Billing", "Edge"]
+    # Removing it leaves what was in it on the map, in no group.
+    removed = workspace.call("DELETE", f"{KBS}/{kb}/groups/{payments['id']}")
+    assert removed.status_code == 204
+    assert workspace.call("GET", path).json()["groups"] == {}
+    assert len(workspace.call("GET", f"{KBS}/{kb}/components").json()) == 1
+
+
+def test_agents_are_told_the_whole_design(workspace: Workspace) -> None:
+    kb, widgets, orders = system(workspace)
+    payments = group(workspace, kb, name="Payments", description="Charging").json()
+    db = component(
+        workspace,
+        kb,
+        kind="database",
+        name="ledger",
+        technology="PostgreSQL",
+        group_id=payments["id"],
+    ).json()["id"]
+    workspace.call(
+        "PATCH", f"{KBS}/{kb}/map", MEMBER, {"groups": {orders: payments["id"]}}
+    )
+    connect(workspace, kb, widgets, orders, kind="calls")
+    connect_ends(
+        workspace, kb, ("repository", orders), ("component", db), kind="writes_to"
+    )
+    docs = workspace.knowledge_base("Docs", kind="rag")
+    tools = OrganizationKnowledgeBases(workspace.sessions, None, workspace.graph)
+
+    async def ask() -> tuple[Any, Any, Any]:
+        return (
+            await tools.describe([kb], organization_id=ORG),
+            await tools.design([docs, kb], organization_id=ORG, focus="ledger"),
+            await tools.design([docs], organization_id=ORG),
+        )
+
+    assert workspace.client.portal is not None
+    described, designed, none = workspace.client.portal.call(ask)
+    assert described == [
+        (
+            "Checkout",
+            "code of acme/orders, Acme/Widgets; other parts: ledger (database, "
+            "PostgreSQL); groups: Payments (acme/orders, ledger): Charging; how "
+            "they connect: Acme/Widgets calls the API of acme/orders; acme/orders "
+            "writes to ledger",
+        )
+    ]
+    (checkout,) = designed["systems"]
+    assert checkout["connections"] == [
+        {
+            "source": "acme/orders",
+            "relation": "writes to",
+            "target": "ledger",
+            "description": "",
+        }
+    ]
+    assert checkout["components"][0]["group"] == "Payments"
+    assert none is None

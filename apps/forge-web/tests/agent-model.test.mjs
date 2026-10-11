@@ -19,7 +19,8 @@ const { exampleAgent } = await load("/src/features/adk-workflows/lib/example.ts"
 const model = await load("/src/features/adk-workflows/lib/model.ts")
 const { validateAgent } = await load("/src/features/adk-workflows/lib/validate.ts")
 const { agentTypes, stateType } = await load("/src/features/adk-workflows/lib/scope.ts")
-const { resolveExpression } = await load("/src/features/steps/lib/expressions.ts")
+const { resolveExpression, completeField, checkField, stepReferences, typeAt } = await load("/src/features/steps/lib/expressions.ts")
+const { expressionSetting, settingScope } = await load("/src/features/steps/lib/fields.ts")
 const { typeLabel } = await load("/src/features/steps/lib/types.ts")
 const { AGENT_ADAPTER } = await load("/src/features/adk-workflows/lib/adapter.ts")
 const { createBuilderStore, documentOf } = await load("/src/features/builder/components/store.ts")
@@ -558,11 +559,12 @@ test("the JSON Schema knows an LLM agent's settings and its tools'", () => {
 })
 
 test("a start can take files: of the types picked, read back, and listed in the state", () => {
-  // None by default.
+  // None by default (and a run that can't carry on fails rather than starting over).
   assert.deepEqual(model.newNode("start", [], "Start").config, {
     input_schema: {},
     allow_files: false,
     file_types: [],
+    start_over: false,
   })
   const doc = agent(
     [
@@ -575,7 +577,12 @@ test("a start can take files: of the types picked, read back, and listed in the 
   doc.nodes[0].config.file_types = ["word", "exe", "pdf", "pdf"]
   const read = parseAgent(doc, { organizationId: ORG })
   assert.deepEqual(read.notes, ["nodes[0].config.file_types names types Forge doesn't know; dropped."])
-  assert.deepEqual(read.doc.nodes[0].config, { input_schema: {}, allow_files: true, file_types: ["word", "pdf"] })
+  assert.deepEqual(read.doc.nodes[0].config, {
+    input_schema: {},
+    allow_files: true,
+    file_types: ["word", "pdf"],
+    start_over: false,
+  })
   // Steps read the run's files in the state.
   const graph = toGraph(read.doc)
   const type = (expression) => typeLabel(resolveExpression(expression, agentTypes(graph).scopeOf("names")))
@@ -602,3 +609,301 @@ test("a start's file types say what they take, by extension", () => {
   assert.equal(files.takesFile({ allowed: true, types: [] }, "anything.bin"), true)
   assert.equal(files.takesFile({ allowed: false, types: [] }, "a.pdf"), false)
 })
+
+/** A start whose input is `{ issues: [{ key, status }], labels: [string] }`. */
+const ISSUES_START = [
+  "start",
+  "start",
+  "Start",
+  {
+    input_schema: {
+      type: "object",
+      properties: {
+        issues: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { key: { type: "string" }, status: { type: "string", enum: ["open", "closed"] } },
+          },
+        },
+        labels: { type: "array", items: { type: "string" } },
+        count: { type: "integer" },
+      },
+    },
+  },
+]
+
+test("a loop's results are typed by what its body hands back", () => {
+  const doc = agent(
+    [
+      ISSUES_START,
+      ["each", "loop", "Each", { items: "input.labels", item_name: "label" }],
+      ["shape", "transform", "Shape", { expression: '{ "name": label, "at": index }' }],
+      ["after", "transform", "After", { expression: "previous.results.name" }],
+    ],
+    [
+      ["start", "next", "each"],
+      ["each", "each", "shape"],
+      ["shape", "next", "each"],
+      ["each", "done", "after"],
+    ]
+  )
+  assert.deepEqual(issuesOf(doc), [])
+  const { scopeOf } = agentTypes(toGraph(doc))
+  const type = (expression, at) => typeLabel(resolveExpression(expression, scopeOf(at)))
+  assert.equal(type("steps.each.output.results", "after"), "array<object>")
+  assert.equal(type("previous.results[0].name", "after"), "string")
+  assert.equal(type("previous.results[0].at", "after"), "integer")
+  assert.equal(type("previous.count", "after"), "integer")
+  // In its own body the loop hasn't handed anything on yet: it isn't there to read.
+  assert.equal(completeField("steps.", 6, "expression", scopeOf("shape")).options.some((o) => o.label === "each"), false)
+  assert.match(
+    checkField("steps.each.output.results", "expression", scopeOf("shape"))[0].message,
+    /hands on once every item has run/
+  )
+})
+
+test("a loop's results read through an If on the way back, and an empty body hands back its item", () => {
+  const doc = agent(
+    [
+      ISSUES_START,
+      ["each", "loop", "Each", { items: "input.issues" }],
+      ["check", "if", "Check", { condition: 'item.status = "open"' }],
+      ["after", "end", "After", { result: "previous.results" }],
+      ["again", "loop", "Again", { items: "input.labels" }],
+      ["last", "end", "Last", { result: "previous.results" }],
+    ],
+    [
+      ["start", "next", "each"],
+      ["each", "each", "check"],
+      ["check", "true", "each"],
+      ["check", "false", "each"],
+      ["each", "done", "after"],
+      ["start", "next", "again"],
+      ["again", "each", "again"],
+      ["again", "done", "last"],
+    ]
+  )
+  const { scopeOf } = agentTypes(toGraph(doc))
+  const type = (expression, at) => typeLabel(resolveExpression(expression, scopeOf(at)))
+  // An If hands on what came into it: the item.
+  assert.equal(type("previous.results[0].status", "after"), '"open" | "closed"')
+  assert.equal(type("previous.results", "last"), "array<string>")
+})
+
+test("a filter keeps a list's items, its condition reading each by name", () => {
+  const doc = agent(
+    [
+      ISSUES_START,
+      ["open", "filter", "Open ones", { items: "input.issues", item_name: "issue", condition: 'issue.status = "open"' }],
+      ["keys", "transform", "Keys", { expression: "previous.results.key" }],
+    ],
+    [
+      ["start", "next", "open"],
+      ["open", "next", "keys"],
+    ]
+  )
+  assert.deepEqual(issuesOf(doc), [])
+  // It goes to a document and back.
+  assert.deepEqual(toDocument(meta(doc), toGraph(doc)), doc)
+  const read = parseAgent(JSON.stringify(doc), { organizationId: ORG })
+  assert.deepEqual(read.notes, [])
+  assert.deepEqual(read.doc.nodes, doc.nodes)
+  assert.deepEqual(read.doc.nodes[1].outputs, ["next"])
+
+  // What it hands on: the list's items, typed as the list's.
+  const { scopeOf, outputOf } = agentTypes(toGraph(doc))
+  assert.deepEqual(Object.keys(outputOf("open").properties), ["count", "results"])
+  const type = (expression, at) => typeLabel(resolveExpression(expression, scopeOf(at)))
+  assert.equal(type("steps.open.output.results", "keys"), "array<object>")
+  assert.equal(type("previous.results[0].status", "keys"), '"open" | "closed"')
+  assert.equal(type("previous.count", "keys"), "integer")
+
+  // Its condition reads the item and its index; the rest of the node's data too.
+  const step = toGraph(doc).steps.find((s) => s.id === "open").data
+  const spec = expressionSetting(step, "condition")
+  const scope = settingScope(spec, scopeOf("open"))
+  assert.equal(typeLabel(resolveExpression("issue", scope)), "object")
+  assert.equal(typeLabel(resolveExpression("index", scope)), "integer")
+  assert.equal(typeLabel(resolveExpression("input.labels", scope)), "array<string>")
+  const offered = completeField("issue.", 6, "expression", scope).options.map((o) => o.label)
+  assert.deepEqual(offered.slice(0, 2).sort(), ["key", "status"])
+  // Its list doesn't read the item.
+  assert.equal(scopeOf("open").roots.has("issue"), false)
+})
+
+test("a filter's list must be a list, and its condition read real fields", () => {
+  const issues = (config) =>
+    issuesOf(
+      agent(
+        [ISSUES_START, ["f", "filter", "F", { items: "input.issues", condition: "true", ...config }]],
+        [["start", "next", "f"]]
+      )
+    )
+  assert.deepEqual(issues({}), [])
+  assert.deepEqual(issues({ items: "input.count" }), ["f:field:items:0"])
+  assert.deepEqual(issues({ condition: "item.stauts = 'open'" }), ["f:field:condition:0"])
+  assert.deepEqual(issues({ items: "", condition: "", item_name: "an item" }), ["f:items", "f:item-name", "f:condition"])
+  const graph = toGraph(agent([ISSUES_START, ["f", "filter", "F", { items: "input.count", condition: "true" }]], [["start", "next", "f"]]))
+  assert.equal(validateAgent(graph)[0].message, "List: It goes through a list; this is integer.")
+})
+
+test("a filter over a loop's results reads each result as the body handed it back", () => {
+  const doc = agent(
+    [
+      ISSUES_START,
+      ["each", "loop", "Each", { items: "input.labels", item_name: "label" }],
+      ["shape", "transform", "Shape", { expression: '{ "name": label, "long": $length(label) > 3 }' }],
+      ["long", "filter", "Long ones", { items: "previous.results", condition: "item.long" }],
+      ["names", "transform", "Names", { expression: "previous.results.name" }],
+    ],
+    [
+      ["start", "next", "each"],
+      ["each", "each", "shape"],
+      ["shape", "next", "each"],
+      ["each", "done", "long"],
+      ["long", "next", "names"],
+    ]
+  )
+  assert.deepEqual(issuesOf(doc), [])
+  const { scopeOf } = agentTypes(toGraph(doc))
+  const step = toGraph(doc).steps.find((s) => s.id === "long").data
+  const scope = settingScope(expressionSetting(step, "condition"), scopeOf("long"))
+  const offered = completeField("item.", 5, "expression", scope).options.map((o) => o.label)
+  assert.deepEqual(offered.slice(0, 2).sort(), ["long", "name"])
+  assert.equal(typeLabel(resolveExpression("previous.results[0].name", scopeOf("names"))), "string")
+})
+
+test("a for-each runs its steps per item, reading the item, and hands on only the count", () => {
+  const doc = agent(
+    [
+      ISSUES_START,
+      ["each", "for_each", "Each issue", { items: "input.issues", item_name: "issue" }],
+      ["shape", "transform", "Shape", { expression: '{ "key": issue.key, "at": index }' }],
+      ["after", "transform", "After", { expression: "previous.count" }],
+    ],
+    [
+      ["start", "next", "each"],
+      ["each", "each", "shape"],
+      ["each", "done", "after"],
+    ]
+  )
+  assert.deepEqual(issuesOf(doc), [])
+  // It goes to a document and back.
+  assert.deepEqual(toDocument(meta(doc), toGraph(doc)), doc)
+  const read = parseAgent(JSON.stringify(doc), { organizationId: ORG })
+  assert.deepEqual(read.notes, [])
+  assert.deepEqual(read.doc.nodes, doc.nodes)
+  assert.deepEqual(read.doc.nodes[1].outputs, ["each", "done"])
+
+  const { scopeOf, outputOf } = agentTypes(toGraph(doc))
+  const type = (expression, at) => typeLabel(resolveExpression(expression, scopeOf(at)))
+  // Its body reads the item and where it is.
+  assert.equal(type("issue.status", "shape"), '"open" | "closed"')
+  assert.equal(type("previous.key", "shape"), "string")
+  assert.equal(type("index", "shape"), "integer")
+  // Done hands on the count, and nothing of its body's.
+  assert.deepEqual(Object.keys(outputOf("each").properties), ["count"])
+  assert.equal(type("previous.count", "after"), "integer")
+  assert.equal(scopeOf("after").roots.get("steps").type.properties.shape, undefined)
+  assert.equal(scopeOf("after").roots.has("issue"), false)
+})
+
+test("a for-each's body never comes back to it, and only Each item leads into it", () => {
+  const steps = [
+    ISSUES_START,
+    ["each", "for_each", "Each issue", { items: "input.issues" }],
+    ["shape", "transform", "Shape", { expression: "item.key" }],
+    ["after", "transform", "After", { expression: "previous.count" }],
+  ]
+  const issues = (edges) => issuesOf(agent(steps, [["start", "next", "each"], ...edges]))
+  // A way back.
+  assert.deepEqual(issues([["each", "each", "shape"], ["shape", "next", "each"], ["each", "done", "after"]]), [
+    "shape:for-each-back-each",
+  ])
+  const back = validateAgent(
+    toGraph(agent(steps, [["start", "next", "each"], ["each", "each", "shape"], ["shape", "next", "each"]]))
+  ).find((i) => i.id === "shape:for-each-back-each")
+  assert.match(back.message, /use a Loop to collect each item's result/)
+  // Each item straight back to it.
+  assert.ok(issues([["each", "each", "each"]]).includes("each:for-each-back"))
+  // Done leading into the body.
+  assert.ok(issues([["each", "each", "shape"], ["each", "done", "shape"]]).includes("shape:body-each-each"))
+  // Nothing for each item.
+  const empty = validateAgent(toGraph(agent(steps.slice(0, 2), [["start", "next", "each"]])))
+  assert.equal(empty.find((i) => i.id === "each:open-each").message, "Nothing runs for each item: connect Each item to the steps to run.")
+  // A loop's body is held to the same: only Each item leads into it.
+  const loop = agent(
+    [ISSUES_START, ["l", "loop", "L", { items: "input.issues" }], ["x", "transform", "X", { expression: "item" }]],
+    [["start", "next", "l"], ["l", "each", "x"], ["x", "next", "l"], ["start", "next", "x"]]
+  )
+  assert.ok(issuesOf(loop).includes("x:body-l-start"))
+})
+
+test("steps complete by name, and write their ID", () => {
+  const doc = agent(
+    [
+      ISSUES_START,
+      ["for_each_bca7t", "for_each", "Each issue", { items: "input.issues" }],
+      ["notify", "transform", "Email each contact", { expression: "item.key" }],
+      ["after", "transform", "After", { expression: "" }],
+    ],
+    [
+      ["start", "next", "for_each_bca7t"],
+      ["for_each_bca7t", "each", "notify"],
+      ["for_each_bca7t", "done", "after"],
+    ]
+  )
+  const scope = agentTypes(toGraph(doc)).scopeOf("after")
+  const options = (text) => completeField(text, text.length, "expression", scope)
+  // The list shows each step's name; picking one writes its ID.
+  const all = options("steps.")
+  assert.equal(all.filtered, true)
+  const each = all.options.find((o) => o.label === "for_each_bca7t")
+  assert.equal(each.display, "Each issue")
+  assert.equal(each.note, "for_each_bca7t")
+  // What's typed finds a step by a word of its name, or by its ID.
+  assert.deepEqual(options("steps.iss").options.map((o) => o.label), ["for_each_bca7t"])
+  assert.deepEqual(options("steps.for_e").options.map((o) => o.label), ["for_each_bca7t"])
+  assert.deepEqual(options("steps.zzz").options, [])
+  // A step's body isn't readable after it: it isn't offered.
+  assert.equal(options("steps.email").options.length, 0)
+  // Hovering a step says what it's saved as.
+  assert.equal(typeAt("steps.for_each_bca7t.output", 10, "expression", scope).description, "Saved as steps.for_each_bca7t.")
+})
+
+test("the steps a field names are found where they're read, by their IDs", () => {
+  const doc = agent(
+    [
+      ISSUES_START,
+      ["for_each_bca7t", "for_each", "Each issue", { items: "input.issues" }],
+      ["after", "transform", "After", { expression: "" }],
+      ["later", "transform", "Later", { expression: "" }],
+    ],
+    [
+      ["start", "next", "for_each_bca7t"],
+      ["for_each_bca7t", "done", "after"],
+      ["after", "next", "later"],
+    ]
+  )
+  const scope = agentTypes(toGraph(doc)).scopeOf("after")
+  const refs = (text, mode = "expression") =>
+    stepReferences(text, mode, scope).map((r) => [text.slice(r.from, r.to), r.step.name])
+  assert.deepEqual(refs("steps.for_each_bca7t.output.count + 1"), [["for_each_bca7t", "Each issue"]])
+  // In {{ }}, while being typed (no field yet), with spaces.
+  assert.deepEqual(refs("{{ steps.for_each_bca7t }}.count"), [["for_each_bca7t", "Each issue"]])
+  assert.deepEqual(refs("steps . for_each_bca7t"), [["for_each_bca7t", "Each issue"]])
+  // Not in a string or comment, not another root's field, not a longer name.
+  assert.deepEqual(refs('"steps.for_each_bca7t" & /* steps.for_each_bca7t */ previous.steps.for_each_bca7t'), [])
+  assert.deepEqual(refs("steps.for_each_bca7t_2"), [])
+  // Not a step this one can't read: its underline says why.
+  assert.deepEqual(refs("steps.later.output"), [])
+  // In a template, only inside {{ }}.
+  assert.deepEqual(refs("Sent steps.for_each_bca7t: {{ steps.for_each_bca7t.output.count }}", "template"), [
+    ["for_each_bca7t", "Each issue"],
+  ])
+  const text = "Sent {{ steps.for_each_bca7t.output.count }}"
+  const [ref] = stepReferences(text, "template", scope)
+  assert.equal(ref.from, text.indexOf("for_each_bca7t"))
+})
+

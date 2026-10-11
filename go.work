@@ -4,7 +4,6 @@ toolchain go1.25.5
 
 use (
 	./apps/forge-codegraph-worker
-	./packages/go/code-graph/agentquery
 	./packages/go/code-graph/authorization
 	./packages/go/code-graph/domain
 	./packages/go/code-graph/serviceconfig

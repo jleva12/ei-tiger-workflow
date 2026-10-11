@@ -170,7 +170,17 @@ def test_a_paused_run_shows_what_ran_and_the_step_that_waits(tmp_path: Path) -> 
         "started_at": None,
         "finished_at": None,
         "calls": [],
+        "input": None,
+        "input_from": None,
+        "state_changes": [],
     }
+    # Each step was handed what the one before it handed on; the start keeps
+    # the run's input in state.
+    assert (shape["input_from"], shape["input"]) == ("start", {"key": "k-1"})
+    assert (review["input_from"], review["input"]) == ("shape", {"loud": "K-1"})
+    assert start["input"] is None
+    assert [(change["key"], change["value"]) for change in start["state_changes"]] == [("input", {"key": "k-1"})]
+    assert start["state_changes"][0]["at"] == start["finished_at"]
 
     async def approve() -> None:
         await ran.answer({"approved": True, "decided_by": "Lead", "comment": "go"})
@@ -188,6 +198,7 @@ def test_a_paused_run_shows_what_ran_and_the_step_that_waits(tmp_path: Path) -> 
     assert (decision["approved"], decision["decided_by"], decision["comment"]) == (True, "Lead", "go")
     assert steps["review"]["started_at"] <= steps["review"]["finished_at"]
     assert steps["yes"]["output"] == {"outcome": "succeeded", "result": True}
+    assert steps["yes"]["input_from"] == "review"
 
 
 def test_the_step_that_failed_the_run_says_why(tmp_path: Path) -> None:
@@ -282,6 +293,23 @@ def test_a_loops_body_steps_show_their_last_item_and_the_loop_its_results(tmp_pa
     assert steps["each"]["started_at"] <= steps["double"]["finished_at"] <= steps["each"]["finished_at"]
 
 
+def test_a_for_eachs_body_steps_show_their_last_item_and_it_its_count(tmp_path: Path) -> None:
+    document = agent(
+        [
+            ANY_START,
+            node("each", "for_each", {"items": "[1, 2, 3]", "item_name": "n", "max_iterations": 10, "concurrency": 1}),
+            transform("double", "n * 2"),
+            end("done", "steps.each.output"),
+        ],
+        [("start", "next", "each"), ("each", "each", "double"), ("each", "done", "done")],
+    )
+    ran = asyncio.run(Sessions(tmp_path).run(document, {}))
+    steps = steps_of(ran, document)
+    assert statuses(steps) == {"start": "done", "each": "done", "double": "done", "done": "done"}
+    assert steps["double"]["output"] == 6
+    assert steps["each"]["output"] == {"count": 3}
+
+
 def test_a_pause_inside_a_loops_body_waits_there_and_in_the_loop(tmp_path: Path) -> None:
     document = agent(
         [
@@ -334,6 +362,32 @@ def test_a_saved_agents_own_steps_are_its_node(tmp_path: Path) -> None:
     assert steps["start"]["output"] == {"n": 4}
 
 
+def test_a_saved_agent_started_with_its_inputs_is_still_one_step(tmp_path: Path) -> None:
+    inner = agent(
+        [
+            node("start", "start", {"input_schema": {}}),
+            transform("add", "input.n + 1"),
+            end("finish", "steps.add.output"),
+        ],
+        [("start", "next", "add"), ("add", "next", "finish")],
+        agent_id="ag_inner00001",
+        name="Add one",
+    )
+    outer = agent(
+        [
+            ANY_START,
+            node("check", "saved", {"agent": "ag_inner00001", "inputs": {"n": "input.m * 10"}}, name="Check"),
+            transform("after", "previous"),
+        ],
+        [("start", "next", "check"), ("check", "next", "after")],
+    )
+    ran = asyncio.run(Sessions(tmp_path).run(outer, {"m": 4}, resolve={"ag_inner00001": inner}.get))
+    steps = steps_of(ran, outer)
+    assert statuses(steps) == {"start": "done", "check": "done", "after": "done"}
+    assert steps["check"]["output"] == 41
+    assert steps["after"]["output"] == 41
+
+
 def test_logic_steps_record_their_way_and_an_llms_answer_its_schema(tmp_path: Path) -> None:
     schema = {
         "type": "object",
@@ -383,6 +437,8 @@ def test_logic_steps_record_their_way_and_an_llms_answer_its_schema(tmp_path: Pa
     }
     assert steps["triage"]["output"] == {"category": "BILLING", "refund": 3}
     assert steps["big"]["output"] == {"branch": "true"}
+    # A logic step hands on what came in: what it was handed.
+    assert (steps["refund"]["input_from"], steps["refund"]["input"]) == ("triage", {"category": "BILLING", "refund": 3})
 
 
 def test_an_llm_step_takes_as_long_as_its_model(tmp_path: Path) -> None:

@@ -53,9 +53,12 @@ func TestOpenAIWindowsAreLosslessAndResponseOrderIsChecked(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := strings.Repeat("中文λ source()\n", 19000)
-	v, err := EmbedText(context.Background(), p, body)
-	if err != nil || len(v) != 2 || v[0] != 1 || received.String() != body {
-		t.Fatalf("lossy embedding windows: %v", err)
+	// One long document spans many windows and requests; one at a time, they
+	// arrive in order and together carry every byte.
+	store := &fakeStore{pages: [][]Document{{{NodeID: "method:long", Text: body}}}}
+	report, err := IndexConcurrent(context.Background(), store, p, "repo", IndexOptions{Concurrency: 1})
+	if err != nil || report.Requests < 2 || len(store.written) != 1 || len(store.written[0].Vector) != 2 || store.written[0].Vector[0] != 1 || received.String() != body {
+		t.Fatalf("lossy embedding windows: %+v %v", report, err)
 	}
 	duplicate = true
 	if _, err = p.Embed(context.Background(), []string{"one", "two"}); err == nil {

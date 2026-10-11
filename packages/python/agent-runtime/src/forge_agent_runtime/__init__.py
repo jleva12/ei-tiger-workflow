@@ -31,11 +31,14 @@ from forge_agent_runtime.executor import (
 )
 from forge_agent_runtime.services import (
     AgentResolver,
+    CredentialProvider,
     KnowledgeBases,
     McpServers,
+    RequestAuth,
     RuntimeServices,
     WorkflowRunner,
 )
+from forge_agent_runtime.tools import http_client
 
 __all__ = [
     "AgentExecutor",
@@ -47,6 +50,7 @@ __all__ = [
     "AgentSource",
     "BuildError",
     "ChatAgentDocument",
+    "CredentialProvider",
     "DirectoryAgentSource",
     "DocumentAgentSource",
     "DocumentError",
@@ -54,6 +58,7 @@ __all__ = [
     "KnowledgeBases",
     "McpServers",
     "MissingSetting",
+    "RequestAuth",
     "ResolvedAgent",
     "RunObserver",
     "RunRequest",
@@ -65,6 +70,7 @@ __all__ = [
     "build_root_agent",
     "build_tools",
     "env",
+    "http_client",
     "load_document",
     "parse_document",
 ]

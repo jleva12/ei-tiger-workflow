@@ -1,20 +1,29 @@
 """
-The worker's queues: SAQ's ``adk_workflows`` and ``documents`` queues on Redis.
-The ``documents`` queue takes ``run_job`` with a job spec of the documents task
-(``{"task_type": "documents", "kind": "ingest" | "delete", "payload": {...}}``),
-which the admin API sends for each knowledge base document uploaded, retried or
-removed. The admin API sends the ``adk_workflows`` queue ``run_adk`` for
-each run it starts or moves on (a decision, an answer, a retry); the worker
-sends its own: ``run_adk`` when a wait is over or a hiccup's backoff is,
-``expire_pause`` at a pause's deadline, and the maintenance's.
+The worker's queues: SAQ's ``adk_workflows``, ``adk_workflows_upkeep`` and
+``documents`` queues on Redis. The ``documents`` queue takes ``run_job`` with
+a job spec of the documents task (``{"task_type": "documents", "kind":
+"ingest" | "delete", "payload": {...}}``), which the admin API sends for each
+knowledge base document uploaded, retried or removed. The admin API sends the
+``adk_workflows`` queue ``run_adk`` for each run it starts or moves on (a
+decision, an answer, a retry); the worker sends its own: ``run_adk`` when a
+wait is over or a hiccup's backoff is, and the maintenance's. Its upkeep,
+``maintain`` every minute and ``expire_pause`` at a pause's deadline, has a
+queue of its own, so runs filling every worker slot never hold it up.
 
 Every job carries ``key`` (a job whose key is queued or running already isn't
 queued again) and the worker's settings for its function (``JOB_OPTIONS``,
 which the worker also applies to the jobs other services send).
+
+What a run failed with is kept in Redis too, a week at most, as its worker
+writes it to the run store (``keep_failure``): should the store not take it,
+the maintenance records it. Each taking of the run keeps its own (by its
+``lease_epoch``), so an earlier one forgetting its own never takes a later
+one's.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import uuid
@@ -25,6 +34,8 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 QUEUE = "adk_workflows"
+#: The worker's upkeep of the runs: ``maintain`` and ``expire_pause``.
+UPKEEP = "adk_workflows_upkeep"
 DOCUMENTS = "documents"
 RUN_ADK = "run_adk"
 RUN_JOB = "run_job"
@@ -48,6 +59,17 @@ JOB_OPTIONS: dict[str, dict[str, Any]] = {
 }
 
 
+#: Seconds a failure kept for the maintenance lasts (``keep_failure``).
+FAILURE_SECONDS = 7 * 24 * 3600
+
+
+def failure_key(run_id: str, epoch: int | None) -> str:
+    """:return: Where a run's failure is kept for the maintenance, by the
+    taking of the run that failed it (``epoch``); None: where workers kept
+    it before they kept it by taking, one for the run."""
+    return f"forge:adk-run-failure:{run_id}" if epoch is None else f"forge:adk-run-failure:{run_id}:{epoch}"
+
+
 def run_key(run_id: str, suffix: str | None = None) -> str:
     """A ``run_adk`` job's key: one of its own (``suffix`` None), or a fixed
     one, so a job already queued under it isn't queued twice."""
@@ -56,14 +78,19 @@ def run_key(run_id: str, suffix: str | None = None) -> str:
 
 class RunQueue:
     """
-    Sends the worker's jobs to the ``adk_workflows`` queue.
+    Sends the worker's jobs to the ``adk_workflows`` queue, and its upkeep's
+    to the ``adk_workflows_upkeep`` queue; keeps runs' failures in Redis.
 
-    :param queue: The ``saq.Queue`` (anything with ``enqueue(function, **kwargs)``
-        and ``disconnect()``).
+    :param queue: The ``saq.Queue`` (anything with ``enqueue(function, **kwargs)``,
+        ``disconnect()`` and, to keep failures, ``redis``).
+    :param upkeep: The upkeep's ``saq.Queue``; None sends its jobs to ``queue``.
     """
 
-    def __init__(self, queue: Any, *, job_options: Mapping[str, Mapping[str, Any]] | None = None) -> None:
+    def __init__(
+        self, queue: Any, *, upkeep: Any = None, job_options: Mapping[str, Mapping[str, Any]] | None = None
+    ) -> None:
         self.queue = queue
+        self.upkeep = upkeep if upkeep is not None else queue
         self.job_options = {name: dict(options) for name, options in (job_options or JOB_OPTIONS).items()}
 
     @property
@@ -77,17 +104,59 @@ class RunQueue:
     async def expire_pause(self, run_id: str, pause_id: str, *, at: datetime) -> None:
         """Reject the pause ``pause_id`` at ``at`` (its deadline), unless someone decided it by then."""
         key = f"adk-expire:{run_id}:{uuid.uuid4().hex[:8]}"
-        await self._send(EXPIRE_PAUSE, {"run_id": run_id, "pause_id": pause_id}, key=key, at=at)
+        await self._send(EXPIRE_PAUSE, {"run_id": run_id, "pause_id": pause_id}, key=key, at=at, to=self.upkeep)
 
-    async def _send(self, function: str, kwargs: dict[str, Any], *, key: str, at: datetime | None) -> None:
+    async def _send(
+        self, function: str, kwargs: dict[str, Any], *, key: str, at: datetime | None, to: Any = None
+    ) -> None:
         options = {**self.job_options.get(function, {}), "key": key}
         if at is not None:
             options["scheduled"] = math.ceil(at.timestamp())  # never before it
-        await self.queue.enqueue(function, **kwargs, **options)
+        await (to if to is not None else self.queue).enqueue(function, **kwargs, **options)
+
+    @property
+    def queues(self) -> tuple[Any, ...]:
+        """The SAQ queues it sends to: its own, and its upkeep's when that's another."""
+        return (self.queue,) if self.upkeep is self.queue else (self.queue, self.upkeep)
+
+    async def keep_failure(self, run_id: str, epoch: int, kept: dict[str, Any]) -> None:
+        """Keeps what the ``epoch``-th taking of a run failed it with (as its
+        worker puts it) where the maintenance finds it, should the run store
+        not take it."""
+        await self.queue.redis.set(failure_key(run_id, epoch), json.dumps(kept, default=str), ex=FAILURE_SECONDS)
+
+    async def kept_failure(self, run_id: str, epoch: int) -> dict[str, Any] | None:
+        """
+        :return: What the ``epoch``-th taking of the run kept (``keep_failure``),
+            or a worker from before takings kept their own kept for it; None
+            when it kept nothing.
+        """
+        found = await self._read(failure_key(run_id, epoch))
+        if found is None:
+            # Kept for the run by a worker from before: that taking's only.
+            found = await self._read(failure_key(run_id, None))
+            if found is not None and found.get("epoch") != epoch:
+                return None
+        return found
+
+    async def forget_failure(self, run_id: str, epoch: int) -> None:
+        """Forgets what the ``epoch``-th taking of the run kept, and nothing
+        another kept. (What a worker from before kept for the run runs out on
+        its own: no later taking reads it.)"""
+        await self.queue.redis.delete(failure_key(run_id, epoch))
+
+    async def _read(self, key: str) -> dict[str, Any] | None:
+        raw = await self.queue.redis.get(key)
+        try:
+            found = json.loads(raw) if raw is not None else None
+        except ValueError:
+            return None
+        return found if isinstance(found, dict) else None
 
     async def close(self) -> None:
         """Disconnects from Redis. Best effort."""
-        try:
-            await self.queue.disconnect()
-        except Exception:
-            log.warning("closing queue %s failed", self.name, exc_info=True)
+        for queue in self.queues:
+            try:
+                await queue.disconnect()
+            except Exception:
+                log.warning("closing queue %s failed", queue.name, exc_info=True)

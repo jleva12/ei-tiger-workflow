@@ -25,6 +25,8 @@ export function stepDetail(step: StepData): string {
         : `${step.config.timeout_seconds} s timeout`
     case "transform":
       return Object.keys(step.config.output_schema).length ? "JSONata, declared output" : "JSONata"
+    case "filter":
+      return `Keeps each ${step.config.item_name || "item"} that holds`
     case "delay":
       return `Waits ${step.config.amount} ${step.config.unit}`
     case "if":
@@ -34,6 +36,7 @@ export function stepDetail(step: StepData): string {
     case "match":
       return `${plural(step.config.arms.length, "rule")}, ${step.config.mode === "all" ? "every one that holds" : "first that holds"}`
     case "loop":
+    case "for_each":
       return step.config.concurrency > 1
         ? `${step.config.concurrency} at a time`
         : "One at a time"
@@ -60,6 +63,12 @@ export function stepSummary(step: StepData): NodeSummary | null {
       return step.config.expression.trim()
         ? { code: firstLine(step.config.expression) }
         : null
+    case "filter":
+      return step.config.condition.trim()
+        ? { tag: "where", code: firstLine(step.config.condition) }
+        : step.config.items.trim()
+          ? { code: step.config.items.trim() }
+          : null
     case "if":
       return step.config.condition.trim()
         ? { code: step.config.condition.trim() }
@@ -69,6 +78,7 @@ export function stepSummary(step: StepData): NodeSummary | null {
         ? { tag: "on", code: step.config.value.trim() }
         : null
     case "loop":
+    case "for_each":
       return step.config.items.trim()
         ? { code: `${step.config.item_name} of ${step.config.items.trim()}` }
         : null

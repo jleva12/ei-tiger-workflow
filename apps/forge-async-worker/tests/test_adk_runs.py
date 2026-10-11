@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from google.adk.sessions import DatabaseSessionService
 
 from forge_async_worker import saq_worker
 from forge_async_worker.queue import RunQueue
+from forge_async_worker.watchdog import Watchdog
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
 from forge_task_adk_workflows.graph import RunServices
 from forge_task_adk_workflows.models import NoModels
@@ -106,8 +108,12 @@ async def adk(tmp_path: Path, store: RunStore, clock: Clock) -> AsyncIterator[Wo
         extras={SERVICES: services, SESSIONS: sessions},
         redis_url=None,
     )
+    assert state.jobs is not None
+    halts: list[str] = []
+    state.jobs.watchdog = Watchdog(halt=halts.append)  # never this process's end
     yield Worker(state, saq, clock)
     await saq_worker.close_state(state)
+    assert halts == [], "the watchdog would have ended the process"
 
 
 async def started(worker: Worker, document: dict[str, Any], value: Any) -> dict[str, Any]:
@@ -194,6 +200,22 @@ async def test_an_approval_nobody_decides_in_time_is_rejected_by_forge(adk: Work
     result = (await adk.get(run["id"]))["result"]
     assert (result["approved"], result["decided_by"]) == (False, "Forge")
     assert "Review (review): no decision in time" in await notes(adk, run["id"])
+
+
+async def test_an_approval_decided_in_time_stands_though_its_job_runs_after_the_deadline(adk: Worker) -> None:
+    run = await started(adk, APPROVAL, {"issue": "XMEN-12"})
+    await adk.run(run["id"])
+    pause = (await adk.get(run["id"]))["pause"]
+
+    adk.clock.advance(1800)  # half an hour into its hour
+    await adk.store.decide(run["id"], request_id=pause["id"], approved=True, comment="Looks right", actor=BOB)
+    adk.clock.advance(1860)  # its job waited in the queue past the hour
+    assert await adk.run(run["id"]) == "succeeded"
+
+    result = (await adk.get(run["id"]))["result"]
+    assert (result["approved"], result["decided_by"]) == (True, "Bob")
+    assert result["decided_at"] == (START + timedelta(seconds=1800)).isoformat()
+    assert "Review (review): approved by Bob" in await notes(adk, run["id"])
 
 
 async def test_a_question_waits_for_its_answer(adk: Worker) -> None:

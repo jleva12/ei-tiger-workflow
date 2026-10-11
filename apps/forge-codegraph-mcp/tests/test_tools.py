@@ -8,8 +8,9 @@ import pytest
 from conftest import REPO, FakeEmbedder, Shop, make_settings
 from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError
-from memstore import MemStore
-from test_query import services
+from forge_codegraph_query import CodeGraph
+from forge_codegraph_query.testing import MemStore
+from forge_codegraph_query.testing import build_services as services
 
 from forge_codegraph_mcp.access import RepositoryScope
 from forge_codegraph_mcp.core.mcp import McpServerFactory
@@ -18,6 +19,7 @@ from forge_codegraph_mcp.tools import CodeGraphTools
 TOOLS = {
     "list_repositories",
     "repository_connections",
+    "system_design",
     "explore_code",
     "search_code",
     "find_symbol",
@@ -44,6 +46,7 @@ def server_over(
     readable: Iterable[str] | None = None,
     link_owners: Iterable[str] | None = None,
     connections: Iterable[dict[str, Any]] = (),
+    systems: Iterable[dict[str, Any]] = (),
 ) -> FastMCP:
     """The tools over a store, for a caller who reads ``readable``: by
     default every repository in it; with ``link_owners``, only those owners'
@@ -56,9 +59,10 @@ def server_over(
         ids,
         link_owners=frozenset(link_owners) if link_owners is not None else None,
         connections=tuple(connections),
+        systems=tuple(systems),
     )
     return McpServerFactory(settings).create(
-        [CodeGraphTools(settings, store, embedder, scope=lambda: scope)]
+        [CodeGraphTools(settings, CodeGraph(store, embedder), scope=lambda: scope)]
     )
 
 
@@ -370,3 +374,54 @@ async def test_repository_connections_answer_the_system_maps() -> None:
     narrow = server_over(store, readable=[repos["orders"]], connections=drawn)
     with pytest.raises(ToolError, match="not found: repository"):
         await call(narrow, "repository_connections", repositories=[repos["checkout"]])
+
+
+async def test_system_design_reads_the_organizations_systems() -> None:
+    store, repos, _ = services()
+    shop = {
+        "id": "1",
+        "name": "Checkout",
+        "description": "The shop",
+        "groups": [{"name": "Payments", "description": "Charging"}],
+        "applications": [
+            {
+                "name": "acme/billing",
+                "url": "https://github.com/acme/billing",
+                "group": "Payments",
+                "repository_id": repos["billing"],
+            }
+        ],
+        "components": [
+            {
+                "name": "ledger",
+                "kind": "database",
+                "technology": "PostgreSQL",
+                "description": "",
+                "group": "Payments",
+            },
+            {"name": "Kafka", "kind": "queue", "technology": "", "description": "", "group": ""},
+        ],
+        "connections": [
+            {"source": "acme/billing", "kind": "writes_to", "target": "ledger", "description": ""},
+            {
+                "source": "acme/billing",
+                "kind": "publishes_to",
+                "target": "Kafka",
+                "description": "",
+            },
+        ],
+    }
+    other = {**shop, "id": "2", "name": "Back office", "connections": []}
+    server = server_over(store, systems=[shop, other])
+    every = await call(server, "system_design")
+    assert [s["knowledge_base"] for s in every["systems"]] == ["Checkout", "Back office"]
+    (checkout,) = (await call(server, "system_design", knowledge_base="checkout"))["systems"]
+    assert checkout["applications"][0]["repository_id"] == repos["billing"]
+    assert checkout["groups"][0]["members"] == ["acme/billing", "ledger"]
+    # Around one part: what it connects to.
+    (focused,) = (await call(server, "system_design", knowledge_base="1", focus="kafka"))["systems"]
+    assert focused["connections"] == [
+        {"source": "acme/billing", "relation": "publishes to", "target": "Kafka", "description": ""}
+    ]
+    with pytest.raises(ToolError, match="not found: knowledge base"):
+        await call(server, "system_design", knowledge_base="Payroll")

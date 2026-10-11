@@ -32,6 +32,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from forge_agent_runtime.http_templates import upgraded_http_tool
 from jsonschema import Draft202012Validator
 
 from forge_admin.adk_workflows.document_store import (
@@ -68,11 +69,15 @@ ADDED_SETTINGS: dict[str, dict[str, Any]] = {
     },
     # 2026-10-05: which version of the workflow runs; null for its latest
     # published (its current document while it has none).
-    "saved": {"version": None},
+    # 2026-10-11: its start's fields, set from the run's data; none hands on what comes in.
+    "saved": {"version": None, "inputs": {}},
     # 2026-10-07: whether a match takes the first rule that holds, or every one.
     "match": {"mode": "first"},
     # 2026-10-07: whether a run may start with files, and of which types.
-    "start": {"allow_files": False, "file_types": []},
+    # 2026-10-09: whether a run ADK can't carry on starts over.
+    "start": {"allow_files": False, "file_types": [], "start_over": False},
+    # 2026-10-09: the organization's credential it signs its requests with.
+    "http": {"credential": ""},
 }
 # The same for sub-agents, in a node's settings.
 ADDED_SUB_AGENT_SETTINGS: dict[str, dict[str, Any]] = {"llm": {"tools": []}}
@@ -80,6 +85,11 @@ ADDED_SUB_AGENT_SETTINGS: dict[str, dict[str, Any]] = {"llm": {"tools": []}}
 ADDED_TOOL_SETTINGS: dict[str, dict[str, Any]] = {
     # 2026-10-05: which version of the workflow it calls.
     "adk_workflow": {"version": None},
+    # 2026-10-09: the organization's credential its calls sign in with.
+    # 2026-10-10: its JSON body, a template (one saved before is upgraded
+    # first: _upgraded_http_tools).
+    "http_tool": {"credential": "", "body": ""},
+    "openapi": {"credential": ""},
 }
 
 
@@ -129,12 +139,49 @@ def with_added_settings(document: dict[str, Any]) -> dict[str, Any]:
     A document with the settings its nodes' kinds gained since it was saved
     (``ADDED_SETTINGS``). Nothing it has is changed.
 
+    An HTTP tool saved before it had a body has the arguments its URL didn't
+    name, which were sent in the query or as the body, written into its URL
+    or its body (``upgraded_http_tool``): they're sent as they were.
+
     :param document: An agent document.
     :return: The document; the same object when nothing was missing.
     """
     return fill_added_settings(
-        document, ADDED_SETTINGS, ADDED_SUB_AGENT_SETTINGS, ADDED_TOOL_SETTINGS
+        _upgraded_http_tools(document),
+        ADDED_SETTINGS,
+        ADDED_SUB_AGENT_SETTINGS,
+        ADDED_TOOL_SETTINGS,
     )
+
+
+def _upgraded_http_tools(item: Any) -> Any:
+    """:return: A document, node or sub-agent with its LLM agents' HTTP tools
+    from before their body upgraded; itself when it has none."""
+    if not isinstance(item, dict):
+        return item
+    if item.get("kind") == "http_tool":
+        config = item.get("config")
+        if isinstance(config, dict) and "body" not in config:
+            return {**item, "config": upgraded_http_tool(config)}
+        return item
+    changed: dict[str, Any] = {}
+    config = item.get("config")
+    if isinstance(config, dict):
+        inner: dict[str, Any] = {}
+        for key in ("tools", "sub_agents"):
+            listed = config.get(key)
+            if isinstance(listed, list):
+                upgraded = [_upgraded_http_tools(each) for each in listed]
+                if any(a is not b for a, b in zip(upgraded, listed, strict=True)):
+                    inner[key] = upgraded
+        if inner:
+            changed["config"] = {**config, **inner}
+    nodes = item.get("nodes")
+    if isinstance(nodes, list):
+        upgraded = [_upgraded_http_tools(node) for node in nodes]
+        if any(a is not b for a, b in zip(upgraded, nodes, strict=True)):
+            changed["nodes"] = upgraded
+    return {**item, **changed} if changed else item
 
 
 def new_agent_id() -> str:

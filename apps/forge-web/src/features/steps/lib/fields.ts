@@ -1,5 +1,6 @@
 import type { FieldCheck, FieldMode } from "./expressions"
 import type { StepData } from "./model"
+import { withItem, type ItemBinding, type Scope } from "./scope"
 
 /*
  * The settings of each kind of step that read the run's data, how each is
@@ -15,6 +16,11 @@ export type ExpressionSetting = {
   mode: FieldMode
   text: string
   check: FieldCheck
+  /**
+   * Read once per item of a list (a Filter's condition): the list's
+   * expression, what the item is called, and the step's name.
+   */
+  each?: ItemBinding
 }
 
 const template = (key: string, label: string, text: string): ExpressionSetting => ({
@@ -43,7 +49,9 @@ export function expressionSettings(step: StepData): ExpressionSetting[] {
         { key: "expression", label: "Expression", mode: "expression", text: step.config.expression, check: {} },
       ]
     case "if":
-      return [{ key: "condition", label: "Condition", mode: "expression", text: step.config.condition, check: {} }]
+      return [
+        { key: "condition", label: "Condition", mode: "expression", text: step.config.condition, check: { expect: "condition" } },
+      ]
     case "switch":
       return [
         { key: "value", label: "Switch on", mode: "expression", text: step.config.value, check: { expect: "value" } },
@@ -54,11 +62,24 @@ export function expressionSettings(step: StepData): ExpressionSetting[] {
         label: arm.label.trim() || `Rule ${index + 1}`,
         mode: "expression" as const,
         text: arm.condition,
-        check: {},
+        check: { expect: "condition" as const },
       }))
     case "loop":
+    case "for_each":
       return [
         { key: "items", label: "Go through", mode: "expression", text: step.config.items, check: { expect: "list" } },
+      ]
+    case "filter":
+      return [
+        { key: "items", label: "List", mode: "expression", text: step.config.items, check: { expect: "list" } },
+        {
+          key: "condition",
+          label: "Keep when",
+          mode: "expression",
+          text: step.config.condition,
+          check: { expect: "condition" },
+          each: { items: step.config.items, name: step.config.item_name || "item", of: step.name },
+        },
       ]
     case "end":
       return [{ key: "result", label: "Result", mode: "expression", text: step.config.result, check: {} }]
@@ -70,3 +91,7 @@ export function expressionSettings(step: StepData): ExpressionSetting[] {
 /** One setting's field spec, by key. */
 export const expressionSetting = (step: StepData, key: string) =>
   expressionSettings(step).find((s) => s.key === key)
+
+/** What a setting reads: the step's scope, and the item it's read for, if it's read per item. */
+export const settingScope = (setting: ExpressionSetting | undefined, scope: Scope) =>
+  setting?.each ? withItem(scope, setting.each) : scope

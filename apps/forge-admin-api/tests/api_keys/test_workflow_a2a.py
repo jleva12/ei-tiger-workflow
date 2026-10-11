@@ -6,7 +6,7 @@ import uuid
 from typing import Any
 
 import pytest
-from key_world import ADMIN, AGENT, World
+from key_world import ADMIN, AGENT, ORG, World
 from runtime_world import INPUT, QUESTION, SHIP, Runtime
 
 V1 = {"A2A-Version": "1.0"}
@@ -207,6 +207,63 @@ def test_cancelling_the_task_gives_its_run_up(runtime: Runtime) -> None:
     cancelled = rpc(runtime, "CancelTask", {"id": task["id"]})["result"]
     assert cancelled["status"]["state"] == "TASK_STATE_CANCELED"
     assert run_of(runtime, task)["status"] == "abandoned"
+
+
+def test_a_failed_tasks_run_isnt_retried_in_the_console(runtime: Runtime) -> None:
+    task = send(runtime, {"data": {"key": "a1"}})["result"]["task"]
+    run = run_of(runtime, task)
+    assert runtime.call(runtime.runs.claim, run["id"], owner="w1", lease_seconds=60)
+    runtime.call(
+        runtime.runs.finish,
+        run["id"],
+        owner="w1",
+        state={},
+        succeeded=False,
+        error={"message": "No route", "category": "failed"},
+    )
+    assert get(runtime, task["id"])["status"]["state"] == "TASK_STATE_FAILED"
+    runs = f"/organizations/{ORG}/adk-runs/{run['id']}"
+    assert runtime.world.call("GET", runs, ADMIN).json()["actions"]["retry"] is False
+
+    refused = runtime.world.call("POST", f"{runs}/retry", ADMIN)
+
+    assert refused.status_code == 409
+    assert "A run started over A2A can't be retried" in refused.json()["detail"]
+    # A2A's final state stays true: the run is as it was.
+    assert run_of(runtime, task)["status"] == "failed"
+    assert get(runtime, task["id"])["status"]["state"] == "TASK_STATE_FAILED"
+    # It can run again as a run of its own, retried like any other.
+    again = runtime.world.call("POST", f"{runs}/resubmit", ADMIN).json()
+    assert again["resubmit_of"] == run["id"]
+    assert runtime.call(runtime.runs.claim, again["id"], owner="w1", lease_seconds=60)
+    runtime.call(
+        runtime.runs.finish,
+        again["id"],
+        owner="w1",
+        state={},
+        succeeded=False,
+        error={"message": "No route", "category": "failed"},
+    )
+    retried = runtime.world.call(
+        "POST", f"/organizations/{ORG}/adk-runs/{again['id']}/retry", ADMIN
+    )
+    assert retried.status_code == 202, retried.json()
+
+
+def test_cancelling_a_working_task_stops_its_run(runtime: Runtime) -> None:
+    task = send(runtime, {"data": {"key": "a1"}})["result"]["task"]
+    run = run_of(runtime, task)
+    assert runtime.call(runtime.runs.claim, run["id"], owner="w1", lease_seconds=60)
+
+    cancelled = rpc(runtime, "CancelTask", {"id": task["id"]})["result"]
+
+    assert cancelled["status"]["state"] == "TASK_STATE_CANCELED"
+    stopping = run_of(runtime, task)
+    assert stopping["status"] == "running" and stopping["cancel_requested_at"]
+    # Its worker stops it, and abandons it; the task was canceled already.
+    runtime.call(runtime.runs.abandon_running, run["id"], owner="w1", state={})
+    assert run_of(runtime, task)["status"] == "abandoned"
+    assert get(runtime, task["id"])["status"]["state"] == "TASK_STATE_CANCELED"
 
 
 def test_tasks_are_their_callers(runtime: Runtime) -> None:

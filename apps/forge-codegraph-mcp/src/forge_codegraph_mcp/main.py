@@ -5,19 +5,16 @@ Takes no arguments; it is configured through the environment and its .env
 ``/health/live`` and ``/health/ready``.
 """
 
-import asyncio
-import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
+from forge_codegraph_query import CodeGraph
 from forge_common.logging import configure_logging, get_logger
 
 from forge_codegraph_mcp.access import ForgeAccessVerifier
 from forge_codegraph_mcp.core.settings import Settings, get_settings
-from forge_codegraph_mcp.graph.embedding import Embedder, OpenAIEmbedder
-from forge_codegraph_mcp.graph.spanner import SpannerGraphStore, VectorLengthMismatch
 from forge_codegraph_mcp.routes import HealthRoutes
 from forge_codegraph_mcp.server import ServerBuilder
 from forge_codegraph_mcp.tools import CodeGraphTools
@@ -25,135 +22,26 @@ from forge_codegraph_mcp.tools import CodeGraphTools
 log = get_logger(__name__)
 
 
-def open_store(settings: Settings) -> SpannerGraphStore:
+def graph_lifespan(graph: CodeGraph, settings: Settings) -> Any:
     """
-    Open and configure a Spanner-based graph store using the provided settings.
-
-    This function initializes and returns a `SpannerGraphStore` instance using the
-    details encapsulated within the given `Settings` object. It ensures that all
-    necessary configurations, including the database, scope, cursor signing key,
-    vector length, and credentials, are properly set up.
-
-    :param settings: The configuration object containing the necessary parameters
-        to initialize the Spanner graph store. Must include the Spanner-specific
-        settings such as database, scope, cursor signing key, and optional
-        credentials and timeout.
-    :type settings: Settings
-    :return: A configured and initialized instance of `SpannerGraphStore`.
-    :rtype: SpannerGraphStore
-    """
-    spanner = settings.spanner
-    assert spanner.cursor_signing_key is not None  # checked by Settings
-    return SpannerGraphStore(
-        spanner.database,
-        scope=spanner.scope,
-        cursor_signing_key=spanner.cursor_signing_key.get_secret_value().encode(),
-        vector_length=settings.embedding.vector_length,
-        credentials_json=(
-            spanner.credentials_json.get_secret_value() if spanner.credentials_json else None
-        ),
-        timeout=spanner.timeout,
-    )
-
-
-def open_embedder(settings: Settings) -> OpenAIEmbedder | None:
-    """
-    Initialize and return an instance of OpenAIEmbedder if embedding is enabled
-    in the provided settings. If embedding is disabled, it logs a warning and
-    returns None. Also ensures that an API key is present for embedding.
-
-    :param settings: The configuration settings that specify embedding parameters.
-    :type settings: Settings
-    :return: An instance of OpenAIEmbedder if embedding is enabled, otherwise None.
-    :rtype: OpenAIEmbedder | None
-    """
-    embedding = settings.embedding
-    if not embedding.enabled:
-        if embedding.model:
-            log.warning(
-                "embedding.disabled",
-                detail="an embedding model without an API key: search stays lexical",
-            )
-        return None
-    assert embedding.api_key is not None
-    return OpenAIEmbedder(
-        embedding.api_key.get_secret_value(),
-        embedding.model,
-        embedding.vector_length,
-        base_url=embedding.base_url,
-        max_input_bytes=embedding.max_input_bytes,
-    )
-
-
-async def wait_for_graph(store: SpannerGraphStore, patience: float) -> None:
-    """
-    Waits for a SpannerGraphStore to respond to a ping request until a specified
-    deadline or an exception is raised if the operation fails.
-
-    This function attempts to ping a SpannerGraphStore until it successfully
-    responds or the patience deadline is exceeded. If the `VectorLengthMismatch`
-    exception is raised, it re-raises the exception immediately. Any other
-    exceptions are logged, and the function retries until the deadline.
-
-    :param store: The SpannerGraphStore instance to ping.
-    :type store: SpannerGraphStore
-    :param patience: The maximum allowed time in seconds to wait for a response
-        before giving up.
-    :type patience: float
-    :return: This function does not return a value. If the operation is
-        successful within the deadline, it exits silently.
-    :rtype: None
-    :raises VectorLengthMismatch: Raised if this specific exception occurs
-        during ping attempts.
-    :raises Exception: Raised if the patience deadline is exceeded.
-    """
-    deadline = time.monotonic() + patience
-    while True:
-        try:
-            await store.ping()
-            return
-        except VectorLengthMismatch:
-            raise
-        except Exception as exc:
-            if time.monotonic() >= deadline:
-                raise
-            log.warning("graph.waiting", database=store.database, error=str(exc)[:200])
-            await asyncio.sleep(2)
-
-
-def graph_lifespan(
-    store: SpannerGraphStore, embedder: OpenAIEmbedder | None, startup_timeout: float
-) -> Any:
-    """
-    Creates a lifespan context manager for a FastAPI application, managing the setup and
-    teardown of the graph database and optional embedder. This ensures that the application
-    only starts when the graph database is ready and properly configured, and handles
-    proper resource cleanup on shutdown.
-
-    :param store: The graph store to manage, implementing interactions with the database.
-    :param embedder: An optional embedder to manage for semantic operations.
-    :param startup_timeout: The maximum time in seconds to wait for the database to become
-        ready during startup.
-    :return: An asynchronous context manager for FastAPI lifespan handling.
+    The code graph for the server's lifetime: startup waits for the worker's
+    database (failing when it never shows up or was made for another
+    embedding dimension), and shutdown closes it.
     """
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        # Fails startup when the database never shows up or was made for
-        # another embedding dimension.
-        await wait_for_graph(store, startup_timeout)
+        await graph.wait(settings.spanner.startup_timeout)
         log.info(
             "graph.ready",
-            database=store.database,
-            vector_length=store.vector_length,
-            semantic=embedder is not None,
+            database=settings.spanner.database,
+            vector_length=settings.embedding.vector_length,
+            semantic=graph.semantic,
         )
         try:
             yield
         finally:
-            await store.close()
-            if embedder is not None:
-                await embedder.close()
+            await graph.close()
 
     return lifespan
 
@@ -198,9 +86,8 @@ def build_server(settings: Settings | None = None) -> ServerBuilder:
     """
     settings = settings or get_settings()
     configure_logging(settings.logging)
-    store = open_store(settings)
-    embedder = open_embedder(settings)
-    semantic: Embedder | None = embedder
+    # The graph as every app reads it (forge_codegraph_query).
+    graph = CodeGraph.open(settings.codegraph)
     verifier = ForgeAccessVerifier(settings.mcp.auth)
     return (
         ServerBuilder(settings)
@@ -208,12 +95,9 @@ def build_server(settings: Settings | None = None) -> ServerBuilder:
         # one), checked with the admin API: each caller reads only its
         # organization's repositories (access.py).
         .with_auth(verifier)
-        .with_lifespan(
-            graph_lifespan(store, embedder, settings.spanner.startup_timeout),
-            closing(verifier),
-        )
-        .with_routes(HealthRoutes(settings, checks={"spanner": store.live}))
-        .with_toolsets(CodeGraphTools(settings, store, semantic))
+        .with_lifespan(graph_lifespan(graph, settings), closing(verifier))
+        .with_routes(HealthRoutes(settings, checks={"spanner": graph.live}))
+        .with_toolsets(CodeGraphTools(settings, graph))
     )  # fmt: skip
 
 

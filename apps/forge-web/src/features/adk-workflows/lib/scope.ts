@@ -1,12 +1,18 @@
+import { resolveExpression } from "@/features/steps/lib/expressions"
 import type { StepData } from "@/features/steps/lib/model"
 import {
   outputTypeOf,
   scopesFor,
-  type Scope,
   type ScopeRules,
 } from "@/features/steps/lib/scope"
-import { fromJsonSchema, t, type DataType } from "@/features/steps/lib/types"
-import type { AgentGraph } from "./document"
+import {
+  fromJsonSchema,
+  t,
+  unionOf,
+  withDescription,
+  type DataType,
+} from "@/features/steps/lib/types"
+import { toGraph, type AgentDocument, type AgentGraph } from "./document"
 import {
   AGENT_KINDS,
   isForgeKind,
@@ -14,6 +20,7 @@ import {
   subAgentsOf,
   walkSubAgents,
   type AgentStep,
+  type SubAgent,
 } from "./model"
 
 /*
@@ -90,51 +97,184 @@ export function stateType(graph: AgentGraph): DataType {
   )
 }
 
-/** What an agent node hands on, as far as its settings say. */
-function agentOutputType(
-  step: AgentStep,
-  context: { input: DataType; incoming: Map<string, DataType> }
-): DataType {
-  if (isForgeKind(step.kind)) return outputTypeOf(step as StepData, context)
-  switch (step.kind) {
-    case "start":
-      return context.input
-    case "llm":
-      return (
-        declared(step.config.output_schema) ?? t.string("The agent's answer.")
+/**
+ * What a sub-agent answers, as the team it's in hands it on: the answer of
+ * the last LLM agent in it to answer. An LLM agent's is held to its output
+ * schema (text without one), or is the answer of one it hands off to.
+ */
+export function answerOf(agent: SubAgent, depth = 0): DataType {
+  if (depth > 8) return t.unknown()
+  const name = agent.name.trim() || "A sub-agent"
+  switch (agent.kind) {
+    case "llm": {
+      const own = declared(agent.config.output_schema) ?? t.string()
+      const answers = [
+        own,
+        ...agent.config.sub_agents.map((sub) => answerOf(sub, depth + 1)),
+      ]
+      return withDescription(
+        answers.length > 1 ? unionOf(answers) : own,
+        `${name}'s answer.`
       )
-    case "sequential":
-    case "loop_agent":
-      return t.unknown("What its last sub-agent answered.")
-    case "parallel":
-      return t.unknown("What its sub-agents answered.")
-    case "saved":
-      return t.unknown("What the other workflow handed on.")
-    case "human_input":
-      return (
-        declared(step.config.response_schema) ??
-        t.unknown("The person's answer.")
+    }
+    case "sequential": {
+      const last = agent.config.sub_agents.at(-1)
+      return last ? answerOf(last, depth + 1) : t.unknown()
+    }
+    default:
+      return unionOf(
+        agent.config.sub_agents.map((sub) => answerOf(sub, depth + 1))
       )
   }
-  return t.unknown()
+}
+
+/** What typing a graph can look up besides it. */
+export type TypeContext = {
+  /** Another of the organization's workflows, by ID: what a saved-workflow node runs. */
+  workflow?: (id: string) => AgentDocument | undefined
+  /** The workflows being typed, outermost first: one met again isn't typed again. */
+  within?: string[]
+}
+
+/** What another workflow takes and hands back, as a saved-workflow node runs it. */
+export type SavedWorkflowTypes = {
+  name: string
+  /** What it starts with: its start's input fields. */
+  input: DataType
+  /** What it hands back: its ending's result. */
+  result: DataType
+}
+
+/**
+ * What a workflow hands back: the result of the step a run ends at (an
+ * End's result, or what came into it when it has none; any other step's
+ * output). With several places a run can end, any of theirs.
+ */
+export function resultType(
+  graph: AgentGraph,
+  types: Pick<
+    ReturnType<typeof agentTypes>,
+    "scopeOf" | "outputOf" | "previousOf"
+  >
+): DataType {
+  const leads = new Set(graph.connections.map((c) => c.source))
+  const endings = graph.steps.filter(
+    (s) =>
+      s.data.kind !== "start" &&
+      !leads.has(s.id) &&
+      // A loop body's ending ends an item, not the run.
+      !types.scopeOf(s.id).enclosing?.size
+  )
+  const results = endings.map((s) => {
+    if (s.data.kind === "end") {
+      const said = s.data.config.result.trim()
+        ? resolveExpression(s.data.config.result, types.scopeOf(s.id))
+        : types.previousOf(s.id)
+      return said ?? t.unknown()
+    }
+    if (
+      s.data.kind === "if" ||
+      s.data.kind === "switch" ||
+      s.data.kind === "match"
+    )
+      return types.previousOf(s.id) ?? t.unknown()
+    return types.outputOf(s.id)
+  })
+  return results.length ? unionOf(results) : t.unknown()
 }
 
 /** Every node's scope, and what each hands on, computed once for a graph. */
-export function agentTypes(graph: AgentGraph): {
-  scopeOf: (id: string) => Scope
-  outputOf: (id: string) => DataType
-} {
+export function agentTypes(graph: AgentGraph, context: TypeContext = {}) {
+  const within = context.within ?? []
+  const saved = new Map<string, SavedWorkflowTypes | undefined>()
+  /** What another workflow takes and hands back, worked out once per graph. */
+  const savedTypes = (id: string): SavedWorkflowTypes | undefined => {
+    if (saved.has(id)) return saved.get(id)
+    saved.set(id, undefined)
+    const doc = within.includes(id) ? undefined : context.workflow?.(id)
+    if (!doc) return undefined
+    const other = toGraph(doc)
+    const types = agentTypes(other, { ...context, within: [...within, id] })
+    const found = {
+      name: doc.name || id,
+      input: inputType(other),
+      result: resultType(other, types),
+    }
+    saved.set(id, found)
+    return found
+  }
+
+  /** What a node hands on, as far as its settings say. */
+  const outputTypeOfNode = (
+    step: AgentStep,
+    known: { input: DataType; incoming: Map<string, DataType> }
+  ): DataType => {
+    if (isForgeKind(step.kind)) return outputTypeOf(step as StepData, known)
+    switch (step.kind) {
+      case "start":
+        return known.input
+      case "llm":
+        return (
+          declared(step.config.output_schema) ??
+          t.string(
+            "The agent's answer, as text: declare what it answers (its fields) to read parts of it."
+          )
+        )
+      case "sequential": {
+        const last = step.config.sub_agents.at(-1)
+        return last
+          ? withDescription(
+              answerOf(last),
+              `What its last sub-agent, ${last.name.trim() || last.id}, answered.`
+            )
+          : t.unknown("What its last sub-agent answered.")
+      }
+      case "loop_agent":
+        return withDescription(
+          unionOf(step.config.sub_agents.map((sub) => answerOf(sub))),
+          "What the last of its sub-agents to answer answered."
+        )
+      case "parallel":
+        return step.config.sub_agents.length
+          ? t.object(
+              Object.fromEntries(
+                step.config.sub_agents.map((sub) => [sub.id, answerOf(sub)])
+              ),
+              "Each sub-agent's answer, by its ID."
+            )
+          : t.unknown("What its sub-agents answered.")
+      case "saved": {
+        const other = step.config.agent
+          ? savedTypes(step.config.agent)
+          : undefined
+        return other
+          ? withDescription(
+              other.result,
+              `What ${other.name} hands back, as it is now.`
+            )
+          : t.unknown("What the other workflow handed back.")
+      }
+      case "human_input":
+        return (
+          declared(step.config.response_schema) ??
+          t.unknown("The person's answer.")
+        )
+    }
+    return t.unknown()
+  }
+
   const rules: ScopeRules<AgentStep> = {
     input: inputType(graph),
-    outputTypeOf: agentOutputType,
+    outputTypeOf: outputTypeOfNode,
     outputsOf,
     markOf: (step) => AGENT_KINDS[step.kind],
     roots: [
       { name: "state", type: stateType(graph), detail: "The session's state" },
     ],
   }
-  return scopesFor(graph, rules)
+  return { ...scopesFor(graph, rules), savedTypes }
 }
 
 /** Every node's scope, computed once for a graph. */
-export const agentScopesOf = (graph: AgentGraph) => agentTypes(graph).scopeOf
+export const agentScopesOf = (graph: AgentGraph, context: TypeContext = {}) =>
+  agentTypes(graph, context).scopeOf

@@ -167,12 +167,13 @@ MB.
   applies to the encoded bytes; the decoded side is already bounded by
   `MaxTextBytes` and `MaxPropertyCount` in `graph.Validate`.
 - `versionFromRow` calls `recordcodec.Decode`. Every reader in `records.go`
-  and the sweep's document restore go through it. Two readers unmarshal the
-  node payload themselves and switch to the codec too: the search-document
-  backfill ([documents.go:99](../../../packages/go/code-graph/storage/spanner/documents.go#L99))
-  and the vector-branch candidate check
-  ([search.go:149](../../../packages/go/code-graph/storage/spanner/search.go#L149)). The first
-  task below adds a test that fails on any further direct decode.
+  and the sweep's document restore go through it. One reader unmarshals the
+  node payload itself and switches to the codec too: the embedding pass's
+  document pages
+  ([search.go:98](../../../packages/go/code-graph/storage/spanner/search.go#L98)). The first
+  task below adds a test that fails on any further direct decode. The
+  readers, the Python package `forge_codegraph_query`, decode payloads
+  themselves and need the codec too.
 - `CGFileIdentities` gets the same tag scheme
   ([identities.go:75](../../../packages/go/code-graph/storage/spanner/identities.go#L75)): the
   JSON map DEFLATE-compressed under `0x02`, decoded by tag. About 18 KiB
@@ -182,10 +183,11 @@ MB.
   `json` (default at first) and `compact` selects what the loader writes.
   Decoding always accepts both.
 
-**Deploy order.** Every process that opens the database (worker, admin, api,
-mcp) must decode the new tags before any worker writes them. Ship the
-release with `json` as the default, deploy all four, then set `compact` on
-the workers. A process on the old release that meets a compact row fails
+**Deploy order.** Every process that reads the database (the worker, and
+everything built on `forge_codegraph_query`: the admin API, the workflows
+worker, the MCP server) must decode the new tags before any worker writes
+them. Ship the release with `json` as the default, deploy them all, then
+set `compact` on the workers. A process on the old release that meets a compact row fails
 with `ErrIntegrity` rather than misreading it.
 
 ## Phase 2: stop storing the digest
@@ -195,8 +197,8 @@ entry, about 46 MB on adk-java, and no reader needs it stored:
 
 - The differ already falls back to `v.Fact.Digest()` when the column is
   empty ([differ.go:216](../internal/graphanalysis/differ.go#L216)).
-- No API or MCP response carries it (checked: no reference to `FactDigest`
-  in `apps/api`, `apps/forge-codegraph-mcp`, `apps/forge-web` or `packages/go/code-graph/agentquery`).
+- No API or MCP response carries it (checked against the Go query code of
+  the time; check `forge_codegraph_query` again before step 2).
 - `RecordsByLineage` selects the base row, not the stored column.
 
 Steps, each safe on its own:
@@ -218,8 +220,7 @@ history caller reads the value.
 
 `CommitFrom` and `CommitTo` repeat, on every row, the commit of the
 generation that opened and closed it. `CGRuns` already maps generation to
-commit and `GenerationCommit` reads it
-([records.go:171](../../../packages/go/code-graph/storage/spanner/records.go#L171)). Dropping
+commit: the generation's succeeded run carries it. Dropping
 the two columns saves 40 to 80 bytes and two cells per row, about 20 MB on
 adk-java.
 
@@ -285,15 +286,16 @@ Each phase ships only when all three pass.
   document, with asserted encoded sizes so a regression in the encoder is a
   test failure, not a surprise in the next size report.
 - Emulator integration test extending `TestPipelineGenerations`: after the
-  load, read every open record through `GetNodes`, `Neighbors` in both
-  directions, `History`, `RecordsByLineage` and `ListNodes`/`ListEdges` by
-  kind, and compare each decoded fact to the fact the projector emitted.
+  load, read every open record through `GetNodes`, `GetEdges`, `Neighbors`
+  in both directions, `RecordsByLineage` and `ListNodes` by kind, and compare
+  each decoded fact to the fact the projector emitted; the readers check the
+  same rows against the shared fixture.
   Today the pipeline verifies counts; this verifies content.
 - On the managed adk-java database, `recode-records -verify` over all
   325,650 rows before the first rewrite.
 
-**Performance.** A benchmark command against a fixed database, run before
-and after on the same instance:
+**Performance.** A benchmark against a fixed database, through
+`forge_codegraph_query`, run before and after on the same instance:
 
 - `neighbors` at depth 1 and 2 from the 20 best-connected nodes,
   `callers` and `impact` at depth 3 from the 20 most-overridden methods,

@@ -32,13 +32,14 @@ import {
   type StepKind,
 } from "@/features/steps/lib/model"
 import { resolveExpression } from "@/features/steps/lib/expressions"
-import { expressionSetting } from "@/features/steps/lib/fields"
+import { expressionSetting, settingScope } from "@/features/steps/lib/fields"
 import { oneOf, valuesOf } from "@/features/steps/lib/types"
 import { useAgentBuilder as useBuilder } from "@/features/adk-workflows/components/agent-store"
 import type { AgentStep } from "@/features/adk-workflows/lib/model"
 import { IssueMessages } from "@/features/builder/components/fields/field-issues"
 import { useFieldIssues } from "@/features/builder/components/fields/field-issues-context"
 import { ExpressionField } from "@/features/builder/components/fields/expression-field"
+import { CredentialField } from "@/features/credentials/components/credential-field"
 
 /*
  * The settings of each kind of step a workflow shares with Forge's
@@ -87,10 +88,14 @@ function Setting({
 }) {
   const scopeOf = useBuilder((s) => s.scopeOf)
   const step = useBuilder((s) => s.nodes.find((n) => n.id === id)?.data)
-  const scope = React.useMemo(() => scopeOf(id), [scopeOf, id])
   const spec = React.useMemo(
     () => (step ? expressionSetting(step as StepData, setting) : undefined),
     [step, setting]
+  )
+  // A setting read per item (a Filter's condition) reads the item too.
+  const scope = React.useMemo(
+    () => settingScope(spec, scopeOf(id)),
+    [spec, scopeOf, id]
   )
   // Its issues, but for its expression's: it checks those itself.
   const { issues, key } = useFieldIssues(setting, { whole: true })
@@ -236,6 +241,8 @@ function ApprovalFields({ id, config }: Props<"approval">) {
 
 function HttpFields({ id, config }: Props<"http">) {
   const set = useSetter<"http">(id)
+  const organizationId = useBuilder((s) => s.meta.organization_id)
+  const credentials = useBuilder((s) => s.lookups.credentials)
   return (
     <>
       <div className="grid grid-cols-[5.5rem_1fr] gap-2.5">
@@ -255,6 +262,13 @@ function HttpFields({ id, config }: Props<"http">) {
           onChange={(value) => set("url", value)}
         />
       </div>
+      <CredentialField
+        organizationId={organizationId}
+        value={config.credential}
+        onChange={(value) => set("credential", value)}
+        credentials={credentials}
+        url={config.url}
+      />
       <HeaderList
         id={id}
         headers={config.headers}
@@ -357,6 +371,58 @@ function TransformFields({ id, config }: Props<"transform">) {
         onChange={(schema) => set("output_schema", schema)}
         empty="Not declared: worked out from the expression where it can be."
         subject={{ one: "result", many: "results" }}
+      />
+    </>
+  )
+}
+
+function FilterFields({ id, config }: Props<"filter">) {
+  const set = useSetter<"filter">(id)
+  const item = config.item_name || "item"
+  return (
+    <>
+      <Setting
+        id={id}
+        setting="items"
+        label="List"
+        value={config.items}
+        placeholder="previous.results"
+        onChange={(value) => set("items", value)}
+        description="JSONata giving a list: a loop's results, an HTTP response's items…"
+      />
+      <TextField
+        issue="item_name"
+        label="Call each"
+        value={config.item_name}
+        code
+        onChange={(value) => set("item_name", value)}
+        description={
+          <>
+            The condition reads the current one as{" "}
+            <code className="font-mono text-[0.9em]">{item}</code>, and its
+            place in the list as{" "}
+            <code className="font-mono text-[0.9em]">index</code>.
+          </>
+        }
+      />
+      <Setting
+        id={id}
+        setting="condition"
+        label="Keep when"
+        value={config.condition}
+        multiline
+        placeholder={`${item}.status = "open"`}
+        onChange={(value) => set("condition", value)}
+        description={
+          <>
+            JSONata, read for each item; the items it&apos;s true for are kept,
+            in order. Later steps read them as{" "}
+            <code className="font-mono text-[0.9em]">
+              steps.{id}.output.results
+            </code>
+            , typed as the list&apos;s items.
+          </>
+        }
       />
     </>
   )
@@ -593,7 +659,12 @@ function MatchFields({ id, config }: Props<"match">) {
   )
 }
 
-function LoopFields({ id, config }: Props<"loop">) {
+/** A loop's settings, and a for-each's: the list and how it's gone through. */
+function EachFields({
+  id,
+  kind,
+  config,
+}: Props<"loop" | "for_each"> & { kind: "loop" | "for_each" }) {
   const set = useSetter<"loop">(id)
   return (
     <>
@@ -639,8 +710,9 @@ function LoopFields({ id, config }: Props<"loop">) {
         />
       </Row>
       <p className="text-xs/[1.6] text-muted-foreground">
-        Connect Each item to the steps to repeat, and the last of them back to
-        the loop. Done goes on when every item has run.
+        {kind === "for_each"
+          ? "Connect Each item to the steps to run for each item; they never lead back here, and nothing is collected. Done goes on, with the count, when every item's way has ended."
+          : "Connect Each item to the steps to repeat, and the last of them back to the loop. Done goes on when every item has run."}
       </p>
     </>
   )
@@ -698,6 +770,8 @@ export function StepFields({ id, step }: { id: string; step: StepData }) {
       return <HttpFields id={id} config={step.config} />
     case "transform":
       return <TransformFields id={id} config={step.config} />
+    case "filter":
+      return <FilterFields id={id} config={step.config} />
     case "delay":
       return <DelayFields id={id} config={step.config} />
     case "if":
@@ -707,7 +781,8 @@ export function StepFields({ id, step }: { id: string; step: StepData }) {
     case "match":
       return <MatchFields id={id} config={step.config} />
     case "loop":
-      return <LoopFields id={id} config={step.config} />
+    case "for_each":
+      return <EachFields id={id} kind={step.kind} config={step.config} />
     case "merge":
       return <MergeFields id={id} config={step.config} />
     case "end":

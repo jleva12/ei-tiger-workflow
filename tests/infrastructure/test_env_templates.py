@@ -13,11 +13,17 @@ EMBEDDING_REFERENCES = {
         "FORGE_ADMIN_KNOWLEDGE_EMBEDDING__DOCUMENT_MODEL": "FORGE_EMBEDDING_MODEL",
         "FORGE_ADMIN_KNOWLEDGE_EMBEDDING__DIMENSIONS": "FORGE_EMBEDDING_DIMENSIONS",
         "FORGE_ADMIN_KNOWLEDGE_EMBEDDING__BASE_URL": "FORGE_EMBEDDING_BASE_URL",
+        "FORGE_ADMIN_CODEGRAPH__EMBEDDING__MODEL": "FORGE_EMBEDDING_MODEL",
+        "FORGE_ADMIN_CODEGRAPH__EMBEDDING__DIMENSIONS": "FORGE_EMBEDDING_DIMENSIONS",
+        "FORGE_ADMIN_CODEGRAPH__EMBEDDING__BASE_URL": "FORGE_EMBEDDING_BASE_URL",
     },
     "apps/forge-async-worker/.env.example": {
         "HYBRID_EMBEDDING__DOCUMENT_MODEL": "FORGE_EMBEDDING_MODEL",
         "HYBRID_EMBEDDING__DIMENSIONS": "FORGE_EMBEDDING_DIMENSIONS",
         "HYBRID_EMBEDDING__BASE_URL": "FORGE_EMBEDDING_BASE_URL",
+        "HYBRID_ADK_WORKFLOWS__CODEGRAPH__EMBEDDING__MODEL": "FORGE_EMBEDDING_MODEL",
+        "HYBRID_ADK_WORKFLOWS__CODEGRAPH__EMBEDDING__DIMENSIONS": "FORGE_EMBEDDING_DIMENSIONS",
+        "HYBRID_ADK_WORKFLOWS__CODEGRAPH__EMBEDDING__BASE_URL": "FORGE_EMBEDDING_BASE_URL",
     },
     "apps/forge-codegraph-worker/.env.example": {
         "CODEGRAPH_EMBEDDING_MODEL": "FORGE_EMBEDDING_MODEL",
@@ -29,6 +35,19 @@ EMBEDDING_REFERENCES = {
         "CODEGRAPH_EMBEDDING__DIMENSIONS": "FORGE_EMBEDDING_DIMENSIONS",
         "CODEGRAPH_EMBEDDING__BASE_URL": "FORGE_EMBEDDING_BASE_URL",
     },
+}
+
+# Every reader of the code graph: its template, and the prefix its code graph
+# settings share; and the settings each names from .env.common.
+CODEGRAPH_READERS = {
+    "apps/forge-admin-api/.env.example": "FORGE_ADMIN_CODEGRAPH__",
+    "apps/forge-async-worker/.env.example": "HYBRID_ADK_WORKFLOWS__CODEGRAPH__",
+    "apps/forge-codegraph-mcp/.env.example": "CODEGRAPH_",
+}
+CODEGRAPH_SHARED = {
+    "SPANNER__DATABASE": "FORGE_CODEGRAPH_SPANNER_DATABASE",
+    "SPANNER__CURSOR_SIGNING_KEY": "FORGE_CODEGRAPH_CURSOR_SIGNING_KEY",
+    "SEARCH__ENHANCE_QUERY": "FORGE_CODEGRAPH_SEARCH_ENHANCE_QUERY",
 }
 
 
@@ -52,26 +71,28 @@ class EmbeddingTemplatesTest(unittest.TestCase):
 
 
 class CodeGraphTemplatesTest(unittest.TestCase):
-    def test_graph_knowledge_bases_reach_the_native_worker_with_its_token(self):
-        # Natively, the admin API and the workflows worker call the code
-        # graph worker where make worker listens, with the token make env
-        # generates into .env.common.
-        worker = env_file(ROOT / "apps/forge-codegraph-worker/.env.example")
-        address = worker["CODEGRAPH_HEALTH_ADDR"]
-        callers = {
-            "apps/forge-admin-api/.env.example": "FORGE_ADMIN_CODEGRAPH",
-            "apps/forge-async-worker/.env.example": "HYBRID_ADK_WORKFLOWS__CODEGRAPH",
-        }
-        for path, prefix in callers.items():
+    def test_every_reader_names_the_shared_code_graph_settings(self):
+        # Natively, every reader of the code graph (packages/python/
+        # codegraph-query) reads the same database with the same cursor key
+        # and query enhancement, from .env.common, as make env sets them.
+        common = env_file(ROOT / ".env.common.example")
+        for name in CODEGRAPH_SHARED.values():
+            with self.subTest(name=name):
+                self.assertIn(name, common)
+        self.assertNotIn("FORGE_CODEGRAPH_ADMISSION_TOKEN", common)
+        for path, prefix in CODEGRAPH_READERS.items():
             template = env_file(ROOT / path)
             with self.subTest(template=path):
-                self.assertEqual(template[f"{prefix}_URL"], f"http://{address}")
-                self.assertEqual(
-                    template[f"{prefix}_TOKEN"], "${FORGE_CODEGRAPH_ADMISSION_TOKEN}"
-                )
-                self.assertEqual(
-                    worker["CODEGRAPH_ADMISSION_TOKEN"], "${FORGE_CODEGRAPH_ADMISSION_TOKEN}"
-                )
+                for setting, shared in CODEGRAPH_SHARED.items():
+                    self.assertEqual(template.get(prefix + setting), "${" + shared + "}")
+                self.assertEqual(template.get(prefix + "EMBEDDING__API_KEY"), "${OPENAI_API_KEY}")
+                # Nothing calls the worker: it serves only its probes.
+                self.assertFalse([key for key in template if key.endswith(("CODEGRAPH_URL", "CODEGRAPH_TOKEN"))])
+
+    def test_the_worker_only_ingests(self):
+        worker = env_file(ROOT / "apps/forge-codegraph-worker/.env.example")
+        self.assertNotIn("CODEGRAPH_ADMISSION_TOKEN", worker)
+        self.assertNotIn("CODEGRAPH_SEARCH_ENHANCE_QUERY", worker)
 
 
 if __name__ == "__main__":

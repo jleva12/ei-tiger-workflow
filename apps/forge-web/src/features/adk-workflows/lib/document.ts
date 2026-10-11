@@ -180,6 +180,12 @@ export function copyAgent(doc: AgentDocument, name: string): AgentDocument {
   }
 }
 
+/** The JSON Schema of what a workflow starts with: its start's input_schema. */
+export function startInputOf(doc: Pick<AgentDocument, "nodes">) {
+  const start = doc.nodes.find((n) => n.kind === "start")
+  return start?.kind === "start" ? start.config.input_schema : undefined
+}
+
 /** The IDs of the organization's agents a document runs as saved-agent nodes. */
 export const usesOf = (doc: Pick<AgentDocument, "nodes">) =>
   doc.nodes.flatMap((n) =>

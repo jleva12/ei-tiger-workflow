@@ -10,10 +10,11 @@ from forge_agent_runtime.build import BuildError, build_app
 from forge_agent_runtime.document import parse_document
 from forge_agent_runtime.services import RuntimeServices
 from forge_agent_runtime.tools import GuardedTools, HttpTool, KnowledgeBaseTool, WorkflowTool
-from tests.conftest import without
+from tests.conftest import EXAMPLE_HOSTS, without
 
 
 async def build(doc: dict[str, Any], models, web, **services: Any):
+    services.setdefault("allowed_hosts", EXAMPLE_HOSTS)
     return await build_app(
         parse_document(doc), models=models, services=RuntimeServices(**services), http=web()
     )
@@ -162,12 +163,35 @@ async def test_workflows_and_organization_mcp_servers_need_the_hosted_runtime(ex
 
 
 class KnowledgeBases:
-    """Stands in for the hosted runtime's knowledge bases: two of them, and
-    what each search was asked."""
+    """Stands in for the hosted runtime's knowledge bases: two of documents
+    and a system design one, what each search was asked and each design
+    read was focused on."""
 
     def __init__(self) -> None:
-        self.known = {"kb_hr": ("HR policies", "Leave, benefits and expenses."), "kb_it": ("IT runbooks", "")}
+        self.known = {
+            "kb_hr": ("HR policies", "Leave, benefits and expenses."),
+            "kb_it": ("IT runbooks", ""),
+            "kb_shop": ("Shop", "The web shop."),
+        }
         self.searches: list[tuple[list[str], str, str | None, int]] = []
+        self.focused: list[str] = []
+
+    async def design(self, knowledge_base_ids, *, organization_id, focus=""):
+        if "kb_shop" not in knowledge_base_ids:
+            return None
+        self.focused.append(focus)
+        return {
+            "systems": [
+                {
+                    "knowledge_base": "Shop",
+                    "description": "The web shop.",
+                    "groups": [],
+                    "applications": [{"name": "acme/web", "url": "", "group": ""}],
+                    "components": [{"name": "orders-db", "kind": "database"}],
+                    "connections": [{"source": "acme/web", "relation": "writes to", "target": "orders-db"}],
+                }
+            ]
+        }
 
     async def describe(self, knowledge_base_ids, *, organization_id):
         missing = [i for i in knowledge_base_ids if i not in self.known]
@@ -233,6 +257,35 @@ async def test_a_knowledge_base_tool_searches_the_organizations_knowledge_bases(
     ]
 
 
+async def test_a_system_design_knowledge_base_brings_a_tool_that_reads_its_design(example, models, web):
+    from forge_agent_runtime.tools import SystemDesignTool
+
+    doc = copy.deepcopy(example)
+    doc["nodes"].append(knowledge_node())
+    doc["edges"].append({"id": "k", "source": "agent", "source_output": "tools", "target": "kb"})
+    knowledge = KnowledgeBases()
+    # Documents only: the search alone.
+    root = (await build(doc, models, web, knowledge_bases=knowledge)).root_agent
+    assert len(root.tools[-1].items) == 1
+
+    doc["nodes"][-1]["config"]["knowledge_bases"] = ["kb_hr", "kb_shop"]
+    root = (await build(doc, models, web, knowledge_bases=knowledge)).root_agent
+    search, design = root.tools[-1].items
+    assert isinstance(search, KnowledgeBaseTool)
+    assert isinstance(design, SystemDesignTool)
+    assert design.name == "policies_system_design"
+    assert "system design of Shop" in design.description
+    assert "searching the code with policies" in design.description
+    declaration: Any = design._get_declaration()
+    assert "focus" in declaration.parameters_json_schema["properties"]
+    assert "required" not in declaration.parameters_json_schema
+
+    answer = await design.run_async(args={"focus": " orders-db "}, tool_context=None)  # type: ignore[arg-type]
+    assert answer["systems"][0]["connections"][0]["target"] == "orders-db"
+    # Read once to build (whether it's there), then with the model's focus.
+    assert knowledge.focused == ["", "orders-db"]
+
+
 async def test_a_knowledge_base_tool_names_a_knowledge_base_the_organization_has(example, models, web):
     doc = copy.deepcopy(example)
     doc["nodes"].append(knowledge_node(knowledge_bases=[], description="Company policies."))
@@ -271,7 +324,7 @@ async def test_one_tool_builds_on_its_own_for_an_agent_built_elsewhere(example, 
         "knowledge_base",
         {"knowledge_bases": ["kb_hr"]},
         models=models,
-        services=RuntimeServices(knowledge_bases=knowledge),
+        services=RuntimeServices(knowledge_bases=knowledge, allowed_hosts=EXAMPLE_HOSTS),
         organization_id="org_1",
     )
     tool: Any = found[0]
@@ -300,8 +353,13 @@ async def test_one_tool_builds_on_its_own_for_an_agent_built_elsewhere(example, 
                 "headers": [{"id": "h", "name": "A", "value": "${ORDERS_TOKEN}"}],
             },
             models=models,
-            services=RuntimeServices(environment={}),
+            services=RuntimeServices(environment={}, allowed_hosts=EXAMPLE_HOSTS),
         )
 
-    root = await build_root_agent(parse_document(without(example, "help")), models=models, http=web())
+    root = await build_root_agent(
+        parse_document(without(example, "help")),
+        models=models,
+        http=web(),
+        services=RuntimeServices(allowed_hosts=EXAMPLE_HOSTS),
+    )
     assert isinstance(root, LlmAgent) and root.name == "support_assistant"

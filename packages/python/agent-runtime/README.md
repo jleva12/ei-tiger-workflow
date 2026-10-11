@@ -166,12 +166,12 @@ server = (
     AgentServer()  # FORGE_AGENT_* settings, from the environment and .env
     .with_agent(HERE / "agent/support-assistant.chat-agent.json")
     .with_models(HERE / "model_provider.yaml")
-    .with_sessions(env("DATABASE_URL"))      # PostgreSQL
-    .with_artifacts(env("ARTIFACTS_URL"))    # s3://bucket/prefix
-    .with_memory(env("MONGODB_URI"))         # MongoDB Atlas
-    .with_streaming(False)                   # replies arrive whole
-    .with_web(HERE / "web" / "dist")         # the built UI, served at /
-    .with_a2a()                              # Google's A2A too: /a2a and its card
+    .with_sessions(env("DATABASE_URL"))  # PostgreSQL
+    .with_artifacts(env("ARTIFACTS_URL"))  # s3://bucket/prefix
+    .with_memory(env("MONGODB_URI"))  # MongoDB Atlas
+    .with_streaming(False)  # replies arrive whole
+    .with_web(HERE / "web" / "dist")  # the built UI, served at /
+    .with_a2a()  # Google's A2A too: /a2a and its card
     # .with_auth(Depends(verify_token))      # guards the run API only
     # .with_routes(my_router)
 )
@@ -211,7 +211,10 @@ Every request is ADK's run request: `appName`, `userId`, `sessionId`,
 `newMessage`, `streaming` and `stateDelta`. `stateDelta` may set `model` and
 `thinking_level` (the model picker's) and the fields the agent's **input
 schema** declares (its `state_schema`), each of its declared type. Anything
-else is refused with a 422.
+else is refused with a 422. The schema's patterns run on forge-common's bounded
+engine (`forge_common.patterns`), not Python's `re`: one that runs away on a
+value refuses it within half a second, rather than holding the interpreter
+lock, and every other conversation with it.
 
 Instructions read both as `{{ … }}` templates (JSONata), filled in before each
 model call:
@@ -237,7 +240,10 @@ app = FastAPI()
 app.include_router(create_router(executor, dependencies=[Depends(your_auth)]), prefix="/agents")
 # And over A2A: POST /agents/a2a/{app}, its card at /agents/a2a/{app}/.well-known/agent-card.json
 from forge_agent_runtime.a2a import create_a2a_router, task_store
-app.include_router(create_a2a_router(executor, path="/a2a", tasks=task_store("sqlite:///tasks.db")), prefix="/agents")
+
+app.include_router(
+    create_a2a_router(executor, path="/a2a", tasks=task_store("sqlite:///tasks.db")), prefix="/agents"
+)
 ```
 
 You can also run turns directly, with `async for event in executor.run(RunRequest(...))`,

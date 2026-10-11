@@ -17,7 +17,8 @@ export const KNOWLEDGE_BASE_KINDS: Record<
   system: {
     label: "System design knowledge base",
     short: "System",
-    summary: "Your applications, how they connect, and their code graphs",
+    summary:
+      "Your applications, the databases, queues and services around them, how it all connects, and their code graphs",
     icon: SYSTEM_ICON,
   },
 }

@@ -3,8 +3,10 @@
 Inline markup is rendered to plain text (emphasis stripped, link text kept),
 fenced code keeps its language (a ``mermaid`` fence is read as a diagram, as
 the Mermaid parser reads a .mmd file), tables keep header/rows, YAML front
-matter goes to metadata. A single leading H1 is treated as the document title
-rather than a section, so it doesn't prefix every breadcrumb.
+matter goes to metadata. List items keep their depth and marker (``-``, ``3.``),
+and a list item's later paragraphs are marked ``continuation``. A single
+leading H1 is treated as the document title rather than a section, so it
+doesn't prefix every breadcrumb.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ _TAG = re.compile(r"<[^>]+>")
 
 class MarkdownParser:
     name = "markdown"
-    version = "2"
+    version = "3"
     extensions = frozenset({"md", "markdown", "mdx"})
     media_types = frozenset({"text/markdown", "text/x-markdown"})
 
@@ -49,6 +51,9 @@ class MarkdownParser:
         tracker = SectionTracker()
         elements: list[Element] = []
         list_depth = 0
+        # One entry per open list item: its marker ("-", "3."), until its first
+        # paragraph takes it; later paragraphs of the item are continuations.
+        items: list[str | None] = []
         i = 0
         while i < len(tokens):
             tok = tokens[i]
@@ -57,6 +62,10 @@ class MarkdownParser:
                 list_depth += 1
             elif tok.type in ("bullet_list_close", "ordered_list_close"):
                 list_depth -= 1
+            elif tok.type == "list_item_open":
+                items.append(f"{tok.info}{tok.markup}" if tok.info else "-")
+            elif tok.type == "list_item_close":
+                items.pop()
             elif tok.type == "heading_open":
                 heading = _inline_text(tokens[i + 1])
                 level = int(tok.tag[1])
@@ -80,6 +89,7 @@ class MarkdownParser:
                             level=max(list_depth - 1, 0) if list_depth else None,
                             section_path=tracker.path,
                             location=loc,
+                            attrs=_item_attrs(items) if list_depth else {},
                         )
                     )
                 i += 3
@@ -128,6 +138,17 @@ class MarkdownParser:
             parser_version=self.version,
             metadata=metadata,
         )
+
+
+def _item_attrs(items: list[str | None]) -> dict[str, Any]:
+    """A list paragraph's marker, or ``continuation`` after its item's first."""
+    if not items:
+        return {}
+    marker = items[-1]
+    if marker is None:
+        return {"continuation": True}
+    items[-1] = None
+    return {"marker": marker}
 
 
 def _split_front_matter(text: str) -> tuple[dict[str, Any], str, int]:

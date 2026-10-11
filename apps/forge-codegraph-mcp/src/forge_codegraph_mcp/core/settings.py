@@ -13,11 +13,18 @@ the app shares with the others, from the repository's ``.env.common``
 (core/env_files.py). See ``.env.example`` for every setting.
 """
 
-import re
 from enum import StrEnum
 from functools import lru_cache
 from typing import Literal, Self
 
+from forge_codegraph import INSTRUCTIONS
+from forge_codegraph_query.settings import (
+    LOCAL_DATABASE,
+    CodeGraphSettings,
+    EmbeddingSettings,
+    SearchSettings,
+    SpannerSettings,
+)
 from forge_common.logging import LoggingSettings, LogLevel
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import (
@@ -27,17 +34,8 @@ from pydantic_settings import (
 )
 
 from forge_codegraph_mcp.core.env_files import EnvFileSettingsSource
-from forge_codegraph_mcp.graph.embedding import DEFAULT_DIMENSIONS, DEFAULT_MAX_INPUT_BYTES
 
-INSTRUCTIONS = """Tools over a code graph whose relationships come from the compiler, not from guesses.
-Call list_repositories first when you don't know a repository id: it names every repository you can read.
-For how repositories, services or projects interact (what calls what, what sends messages to what), call repository_connections first: the connections people drew between them on your organization's system design maps, each with its kind, a note, and code links whose node ids callers, callees, impact and read_source follow in that repository.
-Start with explore_code for any question in plain language: it returns the best-matching declarations (seeds) with their file and line, one hop of callers, callees, type uses and inheritance around the strongest seeds, and the files involved. Then read_source for the exact code of any node id, callers or callees to keep walking, impact before changing a declaration, path to see how two declarations connect, hubs for the most depended-on declarations of a repository, find_symbol when you already know a name, and search_code for ranked hits only.
-Answers are compact by default: id, kind, qualified name, file and line per node. Pass full: true to any of them for complete records with spans, content hashes and properties, or call get_node for one node.
-Repository ids are required on every call. Node ids and content hashes come from earlier results; never invent them.
-Code in one repository can reach code in another over the network, calling its API or sending it events, where no compiler sees it. People record those as cross-repository links. callers, callees and neighbors list them under across_repositories, each with the far node, its repository_id and the link's kind (calls_api, sends_event, depends_on, shares_data, connects_to). impact follows them into the other repositories under across. cross_repository_links lists them for one node. To keep walking on the other side, call the same tools with that repository_id and node id."""  # noqa: E501
-
-_DATABASE = re.compile(r"^projects/[^/\s]+/instances/[^/\s]+/databases/[^/\s]+$")
+# How to use the tools (forge_codegraph.tools), the server instructions.
 
 
 class Environment(StrEnum):
@@ -151,58 +149,10 @@ class McpSettings(BaseModel):
     rate_limit: McpRateLimitSettings = McpRateLimitSettings()
 
 
-class SpannerSettings(BaseModel):
-    """The code graph worker's database: the server reads the graph it writes."""
+class LocalSpannerSettings(SpannerSettings):
+    """The worker's database, on the local emulator unless set."""
 
-    database: str = "projects/codegraph-local/instances/codegraph/databases/codegraph"
-    # The worker's deployment scope; cursors are fingerprinted with it.
-    scope: str = Field(default="codegraph", min_length=1, max_length=128)
-    # Signs pagination cursors, the worker's own key; at least 32 characters.
-    cursor_signing_key: SecretStr | None = Field(default=None, min_length=32)
-    # A service account's JSON key, for hosts without key files; unset uses
-    # Application Default Credentials (or the emulator, SPANNER_EMULATOR_HOST).
-    credentials_json: SecretStr | None = None
-    # Bound on each query, in seconds.
-    timeout: float = Field(default=30.0, gt=0)
-    # How long startup waits for the database: the worker creates it (and the
-    # emulator's schema) when it starts.
-    startup_timeout: float = Field(default=60.0, ge=0)
-
-    @field_validator("database")
-    @classmethod
-    def _database(cls, value: str) -> str:
-        if not _DATABASE.match(value):
-            raise ValueError("spanner.database must be projects/<p>/instances/<i>/databases/<d>")
-        return value
-
-
-class EmbeddingSettings(BaseModel):
-    """The worker's embedding model. With a model and an API key, explore_code
-    and search_code add the semantic branch: questions are embedded as the
-    worker embedded the graph, so the model, dimensions and base URL must be
-    the worker's."""
-
-    api_key: SecretStr | None = None
-    # An OpenAI-compatible gateway; empty for OpenAI.
-    base_url: str | None = None
-    model: str = ""
-    # The database's vector length; 0 means the model's default, 3072.
-    dimensions: int = Field(default=0, ge=0, le=4096)
-    max_input_bytes: int = Field(default=DEFAULT_MAX_INPUT_BYTES, ge=256, le=8000)
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.model and self.api_key and self.api_key.get_secret_value())
-
-    @property
-    def vector_length(self) -> int:
-        return self.dimensions or DEFAULT_DIMENSIONS
-
-
-class SearchSettings(BaseModel):
-    # Spanner's query enhancement (spelling, synonyms, plurals, IDF scoring)
-    # on managed Spanner; the emulator ignores it.
-    enhance_query: bool = False
+    database: str | None = LOCAL_DATABASE
 
 
 class Settings(BaseSettings):
@@ -225,7 +175,9 @@ class Settings(BaseSettings):
     logging: AppLoggingSettings = AppLoggingSettings()
     cors: CorsSettings = CorsSettings()
     mcp: McpSettings = McpSettings()
-    spanner: SpannerSettings = SpannerSettings()
+    # The code graph as every app reads it (forge_codegraph_query.settings),
+    # its groups at the top level here: CODEGRAPH_SPANNER__DATABASE, ...
+    spanner: LocalSpannerSettings = LocalSpannerSettings()
     embedding: EmbeddingSettings = EmbeddingSettings()
     search: SearchSettings = SearchSettings()
 
@@ -248,6 +200,10 @@ class Settings(BaseSettings):
         )
 
     @property
+    def codegraph(self) -> CodeGraphSettings:
+        return CodeGraphSettings(spanner=self.spanner, embedding=self.embedding, search=self.search)
+
+    @property
     def is_production(self) -> bool:
         return self.environment is Environment.PRODUCTION
 
@@ -257,6 +213,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _guardrails(self) -> Self:
+        if self.spanner.database is None:
+            raise ValueError("spanner.database is required: the code graph worker's database")
         if self.spanner.cursor_signing_key is None:
             raise ValueError(
                 "spanner.cursor_signing_key is required: the worker's cursor key "

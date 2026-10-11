@@ -21,7 +21,11 @@ sessions.
   answer must fit what it asks (its ``response_schema``), and is kept as the
   decision's comment, as JSON.
 - Retrying, resubmitting and abandoning one needs ``agents:manage_runs`` (the
-  organization's admins).
+  organization's admins). A run abandoned while it runs stops on its worker
+  (at its next step, or within a minute): it's abandoned then. A run an A2A
+  task started isn't retried: A2A's final states are final, so its task
+  would go on saying it failed whatever became of the run; it's resubmitted
+  instead (a run of its own).
 
 A run is found only through its organization: any other's answers 404. Times
 are ISO 8601 in UTC, with their offset (``+00:00``).
@@ -36,17 +40,21 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, HTTPException, Path, Query, Request, Response, status
 from forge_task_adk_workflows.files import RunFile
 from forge_task_adk_workflows.run_store import (
-    ABANDONABLE,
+    CANCELABLE,
     FAILED,
     FINISHED,
     PAUSED,
+    RUNNING,
     Actor,
     NoSuchRun,
     NotAllowed,
     RunStore,
 )
+from forge_task_adk_workflows.runs import MAX_NOTES, STATE_KEY
 from forge_task_adk_workflows.steps import run_steps
+from forge_task_adk_workflows.trace import run_trace, saved_files
 from google.adk.sessions import BaseSessionService
+from google.adk.sessions import Session as AdkSession
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo.errors import PyMongoError
 from sqlalchemy.exc import SQLAlchemyError
@@ -101,7 +109,7 @@ MANAGE_RUNS = "agents:manage_runs"
 APPROVERS = {"org:admin": APPROVE, "org:member": RUN}
 HUMAN_INPUT = "human_input"
 NO_SUCH_RUN = "The organization has no such ADK workflow run"
-NO_SUCH_FILE = "The run didn't start with such a file"
+NO_SUCH_FILE = "The run has no such file"
 NOT_OPEN = "The run doesn't wait at that approval or question any more"
 RUNS_UNAVAILABLE = "The ADK workflow runs' database isn't answering; try again shortly"
 SESSIONS_UNAVAILABLE = (
@@ -201,7 +209,7 @@ class AdkRun(BaseModel):
     #: Which version ran: a published one's number, or "draft"; null for
     #: runs from before workflows had versions.
     version: int | Literal["draft"] | None = None
-    #: Its ADK session, where its steps are read from.
+    #: The ADK session it started in (one it started over in is read for its steps).
     session_id: str
     status: RunStatus
     #: 1, and one more each time it's retried or queued again after a hiccup.
@@ -220,6 +228,13 @@ class AdkRun(BaseModel):
     waiting_reason: str | None
     pause: RunPause | None
     error: RunFailure | None
+    #: When someone abandoned it while it ran: its worker stops it, and it's
+    #: abandoned then (unless it ended first).
+    cancel_requested_at: str | None = None
+    #: The run that started it: a workflow its LLM agent called as a tool.
+    parent_run_id: str | None = None
+    #: A run queued again after a hiccup isn't tried again before then (its backoff).
+    next_attempt_at: str | None = None
 
 
 class AdkRunPage(BaseModel):
@@ -267,6 +282,12 @@ class AdkRunDetail(AdkRun):
     trigger: dict[str, Any] | None
     #: Oldest first.
     events: list[RunEvent]
+    #: Its activity misses notes: the run noted as many as it may, or some
+    #: couldn't be written.
+    activity_incomplete: bool = False
+    #: The runs it started (workflows its LLM agents called as tools), oldest
+    #: first; abandoning it abandons those still going.
+    children: list[AdkRun] = Field(default_factory=list)
     actions: RunActions
 
 
@@ -290,13 +311,88 @@ class AdkRunStep(BaseModel):
     #: The tools its LLM agents called: ``{"id", "agent", "name", "args",
     #: "status", "response", "at"}``.
     calls: list[dict[str, Any]] = []
+    #: What it was handed (its ``previous``), and the step that handed it on.
+    input: Any = None
+    input_from: str | None = None
+    #: What it set in the session's state, in order: ``{"key", "value", "at"}``.
+    state_changes: list[dict[str, Any]] = []
 
 
 class AdkRunSteps(BaseModel):
     """A run's steps, in its document's order."""
 
     steps: list[AdkRunStep]
+    #: The session they're read from: the one the run runs in, or an earlier one asked for.
     session_id: str
+    #: The sessions the run ran in before it started over, oldest first.
+    earlier_sessions: list[str] = Field(default_factory=list)
+
+
+class AdkRunTrace(BaseModel):
+    """
+    Everything a run did in its ADK session, for the organization's admins:
+    each event (``forge_task_adk_workflows.trace``) and the session's state
+    before and after the run, with what the worker keeps of the run.
+    """
+
+    #: Each event of the run, in order: its step, message, calls and answers,
+    #: output, state and artifact changes, route, error and token usage.
+    events: list[dict[str, Any]]
+    #: The session's state as the first listed event found it.
+    state_before: dict[str, Any]
+    #: It once the run's events applied.
+    state_after: dict[str, Any]
+    #: The session's state now.
+    state: dict[str, Any]
+    #: A later run in the same session changed the state since.
+    later_changes: bool
+    #: How many of the run's earliest events aren't listed.
+    omitted: int
+    #: The run's ADK invocation.
+    invocation_id: str | None
+    #: The session they're read from, and those the run ran in before.
+    session_id: str
+    earlier_sessions: list[str] = Field(default_factory=list)
+    #: What the worker keeps of the run (``runs.STATE_KEY``): its session and
+    #: invocation, the steps it noted, the tool calls it journals, its restarts.
+    worker: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunFileVersion(BaseModel):
+    """A version of a file in a run's session."""
+
+    version: int
+    #: When it was saved, ISO 8601 in UTC, when the storage says.
+    saved_at: str | None = None
+    media_type: str | None = None
+    #: Its size, when it was saved with it (an agent's ``save_file`` does).
+    size_bytes: int | None = None
+    #: The step whose event saved it, and who (its agent); None for a file the
+    #: run started with, or one saved out of the run's events.
+    step: str | None = None
+    saved_by: str | None = None
+
+
+class RunSessionFile(BaseModel):
+    """A file in a run's session: one it started with, or one it saved."""
+
+    name: str
+    #: ``input`` for a file the run started with, ``run`` for one it saved.
+    origin: Literal["input", "run"]
+    #: Its latest version's.
+    media_type: str | None = None
+    #: Oldest first.
+    versions: list[RunFileVersion]
+
+
+class AdkRunFiles(BaseModel):
+    """The files in a run's session: those it started with and those it saved."""
+
+    files: list[RunSessionFile]
+    #: The session they're in.
+    session_id: str
+    #: Whether runs' files are kept here at all (the admin API's artifacts).
+    kept: bool = True
 
 
 # ---------------------------------------------------------------- reading runs
@@ -378,6 +474,9 @@ def _summary(run: dict[str, Any]) -> dict[str, Any]:
         "waiting_reason": run.get("waiting_reason"),
         "pause": _pause(run),
         "error": _failure(run),
+        "cancel_requested_at": _iso(run.get("cancel_requested_at")),
+        "parent_run_id": run.get("parent_run_id"),
+        "next_attempt_at": _iso(run.get("next_attempt_at")),
     }
 
 
@@ -386,21 +485,50 @@ def as_run(run: dict[str, Any]) -> AdkRun:
     return AdkRun.model_validate(_summary(run))
 
 
+#: Why a failed run an A2A task started isn't retried.
+A2A_RETRY = (
+    "A run started over A2A can't be retried: its A2A task ended when the run "
+    "failed, for good. Resubmit it to run it again as a run of its own, or start "
+    "a new task over A2A"
+)
+
+
+def a2a_task(run: dict[str, Any]) -> bool:
+    """:return: Whether the run is an A2A task's: started over A2A (the task's
+    ID is the run's), not resubmitted from one."""
+    payload = run.get("payload")
+    trigger = payload.get("trigger") if isinstance(payload, dict) else None
+    return (
+        isinstance(trigger, dict)
+        and trigger.get("type") == "runtime"
+        and trigger.get("protocol") == "a2a"
+        and not run.get("resubmit_of")
+    )
+
+
 def actions_of(run: dict[str, Any]) -> RunActions:
-    """:return: What the run's status allows."""
+    """:return: What the run's status allows (and what started it: an A2A
+    task's run isn't retried)."""
     current = run["status"]
     pause = _pause(run)
+    # Running, unless someone abandoned it already (its worker stops it).
+    stopping = run.get("cancel_requested_at") is not None
     return RunActions(
-        retry=current == FAILED,
+        retry=current == FAILED and not a2a_task(run),
         resubmit=current in FINISHED,
-        abandon=current in ABANDONABLE,
+        abandon=current in CANCELABLE and not stopping,
         decide=pause is not None and pause.kind != HUMAN_INPUT,
         answer=pause is not None and pause.kind == HUMAN_INPUT,
     )
 
 
-def as_detail(run: dict[str, Any], events: list[dict[str, Any]]) -> AdkRunDetail:
-    """:return: A run as the store has it, with its activity, as its page shows it."""
+def as_detail(
+    run: dict[str, Any],
+    events: list[dict[str, Any]],
+    children: list[dict[str, Any]] | None = None,
+) -> AdkRunDetail:
+    """:return: A run as the store has it, with its activity and the runs it
+    started, as its page shows it."""
     payload = run.get("payload")
     payload = payload if isinstance(payload, dict) else {}
     document, trigger = payload.get("document"), payload.get("trigger")
@@ -425,8 +553,20 @@ def as_detail(run: dict[str, Any], events: list[dict[str, Any]]) -> AdkRunDetail
                 )
                 for event in events
             ],
+            "activity_incomplete": activity_incomplete(run),
+            "children": [as_run(child) for child in children or []],
             "actions": actions_of(run),
         }
+    )
+
+
+def activity_incomplete(run: dict[str, Any]) -> bool:
+    """:return: Whether the run's activity misses notes (``runs.MAX_NOTES``,
+    ``notes_lost``)."""
+    kept = _kept(run)
+    lost, noted = kept.get("notes_lost"), kept.get("notes")
+    return (isinstance(lost, int) and lost > 0) or (
+        isinstance(noted, int) and noted > MAX_NOTES
     )
 
 
@@ -657,8 +797,8 @@ async def get_adk_run(
 ) -> AdkRunDetail:
     """
     Read one ADK workflow run: what it runs and with what input, where it is,
-    what it waits for, its result or failure, its activity, and the actions
-    its status allows.
+    what it waits for, its result or failure, its activity, the runs it
+    started, and the actions its status allows.
     \f
     :raises HTTPException: 403 without organizations:read in the organization;
         404 for a run that isn't the organization's; 503 when the run store
@@ -667,7 +807,8 @@ async def get_adk_run(
     run = await _read(request, session, enforcer, user, organization_id, run_id)
     with store_errors():
         events = await run_store(request).events(run_id)
-    return as_detail(run, events)
+        children = await run_store(request).children(run_id)
+    return as_detail(run, events, children)
 
 
 @router.get("/organizations/{organization_id}/adk-runs/{run_id}/steps")
@@ -678,24 +819,100 @@ async def get_adk_run_steps(
     user: CurrentUser,
     session: Session,
     enforcer: Enforcer,
+    earlier: Annotated[
+        str | None, Query(alias="session_id", min_length=1, max_length=128)
+    ] = None,
 ) -> AdkRunSteps:
     """
     Read a run's steps from its ADK session: each step of the ADK workflow it
     runs, in order, with its status, what it handed on or why it failed, and
-    when it started and finished.
+    when it started and finished. They're the run's own (a session another
+    run shares holds that run's too), from the session it runs in now; a run
+    that started over lists the sessions it ran in before, and
+    ``?session_id=`` reads one of them.
     \f
-    :return: ``{"steps": [...], "session_id"}``.
+    :param earlier: One of the sessions the run ran in before (``earlier_sessions``).
+    :return: ``{"steps": [...], "session_id", "earlier_sessions"}``.
     :raises HTTPException: 403 without organizations:read in the organization;
-        404 for a run that isn't the organization's; 503 when the run store
-        or the sessions' database isn't answering.
+        404 for a run that isn't the organization's, or a session it never ran
+        in; 503 when the run store or the sessions' database isn't answering.
     """
     run = await _read(request, session, enforcer, user, organization_id, run_id)
+    found, document, session_id, before = await _run_session(request, run, earlier)
+    # A run that hasn't started has no invocation yet, and so no events of its own.
+    invocation = str(_kept(run).get("invocation_id") or "")
+    steps = [
+        AdkRunStep.model_validate(step)
+        for step in run_steps(found, document, invocation_id=invocation)
+    ]
+    return AdkRunSteps(steps=steps, session_id=session_id, earlier_sessions=before)
+
+
+@router.get("/organizations/{organization_id}/adk-runs/{run_id}/trace")
+async def get_adk_run_trace(
+    organization_id: NodeId,
+    run_id: RunId,
+    request: Request,
+    user: CurrentUser,
+    session: Session,
+    enforcer: Enforcer,
+    earlier: Annotated[
+        str | None, Query(alias="session_id", min_length=1, max_length=128)
+    ] = None,
+) -> AdkRunTrace:
+    """
+    Read everything a run did in its ADK session, for the organization's
+    admins: each of its events (who said what, the tools called and what they
+    answered, what each step handed on, every change to the session's state
+    and artifacts, the way taken, errors, token usage), the session's state
+    before and after the run, and what the worker keeps of it. A run that
+    started over reads one of its earlier sessions with ``?session_id=``.
+    \f
+    :param earlier: One of the sessions the run ran in before (``earlier_sessions``).
+    :raises HTTPException: 403 without agents:manage_runs in the organization;
+        404 for a run that isn't the organization's, or a session it never ran
+        in; 503 when the run store or the sessions' database isn't answering.
+    """
+    await authorize(
+        session, enforcer, user, MANAGE_RUNS, Scope(Level.ORG, organization_id)
+    )
+    run = await _read(request, session, enforcer, user, organization_id, run_id)
+    found, document, session_id, before = await _run_session(request, run, earlier)
+    kept = _kept(run)
+    invocation = str(kept.get("invocation_id") or "")
+    traced = run_trace(found, document, invocation_id=invocation)
+    return AdkRunTrace(
+        **traced,
+        session_id=session_id,
+        earlier_sessions=before,
+        worker=kept,
+    )
+
+
+async def _run_session(
+    request: Request, run: dict[str, Any], earlier: str | None
+) -> tuple[AdkSession | None, dict[str, Any], str, list[str]]:
+    """
+    :param earlier: One of the sessions the run ran in before, to read
+        instead of the one it runs in.
+    :return: The run's ADK session (None before it has one), the document it
+        runs, the session's ID, and the sessions it ran in before.
+    :raises HTTPException: 404 for a run without a document or a session it
+        never ran in; 503 when the sessions' database isn't answering.
+    """
     payload = run.get("payload")
     run_as = payload.get("run_as") if isinstance(payload, dict) else None
     document = payload.get("document") if isinstance(payload, dict) else None
-    session_id = run["session_id"]
     if not (isinstance(run_as, str) and isinstance(document, dict)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, NO_SUCH_RUN)
+    kept = _kept(run)
+    current = str(kept.get("session_id") or run["session_id"])
+    before = [str(each) for each in kept.get("earlier_sessions") or []]
+    if earlier is not None and earlier not in (current, *before):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "The run never ran in that session"
+        )
+    session_id = earlier or current
     sessions: BaseSessionService = request.app.state.adk_run_sessions
     try:
         found = await sessions.get_session(
@@ -706,8 +923,87 @@ async def get_adk_run_steps(
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, SESSIONS_UNAVAILABLE
         ) from None
-    steps = [AdkRunStep.model_validate(step) for step in run_steps(found, document)]
-    return AdkRunSteps(steps=steps, session_id=session_id)
+    return found, document, session_id, before
+
+
+@router.get("/organizations/{organization_id}/adk-runs/{run_id}/session-files")
+async def list_adk_run_files(
+    organization_id: NodeId,
+    run_id: RunId,
+    request: Request,
+    user: CurrentUser,
+    session: Session,
+    enforcer: Enforcer,
+) -> AdkRunFiles:
+    """
+    List the files in a run's session: those it started with, and those its
+    agents saved (``save_file``), each version with the step that saved it.
+    Each downloads from ``…/files/{name}?version=``.
+    \f
+    :raises HTTPException: 403 without organizations:read; 404 for a run that
+        isn't the organization's; 503 when the files' storage or the
+        sessions' database isn't answering.
+    """
+    run = await _read(request, session, enforcer, user, organization_id, run_id)
+    payload = run.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+    kept = _kept(run)
+    session_id = str(kept.get("session_id") or run["session_id"])
+    artifacts = getattr(request.app.state, "workflow_artifacts", None)
+    if artifacts is None:
+        return AdkRunFiles(files=[], session_id=session_id, kept=False)
+    found, document, _, _ = await _run_session(request, run, None)
+    saved = saved_files(
+        found, document, invocation_id=str(kept.get("invocation_id") or "")
+    )
+    inputs = {file.name: file for file in run_files(payload)}
+    user_id = str(payload.get("run_as") or "")
+    listed: list[RunSessionFile] = []
+    with storage_errors():
+        names = await artifacts.list_artifact_keys(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id
+        )
+        for name in sorted(names):
+            versions = await artifacts.list_artifact_versions(
+                app_name=APP_NAME, user_id=user_id, session_id=session_id, filename=name
+            )
+            shown = []
+            for each in sorted(versions, key=lambda version: version.version):
+                meta = each.custom_metadata or {}
+                by = saved.get((name, each.version), {})
+                size = meta.get("size_bytes")
+                sent = inputs.get(name)
+                if size is None and sent is not None and sent.version == each.version:
+                    size = sent.size_bytes
+                shown.append(
+                    RunFileVersion(
+                        version=each.version,
+                        saved_at=_iso(datetime.fromtimestamp(each.create_time, UTC))
+                        if each.create_time
+                        else by.get("at"),
+                        media_type=each.mime_type,
+                        size_bytes=size if isinstance(size, int) else None,
+                        step=by.get("step"),
+                        saved_by=by.get("author") or meta.get("saved_by"),
+                    )
+                )
+            listed.append(
+                RunSessionFile(
+                    name=name,
+                    origin="input" if name in inputs else "run",
+                    media_type=shown[-1].media_type if shown else None,
+                    versions=shown,
+                )
+            )
+    return AdkRunFiles(files=listed, session_id=session_id)
+
+
+def _kept(run: dict[str, Any]) -> dict[str, Any]:
+    """:return: What the worker keeps of a run's ADK workflow (``runs.STATE_KEY``):
+    the session it runs in, its invocation, the sessions it ran in before."""
+    state = run.get("state")
+    kept = state.get(STATE_KEY) if isinstance(state, dict) else None
+    return kept if isinstance(kept, dict) else {}
 
 
 @router.get(
@@ -723,10 +1019,12 @@ async def get_adk_run_file(
     user: CurrentUser,
     session: Session,
     enforcer: Enforcer,
+    version: Annotated[int | None, Query(ge=0)] = None,
 ) -> Response:
     """
-    Download a file the run started with, as it was sent (the artifact of
-    its session its steps read).
+    Download a file of the run: one it started with, as it was sent (the
+    artifact saved in its session, or a resubmitted run's original's), or one
+    its agents saved in its session (its latest version, or ``?version=``).
     \f
     :raises HTTPException: 403 without organizations:read; 404 for a run or
         file that isn't there; 503 when files aren't set up or their storage
@@ -735,30 +1033,41 @@ async def get_adk_run_file(
     run = await _read(request, session, enforcer, user, organization_id, run_id)
     payload = run.get("payload")
     payload = payload if isinstance(payload, dict) else {}
-    file = next((f for f in run_files(payload) if f.name == name), None)
-    if file is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, NO_SUCH_FILE)
     artifacts = getattr(request.app.state, "workflow_artifacts", None)
     if artifacts is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, NOT_SET_UP)
+    file = next((f for f in run_files(payload) if f.name == name), None)
+    if file is not None and version is None:
+        # One it started with, where it was sent.
+        session_id = str(
+            payload.get("files_session_id")
+            or payload.get("session_id")
+            or run["session_id"]
+        )
+        version = file.version
+    else:
+        session_id = str(_kept(run).get("session_id") or run["session_id"])
     with storage_errors():
         part = await artifacts.load_artifact(
             app_name=APP_NAME,
             user_id=str(payload.get("run_as") or ""),
-            session_id=str(payload.get("session_id") or run["session_id"]),
-            filename=file.name,
-            version=file.version,
+            session_id=session_id,
+            filename=name,
+            version=version,
         )
-    data = part.inline_data.data if part is not None and part.inline_data else None
-    if data is None:
+    blob = part.inline_data if part is not None else None
+    if blob is None or blob.data is None:
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "The run's file isn't kept any more"
+            status.HTTP_404_NOT_FOUND,
+            "The run's file isn't kept any more" if file is not None else NO_SUCH_FILE,
         )
     return Response(
-        content=data,
-        media_type=file.media_type,
+        content=blob.data,
+        media_type=file.media_type
+        if file is not None and version == file.version
+        else blob.mime_type or "application/octet-stream",
         headers={
-            "Content-Disposition": attachment(file.name),
+            "Content-Disposition": attachment(name),
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": "private, no-store",
         },
@@ -887,11 +1196,13 @@ async def retry_adk_run(
 ) -> AdkRun:
     """
     Retry a failed ADK workflow run as its next attempt: it carries on from
-    where it was, on a worker.
+    where it was, on a worker. A run an A2A task started isn't retried (its
+    task ended for good): it's resubmitted instead.
     \f
     :return: The run, queued.
     :raises HTTPException: 403 without agents:manage_runs in the organization;
-        404 for a run that isn't the organization's; 409 unless it failed.
+        404 for a run that isn't the organization's; 409 unless it failed, or
+        when an A2A task started it.
     """
     await authorize(
         session, enforcer, user, MANAGE_RUNS, Scope(Level.ORG, organization_id)
@@ -899,7 +1210,11 @@ async def retry_adk_run(
     queue = run_queue(request)
     actor = await _actor(session, user)
     with store_errors():
-        retried = await run_store(request).retry(
+        store = run_store(request)
+        found = await store.get(run_id, organization_id=organization_id)
+        if found is not None and found["status"] == FAILED and a2a_task(found):
+            raise NotAllowed(A2A_RETRY)
+        retried = await store.retry(
             run_id, actor=actor, organization_id=organization_id
         )
     await queue_run(queue, run_id)
@@ -921,7 +1236,7 @@ async def resubmit_adk_run(
 ) -> AdkRun:
     """
     Run a finished ADK workflow run's ADK workflow again, as it ran (the same
-    documents and input, another invocation of its ADK session), as a new run.
+    documents, input and files), as a new run in an ADK session of its own.
     \f
     :return: The new run, queued.
     :raises HTTPException: 403 without agents:manage_runs in the organization;
@@ -941,23 +1256,35 @@ async def resubmit_adk_run(
     return as_run(again)
 
 
-@router.post("/organizations/{organization_id}/adk-runs/{run_id}/abandon")
+@router.post(
+    "/organizations/{organization_id}/adk-runs/{run_id}/abandon",
+    responses={
+        202: {
+            "model": AdkRun,
+            "description": "It's running: its worker stops it, then abandons it",
+        }
+    },
+)
 async def abandon_adk_run(
     organization_id: NodeId,
     run_id: RunId,
     request: Request,
+    response: Response,
     user: CurrentUser,
     session: Session,
     enforcer: Enforcer,
 ) -> AdkRun:
     """
     Give an ADK workflow run up: queued, paused, waiting or failed, it never
-    carries on.
+    carries on. Running, its worker stops it (at its next step, or within a
+    minute) and abandons it: 202, with ``cancel_requested_at`` set. Asking
+    again changes nothing. The runs it started that are still going, and
+    theirs, are abandoned with it.
     \f
-    :return: The run, abandoned.
+    :return: The run, abandoned; or still running, being stopped (202).
     :raises HTTPException: 403 without agents:manage_runs in the organization;
-        404 for a run that isn't the organization's; 409 while it's running,
-        or once it's finished (but failed).
+        404 for a run that isn't the organization's; 409 once it's finished
+        (but failed).
     """
     await authorize(
         session, enforcer, user, MANAGE_RUNS, Scope(Level.ORG, organization_id)
@@ -967,5 +1294,9 @@ async def abandon_adk_run(
         abandoned = await run_store(request).abandon(
             run_id, actor=actor, organization_id=organization_id
         )
-    logger.info("%s abandoned ADK workflow run %s", user, run_id)
+    if abandoned["status"] == RUNNING:
+        response.status_code = status.HTTP_202_ACCEPTED
+        logger.info("%s asked ADK workflow run %s to stop", user, run_id)
+    else:
+        logger.info("%s abandoned ADK workflow run %s", user, run_id)
     return as_run(abandoned)

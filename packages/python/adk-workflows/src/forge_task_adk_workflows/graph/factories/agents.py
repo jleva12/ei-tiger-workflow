@@ -9,14 +9,19 @@ Agents: ADK's own, with their sub-agents built the same way inside them.
   Forge's hand on their answer: the last one of their agents gave (a
   parallel's: each sub-agent's, by its ID).
 - ``saved``: another of the organization's agents, built the same way and run
-  here whole, with what the node before handed on as its input.
+  here whole, with what the node before handed on as its input. With
+  ``inputs`` (its start's fields, each a JSONata expression over the run's
+  data), its input is those fields instead: an expression that finds nothing
+  leaves its field out. It then runs as an ADK dynamic node of the node's
+  (``ctx.run_node``), so the node can evaluate them first.
 
 An LLM agent's ``tools`` are the Agents builder's (an MCP server, a knowledge
 base, an HTTP tool, an OpenAPI spec, an agent from the Agents page, a
 workflow), each built the first time the agent asks the model
 (``graph.agent_tools.LazyToolset``). In a run started with files, every one
-also has ADK's ``load_artifacts`` tool: it's told the files' names, and
-reads the ones it asks for (``forge_task_adk_workflows.files``). An ``llm`` node whose ``source`` is
+also has the run's file tools (``forge_task_adk_workflows.files.file_tools``)
+wherever the worker keeps artifacts: ADK's ``load_artifacts`` (it's told the
+session's files' names, and reads the ones it asks for) and ``save_file``. An ``llm`` node whose ``source`` is
 ``agent`` is an agent from the Agents page instead, used whole
 (``graph.agent_tools.agent_node``): sent its ``message`` (what it's handed
 by default), its input schema's fields set from its ``inputs``.
@@ -35,11 +40,13 @@ import contextlib
 import json
 import re
 import warnings
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextvars import ContextVar, Token
 from typing import Any
 
-from google.adk import Context, Event, Workflow
+from forge_agent_runtime.services import ToolValues
+from forge_common.adk import ToolFailure
+from google.adk import Context, Event
 from google.adk.agents import (
     BaseAgent,
     LlmAgent,
@@ -49,22 +56,25 @@ from google.adk.agents import (
 )
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.platform import time as platform_time
-from google.adk.tools.load_artifacts_tool import LoadArtifactsTool
-from google.adk.workflow import BaseNode
+from google.adk.tools.tool_context import ToolContext
+from google.adk.workflow import BaseNode, FunctionNode
 from google.genai import types
 from pydantic import PrivateAttr
 
+from forge_task_adk_workflows.files import file_tools
 from forge_task_adk_workflows.graph.agent_tools import (
     AgentSource,
     LazyToolset,
     agent_node,
+    failing_model_errors,
     failing_tools_first,
 )
-from forge_task_adk_workflows.graph.data import PRIVATE_STATE
+from forge_task_adk_workflows.graph.data import PRIVATE_STATE, as_data
 from forge_task_adk_workflows.graph.errors import AgentBuildError, RunFailed
 from forge_task_adk_workflows.graph.factories.base import (
     BuildContext,
     config_of,
+    failed,
     items,
     label_of,
     schema_of,
@@ -174,15 +184,41 @@ def loop_agent(node: dict[str, Any], ctx: BuildContext) -> BaseAgent:
     return _team("loop_agent", node, where_of(node), label_of(node), ctx, text(node.get("id")))
 
 
-def saved(node: dict[str, Any], ctx: BuildContext) -> Workflow:
+def saved(node: dict[str, Any], ctx: BuildContext) -> BaseNode:
     where = where_of(node)
     config = config_of(node)
     agent_id = text(config.get("agent"))
     if not agent_id:
         raise AgentBuildError(f"{where}: choose the agent it runs.")
     assert ctx.saved is not None
+    name = adk_name(text(node.get("name")))
     # Which of its versions: ag_x (its latest published), ag_x@3, ag_x@draft.
-    return ctx.saved(agent_ref(agent_id, config.get("version")), adk_name(text(node.get("name"))), where)
+    graph = ctx.saved(agent_ref(agent_id, config.get("version")), name, where)
+    inputs = config.get("inputs")
+    filled = (
+        {str(key): text(value) for key, value in inputs.items() if text(value).strip()}
+        if isinstance(inputs, dict)
+        else {}
+    )
+    if not filled:
+        return graph
+    evaluator = ctx.services.evaluator
+
+    async def run(adk: Context, node_input: Any) -> Any:
+        known = ctx.data(adk, node_input)
+        started: dict[str, Any] = {}
+        try:
+            for key, expression in filled.items():
+                value = await evaluator.evaluate(expression, known, what=f"Its input {key}")
+                if value is not None:
+                    started[key] = value
+        except StepFailed as error:
+            raise failed(node, error) from None
+        # Its start holds them to its input, as it would what came in.
+        handed = await adk.run_node(graph, node_input=started, run_id="workflow", use_sub_branch=True)
+        return as_data(handed)
+
+    return FunctionNode(name=name, func=run, rerun_on_resume=True)
 
 
 def _llm(
@@ -208,7 +244,12 @@ def _llm(
         "disallow_transfer_to_peers": bool(config.get("disallow_transfer_to_peers")),
         "sub_agents": _sub_agents(config, where, label, ctx, step),
         "tools": _tools(config, where, ctx, step),
+        # A model that answers with an error fails the step instead of ending it with no answer.
+        "after_model_callback": failing_model_errors(label, step),
     }
+    if services.tool_calls is not None:
+        # Each call noted before it runs, so a run that stops during it answers it.
+        settings["before_tool_callback"] = services.tool_calls
     toolsets = settings["tools"]
     if mode:
         settings["mode"] = mode
@@ -226,9 +267,9 @@ def _llm(
         settings["before_model_callback"] = failing_tools_first(toolsets, callback)
     elif callback is not None:
         settings["before_model_callback"] = callback
-    if services.files:
-        # The run's files: it reads them as Excel's too, as tables.
-        settings["tools"] = [*toolsets, LoadArtifactsTool(enable_spreadsheet_parsing=True)]
+    if services.artifacts or services.files:
+        # The run's files: it reads them (Excel's as tables) and saves its own.
+        settings["tools"] = [*toolsets, *file_tools(file.name for file in services.files)]
     return ForgeLlmAgent(**settings)
 
 
@@ -260,29 +301,50 @@ def _tools(config: dict[str, Any], where: str, ctx: BuildContext, step: str | No
             raise AgentBuildError(f"{at}: {needs[1]}.")
         if kind == "mcp" and not (settings.get("server") or settings.get("url")):
             raise AgentBuildError(f"{at}: choose one of the organization's MCP servers, or give its URL.")
-        tools.append(LazyToolset(tool, where=at, step=step, services=ctx.services))
+        tools.append(LazyToolset(tool, where=at, step=step, services=ctx.services, values=_tool_values(ctx)))
     return tools
 
 
-def _instruction(template: str, label: str, ctx: BuildContext) -> Callable[[ReadonlyContext], str]:
-    # An LLM agent's instruction, rendered from Forge's data for each call.
+def _data(session: Mapping[str, Any], ctx: BuildContext) -> dict[str, Any]:
+    """What an LLM agent's instruction, and its HTTP tools' ``{{ }}``, read: the
+    run's data as the agent node running sees it, and the session's state."""
+    running = _RUNNING.get()
+    state = {key: value for key, value in session.items() if not key.startswith(PRIVATE_STATE)}
+    if running is None:
+        data: dict[str, Any] = {"input": state.get("input"), "previous": None, "steps": {}}
+        data.update(ctx.bindings)
+    else:
+        data = ctx.data(*running)
+    data["state"] = plain(state)
+    return data
+
+
+def _instruction(template: str, label: str, ctx: BuildContext) -> Callable[[ReadonlyContext], Awaitable[str]]:
+    # An LLM agent's instruction, rendered from Forge's data for each call (off the event loop).
     evaluator = ctx.services.evaluator
 
-    def render(readonly: ReadonlyContext) -> str:
-        running = _RUNNING.get()
-        state = {key: value for key, value in readonly.state.items() if not key.startswith(PRIVATE_STATE)}
-        if running is None:
-            data: dict[str, Any] = {"input": state.get("input"), "previous": None, "steps": {}}
-            data.update(ctx.bindings)
-        else:
-            data = ctx.data(*running)
-        data["state"] = plain(state)
+    async def render(readonly: ReadonlyContext) -> str:
         try:
-            return evaluator.render(template, data, what="Its instruction")
+            return await evaluator.render(template, _data(readonly.state, ctx), what="Its instruction")
         except StepFailed as error:
             raise RunFailed(f"{label} failed: {error.message}") from None
 
     return render
+
+
+def _tool_values(ctx: BuildContext) -> ToolValues:
+    """Fills in ``{{ }}`` in an LLM agent's HTTP tools' URLs and bodies from
+    the run's data, as its instruction reads it (off the event loop)."""
+    evaluator = ctx.services.evaluator
+
+    async def value(expression: str, context: ToolContext | None, *, what: str) -> Any:
+        session = context.state.to_dict() if context is not None else {}
+        try:
+            return await evaluator.evaluate(expression, _data(session, ctx), what=f"{what}'s {{{{ {expression} }}}}")
+        except StepFailed as error:
+            raise ToolFailure(error.message) from None
+
+    return value
 
 
 def _team(

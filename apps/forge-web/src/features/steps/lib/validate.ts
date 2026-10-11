@@ -13,6 +13,28 @@ import { oneOf, valuesOf } from "./types"
 
 // A name a JSONata path can use without backticks.
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * What every step reads by name: an item called one of these would hide
+ * it from the steps that read the item.
+ */
+export const READ_NAMES: Record<string, string> = {
+  input: "the run's input",
+  previous: "what the step before handed on",
+  steps: "the earlier steps",
+  state: "the session's state",
+  index: "the item's place in the list",
+}
+
+/** What's wrong with what a loop, a for-each or a filter calls its item. */
+function itemNameIssue(name: string): string | undefined {
+  if (!IDENTIFIER.test(name))
+    return "The item's name is one word: letters, digits and _."
+  const taken = READ_NAMES[name]
+  return taken
+    ? `${name} is ${taken}, which the steps reading the item read too: call the item something else.`
+    : undefined
+}
 // An address: http(s) and no spaces except inside its {{ }} parts, or an
 // expression in {{ }}.
 const URLISH =
@@ -66,6 +88,23 @@ export function settingsIssues(
         "Write the JSONata expression that makes what it hands on."
       )
       break
+    case "filter":
+      need(
+        Boolean(step.config.items.trim()),
+        "items",
+        "Say which list it filters."
+      )
+      need(
+        !itemNameIssue(step.config.item_name),
+        "item-name",
+        itemNameIssue(step.config.item_name) ?? ""
+      )
+      need(
+        Boolean(step.config.condition.trim()),
+        "condition",
+        "Write the condition an item is kept by."
+      )
+      break
     case "delay":
       need(step.config.amount > 0, "amount", "Wait longer than zero.")
       break
@@ -102,15 +141,16 @@ export function settingsIssues(
       )
       break
     case "loop":
+    case "for_each":
       need(
         Boolean(step.config.items.trim()),
         "items",
         "Say which list it goes through."
       )
       need(
-        IDENTIFIER.test(step.config.item_name),
+        !itemNameIssue(step.config.item_name),
         "item-name",
-        "The item's name is one word: letters, digits and _."
+        itemNameIssue(step.config.item_name) ?? ""
       )
       need(step.config.max_iterations >= 1, "max", "Allow at least one pass.")
       need(

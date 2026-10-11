@@ -3,14 +3,16 @@ SQLite run store."""
 
 from __future__ import annotations
 
+import asyncio
+import copy
 from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
 from sqlalchemy import exc as db
 
-from forge_async_worker.control import PauseRun, RunControl, WaitRun
-from forge_task_adk_workflows.run_store import LostLease, RunStore
+from forge_async_worker.control import PauseRun, RunControl, StopRun, WaitRun
+from forge_task_adk_workflows.run_store import LostLease, NotAllowed, RunStore
 from forge_tasks.control import Decision, JobControl
 from forge_tasks.errors import TransientError
 
@@ -66,6 +68,19 @@ async def test_a_checkpoint_of_a_run_the_worker_lost_raises(store: RunStore, clo
     await store.requeue(run["id"], owner=None, error={"message": "gone", "category": "interrupted"})
     with pytest.raises(LostLease):
         await control.checkpoint()
+
+
+async def test_a_checkpoint_of_a_run_someone_abandoned_stops_it(store: RunStore) -> None:
+    run, control = await claimed(store)
+    assert control.lease_epoch == 1  # the first taking of the run
+    await store.abandon(run["id"], actor=BOB)
+    control.keep("done", 1)
+
+    with pytest.raises(StopRun):
+        await control.checkpoint("step 1 finished")
+
+    assert control.should_stop() is True
+    assert (await store.get(run["id"]))["state"] is None  # it doesn't carry on, so it keeps nothing
 
 
 async def test_a_checkpoint_the_database_couldnt_take_is_a_hiccup(
@@ -137,7 +152,12 @@ async def test_a_decided_approval_answers_at_once(store: RunStore) -> None:
     decision = await control.approval(key="gate-1", reason="Ship it?", timeout_seconds=60)
 
     assert decision == Decision(
-        approved=True, comment="fine", actor_id="user-bob", actor_name="Bob", request_id=pause["id"]
+        approved=True,
+        comment="fine",
+        actor_id="user-bob",
+        actor_name="Bob",
+        request_id=pause["id"],
+        decided_at=START,  # when Bob decided, as the run store keeps it
     )
     assert await control.approval(key="gate-1", reason="Ship it?") == decision  # every time it's asked
     with pytest.raises(PauseRun):
@@ -179,3 +199,65 @@ async def test_a_run_starts_child_runs_queued_with_a_job_each(store: RunStore) -
     assert found is not None
     assert (found["status"], found["agent_id"], found["requested_by"]) == ("queued", "ag_called00001", "member-1")
     assert found["payload"]["session_id"] == "child-session"
+    assert found["parent_run_id"] == run["id"]  # linked to the run that started it
+
+
+async def test_a_call_starts_its_run_once(store: RunStore) -> None:
+    queued: list[str] = []
+
+    async def queue(run_id: str) -> None:
+        queued.append(run_id)
+
+    run, _ = await claimed(store)
+    control = RunControl(run, store=store, owner="w1", queue=queue)
+
+    first = await control.children.start(CHILD, run_id="c" * 32)
+    again = await control.children.start(CHILD, run_id="c" * 32)  # the call answered again
+
+    assert first == again == "c" * 32
+    assert queued == [first]  # one job: the run's
+
+
+async def test_a_run_being_abandoned_starts_no_runs(store: RunStore) -> None:
+    run, control = await claimed(store)
+    await store.abandon(run["id"], actor=BOB)
+    with pytest.raises(NotAllowed, match="being abandoned"):
+        await control.children.start(CHILD, run_id="c" * 32)
+    # Nor does a worker that lost the run.
+    other, _ = await claimed(store)
+    with pytest.raises(NotAllowed):
+        await RunControl(other, store=store, owner="w2").children.start(CHILD, run_id="d" * 32)
+
+
+async def test_checkpoints_land_one_at_a_time_the_last_with_all_there_is(
+    store: RunStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, control = await claimed(store)
+    checkpoint, first = store.checkpoint, asyncio.Event()
+
+    async def slow_first(run_id: str, *, owner: str, state: dict[str, Any]) -> None:
+        kept = copy.deepcopy(state)  # what it writes, as it starts to
+        if not first.is_set():
+            first.set()
+            await asyncio.sleep(0.05)  # a slow write
+        await checkpoint(run_id, owner=owner, state=kept)
+
+    monkeypatch.setattr(store, "checkpoint", slow_first)
+    control.keep("calls", ["a"])
+    one = asyncio.create_task(control.checkpoint())
+    await first.wait()
+    control.keep("calls", ["a", "b"])  # a tool call at once, noted meanwhile
+    two = asyncio.create_task(control.checkpoint())
+    await asyncio.gather(one, two)
+
+    assert (await store.get(run["id"]))["state"] == {"calls": ["a", "b"]}
+
+
+CHILD = {
+    "tenant_id": "org-1",
+    "agent_id": "ag_called00001",
+    "name": "Called",
+    "session_id": "child-session",
+    "run_as": "member-1",
+    "document": {},
+}

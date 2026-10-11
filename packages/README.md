@@ -43,20 +43,29 @@ Dockerfile copies the package directory before `uv sync --package <app>`.
   a document before a run and to read a run's steps from its session. Its
   tests, and task-sdk's, run with the worker's checks
   (`make async-worker-check`).
+- [`python/codegraph-query/`](python/codegraph-query/README.md)
+  (`forge-codegraph-query`, `forge_codegraph_query`) is every read of the
+  code graph the worker writes to Spanner (search, the explorer, the agents'
+  graph queries, the ingestion audit) and the cross-repository links people
+  draw: one implementation, settings model and test suite for the admin API,
+  the ADK workflows task and the code graph MCP server, so a search answers
+  alike wherever it's asked. Its contract with the worker (search document
+  hashes, graph ids, the embedding transform) is checked against the Go
+  tests' golden file (`make codegraph-query-check`; the store's SQL against
+  the emulator, `make codegraph-query-test-spanner`).
 - [`python/codegraph/`](python/codegraph/README.md) (`forge-codegraph`,
-  `forge_codegraph`) is the code graph worker's read and search API: a
-  client, and code search hits as the knowledge base tool's passages (cited
-  like documents'), cross-repository links, and a system design knowledge
-  base described for its agents. The admin API (system design knowledge
-  bases, the code graph explorer) and the ADK workflows task (LLM nodes
-  searching a system design knowledge base) both use it (`make
-  codegraph-check`).
+  `forge_codegraph`) is system design knowledge bases for their agents: one
+  search of their code as the knowledge base tool's passages (cited like
+  documents'), and their designs described. The admin API (its search route,
+  hosted chat agents) and the ADK workflows task (LLM nodes) both use it
+  (`make codegraph-check`).
 
 [`go/code-graph/`](go/code-graph/README.md) holds the Go modules the code
 graph ingestion worker (`apps/forge-codegraph-worker`) links: the graph's
-domain and parser contracts, its Spanner storage, schema and search, the
-queries agents ask of it (`agentquery`), the shared service configuration
-and the audited Java grammar. Each is a Go module of its own, joined by the
+domain and parser contracts, its Spanner storage and schema (which every
+reader of the graph depends on), the shared service configuration and the
+audited Java grammar. The worker only writes graphs; they're read with
+`python/codegraph-query`. Each is a Go module of its own, joined by the
 root `go.work` (`make worker-check`).
 
 [`forge-ui/`](forge-ui/README.md) is the Forge UI design system: shadcn

@@ -1,0 +1,657 @@
+# Labelled questions for the core suite (see eval/README.md).
+#
+# answer: just what the question asks. It's what --answers grades against,
+# and context the question didn't ask for counts against an answer that
+# leaves it out.
+#
+# evidence: each item names a document and text that ONE passage must hold
+# (its section and text; case, spacing, quotes and dashes folded). Put in
+# contains the facts that make that passage self-sufficient: for a nested
+# list item, its parents too (the passage must say whose limit it is).
+#
+# kinds: fact, paraphrase (worded unlike the document), table, hierarchy,
+# procedure, diagram, identifier, code, notes (speaker notes), multi_doc,
+# unanswerable (answerable: false and no evidence: the search should find nothing).
+
+# ----------------------------------------------------------------- claims manual (Markdown)
+- id: cm-na-senior-home
+  kind: hierarchy
+  question: What can a Senior Adjuster in North America approve without review on a Home claim?
+  answer: "Up to 25,000 USD."
+  evidence:
+    - doc: claims-manual
+      contains: ["North America", "Senior Adjuster", "Home", "Approve without review: up to 25,000 USD"]
+
+- id: cm-emea-field-auto
+  kind: hierarchy
+  question: I'm a Field Adjuster in EMEA. How much can I approve on my own for an Auto claim?
+  answer: "Up to 8,000 EUR."
+  evidence:
+    - doc: claims-manual
+      contains: ["EMEA", "Field Adjuster", "Approve without review: up to 8,000 EUR"]
+
+- id: cm-reverse-105k-sgd
+  kind: hierarchy
+  question: Who can approve claims of up to 105,000 SGD without review? Give the region, role and line of business.
+  answer: APAC, Senior Adjuster, Commercial property.
+  evidence:
+    - doc: claims-manual
+      contains: ["APAC", "Senior Adjuster", "Commercial property", "Approve without review: up to 105,000 SGD"]
+
+- id: cm-latam-field-commercial
+  kind: hierarchy
+  question: In LATAM, what is a Field Adjuster's no-review limit for Commercial property claims?
+  answer: Up to 80,000 BRL.
+  evidence:
+    - doc: claims-manual
+      contains: ["LATAM", "Field Adjuster", "Approve without review: up to 80,000 BRL"]
+
+- id: cm-latam-manager-commercial-refer
+  kind: hierarchy
+  question: Above what amount must a LATAM Claims Manager refer a Commercial property claim upward?
+  answer: Above 3,600,000 BRL.
+  evidence:
+    - doc: claims-manual
+      contains: ["LATAM", "Claims Manager", "Refer upward: above 3,600,000 BRL"]
+
+- id: cm-apac-currency
+  kind: hierarchy
+  question: Which currency are APAC claims settled in?
+  answer: SGD.
+  evidence:
+    - doc: claims-manual
+      contains: ["APAC", "Settlement currency: SGD"]
+
+- id: cm-cat-report
+  kind: procedure
+  question: In the catastrophe response procedure, which step is publishing the daily CAT report part of, and who receives the report?
+  answer: "It's part of step 5, \"Run the daily stand-up\"; the report goes to the Head of Claims and to Reinsurance."
+  evidence:
+    - doc: claims-manual
+      contains: ["Run the daily stand-up", "Publish the daily CAT report", "Head of Claims", "Reinsurance"]
+
+- id: cm-cat-declare-deadline
+  kind: procedure
+  question: How soon after landfall must a catastrophe event be declared?
+  answer: "Within 4 hours of landfall."
+  evidence:
+    - doc: claims-manual
+      contains: ["within 4 hours of landfall"]
+
+- id: cm-cat-loan-cap
+  kind: paraphrase
+  question: During a catastrophe, how many adjusters can we borrow from another region?
+  answer: "At most 20% of that region's adjusters."
+  evidence:
+    - doc: claims-manual
+      contains: ["Cap the loan at 20% of that region's adjusters"]
+
+- id: cm-cat-advance
+  kind: fact
+  question: How large an emergency advance can a Red claimant get after a catastrophe?
+  answer: "Up to 3,000 in local currency."
+  evidence:
+    - doc: claims-manual
+      contains: ["advance of up to 3,000 in local currency"]
+
+- id: cm-siu-police-report
+  kind: hierarchy
+  question: Is a theft claim with no police report a red flag or an amber flag for SIU, and in which group?
+  answer: An amber flag in the Loss group.
+  evidence:
+    - doc: claims-manual
+      contains: ["Loss", "Amber flags", "No police report for a theft"]
+
+- id: cm-siu-rule
+  kind: fact
+  question: When must a claim be referred to the Special Investigations Unit?
+  answer: When it shows any red flag, or three or more amber flags from different groups.
+  evidence:
+    - doc: claims-manual
+      contains: ["any red flag", "three or more amber flags from different groups"]
+
+# ----------------------------------------------------------------- travel and expense policy (Word)
+- id: exp-business-class
+  kind: fact
+  question: When is business class allowed for company travel?
+  answer: Only on flights over 10 hours, with VP approval.
+  evidence:
+    - doc: expense-policy
+      contains: ["Business class is allowed only for flights over 10 hours, with VP approval"]
+
+- id: exp-premium-economy
+  kind: paraphrase
+  question: Can I book a better seat than economy for a 7-hour flight?
+  answer: Yes; premium economy is permitted for flights of 6 hours or more.
+  evidence:
+    - doc: expense-policy
+      contains: ["Premium economy is permitted for flights of 6 hours or more"]
+
+- id: exp-booking-lead-time
+  kind: fact
+  question: How far ahead do flights have to be booked?
+  answer: "At least 14 days before departure."
+  evidence:
+    - doc: expense-policy
+      contains: ["at least 14 days before departure"]
+
+- id: exp-hotel-london
+  kind: table
+  question: What is the nightly hotel cap in London?
+  answer: 350 USD (Tier 1).
+  evidence:
+    - doc: expense-policy
+      contains: ["New York, London, Tokyo; Nightly cap (USD): 350"]
+
+- id: exp-hotel-singapore
+  kind: table
+  question: How much can I spend per night on a hotel in Singapore?
+  answer: 250 USD (Tier 2).
+  evidence:
+    - doc: expense-policy
+      contains: ["Chicago, Berlin, Singapore; Nightly cap (USD): 250"]
+
+- id: exp-per-diem-international
+  kind: fact
+  question: What is the daily meal allowance when travelling internationally?
+  answer: 95 USD a day.
+  evidence:
+    - doc: expense-policy
+      contains: ["95 USD for international travel"]
+
+- id: exp-mileage
+  kind: paraphrase
+  question: How much do I get back for driving my own car on a business trip?
+  answer: "0.67 USD per mile."
+  evidence:
+    - doc: expense-policy
+      contains: ["0.67 USD per mile"]
+
+- id: exp-late-report
+  kind: procedure
+  question: What happens if I file my expense report 70 days after the trip?
+  answer: Reports more than 60 days late are reimbursed only with CFO approval.
+  evidence:
+    - doc: expense-policy
+      contains: ["more than 60 days after the trip", "only with CFO approval"]
+
+- id: exp-director-approval
+  kind: fact
+  question: Which expense reports need a director's approval?
+  answer: Reports totalling over 2,500 USD.
+  evidence:
+    - doc: expense-policy
+      contains: ["over 2,500 USD need director approval"]
+
+- id: exp-baggage
+  kind: paraphrase
+  question: Will the company pay for my extra luggage?
+  answer: "Only up to 50 USD a trip; excess baggage fees over 50 USD aren't reimbursed."
+  evidence:
+    - doc: expense-policy
+      contains: ["Excess baggage fees over 50 USD a trip"]
+
+# ----------------------------------------------------------------- premium rates (Excel)
+- id: rates-ohio-premium
+  kind: table
+  question: What is the monthly premium for the Premium plan in Ohio?
+  answer: 158 USD a month.
+  evidence:
+    - doc: premium-rates
+      contains: ["State: Ohio; Plan: Premium; Monthly premium (USD): 158"]
+
+- id: rates-michigan-standard
+  kind: table
+  question: How much is the Standard auto plan per month in Michigan?
+  answer: 192 USD a month.
+  evidence:
+    - doc: premium-rates
+      contains: ["State: Michigan; Plan: Standard; Monthly premium (USD): 192"]
+
+- id: rates-florida-basic-deductible
+  kind: table
+  question: What is the deductible on the Basic plan in Florida?
+  answer: "1,500 USD."
+  evidence:
+    - doc: premium-rates
+      contains: ["State: Florida; Plan: Basic", "Deductible (USD): 1500"]
+
+- id: rates-florida-standard-roadside
+  kind: table
+  question: Does the Standard plan in Florida include roadside assistance?
+  answer: No.
+  evidence:
+    - doc: premium-rates
+      contains: ["State: Florida; Plan: Standard; Monthly premium (USD): 177; Deductible (USD): 500; Roadside assistance: No"]
+
+- id: rates-washington-premium
+  kind: table
+  question: What does the Premium plan cost each month in Washington state?
+  answer: 171 USD.
+  evidence:
+    - doc: premium-rates
+      contains: ["State: Washington; Plan: Premium; Monthly premium (USD): 171"]
+
+- id: rates-telematics-discount
+  kind: paraphrase
+  question: How much do I save on car insurance by using the DriveWise app?
+  answer: "10%."
+  evidence:
+    - doc: premium-rates
+      contains: ["DriveWise telematics; Percent off: 10%"]
+
+- id: rates-good-student
+  kind: table
+  question: Who qualifies for the good student discount?
+  answer: "Full-time students under 25 with a B average or better."
+  evidence:
+    - doc: premium-rates
+      contains: ["Good student", "Full-time students under 25 with a B average or better"]
+
+- id: rates-plans
+  kind: fact
+  question: Which auto insurance plans are offered?
+  answer: Basic, Standard and Premium.
+  evidence:
+    - doc: premium-rates
+      contains: ["Basic", "Standard", "Premium"]
+
+# ----------------------------------------------------------------- incident runbook (HTML)
+- id: runbook-sev2-response
+  kind: table
+  question: How quickly must we respond to a SEV2 incident?
+  answer: "Within 30 minutes."
+  evidence:
+    - doc: incident-runbook
+      contains: ["Severity: SEV2", "Response time: 30 minutes"]
+
+- id: runbook-sev1-paged
+  kind: table
+  question: Who gets paged for a SEV1?
+  answer: The on-call engineer, the incident commander and the Head of Engineering.
+  evidence:
+    - doc: incident-runbook
+      contains: ["Severity: SEV1", "Head of Engineering"]
+
+- id: runbook-cosmetic
+  kind: paraphrase
+  question: A button has the wrong colour on an internal tool. What severity is that and how fast do we respond?
+  answer: "SEV4; respond by the next business day."
+  evidence:
+    - doc: incident-runbook
+      contains: ["Severity: SEV4", "Next business day"]
+
+- id: runbook-slack-channel
+  kind: procedure
+  question: What should the Slack channel for an incident be called?
+  answer: "#inc-YYYYMMDD-short-name"
+  evidence:
+    - doc: incident-runbook
+      contains: ["#inc-YYYYMMDD-short-name"]
+
+- id: runbook-incident-commander
+  kind: hierarchy
+  question: Who can be the incident commander when declaring an incident?
+  answer: "Anyone except the person fixing the problem."
+  evidence:
+    - doc: incident-runbook
+      contains: ["Open an incident in PagerDuty", "never the person fixing the problem"]
+
+- id: runbook-status-cadence
+  kind: paraphrase
+  question: How often do we post updates while a SEV1 is ongoing?
+  answer: "Every 30 minutes."
+  evidence:
+    - doc: incident-runbook
+      contains: ["every 30 minutes for SEV1"]
+
+- id: runbook-rollback-command
+  kind: code
+  question: What command rolls back the claims API deployment?
+  answer: kubectl rollout undo deployment/claims-api -n claims-prod
+  evidence:
+    - doc: incident-runbook
+      contains: ["kubectl rollout undo deployment/claims-api -n claims-prod"]
+
+- id: runbook-postmortem-review
+  kind: hierarchy
+  question: Where are incident postmortems reviewed?
+  answer: "In the Thursday reliability meeting."
+  evidence:
+    - doc: incident-runbook
+      contains: ["Write a postmortem", "Review it in the Thursday reliability meeting"]
+
+# ----------------------------------------------------------------- Q3 business review (PowerPoint)
+- id: qbr-loss-ratio
+  kind: fact
+  question: What was the loss ratio in Q3 2026?
+  answer: "61.4%."
+  evidence:
+    - doc: business-review
+      contains: ["Loss ratio: 61.4%"]
+
+- id: qbr-nps-reason
+  kind: notes
+  question: Why did our net promoter score go up last quarter?
+  answer: "Mostly the new self-service claims portal."
+  evidence:
+    - doc: business-review
+      contains: ["self-service claims portal"]
+
+- id: qbr-fast-track-time
+  kind: hierarchy
+  question: What was the average cycle time for fast-track claims in Q3?
+  answer: "2.1 days."
+  evidence:
+    - doc: business-review
+      contains: ["Average claim cycle time", "Fast-track claims: 2.1 days"]
+
+- id: qbr-apac-volume
+  kind: table
+  question: How many claims did APAC handle in Q3?
+  answer: "8,900."
+  evidence:
+    - doc: business-review
+      contains: ["Region: APAC; Q2 claims: 7,320; Q3 claims: 8,900"]
+
+- id: qbr-emea-trend
+  kind: table
+  question: Did EMEA claim volume go up or down in Q3?
+  answer: "Down, by 6%."
+  evidence:
+    - doc: business-review
+      contains: ["Region: EMEA", "Change: -6%"]
+
+- id: qbr-auto-claims
+  kind: table
+  question: How many auto claims were there in Q3 2026?
+  answer: 23,100.
+  evidence:
+    - doc: business-review
+      contains: ["Category: Auto; Q3 claims: 23100"]
+
+- id: qbr-telematics-pilot
+  kind: hierarchy
+  question: Where will the DriveWise telematics pilot run, and when?
+  answer: In Germany and the Netherlands, from November.
+  evidence:
+    - doc: business-review
+      contains: ["Launch DriveWise telematics in EMEA", "Pilot in Germany and the Netherlands from November"]
+
+- id: qbr-apac-hiring
+  kind: notes
+  question: When was the budget for hiring APAC field adjusters approved, and how many will be hired?
+  answer: The board approved it on 14 September; 40 field adjusters.
+  evidence:
+    - doc: business-review
+      contains: ["Hire 40 field adjusters in APAC", "approved by the board on 14 September"]
+
+# ----------------------------------------------------------------- vendor agreement (PDF)
+- id: vendor-term
+  kind: fact
+  question: How long does the Acme Auto Repairs agreement run?
+  answer: "24 months from 1 March 2026, renewing automatically for 12-month periods."
+  evidence:
+    - doc: vendor-agreement
+      contains: ["starts on 1 March 2026 and runs for 24 months"]
+
+- id: vendor-termination
+  kind: paraphrase
+  question: How much notice do we have to give to end the Acme contract without cause?
+  answer: 90 days' written notice.
+  evidence:
+    - doc: vendor-agreement
+      contains: ["terminate this agreement for convenience with 90 days' written notice"]
+
+- id: vendor-courtesy-car
+  kind: table
+  question: What does Acme charge per day for a courtesy car?
+  answer: 38 USD a day.
+  evidence:
+    - doc: vendor-agreement
+      contains: ["Courtesy car, per day; Fee (USD): 38"]
+
+- id: vendor-labour-rate
+  kind: table
+  question: What is Acme's hourly labour rate?
+  answer: 112 USD an hour.
+  evidence:
+    - doc: vendor-agreement
+      contains: ["Labour, per hour; Fee (USD): 112"]
+
+- id: vendor-estimate-sla
+  kind: fact
+  question: How quickly must Acme give us a written repair estimate?
+  answer: "Within 2 business days of seeing the vehicle."
+  evidence:
+    - doc: vendor-agreement
+      contains: ["written repair estimate within 2 business days"]
+
+- id: vendor-liability
+  kind: fact
+  question: What is the liability cap in the Acme agreement?
+  answer: "2,000,000 USD a year."
+  evidence:
+    - doc: vendor-agreement
+      contains: ["capped at 2,000,000 USD a year"]
+
+- id: vendor-warranty
+  kind: paraphrase
+  question: If an Acme repair fails later, how long is the work guaranteed?
+  answer: A 36-month workmanship warranty.
+  evidence:
+    - doc: vendor-agreement
+      contains: ["36-month workmanship warranty"]
+
+- id: vendor-notices
+  kind: identifier
+  question: Which email address should legal notices to Acme be sent to?
+  answer: contracts@acmerepairs.example
+  evidence:
+    - doc: vendor-agreement
+      contains: ["contracts@acmerepairs.example"]
+
+# ----------------------------------------------------------------- adjuster roster (CSV)
+- id: roster-japanese-senior
+  kind: table
+  question: Which APAC Senior Adjuster speaks Japanese?
+  answer: "Kenji Watanabe."
+  evidence:
+    - doc: adjuster-roster
+      contains: ["Name: Kenji Watanabe; Region: APAC; Role: Senior Adjuster", "Languages: Japanese, English"]
+
+- id: roster-adj-2217
+  kind: identifier
+  question: Who is adjuster ADJ-2217?
+  answer: "Arjun Mehta, a Claims Manager in APAC."
+  evidence:
+    - doc: adjuster-roster
+      contains: ["Adjuster ID: ADJ-2217; Name: Arjun Mehta"]
+
+- id: roster-caseload
+  kind: table
+  question: What is the maximum number of open claims Lucas Ferreira can carry?
+  answer: 44.
+  evidence:
+    - doc: adjuster-roster
+      contains: ["Name: Lucas Ferreira", "Max open claims: 44"]
+
+- id: roster-uae
+  kind: paraphrase
+  question: Who handles our claims in the United Arab Emirates?
+  answer: "Fatima Haddad."
+  evidence:
+    - doc: adjuster-roster
+      contains: ["Name: Fatima Haddad", "Licensed in: UAE"]
+
+- id: roster-tonga
+  kind: table
+  question: Which adjuster is licensed in Tonga?
+  answer: "Siosaia Tupou."
+  evidence:
+    - doc: adjuster-roster
+      contains: ["Name: Siosaia Tupou", "Licensed in: New Zealand, Tonga"]
+
+# ----------------------------------------------------------------- release notes (text)
+- id: rn-cc-4821
+  kind: identifier
+  question: What was fixed in CC-4821?
+  answer: "Duplicate payments could be issued when an adjuster double-clicked \"Approve\"."
+  evidence:
+    - doc: release-notes
+      contains: ["CC-4821", "Duplicate payments"]
+
+- id: rn-photo-size
+  kind: paraphrase
+  question: How big can photos be when a customer reports a claim online?
+  answer: "Up to 25 MB per photo."
+  evidence:
+    - doc: release-notes
+      contains: ["photos up to 25 MB each"]
+
+- id: rn-bulk-reassign-version
+  kind: fact
+  question: In which ClaimsCenter version could Claims Managers first bulk-reassign claims?
+  answer: "8.3.0."
+  evidence:
+    - doc: release-notes
+      contains: ["Version 8.3.0", "bulk-reassign claims"]
+
+- id: rn-safari
+  kind: fact
+  question: Is there a known problem with ClaimsCenter in Safari?
+  answer: "Yes: the reserve history chart doesn't render in Safari 17 (CC-4911)."
+  evidence:
+    - doc: release-notes
+      contains: ["CC-4911", "Safari 17"]
+
+- id: rn-export-timeout
+  kind: fact
+  question: Which release fixed timeouts when exporting lots of claims to CSV?
+  answer: "8.3.2."
+  evidence:
+    - doc: release-notes
+      contains: ["Version 8.3.2", "CC-4790"]
+
+# ----------------------------------------------------------------- diagrams (Mermaid, Visio)
+- id: fnol-fast-track
+  kind: diagram
+  question: Which claims are fast-tracked at first notice of loss?
+  answer: "Claims where no one is injured and the estimated damage is under 2,000 USD."
+  evidence:
+    - doc: fnol-flow
+      contains: ["[Estimated damage under 2,000 USD?] --Yes--> [Fast-track"]
+
+- id: fnol-injury
+  kind: diagram
+  question: Where does a reported loss go if someone was injured?
+  answer: To the Bodily Injury team.
+  evidence:
+    - doc: fnol-flow
+      contains: ["[Anyone injured?] --Yes--> [Route to the Bodily Injury team]"]
+
+- id: payflow-cfo
+  kind: diagram
+  question: Which payments need the CFO to sign off?
+  answer: Payments over 50,000 USD.
+  evidence:
+    - doc: payment-flow
+      contains: ["Payments over 50,000 USD need CFO sign-off"]
+
+- id: payflow-after-review
+  kind: diagram
+  question: What happens after finance approves a payment request?
+  answer: The payment is released.
+  evidence:
+    - doc: payment-flow
+      contains: ["[Finance review] --approved--> [Release payment]"]
+
+# ----------------------------------------------------------------- across documents
+- id: multi-fraud-score
+  kind: multi_doc
+  question: What happens at intake when a claim's fraud score is above 80, and which ClaimsCenter change introduced the fraud score?
+  answer: "It's referred to SIU; the fraud score came with CC-4702."
+  evidence:
+    - doc: fnol-flow
+      contains: ["[Fraud score above 80?] --Yes--> [Refer to SIU]"]
+    - doc: release-notes
+      contains: ["CC-4702", "fraud score from the Shift model"]
+
+- id: multi-drivewise
+  kind: multi_doc
+  question: What discount does DriveWise give, and where is DriveWise being piloted next?
+  answer: "10% off; the pilot runs in Germany and the Netherlands."
+  evidence:
+    - doc: premium-rates
+      contains: ["DriveWise telematics; Percent off: 10%"]
+    - doc: business-review
+      contains: ["Pilot in Germany and the Netherlands"]
+
+- id: multi-japan-limit
+  kind: multi_doc
+  question: Kenji Watanabe is handling a Home claim. What can he approve without review?
+  answer: "Up to 35,000 SGD."
+  evidence:
+    - doc: adjuster-roster
+      contains: ["Name: Kenji Watanabe; Region: APAC; Role: Senior Adjuster"]
+    - doc: claims-manual
+      contains: ["APAC", "Senior Adjuster", "Home", "Approve without review: up to 35,000 SGD"]
+
+- id: multi-sev1-claims-down
+  kind: multi_doc
+  question: Claims intake is down for every customer. How fast must we respond, and what command rolls back the last claims API deploy?
+  answer: "Within 15 minutes (SEV1); kubectl rollout undo deployment/claims-api -n claims-prod."
+  evidence:
+    - doc: incident-runbook
+      contains: ["Severity: SEV1", "Response time: 15 minutes"]
+    - doc: incident-runbook
+      contains: ["kubectl rollout undo deployment/claims-api"]
+
+# ----------------------------------------------------------------- not in the documents
+- id: un-parental-leave
+  kind: unanswerable
+  answerable: false
+  question: How many weeks of parental leave do employees get?
+  answer: Not in the documents.
+
+- id: un-dental
+  kind: unanswerable
+  answerable: false
+  question: What is the waiting period for the employee dental plan?
+  answer: Not in the documents.
+
+- id: un-ceo
+  kind: unanswerable
+  answerable: false
+  question: Who is the CEO of Northwind Mutual?
+  answer: Not in the documents.
+
+- id: un-boat-premium
+  kind: unanswerable
+  answerable: false
+  question: What is the monthly premium for boat insurance in Ohio?
+  answer: Not in the documents (only auto rates are listed).
+
+- id: un-windscreen-fee
+  kind: unanswerable
+  answerable: false
+  question: What does Acme charge for a windscreen replacement?
+  answer: Not in the documents (the fee table has no windscreen fee).
+
+- id: un-sev5
+  kind: unanswerable
+  answerable: false
+  question: What is the response time for a SEV5 incident?
+  answer: Not in the documents (severities stop at SEV4).
+
+- id: un-version-9
+  kind: unanswerable
+  answerable: false
+  question: What changed in ClaimsCenter version 9.0?
+  answer: Not in the documents.
+
+- id: un-weather
+  kind: unanswerable
+  answerable: false
+  question: What's the weather forecast for Singapore tomorrow?
+  answer: Not in the documents.

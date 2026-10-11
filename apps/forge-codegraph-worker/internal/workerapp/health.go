@@ -16,11 +16,10 @@ type healthStatus struct {
 	queueOK atomic.Bool
 }
 
-func (s *healthStatus) handler(api *workerAPI) http.Handler {
+// handler serves the unauthenticated probes, and nothing else: graph reads
+// and search live in the Python package forge_codegraph_query.
+func (s *healthStatus) handler() http.Handler {
 	mux := http.NewServeMux()
-	if api != nil {
-		api.register(mux)
-	}
 	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusOK)
@@ -38,8 +37,8 @@ func (s *healthStatus) handler(api *workerAPI) http.Handler {
 	return mux
 }
 
-// startHealth serves the probes and, when api is set, the worker's API.
-func startHealth(ctx context.Context, addr string, status *healthStatus, api *workerAPI, logger *slog.Logger) (*http.Server, <-chan error, error) {
+// startHealth serves the probes on addr; an empty addr disables them.
+func startHealth(ctx context.Context, addr string, status *healthStatus, logger *slog.Logger) (*http.Server, <-chan error, error) {
 	if addr == "" {
 		return nil, nil, nil
 	}
@@ -47,19 +46,14 @@ func startHealth(ctx context.Context, addr string, status *healthStatus, api *wo
 	if err != nil {
 		return nil, nil, err
 	}
-	// A graph read or the audit may take far longer than a probe.
-	write := 5 * time.Second
-	if api != nil {
-		write = apiTimeout + 5*time.Second
-	}
 	server := &http.Server{
-		Handler: status.handler(api), ReadHeaderTimeout: 2 * time.Second,
-		ReadTimeout: 5 * time.Second, WriteTimeout: write,
+		Handler: status.handler(), ReadHeaderTimeout: 2 * time.Second,
+		ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second,
 		IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8 << 10,
 		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
-	logger.Info("worker health listener started", "address", listener.Addr().String(), "api", api != nil)
+	logger.Info("worker health listener started", "address", listener.Addr().String())
 	return server, done, nil
 }

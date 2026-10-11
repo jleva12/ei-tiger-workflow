@@ -20,7 +20,7 @@ that repository's.
 | Path | Owns |
 |---|---|
 | `cmd/codegraph-worker` | The worker process: configuration from the environment only, a supervisor that drains on the first signal and exits on the second |
-| `internal/workerapp` | Configuration on top of `packages/go/code-graph/serviceconfig`, language bootstrap, the job loop (claim, admit, run, settle: `ingest.go`), health probes, the worker API, worker registration |
+| `internal/workerapp` | Configuration on top of `packages/go/code-graph/serviceconfig`, language bootstrap, the job loop (claim, admit, run, settle: `ingest.go`), health probes, worker registration |
 | `internal/jobqueue` | The queue of ingestion jobs in the admin API's MySQL (`code_ingestion_jobs`): claims under `FOR UPDATE SKIP LOCKED`, leases, fenced writes |
 | `internal/ingestion` | The pipeline and the analysis configuration digest |
 | `internal/languages`, `internal/parser/{java,typescript}`, `internal/resolve/{java,typescript}` | Language adapters, the Tree-sitter Java and TypeScript/JavaScript parsers, the javac binding bridge and the TypeScript syntax-tier resolver |
@@ -96,48 +96,6 @@ created before keeps its `CGJobs` table and `CGReadyJobs` index, unused;
 drop them by hand if you like (`DROP INDEX CGReadyJobs`, then
 `DROP TABLE CGJobs`): the schema tools only ever add.
 
-## Worker API
-
-One trusted caller, such as the Forge admin API, reads the published
-graphs, their runs and the ingestion audit over HTTP, and keeps
-cross-repository links. The API shares the health listener
-(`CODEGRAPH_HEALTH_ADDR`: 8090 natively, 18090 from Compose,
-`http://worker:8080` inside the stack) and is on only when
-`CODEGRAPH_ADMISSION_TOKEN` is set (named for when it also admitted
-ingestions); `make env` generates one (`FORGE_CODEGRAPH_ADMISSION_TOKEN` in
-`.env.common`). Every call sends it as `Authorization: Bearer <token>`. The
-caller decides who may read which repository: repository IDs are
-deterministic (`repo:` and a hash of the URL), so only ever pass on IDs of
-repositories the reader's organization has.
-
-| Call | Does |
-|---|---|
-| `GET /v1/repositories/{repo}/runs/{run}` | The run: `phase`, metrics, failure |
-| `GET /v1/repositories/{repo}/runs?limit=&cursor=` | `{"runs", "next_cursor"?}`: the repository's runs, newest deployment first, each the `run` object of the run call; `limit` 1–50, default 10; `next_cursor` is absent on the last page |
-| `GET /v1/repositories/{repo}/stats` | Totals of the live graph from one snapshot: `generation`, `branch`, `commit_sha`, `run_id`, `nodes` and `edges` with `node_kinds` and `edge_kinds`, `searchable` nodes, and `embeddings` (`model`, `dimensions`, `current` vectors that match their node, `stored` vectors) for the model this worker embeds with (empty and zero when embeddings are off). Before the first publication, generation 0 and zero counts |
-| `GET /v1/repositories/{repo}/graph?kind=&generation=&cursor=` | A sample of published nodes (of one kind, or any), a bounded neighbourhood around each and the edges among them, with the generation, branch and commit read; `generation` 0 or absent is the live one |
-| `GET /v1/repositories/{repo}/neighbors?node=&direction=&generation=&limit=&cursor=` | A node's edges (`in`, `out` or `both`, the default) and their far endpoints; `limit` 1–200, default 40 |
-| `GET /v1/repositories/{repo}/symbols?name=\|qualified_name=&generation=&limit=` | Nodes with exactly that name or qualified name (one of the two); `limit` default 20 |
-| `GET /v1/repositories/{repo}/source?node=&generation=&context=` | A node's retained source, with `context` lines around it (0–200, default 3) |
-| `GET /v1/repositories/{repo}/node?node=&generation=` | One node's version |
-| `PUT /v1/cross-links/{owner}` | Makes `{"links": [...]}` the owner's (e.g. `team:<id>`) whole set of cross-repository links: each from a node of one repository's graph to a node of another's, with its kind, label and the nodes' qualified names. Stored beside the graphs in `CGCrossLinks`, never in a generation; an empty list removes them. At most 2000 per owner |
-| `GET /v1/repositories/{repo}/cross-links?node=&direction=` | `{"hops"}`: the node's cross-repository links (`in`, `out` or `both`, the default), each followed to the node at its far end in that repository's live generation, or `stale` when it's gone |
-
-```sh
-token=$(sed -n 's/^FORGE_CODEGRAPH_ADMISSION_TOKEN=//p' .env.common)
-curl -s localhost:8090/v1/repositories/<repository id>/stats -H "Authorization: Bearer $token"
-```
-
-Failures return `{"code", "message"}`:
-
-| Status | `code` | Meaning |
-|---|---|---|
-| 400 | `invalid_request` | A missing or out-of-range parameter, or a bad cursor |
-| 401 | `unauthenticated` | Missing or wrong token |
-| 404 | `not_found` | No such run, repository, node or source |
-| 409 | `conflict` | The request conflicts with the graph's state |
-| 503 | `unavailable` | Spanner is down; retry |
-
 ### GitHub access
 
 Every clone, fetch and `ls-remote` sends `CODEGRAPH_GITHUB_TOKEN` to
@@ -155,6 +113,30 @@ reports.
 The copy in `forge-aidlc-parent` reads GitHub as Forge's GitHub App instead,
 with per-repository tokens its admin API mints; this repository has no
 GitHub App, so that client (`internal/githubtokens`) was left out.
+
+## Probes and queries
+
+The worker serves no API. Its health listener (`CODEGRAPH_HEALTH_ADDR`:
+8090 natively, 18090 from Compose, `http://worker:8080` inside the stack;
+empty turns it off) answers two unauthenticated probes, and 404 to
+anything else:
+
+| Call | Does |
+|---|---|
+| `GET /livez` | 200 while the process runs |
+| `GET /readyz` | 200 once startup's checks passed, while Spanner and the admin MySQL answer the health tick's probes (every 5 seconds); 503 otherwise and while draining |
+
+Everything that reads what the worker writes lives in the Python package
+[`packages/python/codegraph-query`](../../packages/python/codegraph-query)
+(`forge_codegraph_query`), which the admin API, the workflows worker and
+the code graph MCP server use: runs, graph reads, search over
+`CGSearchDocuments` and `CGSearchEmbeddings`, the ingestion audit, and the
+cross-repository links, which it keeps in `CGCrossLinks` itself. It reads
+Spanner directly and hashes documents exactly as ingestion does
+(`codesearch.FromNode`); `packages/go/code-graph/domain/codesearch/testdata/reader_contract.json`
+is the fixture both sides test against. The worker used to serve those
+reads behind `CODEGRAPH_ADMISSION_TOKEN`; an env file that still sets it,
+or `CODEGRAPH_SEARCH_ENHANCE_QUERY`, loads, and both are ignored.
 
 ## Languages
 
@@ -216,15 +198,15 @@ The worker stops at startup when the admin MySQL has no
 `code_ingestion_jobs` table yet, saying to run `make admin-migrate`.
 
 The worker's host ports sit beside `forge-aidlc-parent`'s, so both stacks
-run at once: health and admission on 8090 natively and 18090 in Compose
+run at once: the probes on 8090 natively and 18090 in Compose
 (`WORKER_HEALTH_PORT`), the emulator on 19030 (gRPC, `SPANNER_GRPC_PORT`)
 and 19040 (REST, `SPANNER_HTTP_PORT`).
 
 The process accepts no arguments. It reads defaults, then `codegraph.yaml`
 when present, then `.env` from its working directory (`CODEGRAPH_ENV_FILE`
 selects another file), then the process environment; `.env.example` lists
-every setting. Values the worker shares with other apps (the admission token,
-the cursor signing key, the GitHub token, the embedding model, dimensions and
+every setting. Values the worker shares with other apps (the cursor signing
+key, the GitHub token, the embedding model, dimensions and
 gateway every app embeds with (`FORGE_EMBEDDING_*`) and the OpenAI key) live
 once in the repository's `.env.common`, and `.env` names each
 with a `${NAME}` reference, e.g.
@@ -349,7 +331,9 @@ SPANNER_EMULATOR_HOST=127.0.0.1:19030 CODEGRAPH_TEST_JAVA_HOME=/abs/jdk CODEGRAP
 ```
 
 It publishes five generations of a Maven fixture and checks
-implements/overrides edges, history and as-of reads. See
+implements/overrides edges, history and as-of reads, and the search
+documents, embeddings and retained source it writes, straight from the
+tables. See
 [docs/language-routing.md](docs/language-routing.md) for how the
 adapters compose and [docs/architecture.md](docs/architecture.md) for
 generations, incremental scope and identities. The docs describe the original

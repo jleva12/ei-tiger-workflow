@@ -1,5 +1,6 @@
 # The code graph MCP server: read-only Model Context Protocol tools over the
-# graph the code graph worker writes. Included by the root compose.yaml beside
+# graph the code graph worker writes, read as every app reads it
+# (packages/python/codegraph-query). Included by the root compose.yaml beside
 # apps/forge-codegraph-worker/compose.yaml, whose worker-spanner holds the
 # graph. Settings come from apps/forge-codegraph-mcp/.env, whose ${NAME}
 # references Compose resolves from .env.common (the root Makefile passes it
@@ -39,7 +40,7 @@ services:
       CODEGRAPH_EMBEDDING__BASE_URL: ${FORGE_EMBEDDING_BASE_URL:-}
       CODEGRAPH_EMBEDDING__API_KEY: ${OPENAI_API_KEY:-}
       # Query enhancement is a managed-Spanner feature the emulator ignores.
-      CODEGRAPH_SEARCH__ENHANCE_QUERY: ${CODEGRAPH_MCP_SEARCH_ENHANCE_QUERY:-false}
+      CODEGRAPH_SEARCH__ENHANCE_QUERY: ${CODEGRAPH_SEARCH_ENHANCE_QUERY:-false}
       # The container has no .env.common: Compose resolved .env's references.
       FORGE_ENV_COMMON_FILE: ""
     ports:

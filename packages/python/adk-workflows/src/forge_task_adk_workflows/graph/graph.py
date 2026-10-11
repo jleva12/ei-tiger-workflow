@@ -14,7 +14,8 @@ kind's factory (``factories.FACTORIES``), joined by ADK's edges.
 - **Loops.** A loop's body (what its Each item way reaches before coming back
   to it) is cut out into a graph of its own, run per item by the loop's node;
   its ways back lead to a hidden node whose output is the item's result, its
-  other endings to one that hands on nothing.
+  other endings to one that hands on nothing. A for-each's body is cut out
+  the same, but nothing leads back to it: each item's way ends where it ends.
 - **Endings.** ADK takes one ending node with an output, so every ending of an
   agent's graph leads, through a hidden node tagging it with its step, to a
   hidden finish that collects them all: an End's ``{outcome, result}``, or,
@@ -60,7 +61,9 @@ from forge_task_adk_workflows.graph.factories.base import (
 from forge_task_adk_workflows.graph.factories.logic import back, ending, finish, stop, via
 from forge_task_adk_workflows.graph.factories.start import input_model
 from forge_task_adk_workflows.graph.names import (
+    BODY_KINDS,
     GRAPH_NAME,
+    READ_NAMES,
     RESERVED_NAMES,
     adk_name,
     body_name,
@@ -78,6 +81,7 @@ BRANCHES = {
     "approval": ("approved", "rejected"),
     "if": ("true", "false"),
     "loop": ("each", "done"),
+    "for_each": ("each", "done"),
 }
 # A sub-agent's ID: an LLM sub-agent's answer is kept in the state under it.
 SUB_AGENT_ID = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
@@ -232,12 +236,13 @@ class _Agent:
             )
         self.start = starts[0]
         _check_names(self.nodes)
+        _check_items(self.nodes)
         self.by_id = {node["id"]: node for node in self.nodes}
         self.edges = self._checked_edges(items(document.get("edges")))
         if not any(source == self.start["id"] for source, _, _ in self.edges):
             raise AgentBuildError("The start leads nowhere: connect it to a node.")
         self._check_reached()
-        self.bodies = {node["id"]: self._body_of(node["id"]) for node in self.nodes if node["kind"] == "loop"}
+        self.bodies = {node["id"]: self._body_of(node["id"]) for node in self.nodes if node["kind"] in BODY_KINDS}
         self._check_bodies()
         self._check_merges()
         self.names = {node["id"]: adk_name(text(node.get("name"))) for node in self.nodes if node is not self.start}
@@ -301,7 +306,7 @@ class _Agent:
         """
         # In the document's order, so the graph is the same each time.
         ordered = [node["id"] for node in self.nodes if node["id"] in members]
-        loops = [step for step in ordered if self.by_id[step]["kind"] == "loop"]
+        loops = [step for step in ordered if self.by_id[step]["kind"] in BODY_KINDS]
         ctx = replace(
             ctx,
             bodies={
@@ -459,8 +464,19 @@ class _Agent:
 
     def _check_bodies(self) -> None:
         # A loop's body runs per item, inside the loop: only its Each item way
-        # leads into it.
+        # leads into it. A for-each's never comes back to it.
         for loop, body in self.bodies.items():
+            node = self.by_id[loop]
+            if node["kind"] == "for_each":
+                back = next(
+                    (s for s, o, t in self.edges if t == loop and (s in body or (s, o) == (loop, "each"))), None
+                )
+                if back is not None:
+                    raise AgentBuildError(
+                        f"{where_of(self.by_id[back])}: it leads back to for-each "
+                        f"'{text(node.get('name')) or loop}', which takes nothing back; "
+                        "use a Loop to collect each item's result."
+                    )
             for source, output, target in self.edges:
                 if (
                     target in body
@@ -546,6 +562,20 @@ def _reach(
             continue
         waiting.extend(t for s, _, t in edges if s == at and t not in reached)
     return reached
+
+
+def _check_items(nodes: list[dict[str, Any]]) -> None:
+    # A loop's, a for-each's or a filter's item is read by its name beside the
+    # run's data (graph.data): one called as that data is would hide it.
+    for node in nodes:
+        if node["kind"] not in BODY_KINDS and node["kind"] != "filter":
+            continue
+        name = text(config_of(node).get("item_name")) or "item"
+        if name in READ_NAMES:
+            raise AgentBuildError(
+                f"{where_of(node)}: its item can't be called {name}: that's {READ_NAMES[name]}, "
+                "which the steps reading the item read too; call it something else."
+            )
 
 
 def _check_names(nodes: list[dict[str, Any]]) -> None:

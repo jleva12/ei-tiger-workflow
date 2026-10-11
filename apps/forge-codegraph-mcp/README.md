@@ -7,28 +7,28 @@ It serves read-only tools to agents over streamable HTTP:
 `explore_code` for a question in plain language, `search_code`,
 `find_symbol`, `get_node`, `neighbors`, `callers`, `callees`, `impact`,
 `path`, `hubs`, `changes`, `change_impact`, `history`, `read_source`,
-`read_file`, `repository_state`, `cross_repository_links` and
-`repository_connections`.
+`read_file`, `repository_state`, `cross_repository_links`,
+`repository_connections` and `system_design`.
 
 It is a Python rewrite of `forge-aidlc-parent`'s Go server
 (`apps/forge-codegraph-mcp` there), on the design of the `template-mcp`
 service template: a `ServerBuilder`
 that assembles FastAPI and a FastMCP server from settings, toolsets as
 classes of `@mcp_tool` methods, route classes, and pluggable auth. The graph
-operations are a port of the Go modules under
-[packages/go/code-graph](../../packages/go/code-graph/README.md) the worker
-links (`agentquery`, and `storage`'s reads), so on the same graph a tool
-answers as the Go server did: same queries, same ranking, same JSON.
+itself is read with
+[`forge-codegraph-query`](../../packages/python/codegraph-query/README.md),
+as the admin API and ADK workflows read it: the same queries, ranking, JSON
+and settings, so `search_code` here answers as a system design knowledge
+base's search does there.
 
 | Path | Owns |
 |---|---|
-| `main.py` | The process: settings, logging, the store and embedder, the server assembled |
+| `main.py` | The process: settings, logging, the code graph (`CodeGraph.open`), the server assembled |
 | `server.py` | `ServerBuilder` (the template's): FastAPI, routes, the MCP endpoint mounted at the root, middleware, Uvicorn |
 | `core/` | Settings (`settings.py`) with `.env` references to `.env.common` (`env_files.py`), auth providers (`auth.py`), the FastMCP server factory and its request logging and rate limiting (`mcp.py`) |
 | `routes/` | `Routes` and `Route` (the template's), and the health probes |
-| `tools/` | `Toolset` and `Tool` (the template's), and `CodeGraphTools`, the tools |
-| `graph/` | The graph: records and results (`model.py`), query parsing and retrieval documents (`codesearch.py`), signed cursors (`cursor.py`), question embedding (`embedding.py`), the store interface (`store.py`) and its Spanner reader (`spanner.py`) |
-| `graph/query/` | The operations the tools serve: search, explore, impact with its assessment, changes, path, hubs, source, cross-repository hops |
+| `tools/` | `Toolset` and `Tool` (the template's), and `CodeGraphTools`, which serves `forge_codegraph.tools`' code tools over MCP (the admin API's assistant offers the same ones) |
+| `access.py` | Each caller's organization and its repositories, from the admin API |
 
 Not ported: the Go server's commit search, document search, repository wikis,
 `code_owners` and `pr_impact`, whose data (the commits and wiki tasks, the
@@ -89,6 +89,15 @@ connects_to), each with its knowledge base, note and code links, whose node
 ids the other tools follow; with `repositories`, only those touching them.
 They come with the caller's access answer, so they're as fresh as it is.
 
+**How the system fits together.** `system_design` reads those maps whole:
+each system design knowledge base's applications (with their repository
+ids), the parts of the system that aren't code here (databases, queues and
+topics, caches, storage, external systems, services, clients, each with
+what it runs on and a description), the groups they're in with what each
+group is for, and every connection between them (calls, reads from, writes
+to, publishes to, consumes from…). `knowledge_base` narrows it to one
+system; `focus` to one part (or group) and what it connects to.
+
 Failures the model can act on (an argument out of range, a node that isn't
 there at the generation, a stale cursor) come back as tool errors with their
 reason; anything else is logged and masked.
@@ -141,13 +150,13 @@ values shared with the worker come from the repository's `.env.common` by
 | `CODEGRAPH_MCP__AUTH__ADMIN_API_KEY` | none | The admin API's deployment key (its `FORGE_ADMIN_API_KEY`), sent with each check when it has one; `make env` copies it |
 | `CODEGRAPH_MCP__AUTH__CACHE_SECONDS`, `__CACHE_SIZE`, `__TIMEOUT` | `60`, `1024`, `10` | How long and for how many credentials the admin API's answers are kept; zero asks every time. How long it has to answer |
 | `CODEGRAPH_MCP__RATE_LIMIT__ENABLED` | `false` | Requests per second per client |
-| `CODEGRAPH_SPANNER__DATABASE` | `projects/codegraph-local/instances/codegraph/databases/codegraph` | The worker's database |
-| `CODEGRAPH_SPANNER__SCOPE` | `codegraph` | The worker's scope |
-| `CODEGRAPH_SPANNER__CURSOR_SIGNING_KEY` | required | The worker's cursor key (`FORGE_CODEGRAPH_CURSOR_SIGNING_KEY`), at least 32 characters |
+| `CODEGRAPH_SPANNER__DATABASE` | `projects/codegraph-local/instances/codegraph/databases/codegraph` | The worker's database, every reader's (`FORGE_CODEGRAPH_SPANNER_DATABASE`) |
+| `CODEGRAPH_SPANNER__SCOPE` | `codegraph` | The scope cursors are fingerprinted with |
+| `CODEGRAPH_SPANNER__CURSOR_SIGNING_KEY` | required | The readers' cursor key (`FORGE_CODEGRAPH_CURSOR_SIGNING_KEY`), at least 32 characters |
 | `CODEGRAPH_SPANNER__CREDENTIALS_JSON` | none | A service account's key, for hosts without key files; otherwise Application Default Credentials, or the emulator at `SPANNER_EMULATOR_HOST` |
 | `CODEGRAPH_SPANNER__TIMEOUT`, `__STARTUP_TIMEOUT` | `30`, `60` | Seconds per query; how long startup waits for the database |
 | `CODEGRAPH_EMBEDDING__MODEL`, `__DIMENSIONS`, `__BASE_URL`, `__API_KEY` | none, 3072 | The embedding model, vector length and gateway every app shares, `FORGE_EMBEDDING_*` in `.env.common` (the worker embeds the graph with them); with a model and key, search adds the semantic branch. Startup checks the database's vector length against the dimensions |
-| `CODEGRAPH_SEARCH__ENHANCE_QUERY` | `false` | Spanner's query enhancement, on managed Spanner |
+| `CODEGRAPH_SEARCH__ENHANCE_QUERY` | `false` | Spanner's query enhancement, on managed Spanner, as every reader has it (`FORGE_CODEGRAPH_SEARCH_ENHANCE_QUERY`) |
 | `CODEGRAPH_LOGGING__LEVEL`, `__FORMAT` | `INFO`, by terminal | Structured logs (`forge_common.logging`) |
 
 ## Endpoints
@@ -209,9 +218,9 @@ ingested.
 make codegraph-mcp-check   # ruff, format check, mypy and pytest
 ```
 
-The tests run the operations on the Go tests' fixtures with an in-memory
-store, every tool through an MCP client (and what a caller of one
+The tests run every tool through an MCP client over
+`forge_codegraph_query.testing`'s in-memory store (and what a caller of one
 organization may read), the HTTP surface with its probes and the admin API's
-checks (an `httpx` mock of it), and settings; the cursor and
-id encodings are checked against values the Go code computes. No Spanner is
-needed.
+checks (an `httpx` mock of it), and settings. No Spanner is needed: the
+operations, the store's SQL and ranking, and the contract with the worker are
+`forge-codegraph-query`'s tests.

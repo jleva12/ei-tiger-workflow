@@ -7,7 +7,9 @@ requires-python = ">=3.13"
 dependencies = [
   "forge-tasks",
   "forge-jsonata",                    # every expression in a document is JSONata, evaluated here in Python
-  "forge-common[adk,adk-models,adk-artifacts-s3]",  # ADK, the models of the shared model_provider.yaml, and artifacts in S3 (runs' files)
+  # ADK, the models of the shared model_provider.yaml, artifacts in S3 (runs' files), and documents'
+  # regular expressions, bounded in time and off the interpreter lock (forge_common.patterns)
+  "forge-common[adk,adk-models,adk-artifacts-s3,patterns]",
   "google-adk>=2.9.2",
   "pydantic>=2.7",
   "jsonschema>=4.23",
@@ -18,8 +20,10 @@ dependencies = [
   "forge-agent-runtime",
   # The organization's MCP servers, connected with their credentials (the admin's, shared)
   "forge-mcp-servers",
-  # Graph knowledge bases: their code searched in the code graph worker's API
+  # System design knowledge bases: their code searched as the admin API searches it
   "forge-codegraph",
+  # The code graph in the worker's Spanner database (forge_codegraph_query)
+  "forge-codegraph-query",
 ]
 
 # Registers the task with the Forge async worker.

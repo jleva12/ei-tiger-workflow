@@ -1,7 +1,7 @@
 import jsonata from "jsonata"
 
 import { normalizeReferences } from "./references"
-import { t, type DataType } from "./types"
+import { t, unionOf, type DataType } from "./types"
 
 /*
  * JSONata, the one expression language of a workflow's settings. Runs
@@ -18,6 +18,8 @@ export type JsonataNode = {
   position?: number
   steps?: JsonataNode[]
   stages?: JsonataNode[]
+  /** Filters on what isn't a path's name: a function's result, a block. */
+  predicate?: JsonataNode[]
   expr?: JsonataNode
   expression?: JsonataNode
   expressions?: JsonataNode[]
@@ -76,7 +78,16 @@ export type JsonataFunction = {
   /** How it's called, e.g. `$contains(str, pattern)`. */
   signature: string
   description: string
-  returns: () => DataType
+  /**
+   * What it gives, from what it's given: its arguments' types (fewer when
+   * they aren't known) and what its function argument makes, if it has one.
+   */
+  returns: (args?: DataType[], made?: DataType) => DataType
+  /**
+   * What its function argument is handed, from its arguments' types: an
+   * item of the list and its index ($map), two items to order ($sort)…
+   */
+  hands?: (args: DataType[]) => DataType[]
 }
 
 const text = () => t.string()
@@ -85,6 +96,40 @@ const integer = () => t.number(undefined, true)
 const bool = () => t.boolean()
 const list = (items: DataType = t.unknown()) => () => t.array(items)
 const any = () => t.unknown()
+
+/** What a list holds: a single value is a list of one, as JSONata reads it. */
+const itemOf = (value: DataType | undefined): DataType =>
+  !value || value.kind === "unknown"
+    ? t.unknown()
+    : value.kind === "array"
+      ? value.items
+      : value
+/** The first argument as a list, its items kept: what $sort, $filter… give back. */
+const sameList = (args: DataType[] = []) => t.array(itemOf(args[0]))
+/** An item of the first argument, its index, and the list: what $map's function is handed. */
+const eachItem = (args: DataType[]) => [
+  itemOf(args[0]),
+  t.number("Its place in the list, from 0.", true),
+  args[0] ?? t.unknown(),
+]
+/** An object's values (typed where they agree), their names, the object: what $each's function is handed. */
+const eachField = (args: DataType[]) => {
+  const object = args[0]
+  const values =
+    object?.kind === "object"
+      ? unionOf(Object.values(object.properties))
+      : t.unknown()
+  return [values, t.string("The field's name."), object ?? t.unknown()]
+}
+const MATCHED = t.object(
+  {
+    match: t.string("The text it matched."),
+    index: t.number("Where in the text it starts, from 0.", true),
+    groups: t.array(t.string(), "What its capture groups matched."),
+  },
+  "A match.",
+  { required: ["match", "index", "groups"] }
+)
 
 /** JSONata's built-in functions, by name without the `$`. */
 export const JSONATA_FUNCTIONS: Record<string, JsonataFunction> = {
@@ -101,7 +146,7 @@ export const JSONATA_FUNCTIONS: Record<string, JsonataFunction> = {
   contains: { signature: "$contains(str, pattern)", description: "Whether the text contains a string or matches a regex.", returns: bool },
   split: { signature: "$split(str, separator, limit?)", description: "The text split into a list of strings.", returns: list(t.string()) },
   join: { signature: "$join(array, separator?)", description: "A list of strings joined into one.", returns: text },
-  match: { signature: "$match(str, pattern, limit?)", description: "The regex's matches in the text.", returns: list() },
+  match: { signature: "$match(str, pattern, limit?)", description: "The regex's matches in the text: each its match, index and groups.", returns: list(MATCHED) },
   replace: { signature: "$replace(str, pattern, replacement, limit?)", description: "The text with a string or regex replaced.", returns: text },
   base64encode: { signature: "$base64encode(str)", description: "The text in base64.", returns: text },
   base64decode: { signature: "$base64decode(str)", description: "Base64 decoded to text.", returns: text },
@@ -132,23 +177,56 @@ export const JSONATA_FUNCTIONS: Record<string, JsonataFunction> = {
   exists: { signature: "$exists(value)", description: "Whether the value is there at all.", returns: bool },
   // Lists
   count: { signature: "$count(array)", description: "How many items the list has.", returns: integer },
-  append: { signature: "$append(array1, array2)", description: "Two lists as one.", returns: list() },
-  sort: { signature: "$sort(array, function?)", description: "The list in order.", returns: list() },
-  reverse: { signature: "$reverse(array)", description: "The list backwards.", returns: list() },
-  shuffle: { signature: "$shuffle(array)", description: "The list in random order.", returns: list() },
-  distinct: { signature: "$distinct(array)", description: "The list without repeats.", returns: list() },
-  zip: { signature: "$zip(array1, …)", description: "The lists' items side by side.", returns: list() },
-  map: { signature: "$map(array, function)", description: "Each item made into something else.", returns: list() },
-  filter: { signature: "$filter(array, function)", description: "The items the function says true for.", returns: list() },
-  single: { signature: "$single(array, function?)", description: "The one item that matches; an error for none or more.", returns: any },
-  reduce: { signature: "$reduce(array, function, init?)", description: "The list folded into one value.", returns: any },
+  append: {
+    signature: "$append(array1, array2)",
+    description: "Two lists as one.",
+    returns: (args = []) => t.array(args.length > 1 ? unionOf([itemOf(args[0]), itemOf(args[1])]) : t.unknown()),
+  },
+  sort: { signature: "$sort(array, function?)", description: "The list in order.", returns: sameList, hands: (args) => [itemOf(args[0]), itemOf(args[0])] },
+  reverse: { signature: "$reverse(array)", description: "The list backwards.", returns: sameList },
+  shuffle: { signature: "$shuffle(array)", description: "The list in random order.", returns: sameList },
+  distinct: { signature: "$distinct(array)", description: "The list without repeats.", returns: sameList },
+  zip: { signature: "$zip(array1, …)", description: "The lists' items side by side.", returns: list(t.array(t.unknown())) },
+  map: {
+    signature: "$map(array, function)",
+    description: "Each item made into something else.",
+    returns: (_args, made) => t.array(made ?? t.unknown()),
+    hands: eachItem,
+  },
+  filter: { signature: "$filter(array, function)", description: "The items the function says true for.", returns: sameList, hands: eachItem },
+  single: {
+    signature: "$single(array, function?)",
+    description: "The one item that matches; an error for none or more.",
+    returns: (args = []) => itemOf(args[0]),
+    hands: eachItem,
+  },
+  reduce: {
+    signature: "$reduce(array, function, init?)",
+    description: "The list folded into one value.",
+    returns: (_args, made) => made ?? t.unknown(),
+    hands: (args) => [t.unknown("What it's folded into so far."), itemOf(args[0]), t.number(undefined, true)],
+  },
   // Objects
   keys: { signature: "$keys(object)", description: "The object's field names.", returns: list(t.string()) },
   lookup: { signature: "$lookup(object, key)", description: "A field by a name worked out at run time.", returns: any },
   spread: { signature: "$spread(object)", description: "One object per field.", returns: list() },
   merge: { signature: "$merge(array)", description: "A list of objects as one object.", returns: () => t.object({}, undefined, { open: true }) },
-  sift: { signature: "$sift(object, function)", description: "The fields the function says true for.", returns: () => t.object({}, undefined, { open: true }) },
-  each: { signature: "$each(object, function)", description: "Each field made into something.", returns: list() },
+  sift: {
+    signature: "$sift(object, function)",
+    description: "The fields the function says true for.",
+    // Its fields, any of which may be gone.
+    returns: (args = []) =>
+      args[0]?.kind === "object"
+        ? { ...args[0], required: undefined }
+        : t.object({}, undefined, { open: true }),
+    hands: eachField,
+  },
+  each: {
+    signature: "$each(object, function)",
+    description: "Each field made into something.",
+    returns: (_args, made) => t.array(made ?? t.unknown()),
+    hands: eachField,
+  },
   type: { signature: "$type(value)", description: 'The value\'s type: "string", "number", "array"…', returns: text },
   error: { signature: "$error(message)", description: "Stops the step with this message.", returns: any },
   assert: { signature: "$assert(condition, message)", description: "Stops the step with the message unless condition is true.", returns: any },

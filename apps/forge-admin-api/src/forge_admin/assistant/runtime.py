@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from fastapi import FastAPI
+from forge_common.adk.context_window import ContextWindowPlugin, windows_from
 from forge_common.adk.models import ProviderModels
 from forge_common.adk.usage import UsagePlugin, price_from
 from forge_task_adk_workflows.usage_store import UsageStore
@@ -73,12 +74,16 @@ class AgentRuntime:
         :return: The runtime.
         """
         assistant = forge.create_app(settings, app=app)
+        model = getattr(assistant.root_agent, "model", None)
+        # Each agent's context window kept in the conversation's state, and
+        # compacted mid-turn when its request nears the model's window.
+        assistant.plugins.append(ContextWindowPlugin(window=windows_from(model)))
         usage = UsageStore(engine)
         # Every model and tool call of a turn the run attributes (attributed()).
         assistant.plugins.append(
             UsagePlugin(
                 usage.record,
-                price=price_from(getattr(assistant.root_agent, "model", None)),
+                price=price_from(model),
             )
         )
         runtime = cls.of(

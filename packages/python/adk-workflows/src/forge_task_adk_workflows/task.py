@@ -19,6 +19,7 @@ from dataclasses import replace
 from typing import Any
 
 import httpx
+from forge_agent_runtime import http_client
 from forge_common.model_provider import ModelProviderConfigError
 from google.adk.artifacts import BaseArtifactService
 from google.adk.sessions import BaseSessionService
@@ -27,7 +28,14 @@ from pydantic_settings import SettingsError
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
 from forge_task_adk_workflows.files import artifact_service
 from forge_task_adk_workflows.graph import RunServices
-from forge_task_adk_workflows.graph.agent_tools import AgentServices, DocumentsSearch, WorkerMcpServers
+from forge_task_adk_workflows.graph.agent_tools import (
+    TOOL_ENVIRONMENT_NOTE,
+    AgentServices,
+    DocumentsSearch,
+    WorkerCredentials,
+    WorkerMcpServers,
+    tool_environment,
+)
 from forge_task_adk_workflows.models import NOT_SET_UP, NoModels, load_models
 from forge_task_adk_workflows.runs import APP_NAME, AdkRun, RunPayload
 from forge_tasks.control import LocalJobControl, current_control
@@ -135,7 +143,8 @@ class AdkWorkflowsTask:
         agents = self.services.agents
         code = getattr(agents, "code", None)
         if code is not None:
-            await code.aclose()
+            # forge_codegraph_query.CodeGraph closes with close(), not aclose().
+            await code.close()
         store = getattr(getattr(agents, "runtime", None), "mcp_servers", None)
         engine = getattr(getattr(store, "store", None), "engine", None)
         if engine is not None:
@@ -148,7 +157,8 @@ class AdkWorkflowsTask:
 def build_services(settings: AdkWorkflowsSettings) -> RunServices:
     """What runs' nodes use, once per process: HTTP, and the models LLM nodes
     run on (with each node's model and thinking level), or a stand-in that
-    fails an LLM node saying why there are none."""
+    fails an LLM node saying why there are none. The one HTTP client serves
+    every organization's runs, so it keeps no cookies (``http_client``)."""
     unavailable = None
     try:
         models: Any = load_models(settings)
@@ -158,8 +168,10 @@ def build_services(settings: AdkWorkflowsSettings) -> RunServices:
         log.error("adk_workflows: %s", unavailable)
     if models is None:
         models = NoModels(reason=unavailable or NOT_SET_UP)
-    http = httpx.AsyncClient(timeout=30, follow_redirects=False)
-    return RunServices.of(settings, http=http, model=models, agents=build_agent_services(settings, models, http))
+    http = http_client(timeout=30, follow_redirects=False)
+    agents = build_agent_services(settings, models, http)
+    # HTTP steps sign with the organization's credentials as its tools do.
+    return RunServices.of(settings, http=http, model=models, agents=agents, credentials=agents.runtime.credentials)
 
 
 def build_agent_services(
@@ -177,40 +189,64 @@ def build_agent_services(
 
     servers: Any = None
     store: Any = None
+    credentials: Any = None
+    credential_store: Any = None
     unavailable = None
     if settings.session_database_url is None:
-        unavailable = "the organization's MCP servers can't be used: the worker has no admin database"
+        unavailable = "the worker has no admin database"
     elif settings.secrets_key is None:
         unavailable = (
-            "the organization's MCP servers can't be used on this worker: set "
-            "HYBRID_ADK_WORKFLOWS__SECRETS_KEY to the admin API's FORGE_ADMIN_SECRETS_KEY"
+            "this worker has no secrets key: set HYBRID_ADK_WORKFLOWS__SECRETS_KEY to the admin API's "
+            "FORGE_ADMIN_SECRETS_KEY"
         )
     else:
-        from forge_mcp_servers import McpServers, SecretBox, SqlServerStore
+        from forge_mcp_servers import ApiCredentials, McpServers, SecretBox, SqlCredentialStore, SqlServerStore
         from sqlalchemy.ext.asyncio import create_async_engine
 
         try:
-            servers = McpServers(SecretBox(settings.secrets_key.get_secret_value()), timeout=settings.mcp_timeout)
-            store = SqlServerStore(create_async_engine(settings.session_database_url.get_secret_value()))
+            box = SecretBox(settings.secrets_key.get_secret_value())
+            engine = create_async_engine(settings.session_database_url.get_secret_value())
+            servers = McpServers(box, timeout=settings.mcp_timeout)
+            store = SqlServerStore(engine)
+            credentials = ApiCredentials(box, timeout=settings.mcp_timeout)
+            credential_store = SqlCredentialStore(engine)
         except ValueError as error:
-            servers, unavailable = None, f"the organization's MCP servers can't be used on this worker: {error}"
+            servers = credentials = None
+            unavailable = str(error)
     if unavailable:
-        log.warning("adk_workflows: %s", unavailable)
+        log.warning("adk_workflows: the organization's MCP servers and credentials can't be used: %s", unavailable)
     runtime = RuntimeServices(
-        environment=os.environ,
+        environment=tool_environment(settings.tool_environment, os.environ),
+        environment_note=TOOL_ENVIRONMENT_NOTE,
         allow_private=settings.http_allow_private,
         allowed_hosts=tuple(settings.http_allowed_hosts),
         max_response_bytes=settings.http_max_response_bytes,
         model_timeout=settings.model_timeout,
-        mcp_servers=WorkerMcpServers(servers, store, unavailable=unavailable),
+        mcp_servers=WorkerMcpServers(
+            servers,
+            store,
+            unavailable=f"the organization's MCP servers can't be used on this worker: {unavailable}"
+            if unavailable
+            else None,
+        ),
+        credentials=WorkerCredentials(
+            credentials,
+            credential_store,
+            unavailable=f"the organization's credentials can't be used on this worker: {unavailable}"
+            if unavailable
+            else None,
+        ),
     )
     code = None
-    if settings.codegraph_url and settings.codegraph_token:
-        from forge_codegraph import CodeGraph
+    if settings.codegraph.enabled:
+        from forge_codegraph_query import CodeGraph
 
-        code = CodeGraph.connect(
-            settings.codegraph_url, settings.codegraph_token.get_secret_value(), timeout=settings.codegraph_timeout
-        )
+        try:
+            code = CodeGraph.open(settings.codegraph)
+        except Exception as error:
+            # No Google credentials, or a malformed key: system design knowledge
+            # bases answer that they can't be searched; every other run goes on.
+            log.error("adk_workflows: the code graph can't be opened, so it's off: %s", str(error)[:300])
     return AgentServices(
         models=models,
         runtime=runtime,

@@ -346,7 +346,8 @@ function kindName(filename: string) {
         ? extension.toUpperCase()
         : "Spreadsheet"
     case "text":
-      return ["md", "markdown", "mdx"].includes(extension) ? "Markdown" : "Text"
+      if (["md", "markdown", "mdx"].includes(extension)) return "Markdown"
+      return extension.includes("htm") ? "HTML page" : "Text"
     case "diagrams":
       return extension.startsWith("vsd") ? "Visio drawing" : "Mermaid diagram"
     default:

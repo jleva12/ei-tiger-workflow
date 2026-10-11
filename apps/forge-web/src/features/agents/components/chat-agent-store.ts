@@ -18,6 +18,7 @@ import {
   type ChatAgentGraph,
 } from "@/features/agents/lib/document"
 import type { ChatStep } from "@/features/agents/lib/model"
+import type { CredentialLookup } from "@/features/credentials/lib/display"
 import type { ChatAgentValidationContext } from "@/features/agents/lib/validate"
 
 /*
@@ -44,6 +45,8 @@ export type ChatLookups = {
   mcpServers: Record<string, McpServerLookup>
   /** The organization's knowledge bases, by ID. */
   knowledgeBases: Record<string, KnowledgeBaseLookup>
+  /** The organization's API credentials, by ID. */
+  credentials: Record<string, CredentialLookup>
 }
 
 /** A knowledge base, as a knowledge base tool node shows it. */

@@ -1,6 +1,6 @@
 """The SAQ side of the worker (saq_worker.py, queue.py): the job functions,
-the settings every job runs under, the queue, the worker and its cron.
-tests/test_saq_redis.py runs the same code on a real Redis."""
+the settings every job runs under, the queues, the workers and the upkeep's
+cron. tests/test_saq_redis.py runs the same code on a real Redis."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import pytest
 from forge_async_worker import saq_worker
 from forge_async_worker.queue import HEARTBEAT, JOB_OPTIONS, RunQueue
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
+from forge_task_adk_workflows.run_store import RunStore
 from forge_tasks.tasks import JobSpec
 
 from .conftest import START, FakeJob, FakeSaqQueue, Worker, worker_settings
@@ -40,6 +41,8 @@ async def test_the_job_functions_run_the_workers_jobs(worker: Worker) -> None:
     assert await saq_worker.maintain(context(worker, FakeJob("maintain"))) == {
         "recovered": [],
         "failed": [],
+        "deferred": [],
+        "abandoned": [],
         "queued": [],
         "timed_out": [],
     }
@@ -61,21 +64,50 @@ async def test_jobs_run_under_the_workers_settings() -> None:
 
 
 async def test_the_queue_sends_each_job_with_its_settings_and_key() -> None:
-    saq = FakeSaqQueue()
-    queue = RunQueue(saq)
+    saq, upkeep = FakeSaqQueue(), FakeSaqQueue("adk_workflows_upkeep")
+    queue = RunQueue(saq, upkeep=upkeep)
 
     await queue.run_adk("r1")
     await queue.run_adk("r1", at=START + timedelta(seconds=30.2), key="adk-run:r1:sweep")
     await queue.expire_pause("r1", "p1", at=START + timedelta(hours=1))
     await queue.close()
 
-    (f1, now), (f2, later), (f3, expiry) = saq.sent
+    (f1, now), (f2, later) = saq.sent
     assert (f1, now.pop("run_id"), now.pop("key")[:11]) == ("run_adk", "r1", "adk-run:r1:")
     assert now == JOB_OPTIONS["run_adk"] and "scheduled" not in now
     assert (later["key"], later["scheduled"]) == ("adk-run:r1:sweep", int(START.timestamp()) + 31)  # never early
+    # The upkeep's job goes to its own queue.
+    [(f3, expiry)] = upkeep.sent
     assert (f3, expiry["run_id"], expiry["pause_id"]) == ("expire_pause", "r1", "p1")
     assert expiry["scheduled"] == int(START.timestamp()) + 3600 and expiry["timeout"] == 60
-    assert queue.name == "adk_workflows"
+    assert queue.name == "adk_workflows" and queue.queues == (saq, upkeep)
+    assert (saq.disconnected, upkeep.disconnected) == (1, 1)
+
+    alone = RunQueue(saq)  # without an upkeep queue: everything goes to the one
+    await alone.expire_pause("r1", "p1", at=START)
+    assert saq.sent[-1][0] == "expire_pause" and alone.queues == (saq,)
+
+
+async def test_the_queue_keeps_a_runs_failure_a_week() -> None:
+    saq = FakeSaqQueue()
+    queue = RunQueue(saq)
+
+    assert await queue.kept_failure("r1", 2) is None
+    await queue.keep_failure("r1", 2, {"error": {"message": "no"}, "final": True, "epoch": 2})
+    assert await queue.kept_failure("r1", 2) == {"error": {"message": "no"}, "final": True, "epoch": 2}
+    assert saq.redis.expiries["forge:adk-run-failure:r1:2"] == 7 * 24 * 3600
+    # Each taking's own: another's isn't it, nor forgets it.
+    assert await queue.kept_failure("r1", 3) is None
+    await queue.forget_failure("r1", 3)
+    assert await queue.kept_failure("r1", 2) is not None
+    await queue.forget_failure("r1", 2)
+    assert await queue.kept_failure("r1", 2) is None
+    saq.redis.values["forge:adk-run-failure:r2:1"] = "not JSON"
+    assert await queue.kept_failure("r2", 1) is None
+    # One a worker from before kept for the run is the taking's it names.
+    saq.redis.values["forge:adk-run-failure:r3"] = '{"error": {"message": "no"}, "final": true, "epoch": 4}'
+    assert (await queue.kept_failure("r3", 4) or {}).get("epoch") == 4
+    assert await queue.kept_failure("r3", 5) is None
 
 
 def test_it_serves_the_enabled_tasks_queues() -> None:
@@ -93,26 +125,34 @@ def test_it_serves_the_enabled_tasks_queues() -> None:
     assert saq_worker.serving(both, ["documents"]) == ["documents"]
 
 
-def test_the_job_queue_is_saqs_adk_workflows_queue() -> None:
+def test_the_job_queue_is_saqs_adk_workflows_queue_with_its_upkeeps() -> None:
     from saq import Queue
 
     queue = saq_worker.job_queue(worker_settings())
     assert isinstance(queue.queue, Queue) and queue.name == "adk_workflows"
+    assert isinstance(queue.upkeep, Queue) and queue.upkeep.name == "adk_workflows_upkeep"
     assert queue.job_options == JOB_OPTIONS
+    documents = saq_worker.job_queue(worker_settings(), "documents")
+    assert documents.queues == (documents.queue,) and documents.name == "documents"
 
 
-async def test_the_worker_runs_the_jobs_and_maintains_every_minute(worker: Worker) -> None:
-    from saq import Queue
+async def test_runs_and_their_upkeep_have_a_worker_each(worker: Worker) -> None:
+    worker.state.queue = saq_worker.job_queue(worker_settings(redis_url="redis://127.0.0.1:1/0"))
+    [runs, upkeep] = saq_worker.build_workers(worker.state, concurrency=3)
 
-    worker.state.queue = RunQueue(Queue.from_url("redis://127.0.0.1:1/0", name="adk_workflows"))
-    [built] = saq_worker.build_workers(worker.state, concurrency=3)
-
-    assert set(built.functions) == {"run_adk", "expire_pause", "maintain"}
-    [cron] = built.cron_jobs
+    # Runs: as many at once as asked, and the upkeep queued here before it had a queue of its own.
+    assert runs.queue is worker.state.queue.queue and runs.concurrency == 3
+    assert set(runs.functions) == {"run_adk", "expire_pause", "maintain"} and not runs.cron_jobs
+    # The upkeep: the maintenance every minute, never behind the runs.
+    assert upkeep.queue is worker.state.queue.upkeep and upkeep.concurrency == saq_worker.UPKEEP_CONCURRENCY
+    assert set(upkeep.functions) == {"maintain", "expire_pause"}
+    [cron] = upkeep.cron_jobs
     assert cron.function is saq_worker.maintain and cron.cron == "* * * * *" and cron.unique
     assert (cron.timeout, cron.retries) == (300, 1)
-    assert built.concurrency == 3 and built.context[saq_worker.CONTEXT_KEY] is worker.state
-    assert str(built.id).startswith(f"{socket.gethostname()}.") and ":" not in str(built.id)
+    for built in (runs, upkeep):
+        assert built.context[saq_worker.CONTEXT_KEY] is worker.state
+        assert str(built.id).startswith(f"{socket.gethostname()}.") and ":" not in str(built.id)
+    assert str(upkeep.id).endswith(".adk_workflows_upkeep")
     await worker.state.queue.close()
 
 
@@ -156,6 +196,21 @@ async def test_a_worker_without_a_run_store_says_what_to_set() -> None:
             queue=RunQueue(FakeSaqQueue()),
             options={"adk_workflows": AdkWorkflowsSettings()},
         )
+
+
+async def test_an_attempt_takes_as_long_as_the_tasks_settings_allow(store: RunStore) -> None:
+    state = await saq_worker.start_state(
+        worker_settings(),
+        registry=toy_registry(),
+        store=store,
+        queue=RunQueue(FakeSaqQueue()),
+        redis_url=None,
+        options={"adk_workflows": AdkWorkflowsSettings(run_timeout=600)},
+    )
+    try:
+        assert state.jobs is not None and state.jobs.attempt_seconds == 1200
+    finally:
+        await saq_worker.close_state(state)
 
 
 async def test_a_job_can_hand_no_follow_ups_on(worker: Worker) -> None:

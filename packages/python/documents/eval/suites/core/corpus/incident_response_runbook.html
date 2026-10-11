@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Incident Response Runbook – Northwind Engineering</title>
+  <meta name="author" content="Northwind Reliability Team">
+</head>
+<body>
+  <nav><a href="/">Engineering home</a> · <a href="/runbooks">All runbooks</a></nav>
+  <main>
+    <h1>Incident Response Runbook</h1>
+    <p>How Northwind engineering declares, runs and closes production incidents.</p>
+
+    <h2>Severity levels</h2>
+    <table>
+      <thead><tr><th>Severity</th><th>Definition</th><th>Response time</th><th>Who is paged</th></tr></thead>
+      <tbody>
+        <tr><td>SEV1</td><td>Claims intake or payments down for all customers</td><td>15 minutes</td>
+            <td>On-call engineer, incident commander and the Head of Engineering</td></tr>
+        <tr><td>SEV2</td><td>A major feature down or degraded in one region</td><td>30 minutes</td>
+            <td>On-call engineer and incident commander</td></tr>
+        <tr><td>SEV3</td><td>A minor feature degraded, with a workaround</td><td>4 business hours</td>
+            <td>On-call engineer</td></tr>
+        <tr><td>SEV4</td><td>Cosmetic issue or internal tooling</td><td>Next business day</td>
+            <td>The owning team's queue</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Declaring an incident</h2>
+    <ol>
+      <li>Open an incident in PagerDuty against the affected service
+        <ol>
+          <li>Pick the severity from the table above</li>
+          <li>Name an incident commander; it is never the person fixing the problem</li>
+        </ol>
+      </li>
+      <li>Create a Slack channel named <code>#inc-YYYYMMDD-short-name</code> and invite the responders</li>
+      <li>Post a status update every 30 minutes for SEV1 and every hour for SEV2</li>
+    </ol>
+
+    <h2>Rolling back a deployment</h2>
+    <p>When an incident starts within 30 minutes of a deploy, roll back first and investigate later.</p>
+    <pre><code class="language-bash">kubectl rollout undo deployment/claims-api -n claims-prod
+kubectl rollout status deployment/claims-api -n claims-prod</code></pre>
+
+    <h2>After the incident</h2>
+    <ul>
+      <li>Write a postmortem within 5 business days for SEV1 and SEV2
+        <ul>
+          <li>Use the blameless template in Confluence</li>
+          <li>Review it in the Thursday reliability meeting</li>
+        </ul>
+      </li>
+      <li>File follow-up tickets in the RELY Jira project</li>
+    </ul>
+  </main>
+  <footer>© Northwind Mutual · Internal use only</footer>
+</body>
+</html>

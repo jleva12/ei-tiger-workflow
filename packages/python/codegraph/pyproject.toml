@@ -1,12 +1,12 @@
 [project]
 name = "forge-codegraph"
 version = "0.1.0"
-description = "The code graph worker's read and search API for Forge: a client, and code search hits as knowledge base passages, for the admin API and the async worker"
+description = "System design knowledge bases for their agents: their code searched as knowledge base passages, and their designs described, for the admin API and ADK workflows"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    # The worker's HTTP API (apps/forge-codegraph-worker).
-    "httpx2>=2.13.1",
+    # The code graph, searched as every app searches it.
+    "forge-codegraph-query",
 ]
 
 [build-system]

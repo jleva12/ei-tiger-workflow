@@ -94,7 +94,7 @@ func fixtureDocs(n int, prefix string) []Document {
 	return docs
 }
 
-func TestIndexConcurrentBatchesAcrossDocumentsAndMatchesEmbedText(t *testing.T) {
+func TestIndexConcurrentBatchesAcrossDocumentsAndCombinesWindows(t *testing.T) {
 	p := &fakeProvider{dims: 4, maxBytes: 8}
 	st := &fakeStore{pages: [][]Document{fixtureDocs(40, "a"), fixtureDocs(70, "b"), fixtureDocs(3, "c")}}
 	var progress []uint64
@@ -136,15 +136,25 @@ func TestIndexConcurrentBatchesAcrossDocumentsAndMatchesEmbedText(t *testing.T) 
 			t.Fatalf("request of %d inputs", len(r))
 		}
 	}
-	// A batched document's vector equals the single-document transform.
+	// A batched document's vector is the combination of its own windows'
+	// vectors, whichever requests the windows travelled in.
+	reference := &fakeProvider{dims: p.dims, maxBytes: p.maxBytes}
 	for _, row := range st.written {
-		want, err := EmbedText(context.Background(), p, row.Document.Text)
+		ws, err := windows(row.Document.Text, p.maxBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		vectors, err := reference.Embed(context.Background(), ws)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := combine(ws, vectors, p.dims)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for j := range want {
 			if diff := want[j] - row.Vector[j]; diff > 1e-12 || diff < -1e-12 {
-				t.Fatalf("%s: batched vector differs from EmbedText at %d: %v vs %v", row.Document.NodeID, j, row.Vector[j], want[j])
+				t.Fatalf("%s: batched vector differs from its windows' combination at %d: %v vs %v", row.Document.NodeID, j, row.Vector[j], want[j])
 			}
 		}
 	}

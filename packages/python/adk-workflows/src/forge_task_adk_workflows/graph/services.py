@@ -79,6 +79,10 @@ class RunServices:
     #: settings.
     model: str | BaseLlm | None = None
     model_callbacks: ModelCallbacks | None = None
+    #: How full an LLM agent's request gets, of what its model may read,
+    #: before it's compacted mid-step (``forge_common.adk.context_window``);
+    #: None compacts only when a tool asks.
+    compaction_threshold: float | None = _DEFAULTS.context_compaction_threshold
     #: Finds the organization's other agents, for saved-agent nodes.
     resolve: Resolve | None = None
     #: What LLM agents' tools and agents from the Agents page use
@@ -89,6 +93,20 @@ class RunServices:
     #: session, which its start lists in ``state.files`` and its LLM agents
     #: read with ADK's ``load_artifacts`` tool.
     files: tuple[Any, ...] = ()
+    #: The run's runner keeps artifacts (the worker has an artifact service):
+    #: its LLM agents read and save files (``files.file_tools``).
+    artifacts: bool = False
+    #: Called before each of an LLM agent's tools runs (ADK's
+    #: ``before_tool_callback``): the run notes the call durably first, so an
+    #: attempt that stops while it runs is answered for it, not run again
+    #: (``runs.AdkRun``); None for no note (a build that only checks).
+    tool_calls: Callable[..., Awaitable[Any]] | None = None
+    #: Signs HTTP steps' requests with the organization's credentials (the
+    #: runtime's ``CredentialProvider``: ``graph.agent_tools.WorkerCredentials``);
+    #: None where there are none.
+    credentials: Any = None
+    #: The run's organization: whose credentials its steps may use (per run).
+    organization_id: str | None = None
 
     @classmethod
     def of(cls, settings: AdkWorkflowsSettings, **services: Any) -> Self:
@@ -108,12 +126,17 @@ class RunServices:
             services["model_callbacks"] = model_selection(model, timeout=settings.model_timeout)
         return cls(
             **{
-                "evaluator": Evaluator(settings.expression_timeout_ms, settings.expression_depth),
+                "evaluator": Evaluator(
+                    settings.expression_timeout_ms, settings.expression_depth, settings.expression_list_timeout_ms
+                ),
                 "allow_private": settings.http_allow_private,
                 "allowed_hosts": tuple(settings.http_allowed_hosts),
                 "max_response_bytes": settings.http_max_response_bytes,
                 "inline_delay_seconds": settings.inline_delay_seconds,
                 "max_loop_items": settings.max_loop_items,
+                "compaction_threshold": (
+                    settings.context_compaction_threshold if settings.context_compaction else None
+                ),
                 **services,
             }
         )

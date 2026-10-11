@@ -1,6 +1,7 @@
 """What a credential reads of the code graph (GET /code-graph/access): an
 organization's API key its organization's repositories, a token minted for
-an organization that one's, each with repositories:read there."""
+an organization that one's, each with repositories:read there; and a person
+in an organization they name (GET /organizations/{id}/code-graph/access)."""
 
 from datetime import timedelta
 from typing import Any
@@ -17,7 +18,9 @@ from forge_admin.models import (
     CodeRepository,
     KnowledgeBase,
     KnowledgeBaseCodeLink,
+    KnowledgeBaseComponent,
     KnowledgeBaseConnection,
+    KnowledgeBaseGroup,
     KnowledgeBaseRepository,
     Permission,
 )
@@ -37,6 +40,8 @@ def code(world: World) -> World:
         made = (
             "code_repositories",
             "knowledge_bases",
+            "knowledge_base_groups",
+            "knowledge_base_components",
             "knowledge_base_repositories",
             "knowledge_base_connections",
             "knowledge_base_code_links",
@@ -138,6 +143,29 @@ def test_a_credential_without_an_organization_reads_nothing(code: World) -> None
     assert code.call("GET", ACCESS, None).status_code == 401
 
 
+def test_a_person_reads_an_organization_they_name(code: World) -> None:
+    # The assistant's code tools ask for the person in the organization a
+    # call names, with the person's own sign-in (no organization in it).
+    for user in (ADMIN, MEMBER, VIEWER):
+        answer = code.call("GET", f"/organizations/{ORG}{ACCESS}", user)
+        assert answer.status_code == 200, answer.json()
+        assert (answer.json()["subject"], answer.json()["organization_id"]) == (
+            user,
+            ORG,
+        )
+        assert urls(answer.json()) == [
+            "https://github.com/acme/billing",
+            "https://github.com/acme/shop",
+        ]
+    # The same answer a token minted for the organization gets.
+    minted = ask(code, token_for(code, MEMBER, ORG)).json()
+    assert code.call("GET", f"/organizations/{ORG}{ACCESS}", MEMBER).json() == minted
+    # Not an organization they're in.
+    refused = code.call("GET", f"/organizations/{ORG}{ACCESS}", NEIGHBOUR)
+    assert refused.status_code == 403
+    assert code.call("GET", f"/organizations/{ORG}{ACCESS}", None).status_code == 401
+
+
 def test_without_repositories_read_nothing_is_read(code: World) -> None:
     key = code.make_key(name="Key keeper", role="org:keykeeper")
     answer = code.call("GET", ACCESS, key=key["secret"])
@@ -174,11 +202,33 @@ def test_the_answer_says_how_the_organizations_repositories_connect(
         rag = KnowledgeBase(organization_id=ORG, name="Docs", kind="rag")
         session.add_all([kb, rag])
         await session.flush()
+        payments = KnowledgeBaseGroup(
+            knowledge_base_id=kb.id, name="Payments", description="Charging"
+        )
+        session.add(payments)
+        await session.flush()
         session.add_all(
-            KnowledgeBaseRepository(knowledge_base_id=kb.id, repository_id=r)
+            KnowledgeBaseRepository(
+                knowledge_base_id=kb.id,
+                repository_id=r,
+                group_id=payments.id if r == billing else None,
+            )
             for r in (shop, billing)
         )
+        ledger = KnowledgeBaseComponent(
+            knowledge_base_id=kb.id, kind="database", name="ledger"
+        )
+        session.add(ledger)
         await session.flush()
+        # Not a connection between two repositories: only in the design.
+        session.add(
+            KnowledgeBaseConnection(
+                knowledge_base_id=kb.id,
+                source_repository_id=billing,
+                target_component_id=ledger.id,
+                kind="writes_to",
+            )
+        )
         connection = KnowledgeBaseConnection(
             knowledge_base_id=kb.id,
             source_repository_id=shop,
@@ -238,6 +288,21 @@ def test_the_answer_says_how_the_organizations_repositories_connect(
             "label": "POST /charges",
         }
     ]
+    # Each system design knowledge base's whole design, components and groups too.
+    [system] = body["systems"]
+    assert (system["id"], system["name"]) == (kb, "Checkout")
+    assert system["groups"] == [{"name": "Payments", "description": "Charging"}]
+    assert system["applications"][0] == {
+        "name": "acme/billing",
+        "url": "https://github.com/acme/billing",
+        "group": "Payments",
+    }
+    assert system["components"][0]["name"] == "ledger"
+    assert {(c["source"], c["kind"], c["target"]) for c in system["connections"]} == {
+        ("acme/shop", "calls", "acme/billing"),
+        ("acme/billing", "writes_to", "ledger"),
+    }
     # Globex has the shop too, but not Acme's map.
     other = ask(code, token_for(code, NEIGHBOUR, OTHER_ORG)).json()
     assert (other["connections"], other["link_owners"]) == ([], [])
+    assert other["systems"] == []

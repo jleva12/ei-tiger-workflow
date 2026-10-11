@@ -44,8 +44,9 @@ export type KnowledgeBase = {
   /** A system design one's repositories, and how many have a code graph to search. */
   repositories: number
   ingested: number
-  /** A system design one's connections between its applications. */
+  /** A system design one's connections, and its components (databases, queues…). */
   connections: number
+  components: number
   /** A RAG one's documents, how many are searchable and how many failed. */
   documents: number
   ready: number

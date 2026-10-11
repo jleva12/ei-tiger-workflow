@@ -34,7 +34,17 @@ async def test_ingest_all_formats(loaded, storage):
     stored = [c for c, _ in storage.chunks.rows.values()]
     assert all(c.embedding and len(c.embedding) == 256 for c in stored)
     assert all(c.embed_text.startswith("Document: ") for c in stored)
-    assert {c.source_type for c in stored} == {"docx", "xlsx", "markdown", "text", "csv", "visio", "pdf", "pptx"}
+    assert {c.source_type for c in stored} == {
+        "docx",
+        "xlsx",
+        "markdown",
+        "html",
+        "text",
+        "csv",
+        "visio",
+        "pdf",
+        "pptx",
+    }
 
 
 async def test_exact_identifier_search(loaded, search_service):

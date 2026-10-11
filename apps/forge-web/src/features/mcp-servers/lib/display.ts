@@ -1,7 +1,7 @@
 import { McpServerIcon } from "@hugeicons/core-free-icons"
 
 import type { IconProp } from "@/components/forge/icons"
-import type { McpServerRecord, McpServerStatus } from "./api"
+import type { AuthMethodInfo, McpServerRecord, McpServerStatus } from "./api"
 
 export const MCP_SERVERS_ICON: IconProp = McpServerIcon
 
@@ -39,3 +39,12 @@ export const toolNames = (tools: string) =>
 export const OAUTH_RETURN_KEY = "forge:mcp-oauth-return"
 
 export type OAuthReturn = { organizationId: string; serverId: string }
+
+/** An auth method's settings as its form starts them: each field's default. */
+export function defaultsOf(method: AuthMethodInfo | undefined) {
+  return Object.fromEntries(
+    (method?.fields ?? [])
+      .filter((f) => !f.secret)
+      .map((f) => [f.name, f.default])
+  )
+}

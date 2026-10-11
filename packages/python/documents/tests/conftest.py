@@ -22,6 +22,7 @@ def files() -> dict[str, bytes]:
         "handbook.docx": fixtures.make_docx(),
         "pricing.xlsx": fixtures.make_xlsx(),
         "runbook.md": fixtures.make_markdown(),
+        "help_center.html": fixtures.make_html(),
         "incident.txt": fixtures.make_text_latin1(),
         "people.csv": fixtures.make_csv(),
         "order_flow.vsdx": fixtures.make_vsdx(),

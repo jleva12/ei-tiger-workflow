@@ -252,7 +252,7 @@ type pageStats struct {
 
 // embedPage windows every document of a page, packs the windows across
 // documents into requests of MaxInputsPerRequest, sends them with the given
-// concurrency and combines each document's window vectors as EmbedText does.
+// concurrency and combines each document's window vectors (combine).
 //
 // A request the provider refuses for its content is split in halves until
 // the refused window is alone; that window's document is skipped and every
@@ -382,32 +382,6 @@ func validateProvider(p Provider) error {
 		return errors.New("code search: invalid embedding provider")
 	}
 	return nil
-}
-
-// EmbedText covers every UTF-8 byte in bounded windows and length-weights their
-// embeddings. Long bodies are never silently truncated. The same transform is
-// applied to natural-language queries and source documents.
-func EmbedText(ctx context.Context, p Provider, text string) ([]float64, error) {
-	if err := validateProvider(p); err != nil {
-		return nil, err
-	}
-	ws, err := windows(text, p.MaxInputBytes())
-	if err != nil {
-		return nil, err
-	}
-	vectors := make([][]float64, 0, len(ws))
-	for start := 0; start < len(ws); start += MaxInputsPerRequest {
-		chunk := ws[start:min(start+MaxInputsPerRequest, len(ws))]
-		out, err := p.Embed(ctx, chunk)
-		if err != nil {
-			return nil, err
-		}
-		if len(out) != len(chunk) {
-			return nil, errors.New("code search: embedding count mismatch")
-		}
-		vectors = append(vectors, out...)
-	}
-	return combine(ws, vectors, p.Dimensions())
 }
 
 // windows splits text into pieces of at most maxBytes on rune boundaries so

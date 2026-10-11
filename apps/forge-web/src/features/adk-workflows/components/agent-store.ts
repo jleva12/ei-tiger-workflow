@@ -4,6 +4,7 @@ import type {
   McpServerLookup,
 } from "@/features/agents/components/chat-agent-store"
 import type { ChatAgentLookup } from "@/features/adk-workflows/lib/validate"
+import type { CredentialLookup } from "@/features/credentials/lib/display"
 import * as React from "react"
 import type { StoreApi } from "zustand"
 
@@ -49,6 +50,8 @@ export type AgentLookups = {
   /** The organization's MCP servers and knowledge bases, for LLM agents' tools. */
   mcpServers: Record<string, McpServerLookup>
   knowledgeBases: Record<string, KnowledgeBaseLookup>
+  /** The organization's API credentials, by ID: what HTTP steps and tools sign in with. */
+  credentials: Record<string, CredentialLookup>
 }
 
 /** An agent from the Agents page, as an LLM node picks it. */

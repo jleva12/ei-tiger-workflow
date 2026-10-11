@@ -103,5 +103,6 @@ export const CHAT_AGENT_ADAPTER: BuilderAdapter<
     models: {},
     mcpServers: {},
     knowledgeBases: {},
+    credentials: {},
   }),
 }

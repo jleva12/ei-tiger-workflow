@@ -51,6 +51,36 @@ def as_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
+def evaluate(
+    expression: str,
+    data: Mapping[str, Any],
+    *,
+    what: str = "The instruction",
+    timeout_ms: int = 2000,
+    depth: int = 300,
+) -> Any:
+    """
+    :param expression: One ``{{ }}`` part's JSONata.
+    :param data: What it reads.
+    :param what: What's being filled in, for errors.
+    :param timeout_ms: How long it may take to evaluate.
+    :param depth: How deep it may recurse.
+    :return: What it gives, as plain JSON (None for a path that finds nothing).
+    :raises TemplateError: It's empty, or it failed.
+    """
+    expression = expression.strip()
+    if not expression:
+        raise TemplateError(f"{what} has an empty {{{{ }}}}.")
+    try:
+        # One instance per evaluation: an instance isn't safe to share.
+        value = Jsonata(expression, timeout=timeout_ms, stack=depth).evaluate(_plain(dict(data)))
+    except JException as exc:
+        raise TemplateError(f"{what} couldn't fill in {{{{ {expression} }}}}: {exc}") from exc
+    except (ValueError, TypeError, ArithmeticError, RecursionError) as exc:
+        raise TemplateError(f"{what} couldn't fill in {{{{ {expression} }}}}: {exc}") from exc
+    return _plain(value)
+
+
 def render(
     template: str,
     data: Mapping[str, Any],
@@ -73,17 +103,7 @@ def render(
     plain = _plain(dict(data))
 
     def fill(match: re.Match[str]) -> str:
-        expression = match.group(1).strip()
-        if not expression:
-            raise TemplateError(f"{what} has an empty {{{{ }}}}.")
-        try:
-            # One instance per evaluation: an instance isn't safe to share.
-            value = Jsonata(expression, timeout=timeout_ms, stack=depth).evaluate(plain)
-        except JException as exc:
-            raise TemplateError(f"{what} couldn't fill in {{{{ {expression} }}}}: {exc}") from exc
-        except (ValueError, TypeError, ArithmeticError, RecursionError) as exc:
-            raise TemplateError(f"{what} couldn't fill in {{{{ {expression} }}}}: {exc}") from exc
-        return as_text(_plain(value))
+        return as_text(evaluate(match.group(1), plain, what=what, timeout_ms=timeout_ms, depth=depth))
 
     return TEMPLATE.sub(fill, template)
 

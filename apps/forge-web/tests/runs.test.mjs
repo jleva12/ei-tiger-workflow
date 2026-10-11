@@ -72,6 +72,25 @@ test("a run's badge says what it waits for", () => {
   assert.equal(runs.runStatusDisplay(run({ status: "abandoned" })).status, "cancelled")
 })
 
+test("an A2A task's run isn't retried, unlike its resubmission or a run from elsewhere", () => {
+  const a2a = { type: "runtime", protocol: "a2a", task_id: "t-1" }
+  assert.equal(runs.isA2aTask({ trigger: a2a, resubmit_of: null }), true)
+  assert.equal(runs.isA2aTask({ trigger: a2a, resubmit_of: "run-0" }), false)
+  assert.equal(runs.isA2aTask({ trigger: { type: "runtime", protocol: "rest" }, resubmit_of: null }), false)
+  assert.equal(runs.isA2aTask({ trigger: { type: "manual" }, resubmit_of: null }), false)
+  assert.equal(runs.isA2aTask({ trigger: null, resubmit_of: null }), false)
+})
+
+test("a run abandoned while it runs says it's stopping, in the Running band", () => {
+  const stopping = run({ status: "running", cancel_requested_at: new Date().toISOString() })
+  assert.deepEqual(runs.runStatusDisplay(stopping), { status: "running", label: "Stopping" })
+  assert.equal(runs.runLine(stopping), "Abandoned: its worker stops it")
+  assert.deepEqual(runs.runStatusDisplay(run({ status: "running" })), { status: "running", label: "Running" })
+  // Abandoned, once it stopped.
+  const abandoned = run({ status: "abandoned", cancel_requested_at: new Date().toISOString() })
+  assert.equal(runs.runStatusDisplay(abandoned).label, "Abandoned")
+})
+
 test("a run's line says what it waits for, why it failed, or when it started", () => {
   assert.equal(runs.runNote(run()), undefined)
   assert.match(runs.runLine(run()), /^Started /)

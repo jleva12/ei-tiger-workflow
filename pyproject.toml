@@ -13,6 +13,7 @@ members = [
     "packages/python/agent-runtime",
     "packages/python/adk-workflows",
     "packages/python/codegraph",
+    "packages/python/codegraph-query",
     "packages/python/common",
     "packages/python/documents",
     "packages/python/embeddings",
@@ -25,6 +26,7 @@ members = [
 [tool.uv.sources]
 forge-agent-runtime = { workspace = true }
 forge-codegraph = { workspace = true }
+forge-codegraph-query = { workspace = true }
 forge-common = { workspace = true }
 forge-embeddings = { workspace = true }
 forge-jsonata = { workspace = true }

@@ -34,8 +34,8 @@ import type { FileTypeId } from "./files"
  * agent with its sub-agents, another of the organization's agents nested
  * whole, and a pause for a person's answer. And Forge's workflow steps, with
  * the same kinds and settings as a `forge.workflow/v1` workflow's: an
- * approval, an HTTP request, a transform, a delay, If / Switch / Match, a
- * loop over items, a merge and an end. A node leaves by `next`, or a
+ * approval, an HTTP request, a transform, a filter, a delay, If / Switch /
+ * Match, a loop or a for-each over items, a merge and an end. A node leaves by `next`, or a
  * branching step by one of its ways out. Sub-agents aren't drawn: they're
  * set up in their agent's settings, and can have sub-agents of their own.
  * The builder edits this model; `document.ts` writes it as the agent's JSON,
@@ -146,11 +146,13 @@ export const FORGE_KINDS = [
   "approval",
   "http",
   "transform",
+  "filter",
   "delay",
   "if",
   "switch",
   "match",
   "loop",
+  "for_each",
   "merge",
   "end",
 ] as const satisfies readonly (keyof StepConfigs)[]
@@ -168,6 +170,11 @@ export type AgentConfigs = {
     allow_files: boolean
     /** The types of files it takes (`files.ts`); none takes any type. */
     file_types: FileTypeId[]
+    /**
+     * Whether a run ADK can't carry on where it stopped starts over in a new
+     * session, its steps running again; off, it fails and can be resubmitted.
+     */
+    start_over: boolean
   }
   llm: LlmSettings & {
     /** `single_turn`: it answers once; `task`: it may ask back until it's done. */
@@ -194,6 +201,11 @@ export type AgentConfigs = {
     agent: string
     /** Which of its versions runs: a published one, its draft, or null for its latest published. */
     version: AgentVersion
+    /**
+     * The fields of its start's input, each a JSONata expression over the
+     * run's data: with any, they're its input instead of what comes in.
+     */
+    inputs: Record<string, string>
   }
   human_input: {
     /** What the person is asked; `{{ }}` puts in the run's data. */
@@ -231,11 +243,13 @@ const FORGE_GROUPS: Record<ForgeKind, string> = {
   approval: "people",
   http: "actions",
   transform: "actions",
+  filter: "actions",
   delay: "actions",
   if: "logic",
   switch: "logic",
   match: "logic",
   loop: "logic",
+  for_each: "logic",
   merge: "logic",
   end: "finish",
 }
@@ -273,7 +287,12 @@ export const AGENT_KINDS: { [K in AgentKind]: AgentKindInfo<K> } = {
     keywords: "start input begin entry",
     terminal: true,
     idPrefix: "start",
-    defaults: () => ({ input_schema: {}, allow_files: false, file_types: [] }),
+    defaults: () => ({
+      input_schema: {},
+      allow_files: false,
+      file_types: [],
+      start_over: false,
+    }),
   },
   llm: {
     label: "LLM agent",
@@ -330,7 +349,7 @@ export const AGENT_KINDS: { [K in AgentKind]: AgentKindInfo<K> } = {
     summary: "Runs another of the organization's workflows here, whole.",
     keywords: "saved nested reuse subgraph workflow compose other agent",
     idPrefix: "saved",
-    defaults: () => ({ agent: "", version: null }),
+    defaults: () => ({ agent: "", version: null, inputs: {} }),
   },
   approval: forgeKind("approval"),
   human_input: {
@@ -345,11 +364,13 @@ export const AGENT_KINDS: { [K in AgentKind]: AgentKindInfo<K> } = {
   },
   http: forgeKind("http"),
   transform: forgeKind("transform"),
+  filter: forgeKind("filter"),
   delay: forgeKind("delay"),
   if: forgeKind("if"),
   switch: forgeKind("switch"),
   match: forgeKind("match"),
   loop: forgeKind("loop"),
+  for_each: forgeKind("for_each"),
   merge: forgeKind("merge"),
   end: forgeKind("end"),
 }

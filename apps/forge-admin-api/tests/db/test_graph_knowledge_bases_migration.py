@@ -52,15 +52,25 @@ def test_on_mysql_it_makes_the_models_table_and_column() -> None:
     with Operations.context(context):
         revision().upgrade()
     table = KnowledgeBaseRepository.__table__
-    # Without the columns later revisions add (0018system_maps).
+    # Without the columns later revisions add (0018system_maps,
+    # 0019system_designs).
     expected = {
-        re.sub(r", map_[xy] FLOAT", "", statement)
+        re.sub(
+            r", map_[xy] FLOAT|, group_id VARCHAR\(36\) CHARACTER SET ascii COLLATE "
+            r"ascii_bin|, FOREIGN KEY\(group_id\) REFERENCES knowledge_base_groups "
+            r"\(id\) ON DELETE SET NULL",
+            "",
+            statement,
+        )
         for statement in statements(
             str(CreateTable(table).compile(dialect=mysql.dialect()))  # type: ignore[arg-type]
         )
     }
     for index in table.indexes:  # type: ignore[attr-defined]
-        expected |= statements(str(CreateIndex(index).compile(dialect=mysql.dialect())))
+        if "group_id" not in index.columns:
+            expected |= statements(
+                str(CreateIndex(index).compile(dialect=mysql.dialect()))
+            )
     made = statements(output.getvalue())
     assert expected <= made
     # The kind column as the model has it.

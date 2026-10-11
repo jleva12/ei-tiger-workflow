@@ -59,7 +59,6 @@ services:
       # anonymously, so only public repositories ingest.
       CODEGRAPH_GITHUB_TOKEN: ${FORGE_GITHUB_TOKEN:-}
       FORGE_ENV_COMMON_FILE: ""
-      CODEGRAPH_ADMISSION_TOKEN: ${FORGE_CODEGRAPH_ADMISSION_TOKEN:-}
       CODEGRAPH_GRAPH_CURSOR_SIGNING_KEY: ${FORGE_CODEGRAPH_CURSOR_SIGNING_KEY:-}
       # The embedding model every app shares (FORGE_EMBEDDING_* in .env.common).
       CODEGRAPH_EMBEDDING_MODEL: ${FORGE_EMBEDDING_MODEL:-text-embedding-3-large}

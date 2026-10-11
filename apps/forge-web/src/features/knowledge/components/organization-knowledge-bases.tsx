@@ -105,7 +105,12 @@ const COLUMNS = helper.columns([
     cell: ({ row: { original: base } }) => (
       <span className="tabular-nums">
         {base.kind === "system"
-          ? plural(base.repositories, "application")
+          ? [
+              plural(base.repositories, "application"),
+              base.components > 0 && plural(base.components, "component"),
+            ]
+              .filter(Boolean)
+              .join(" · ")
           : plural(base.documents, "document")}
       </span>
     ),

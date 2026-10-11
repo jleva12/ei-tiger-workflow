@@ -5,7 +5,7 @@ go 1.25.0
 toolchain go1.25.5
 
 require (
-	ei-aitiger-codegraph/agentquery v0.0.0
+	cloud.google.com/go/spanner v1.95.1
 	ei-aitiger-codegraph/pkg v0.0.0
 	ei-aitiger-codegraph/serviceconfig v0.0.0
 	ei-aitiger-codegraph/storage v0.0.0
@@ -21,6 +21,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/sync v0.21.0
 	golang.org/x/sys v0.46.0
+	google.golang.org/api v0.287.1
 	google.golang.org/grpc v1.82.1
 )
 
@@ -33,7 +34,6 @@ require (
 	cloud.google.com/go/iam v1.11.0 // indirect
 	cloud.google.com/go/longrunning v1.2.0 // indirect
 	cloud.google.com/go/monitoring v1.29.0 // indirect
-	cloud.google.com/go/spanner v1.95.1 // indirect
 	ei-aitiger-codegraph/authorization v0.0.0 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/GoogleCloudPlatform/grpc-gcp-go/grpcgcp v1.6.0 // indirect
@@ -99,7 +99,6 @@ require (
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	google.golang.org/api v0.287.1 // indirect
 	google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260630182238-925bb5da69e7 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260630182238-925bb5da69e7 // indirect
@@ -120,7 +119,6 @@ replace github.com/tree-sitter/tree-sitter-java => ../../packages/go/code-graph/
 
 // Shared contracts retain their existing import paths.
 replace (
-	ei-aitiger-codegraph/agentquery => ../../packages/go/code-graph/agentquery
 	ei-aitiger-codegraph/pkg => ../../packages/go/code-graph/domain
 	ei-aitiger-codegraph/serviceconfig => ../../packages/go/code-graph/serviceconfig
 	ei-aitiger-codegraph/storage => ../../packages/go/code-graph/storage

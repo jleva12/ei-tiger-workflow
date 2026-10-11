@@ -1,8 +1,10 @@
-"""The SAQ worker: serves the ``adk_workflows`` queue with ``run_adk`` and
-``expire_pause``, and runs ``maintain`` every minute (jobs.py says what each
-does to a run); and the ``documents`` queue with ``run_job``, which runs a
-documents task job (ingest or delete a knowledge base document). Jobs are
-coroutines, so a worker runs several at once on its event loop.
+"""The SAQ worker: serves the ``adk_workflows`` queue with ``run_adk``, and
+its upkeep's, ``adk_workflows_upkeep``, with ``maintain`` every minute and
+``expire_pause`` (jobs.py says what each does to a run): runs filling every
+slot of the one never hold up the other. It serves the ``documents`` queue
+with ``run_job``, which runs a documents task job (ingest or delete a
+knowledge base document). Jobs are coroutines, so a worker runs several at
+once on its event loop.
 
     forge-async-worker worker                       # every enabled task's queue
     forge-async-worker worker --queues=documents    # one of them
@@ -18,6 +20,7 @@ under its own settings (queue.JOB_OPTIONS), whatever it was enqueued with.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import os
 import signal
@@ -31,8 +34,8 @@ from saq import CronJob, Queue, Worker
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from forge_async_worker.config import WorkerSettings
-from forge_async_worker.jobs import AdkRunJobs
-from forge_async_worker.queue import DOCUMENTS, JOB_OPTIONS, MAINTAIN, QUEUE, RunQueue
+from forge_async_worker.jobs import ATTEMPT_SECONDS, AdkRunJobs
+from forge_async_worker.queue import DOCUMENTS, JOB_OPTIONS, MAINTAIN, QUEUE, UPKEEP, RunQueue
 from forge_async_worker.runtime import Runtime, build_runtime, default_registry
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
 from forge_task_adk_workflows.run_store import RunStore, runs
@@ -44,6 +47,8 @@ log = logging.getLogger(__name__)
 
 CONTEXT_KEY = "forge"  # SAQ's context keeps its own worker under "worker"
 MAINTENANCE_CRON = "* * * * *"
+#: Upkeep jobs at once: the maintenance, and a pause's expiry beside it.
+UPKEEP_CONCURRENCY = 2
 NO_STORE = (
     "The worker keeps ADK workflow runs in the admin MySQL: set HYBRID_ADK_WORKFLOWS__SESSION_DATABASE_URL "
     "(mysql+aiomysql://...)"
@@ -52,6 +57,15 @@ NO_STORE = (
 DOCUMENTS_TASK = "documents"
 #: Each task's queue, in the order the worker serves them.
 TASK_QUEUES = {TASK_NAME: QUEUE, DOCUMENTS_TASK: DOCUMENTS}
+#: What ADK imports the first time an LLM agent asks its model (the model
+#: kinds whose tool calls it pairs by ID, each when installed), taking a good
+#: part of a second: imported as the worker starts, on a thread, rather than
+#: on the event loop under a run's first step, which it would hold meanwhile.
+FIRST_USE_MODULES = (
+    "google.adk.models.anthropic_llm",
+    "google.adk.models.lite_llm",
+    "google.adk.integrations.openai._openai_responses_llm",
+)
 
 
 @dataclass
@@ -192,8 +206,9 @@ class _NoFollowUps:
 
 
 def job_queue(settings: WorkerSettings, name: str = QUEUE) -> RunQueue:
-    """The ``adk_workflows`` queue (or ``name``), on HYBRID_REDIS_URL."""
-    return RunQueue(Queue.from_url(settings.redis_url, name=name))
+    """The ``adk_workflows`` queue, with its upkeep's (or the queue ``name``), on HYBRID_REDIS_URL."""
+    upkeep = Queue.from_url(settings.redis_url, name=UPKEEP) if name == QUEUE else None
+    return RunQueue(Queue.from_url(settings.redis_url, name=name), upkeep=upkeep)
 
 
 def serving(settings: WorkerSettings, requested: Sequence[str] | None = None) -> list[str]:
@@ -229,18 +244,29 @@ def build_workers(
     state: WorkerState, *, concurrency: int, queues: Sequence[str] | None = None, **worker_options: Any
 ) -> list[Worker]:
     """A SAQ worker for each queue served (``queues``, or every enabled
-    task's), sharing the process's tasks, run store and queue."""
+    task's), and one for the ``adk_workflows`` queue's upkeep, sharing the
+    process's tasks, run store and queue."""
     workers: list[Worker] = []
     for name in serving(state.settings, queues):
+        upkeep: Worker[Any] | None = None
         if name == QUEUE:
             # The jobs take SAQ's context as a plain dict, with the worker's own entry.
-            upkeep: CronJob[Any] = CronJob(maintain, cron=MAINTENANCE_CRON, unique=True, **JOB_OPTIONS[MAINTAIN])
             worker: Worker[Any] = Worker(
                 state.queue.queue,
-                functions=[run_adk, expire_pause],
-                cron_jobs=[upkeep],
+                # The upkeep's too: what was queued here before it had a queue of its own.
+                functions=[run_adk, expire_pause, maintain],
                 concurrency=concurrency,
                 id=worker_id(),
+                before_process=_own_policy,
+                **worker_options,
+            )
+            cron: CronJob[Any] = CronJob(maintain, cron=MAINTENANCE_CRON, unique=True, **JOB_OPTIONS[MAINTAIN])
+            upkeep = Worker(
+                state.queue.upkeep,
+                functions=[maintain, expire_pause],
+                cron_jobs=[cron],
+                concurrency=UPKEEP_CONCURRENCY,
+                id=worker_id(UPKEEP),
                 before_process=_own_policy,
                 **worker_options,
             )
@@ -253,8 +279,9 @@ def build_workers(
                 before_process=_own_policy,
                 **worker_options,
             )
-        worker.context[CONTEXT_KEY] = state
-        workers.append(worker)
+        for each in (worker, upkeep) if upkeep is not None else (worker,):
+            each.context[CONTEXT_KEY] = state
+            workers.append(each)
     return workers
 
 
@@ -338,23 +365,48 @@ async def start_state(
         redis_url=runtime_options.pop("redis_url", settings.redis_url),
         **runtime_options,
     )
+    options: AdkWorkflowsSettings | None = None
     try:
         if not any(task in runtime.tasks for task in TASK_QUEUES):
             raise ValueError(f"neither the {TASK_NAME} nor the {DOCUMENTS_TASK} task is enabled (HYBRID_ENABLED_TASKS)")
-        if store is None and TASK_NAME in runtime.tasks:
-            options = getattr(runtime.tasks[TASK_NAME], "settings", None)
-            if not isinstance(options, AdkWorkflowsSettings):
-                options = load_section(TASK_NAME, AdkWorkflowsSettings)
-            store = open_store(options)
+        if TASK_NAME in runtime.tasks:
+            found = getattr(runtime.tasks[TASK_NAME], "settings", None)
+            options = found if isinstance(found, AdkWorkflowsSettings) else None
+            if store is None:
+                options = options or load_section(TASK_NAME, AdkWorkflowsSettings)
+                store = open_store(options)
         queue = queue or job_queue(settings)
     except BaseException:
         await runtime.close()
         raise
-    jobs = AdkRunJobs(store=store, queue=queue, runner=runtime.runner) if store is not None else None
+    jobs = (
+        AdkRunJobs(
+            store=store,
+            queue=queue,
+            runner=runtime.runner,
+            attempt_seconds=options.attempt_seconds if options is not None else ATTEMPT_SECONDS,
+        )
+        if store is not None
+        else None
+    )
+    if jobs is not None:
+        await asyncio.to_thread(_preload)
     return WorkerState(settings=settings, runtime=runtime, store=store, queue=queue, jobs=jobs)
 
 
+def _preload() -> None:
+    """Imports FIRST_USE_MODULES (best effort: one that isn't installed, ADK leaves out too)."""
+    for name in FIRST_USE_MODULES:
+        try:
+            importlib.import_module(name)
+        except Exception:
+            log.debug("%s isn't there to preload", name, exc_info=True)
+
+
 async def close_state(state: WorkerState) -> None:
+    if state.jobs is not None:
+        # Attempts still going (their jobs stopping, what became of their runs written) need the rest.
+        await state.jobs.close()
     try:
         await state.runtime.close()  # the tasks and their shared clients
     finally:
@@ -405,16 +457,17 @@ async def serve(
 
 
 async def check(settings: WorkerSettings, queue_names: Sequence[str] | None = None) -> bool:
-    """True when this host has a live worker on each queue (workers refresh
-    their info every 10 seconds)."""
+    """True when this host has a live worker on each queue, the upkeep's too
+    (workers refresh their info every 10 seconds)."""
     prefix = f"{socket.gethostname()}.".replace(":", "-")
     for name in serving(settings, queue_names):
         queue = job_queue(settings, name)
         try:
-            info = await queue.queue.info()
-            if not any(wid.startswith(prefix) for wid in info.get("workers", {})):
-                log.warning("no live worker from this host on queue %s", name)
-                return False
+            for served in queue.queues:
+                info = await served.info()
+                if not any(wid.startswith(prefix) for wid in info.get("workers", {})):
+                    log.warning("no live worker from this host on queue %s", served.name)
+                    return False
         finally:
             await queue.close()
     return True

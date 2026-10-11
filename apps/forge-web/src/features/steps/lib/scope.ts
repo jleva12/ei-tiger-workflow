@@ -5,8 +5,8 @@ import type {
   StepOutput,
 } from "@/features/builder/lib/types"
 import { resolveExpression } from "./expressions"
-import type { StepData } from "./model"
-import { fromJsonSchema, t, type DataType } from "./types"
+import { BODY_KINDS, type EachConfig, type StepData } from "./model"
+import { fromJsonSchema, t, unionOf, type DataType } from "./types"
 
 /*
  * What a step can read when it runs, and the type of each: the run's
@@ -14,9 +14,9 @@ import { fromJsonSchema, t, type DataType } from "./types"
  * output of every step that can run before it (`steps.<id>.output`, and
  * `.error` where a step can fail its way), `previous` (the step just
  * before it, looking through logic steps, which hand on what they got),
- * and, in a loop's body, the current item and its index. These are the
- * contract a runner implements; the builder completes and checks
- * expressions against them.
+ * and, in a loop's or for-each's body (or a Filter's condition), the
+ * current item and its index. These are the contract a runner implements; the builder
+ * completes and checks expressions against them.
  *
  * An agent reads the same (its graph holds Forge's steps by the same
  * kind names), so the reckoning takes rules for what's its own: what the
@@ -45,6 +45,8 @@ export type Root = {
   type: DataType
   /** One line: what it is. */
   detail: string
+  /** How high completions list it (higher first); by default previous, then steps. */
+  boost?: number
 }
 
 export type Scope = {
@@ -54,17 +56,86 @@ export type Scope = {
   steps: Map<string, StepInfo>
   /** Every step in the workflow, to tell "not before this one" from "no such step". */
   allSteps: Map<string, { name: string }>
+  /**
+   * The loops (and for-eachs) whose body the step is in, by ID: they hand
+   * on once every item has run, so inside, their output isn't there yet.
+   */
+  enclosing?: Set<string>
 }
 
+// What a run records as `steps.<id>.error` (StepFailed.as_error): its
+// message, and the status, body or expression when they're known.
 const ERROR = t.object(
   {
     message: t.string("What went wrong."),
     status: t.number("The HTTP status, when there was a response.", true),
+    body: t.unknown(
+      "The response's body, when it answered: a status that isn't 2xx, or a body that doesn't fit what it returns."
+    ),
+    expression: t.string("The expression that failed, when one did."),
   },
-  "Why the step took its error way."
+  "Why the step took its Error way.",
+  { required: ["message"] }
 )
 
-const LOGIC = new Set(["if", "switch", "match", "merge"])
+/** Logic steps that hand on what came into them (a run records their way as their output). */
+const PASS_THROUGH = new Set(["if", "switch", "match"])
+
+/**
+ * What a list's items are: what it holds. A run takes one value on its
+ * own (JSONata gives a single match unwrapped) as a list of one.
+ */
+export function itemTypeOf(list: DataType | undefined): DataType {
+  if (!list || list.kind === "unknown") return t.unknown()
+  return list.kind === "array" ? list.items : list
+}
+
+/** A setting read once per item of a list: what's read, and as what. */
+export type ItemBinding = {
+  /** The list's expression. */
+  items: string
+  /** What the item is called. */
+  name: string
+  /** The step it's read in, by name. */
+  of: string
+}
+
+/**
+ * A scope with an item of a list in it (a Filter's condition): the item
+ * under its name, typed by what the list holds, and `index`. The innermost
+ * wins a name, as a run binds it.
+ */
+export function withItem(
+  scope: Scope,
+  { items, name, of }: ItemBinding
+): Scope {
+  const item = itemTypeOf(resolveExpression(items, scope))
+  const roots = new Map(scope.roots)
+  roots.set(name, {
+    name,
+    type: { ...item, description: `The item ${of} is on.` },
+    detail: `${of}'s current item`,
+    boost: 4,
+  })
+  roots.set("index", {
+    name: "index",
+    type: t.number(`Where the item is in ${of}'s list, from 0.`, true),
+    detail: `${of}'s current position`,
+    boost: 0,
+  })
+  return { ...scope, roots }
+}
+
+/** A loop's or filter's `{count, results}`, its results' items typed. */
+function withResults(type: DataType, items: DataType): DataType {
+  if (type.kind !== "object" || type.properties.results?.kind !== "array")
+    return type
+  const results = type.properties.results
+  return {
+    ...type,
+    properties: { ...type.properties, results: { ...results, items } },
+  }
+}
 
 /** What a graph's own kinds bring to the reckoning. */
 export type ScopeRules<S extends BaseStep> = {
@@ -85,6 +156,12 @@ export type ScopeRules<S extends BaseStep> = {
 // Forge's steps by kind name, as both graphs hold them.
 const configOf = <K extends StepData["kind"]>(step: BaseStep, kind: K) =>
   step.kind === kind ? (step as StepData<K>).config : undefined
+
+/** A loop's or a for-each's list settings. */
+const eachOf = (step: BaseStep) =>
+  BODY_KINDS.has(step.kind)
+    ? (step as unknown as { config: EachConfig }).config
+    : undefined
 
 /** What a step hands on, as far as its settings say. */
 export function outputTypeOf(
@@ -117,6 +194,15 @@ export function outputTypeOf(
       return Object.keys(step.config.output_schema).length
         ? fromJsonSchema(step.config.output_schema)
         : t.unknown("What its expression makes.")
+    case "filter":
+      // Its results' items are what its list holds (scopesFor).
+      return t.object({
+        count: t.number("How many items it kept.", true),
+        results: t.array(
+          t.unknown(),
+          "The items its condition held for, in order."
+        ),
+      })
     case "delay":
       return t.object({
         resumed_at: t.string("When it went on.", { format: "date-time" }),
@@ -133,12 +219,17 @@ export function outputTypeOf(
     case "if":
     case "switch":
       return t.object({ branch: t.string("The way it took, by output ID.") })
+    case "for_each":
+      return t.object({
+        count: t.number("How many items it went through.", true),
+      })
     case "loop":
+      // Its results' items are what its body hands back (scopesFor).
       return t.object({
         count: t.number("How many items it went through.", true),
         results: t.array(
           t.unknown(),
-          "What the body's last step handed on, for each item."
+          "What the body's last step handed on, for each item; null for one whose body ended before coming back."
         ),
       })
     case "merge":
@@ -166,7 +257,14 @@ export function inputFields(schema: Record<string, unknown>) {
 /**
  * Every step's scope, and what each hands on, computed once for a graph.
  * Types flow in order: a step's output can depend on what came into it
- * (a merge), and a loop's item on its list's type.
+ * (a merge), a loop's item and a filter's results on their list's type,
+ * and a loop's results on what its body hands back.
+ *
+ * What a way in hands on is what a run hands on by it: a step's output; a
+ * loop's Each item way, the item; an Error way, nothing (why is the step's
+ * error); If, Switch and Match, what came into them. A loop's body leads
+ * back to it, but those ways bring each item's result to what collects
+ * them: the loop itself is handed only what comes from outside its body.
  */
 export function scopesFor<S extends BaseStep>(
   graph: BuilderGraph<S>,
@@ -208,95 +306,195 @@ export function scopesFor<S extends BaseStep>(
     return seen
   }
 
+  // Set when a type is worked out while one it needs is still being
+  // worked out (a circle): what's found meanwhile isn't kept.
+  let cut = false
+
   const outputs = new Map<string, DataType>()
-  // Transforms being worked out: their expressions read what's before them.
-  const inferring = new Set<string>()
-  const outputOf = (id: string, trail = new Set<string>()): DataType => {
+  // Steps whose output is being worked out: a transform, filter or loop
+  // reads what's before it (a loop, its body), which may lead back to it.
+  const computing = new Set<string>()
+  const outputOf = (id: string): DataType => {
     const known = outputs.get(id)
     if (known) return known
     const step = byId.get(id)
-    if (!step || trail.has(id) || inferring.has(id)) return t.unknown()
-    trail.add(id)
-    const incoming = new Map(
-      (into.get(id) ?? []).map((link) => [
-        link.source,
-        outputOf(link.source, trail),
-      ])
-    )
-    let type = rules.outputTypeOf(step.data, { input, incoming })
-    const transform = configOf(step.data, "transform")
-    if (
-      transform &&
-      !Object.keys(transform.output_schema).length &&
-      transform.expression.trim()
-    ) {
-      inferring.add(id)
-      const made = resolveExpression(transform.expression, scopeOf(id))
-      inferring.delete(id)
-      if (made && made.kind !== "unknown")
-        type = { ...made, description: "What its expression makes." }
+    if (!step) return t.unknown()
+    if (computing.has(id)) {
+      cut = true
+      return t.unknown()
     }
-    outputs.set(id, type)
-    return type
+    computing.add(id)
+    try {
+      // A merge hands on what each way into it brought, by the step it came from.
+      const incoming = new Map<string, DataType>(
+        step.data.kind === "merge"
+          ? waysIn(id).map((link) => [link.source, handedOn(link)])
+          : []
+      )
+      let type = rules.outputTypeOf(step.data, { input, incoming })
+      const transform = configOf(step.data, "transform")
+      if (
+        transform &&
+        !Object.keys(transform.output_schema).length &&
+        transform.expression.trim()
+      ) {
+        const made = resolveExpression(transform.expression, scopeOf(id))
+        if (made && made.kind !== "unknown")
+          type = { ...made, description: "What its expression makes." }
+      }
+      const filter = configOf(step.data, "filter")
+      if (filter?.items.trim()) {
+        const item = itemTypeOf(resolveExpression(filter.items, scopeOf(id)))
+        if (item.kind !== "unknown") type = withResults(type, item)
+      }
+      if (step.data.kind === "loop") {
+        const result = resultOf(id)
+        if (result.kind !== "unknown") type = withResults(type, result)
+      }
+      outputs.set(id, type)
+      return type
+    } finally {
+      computing.delete(id)
+    }
   }
 
-  /** What the step just before hands on, looking through logic steps. */
-  const previousOf = (
-    id: string,
-    trail = new Set<string>()
-  ): DataType | undefined => {
+  /**
+   * The ways into a step that hand it something: all of them, but for a
+   * loop's (or a for-each's) ways back from its body.
+   */
+  const waysIn = (id: string) => {
     const links = into.get(id) ?? []
-    if (links.length !== 1 || trail.has(id)) {
-      return links.length
-        ? t.unknown("What the step before handed on.")
-        : undefined
-    }
-    trail.add(id)
-    const source = byId.get(links[0].source)
-    if (!source) return undefined
-    // A loop's body starts from the item it's on, as a run hands it on.
-    if (source.data.kind === "loop" && links[0].output === "each") {
+    const step = byId.get(id)
+    if (!step || !BODY_KINDS.has(step.data.kind)) return links
+    const body = bodyOf(id)
+    return links.filter((link) => link.source !== id && !body.has(link.source))
+  }
+
+  /** What a way hands the step it leads to, as a run hands it on. */
+  const handedOn = (link: { source: string; output: string }): DataType => {
+    const source = byId.get(link.source)
+    if (!source) return t.unknown()
+    // A loop's body starts from the item it's on.
+    if (BODY_KINDS.has(source.data.kind) && link.output === "each") {
       return {
         ...itemOf(source.id),
         description: `The item ${source.data.name} is on.`,
       }
     }
-    if (LOGIC.has(source.data.kind) && source.data.kind !== "merge") {
-      return previousOf(source.id, trail) ?? t.unknown()
+    if (link.output === "error") {
+      return t.null(
+        `Nothing: ${source.data.name} took its Error way. Why is in steps.${source.id}.error.`
+      )
     }
+    // If, Switch and Match hand on what came into them.
+    if (PASS_THROUGH.has(source.data.kind))
+      return previousOf(source.id) ?? t.unknown()
     return outputOf(source.id)
   }
 
   /**
-   * What a loop's items are: what its list holds. A run takes one value
-   * on its own (JSONata gives a single match unwrapped) as a list of one.
+   * What a loop's body hands back for an item: what each way back to the
+   * loop hands on (an Each item way straight back, the item). A way that
+   * hands on nothing (an Error way) adds nothing.
    */
-  const itemOf = (loopId: string): DataType => {
-    const loop = byId.get(loopId)
-    const config = loop && configOf(loop.data, "loop")
-    if (!config || working.has(loopId)) return t.unknown()
-    const list = resolveExpression(config.items, scopeOf(loopId))
-    if (!list || list.kind === "unknown") return t.unknown()
-    return list.kind === "array" ? list.items : list
+  const resultOf = (loopId: string): DataType => {
+    const body = bodyOf(loopId)
+    return unionOf(
+      (into.get(loopId) ?? [])
+        .filter((link) =>
+          link.source === loopId
+            ? link.output === "each"
+            : body.has(link.source)
+        )
+        .map(handedOn)
+    )
   }
 
-  /** The loops whose body `id` is in, innermost last. */
-  const loopsAround = (id: string) =>
-    graph.steps.filter((loop) => {
-      if (loop.data.kind !== "loop") return false
-      // The body: reachable from Each item without coming back through the loop.
-      const seen = new Set<string>()
-      const queue = (outOf.get(loop.id) ?? [])
-        .filter((l) => l.output === "each")
-        .map((l) => l.target)
-      while (queue.length) {
-        const at = queue.shift()!
-        if (at === loop.id || seen.has(at)) continue
-        seen.add(at)
-        for (const link of outOf.get(at) ?? []) queue.push(link.target)
+  const previousTypes = new Map<string, DataType | undefined>()
+  const reading = new Set<string>()
+  /**
+   * What `previous` is in a step: what its way in hands it. With several
+   * ways in, it runs once for each that arrives, so it's any of theirs:
+   * typed where they agree.
+   */
+  const previousOf = (id: string): DataType | undefined => {
+    if (previousTypes.has(id)) return previousTypes.get(id)
+    const links = waysIn(id)
+    if (!links.length) return undefined
+    if (reading.has(id)) {
+      cut = true
+      return t.unknown("What the step before handed on.")
+    }
+    const outer = cut
+    cut = false
+    reading.add(id)
+    let type: DataType
+    try {
+      // Ways from one step hand on the same, but for its Each item and Error ways.
+      const ways = new Map<string, { source: string; output: string }>()
+      for (const link of links) {
+        const special = link.output === "each" || link.output === "error"
+        ways.set(`${link.source}:${special ? link.output : ""}`, link)
       }
-      return seen.has(id)
-    })
+      const types = [...ways.values()].map(handedOn)
+      if (types.length === 1) type = types[0]
+      else {
+        const union = unionOf(types)
+        type =
+          union.kind === "unknown"
+            ? t.unknown(
+                "What the step before handed on: its ways in hand on different things."
+              )
+            : {
+                ...union,
+                description:
+                  "What the step before handed on, by whichever way came in.",
+              }
+      }
+    } finally {
+      reading.delete(id)
+    }
+    if (!cut) previousTypes.set(id, type)
+    cut ||= outer
+    return type
+  }
+
+  /** What a loop's (or a for-each's) items are: what its list holds. */
+  const itemOf = (loopId: string): DataType => {
+    const loop = byId.get(loopId)
+    const config = loop && eachOf(loop.data)
+    if (!config) return t.unknown()
+    if (working.has(loopId)) {
+      cut = true
+      return t.unknown()
+    }
+    return itemTypeOf(resolveExpression(config.items, scopeOf(loopId)))
+  }
+
+  // The body: reachable from Each item without coming back through the loop.
+  const bodies = new Map<string, Set<string>>()
+  const bodyOf = (loopId: string) => {
+    const known = bodies.get(loopId)
+    if (known) return known
+    const seen = new Set<string>()
+    const queue = (outOf.get(loopId) ?? [])
+      .filter((l) => l.output === "each")
+      .map((l) => l.target)
+    while (queue.length) {
+      const at = queue.shift()!
+      if (at === loopId || seen.has(at)) continue
+      seen.add(at)
+      for (const link of outOf.get(at) ?? []) queue.push(link.target)
+    }
+    bodies.set(loopId, seen)
+    return seen
+  }
+
+  /** The loops (and for-eachs) whose body `id` is in, innermost last. */
+  const loopsAround = (id: string) =>
+    graph.steps.filter(
+      (loop) => BODY_KINDS.has(loop.data.kind) && bodyOf(loop.id).has(id)
+    )
 
   const scopes = new Map<string, Scope>()
   const working = new Set<string>()
@@ -306,10 +504,17 @@ export function scopesFor<S extends BaseStep>(
     // Loops in each other's bodies: the inner one sees no item of the outer.
     const nested = working.has(id)
     working.add(id)
+    const around = loopsAround(id)
     const steps = new Map<string, StepInfo>()
     for (const other of before(id)) {
       const step = byId.get(other)
       if (!step || step.data.kind === "end") continue
+      // A step in a loop's body is read only inside it: a run keeps each
+      // item's apart (and the loop itself runs before its body).
+      if (loopsAround(other).some((loop) => !around.includes(loop))) continue
+      // A loop around it hands on once every item has run: inside its
+      // body, it hasn't yet.
+      if (around.some((loop) => loop.id === other)) continue
       const canFail = rules
         .outputsOf(step.data)
         .some((o) => o.id === "error" || o.id === "failed")
@@ -353,40 +558,40 @@ export function scopesFor<S extends BaseStep>(
       })
     }
     // The current item of each loop around it (the innermost wins a name).
-    const scopeForLoops = new Map<string, Scope>()
-    for (const loop of nested ? [] : loopsAround(id)) {
-      const config = configOf(loop.data, "loop")
-      if (!config || working.has(loop.id)) continue
-      const loopScope = scopeForLoops.get(loop.id) ?? scopeOf(loop.id)
-      scopeForLoops.set(loop.id, loopScope)
-      const list = resolveExpression(config.items, loopScope)
-      const item =
-        list?.kind === "array"
-          ? list.items
-          : list && list.kind !== "unknown"
-            ? list
-            : t.unknown()
-      const name = config.item_name || "item"
-      roots.set(name, {
-        name,
-        type: { ...item, description: `The item ${loop.data.name} is on.` },
-        detail: `${loop.data.name}'s current item`,
+    // One whose own scope is being worked out can't give it yet: this one
+    // isn't kept, so it's worked out again whole.
+    let partial = false
+    for (const loop of nested ? [] : around) {
+      const config = eachOf(loop.data)
+      if (!config) continue
+      if (working.has(loop.id)) {
+        partial = true
+        continue
+      }
+      const item = withItem(scopeOf(loop.id), {
+        items: config.items,
+        name: config.item_name || "item",
+        of: loop.data.name,
       })
-      roots.set("index", {
-        name: "index",
-        type: t.number(
-          `Where the item is in ${loop.data.name}'s list, from 0.`,
-          true
-        ),
-        detail: `${loop.data.name}'s current position`,
-      })
+      for (const name of [config.item_name || "item", "index"])
+        roots.set(name, item.roots.get(name)!)
     }
     for (const root of rules.roots ?? []) roots.set(root.name, root)
-    const scope = { roots, steps, allSteps }
+    const scope: Scope = {
+      roots,
+      steps,
+      allSteps,
+      enclosing: new Set(around.map((loop) => loop.id)),
+    }
     working.delete(id)
-    if (!nested) scopes.set(id, scope)
+    if (!nested && !partial) scopes.set(id, scope)
     return scope
   }
 
-  return { scopeOf, outputOf: (id: string) => outputOf(id) }
+  return {
+    scopeOf,
+    outputOf: (id: string) => outputOf(id),
+    /** What `previous` is in a step; undefined when nothing leads to it. */
+    previousOf: (id: string) => previousOf(id),
+  }
 }

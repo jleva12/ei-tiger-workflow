@@ -19,6 +19,10 @@ from pydantic import Field
 from forge_common.adk.models import ModelCall, ProviderModels
 from forge_common.model_provider import parse_model_provider_yaml
 
+#: The hosts the example's tools call, answered by ``web`` rather than the
+#: network: allowed, so the private-network check doesn't look them up.
+EXAMPLE_HOSTS = ("api.example.com",)
+
 FIXTURES = Path(__file__).with_name("fixtures")
 EXAMPLE = FIXTURES / "support-assistant.chat-agent.json"
 

@@ -8,7 +8,8 @@ from fastapi.testclient import TestClient
 
 from forge_agent_runtime.a2a import api_key_security, create_a2a_router, owner_of, task_store
 from forge_agent_runtime.executor import AgentExecutor, DirectoryAgentSource
-from tests.conftest import call, text, without
+from forge_agent_runtime.services import RuntimeServices
+from tests.conftest import EXAMPLE_HOSTS, call, text, without
 
 AGENT = "ca_1k2cuqsuev"
 STATE = {"type": "object", "properties": {"customer_tier": {"type": "string", "enum": ["free", "pro"]}}}
@@ -30,7 +31,12 @@ def agents(tmp_path: Path, example) -> Path:
 
 @pytest.fixture
 def executor(agents, models, web) -> AgentExecutor:
-    return AgentExecutor(DirectoryAgentSource(agents), models=models, http=web())
+    return AgentExecutor(
+        DirectoryAgentSource(agents),
+        models=models,
+        http=web(),
+        services=RuntimeServices(allowed_hosts=EXAMPLE_HOSTS),
+    )
 
 
 def app_of(executor: AgentExecutor, **options: Any) -> FastAPI:

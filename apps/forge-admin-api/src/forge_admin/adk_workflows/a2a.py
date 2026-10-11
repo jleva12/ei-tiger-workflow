@@ -23,6 +23,11 @@ A task is a run, the task's ID the run's (as hex):
 - Getting the task (``GetTask``) catches it up with its run, which may have
   moved on since (decided in the console, or finished after the wait).
 - Cancelling it gives the run up, for its starter or those who manage runs.
+  A running one is stopped by its worker, and the task is canceled at once
+  (should the run end first, the task stays canceled).
+- A task's final state is final, as A2A has it: the console doesn't retry
+  the run of a task that failed (its task would go on saying it failed). It
+  can be resubmitted, as a run of its own; its caller starts a new task.
 """
 
 import asyncio
@@ -74,7 +79,7 @@ from forge_agent_runtime.a2a import (
 )
 from forge_agent_runtime.server import CallAction
 from forge_task_adk_workflows.files import FILE_TYPES, files_rule
-from forge_task_adk_workflows.run_store import ABANDONABLE, PAUSED
+from forge_task_adk_workflows.run_store import CANCELABLE, PAUSED
 from google.protobuf.struct_pb2 import Struct
 
 from forge_admin.adk_workflows.files import Limits, SentFile
@@ -614,7 +619,7 @@ class WorkflowRequestHandler(ForgeRequestHandler):
             caller = caller_of(request)
             if not await may(request, caller, run, MANAGE_RUNS):
                 raise TaskNotFoundError
-            if run["status"] not in ABANDONABLE:
+            if run["status"] not in CANCELABLE:
                 raise TaskNotCancelableError
             await run_store(request).abandon(
                 run["id"], actor=await caller_actor(request, caller)

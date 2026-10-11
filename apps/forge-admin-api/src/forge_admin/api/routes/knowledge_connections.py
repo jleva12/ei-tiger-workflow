@@ -1,22 +1,26 @@
 """
-A system design knowledge base's system map: where its applications are on
-it (``…/map``, the same for everyone who opens it), and its connections, the
-edges of the map: how one of its applications connects to another (calling
-its API, depending on it, sending it events or sharing its data), and their
-code links, where in each application's code graph it happens
-(``forge_admin.knowledge.connections``).
+A system design knowledge base's system map: where its applications,
+components and groups are on it and which group each application and
+component is in (``…/map``, the same for everyone who opens it), and its
+connections, the edges of the map: how one of its applications or
+components connects to another (calling its API, depending on it, sending it
+events, sharing its data; reading from a database, publishing to a topic),
+and the code links of a connection between two applications, where in each
+one's code graph it happens (``forge_admin.knowledge.connections``).
+Components and groups themselves are ``knowledge_designs``'.
 
 Reading needs ``organizations:read`` in the organization; drawing, removing
-and moving applications need ``knowledge_bases:manage``. Code links are written into the
-code graph, so adding or removing one needs the worker.
+and moving things need ``knowledge_bases:manage``. Code links are written
+into the code graph, so adding or removing one needs the worker.
 """
 
 import logging
-from typing import Annotated, Any
+from collections.abc import Iterable
+from typing import Annotated, Any, Self
 
 from fastapi import APIRouter, HTTPException, Request, status
-from forge_codegraph import CodeGraph, WorkerError
-from pydantic import BaseModel, Field, StringConstraints
+from forge_codegraph_query import CodeGraph, GraphError, InvalidRequest, NotFound
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,7 +34,9 @@ from forge_admin.models import (
     CodeRepository,
     KnowledgeBase,
     KnowledgeBaseCodeLink,
+    KnowledgeBaseComponent,
     KnowledgeBaseConnection,
+    KnowledgeBaseGroup,
     KnowledgeBaseRepository,
 )
 from forge_admin.models.knowledge import SYSTEM, ConnectionKind, MapLayout
@@ -42,6 +48,7 @@ router = APIRouter(tags=["knowledge bases"])
 BASE = "/organizations/{organization_id}/knowledge-bases/{knowledge_base_id}"
 PATH = f"{BASE}/connections"
 NO_CONNECTION = "The knowledge base has no such connection"
+SAME_WAY = "They're already connected that way"
 Description = Annotated[str, StringConstraints(strip_whitespace=True, max_length=1000)]
 Label = Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)]
 NodeRef = Annotated[str, StringConstraints(min_length=1, max_length=256)]
@@ -50,21 +57,44 @@ NodeRef = Annotated[str, StringConstraints(min_length=1, max_length=256)]
 class ConnectionRead(Audited):
     id: str
     knowledge_base_id: str
-    # The application it's from, e.g. the caller.
-    source_repository_id: str
-    # The application it's to, e.g. the one called.
-    target_repository_id: str
+    # The application it's from, e.g. the caller; None from a component.
+    source_repository_id: str | None
+    # The application it's to, e.g. the one called; None to a component.
+    target_repository_id: str | None
+    # The component it's from, when it isn't from an application.
+    source_component_id: str | None
+    # The component it's to, when it isn't to an application.
+    target_component_id: str | None
     kind: ConnectionKind
     description: str
     # How many code links say where it happens.
     code_links: int = 0
 
 
+EndId = Annotated[str, StringConstraints(max_length=36)]
+
+
 class ConnectionCreate(BaseModel):
-    source_repository_id: str = Field(max_length=36)
-    target_repository_id: str = Field(max_length=36)
+    """From one of the knowledge base's applications (``source_repository_id``)
+    or components (``source_component_id``) to another (``target_…``)."""
+
+    source_repository_id: EndId | None = None
+    source_component_id: EndId | None = None
+    target_repository_id: EndId | None = None
+    target_component_id: EndId | None = None
     kind: ConnectionKind = "connects_to"
     description: Description = ""
+
+    @model_validator(mode="after")
+    def _one_of_each_end(self) -> Self:
+        for side in ("source", "target"):
+            repository = getattr(self, f"{side}_repository_id")
+            component = getattr(self, f"{side}_component_id")
+            if (repository is None) == (component is None):
+                raise ValueError(
+                    f"Give the {side}'s repository or its component, not both"
+                )
+        return self
 
 
 class ConnectionUpdate(BaseModel):
@@ -111,6 +141,34 @@ def _code_link_read(row: KnowledgeBaseCodeLink) -> CodeLinkRead:
     return as_read(CodeLinkRead, row, source=end("source"), target=end("target"))
 
 
+def _components_of(connection: KnowledgeBaseConnection) -> bool:
+    """Whether either end is a component, which the unique key doesn't cover."""
+    return (
+        connection.source_component_id is not None
+        or connection.target_component_id is not None
+    )
+
+
+async def _same_way(session: AsyncSession, row: KnowledgeBaseConnection) -> bool:
+    """:return: Whether another connection joins the same ends the same way."""
+    query = select(func.count()).where(
+        KnowledgeBaseConnection.knowledge_base_id == row.knowledge_base_id,
+        KnowledgeBaseConnection.kind == row.kind,
+    )
+    if row.id is not None:
+        query = query.where(KnowledgeBaseConnection.id != row.id)
+    for column in (
+        "source_repository_id",
+        "source_component_id",
+        "target_repository_id",
+        "target_component_id",
+    ):
+        value = getattr(row, column)
+        field = getattr(KnowledgeBaseConnection, column)
+        query = query.where(field.is_(None) if value is None else field == value)
+    return bool(await session.scalar(query))
+
+
 async def _connection(
     session: AsyncSession, knowledge_base_id: str, connection_id: str
 ) -> KnowledgeBaseConnection:
@@ -134,8 +192,9 @@ async def list_connections(
     enforcer: Enforcer,
 ) -> list[ConnectionRead]:
     """
-    The connections between the knowledge base's applications, oldest
-    first, each with how many code links say where it happens.
+    The connections between the knowledge base's applications and
+    components, oldest first, each with how many code links say where it
+    happens.
     \f
     :raises HTTPException: 403 without ``organizations:read``; 404 for
         another organization's knowledge base, or none; 409 for a RAG one.
@@ -167,13 +226,15 @@ async def add_connection(
     enforcer: Enforcer,
 ) -> ConnectionRead:
     """
-    Connect one of the knowledge base's applications to another by hand.
+    Connect one of the knowledge base's applications or components to
+    another by hand: an application calling another's API, writing to a
+    database, publishing to a topic, calling an external system.
     \f
     :raises HTTPException: 403 without ``knowledge_bases:manage``; 404 for
         another organization's knowledge base, or none; 409 when they're
         already connected that way, or for a RAG knowledge base; 422 for an
-        application connected to itself, or one the knowledge base doesn't
-        include.
+        end connected to itself, or an application or component the
+        knowledge base doesn't have.
     """
     await knowledge_base_of(
         session,
@@ -184,46 +245,58 @@ async def add_connection(
         manage=True,
         kind=SYSTEM,
     )
-    if body.source_repository_id == body.target_repository_id:
+    source = body.source_repository_id or body.source_component_id
+    target = body.target_repository_id or body.target_component_id
+    if source == target:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "An application can't connect to itself",
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Nothing connects to itself"
         )
+    repositories = [
+        i for i in (body.source_repository_id, body.target_repository_id) if i
+    ]
+    components = [i for i in (body.source_component_id, body.target_component_id) if i]
     included = set(
         await session.scalars(
             select(KnowledgeBaseRepository.repository_id).where(
                 KnowledgeBaseRepository.knowledge_base_id == knowledge_base_id,
-                KnowledgeBaseRepository.repository_id.in_(
-                    [body.source_repository_id, body.target_repository_id]
-                ),
+                KnowledgeBaseRepository.repository_id.in_(repositories),
+            )
+        )
+    ) | set(
+        await session.scalars(
+            select(KnowledgeBaseComponent.id).where(
+                KnowledgeBaseComponent.knowledge_base_id == knowledge_base_id,
+                KnowledgeBaseComponent.id.in_(components),
             )
         )
     )
     if len(included) < 2:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "Both must be the knowledge base's applications",
+            "Both must be the knowledge base's applications or components",
         )
     row = KnowledgeBaseConnection(
         knowledge_base_id=knowledge_base_id,
         source_repository_id=body.source_repository_id,
+        source_component_id=body.source_component_id,
         target_repository_id=body.target_repository_id,
+        target_component_id=body.target_component_id,
         kind=body.kind,
         description=body.description,
     )
+    if _components_of(row) and await _same_way(session, row):
+        raise HTTPException(status.HTTP_409_CONFLICT, SAME_WAY)
     session.add(row)
     try:
         await session.commit()
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "They're already connected that way"
-        ) from None
+        raise HTTPException(status.HTTP_409_CONFLICT, SAME_WAY) from None
     logger.info(
         "%s connected %s to %s (%s) in knowledge base %s",
         user,
-        body.source_repository_id,
-        body.target_repository_id,
+        source,
+        target,
         body.kind,
         knowledge_base_id,
     )
@@ -242,8 +315,8 @@ async def update_connection(
     enforcer: Enforcer,
 ) -> ConnectionRead:
     """
-    Change how two applications connect, or the note on it. A new kind
-    changes its code links' kind in the code graph too.
+    Change how two applications or components connect, or the note on it. A
+    new kind changes its code links' kind in the code graph too.
     \f
     :raises HTTPException: 403 without ``knowledge_bases:manage``; 404 for
         another knowledge base's connection; 409 when they're already
@@ -270,13 +343,14 @@ async def update_connection(
         row.kind = body.kind
     if body.description is not None:
         row.description = body.description
+    if _components_of(row) and await _same_way(session, row):
+        await session.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, SAME_WAY)
     try:
         await session.flush()
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "They're already connected that way"
-        ) from None
+        raise HTTPException(status.HTTP_409_CONFLICT, SAME_WAY) from None
     await commit_synced(
         session, _graph_of(request), [knowledge_base_id] if coded else []
     )
@@ -300,7 +374,7 @@ async def remove_connection(
 ) -> None:
     """
     Remove a connection, with its code links, which leave the code graph
-    with it. Nothing changes in either application.
+    with it. Nothing changes at either end.
     \f
     :raises HTTPException: 403 without ``knowledge_bases:manage``; 404 for
         another knowledge base's connection; 503 when its code links can't
@@ -362,7 +436,7 @@ async def _node(
     codegraph: CodeGraph, repository: CodeRepository, graph_id: str, node_id: str
 ) -> dict[str, Any]:
     """
-    A node of the application's live code graph, as the worker has it.
+    A node of the application's live code graph.
 
     :raises HTTPException: 422 when the graph has no such node.
     """
@@ -371,17 +445,14 @@ async def _node(
         f"{repository.owner}/{repository.name}'s code graph has no node {node_id}",
     )
     try:
-        version = await codegraph.read(graph_id, "node", {"node": node_id})
-    except WorkerError as error:
-        if error.status in (status.HTTP_404_NOT_FOUND, status.HTTP_400_BAD_REQUEST):
-            if error.code == "invalid_response":
-                raise refused(error) from None
-            raise missing from None
+        version = await codegraph.node(graph_id, node_id)
+    except (NotFound, InvalidRequest):
+        raise missing from None
+    except GraphError as error:
         raise refused(error) from None
-    node = (version.get("fact") or {}).get("node")
-    if not isinstance(node, dict) or version.get("gen_to"):
+    if version.node is None or version.gen_to:
         raise missing
-    return node
+    return version.node
 
 
 def _end_into(row: KnowledgeBaseCodeLink, side: str, node: dict[str, Any]) -> None:
@@ -416,8 +487,9 @@ async def add_code_link(
     :raises HTTPException: 403 without ``knowledge_bases:manage``; 404 for
         another knowledge base's connection; 409 when either application
         isn't in the code graph yet, or the nodes are linked already; 422
-        for a node its graph doesn't have, or two applications with one
-        graph; 503 without the worker.
+        for a node its graph doesn't have, two applications with one graph,
+        or a connection to or from a component, which has no code; 503
+        without the worker.
     """
     await knowledge_base_of(
         session,
@@ -429,6 +501,14 @@ async def add_code_link(
         kind=SYSTEM,
     )
     connection = await _connection(session, knowledge_base_id, connection_id)
+    if (
+        connection.source_repository_id is None
+        or connection.target_repository_id is None
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Code links join two applications' code; a component has none",
+        )
     codegraph = codegraph_of(request)
     source = await session.get(CodeRepository, connection.source_repository_id)
     target = await session.get(CodeRepository, connection.target_repository_id)
@@ -531,37 +611,75 @@ class MapPoint(BaseModel):
 class SystemMapRead(BaseModel):
     # The layout last picked; None until someone arranges the map.
     layout: MapLayout | None
-    # Each placed application's place, by its repository ID; one not yet
-    # placed is missing.
+    # Each placed application's, component's and group's place, by its ID
+    # (an application's is its repository's); one not yet placed is
+    # missing. A group with anything in it is drawn around that instead.
     positions: dict[str, MapPoint]
+    # The group of each application and component in one, by its ID.
+    groups: dict[str, str] = Field(default_factory=dict)
+
+
+MapId = Annotated[str, StringConstraints(max_length=36)]
 
 
 class SystemMapUpdate(BaseModel):
     # A layout picked; left as it is when absent.
     layout: MapLayout | None = None
-    # Places for some of its applications, by repository ID; the others keep
-    # theirs. One the knowledge base doesn't include (removed meanwhile) is
-    # ignored.
-    positions: dict[Annotated[str, StringConstraints(max_length=36)], MapPoint] = Field(
-        default_factory=dict, max_length=1000
-    )
+    # Places for some of its applications, components and groups, by ID;
+    # the others keep theirs. One the knowledge base doesn't have (removed
+    # meanwhile) is ignored.
+    positions: dict[MapId, MapPoint] = Field(default_factory=dict, max_length=1000)
+    # Some applications and components put in a group, by ID, or taken out
+    # of theirs (null); the others stay where they are.
+    groups: dict[MapId, MapId | None] = Field(default_factory=dict, max_length=1000)
+
+
+def _placed(
+    rows: Iterable[
+        KnowledgeBaseRepository | KnowledgeBaseComponent | KnowledgeBaseGroup
+    ],
+    key: str,
+) -> dict[str, MapPoint]:
+    """:return: The places of those placed, by their ``key``."""
+    return {
+        getattr(row, key): MapPoint(x=row.map_x, y=row.map_y)
+        for row in rows
+        if row.map_x is not None and row.map_y is not None
+    }
 
 
 async def _system_map(
     session: AsyncSession, knowledge_base: KnowledgeBase
 ) -> SystemMapRead:
-    rows = await session.scalars(
-        select(KnowledgeBaseRepository).where(
-            KnowledgeBaseRepository.knowledge_base_id == knowledge_base.id,
-            KnowledgeBaseRepository.map_x.is_not(None),
-            KnowledgeBaseRepository.map_y.is_not(None),
+    applications = list(
+        await session.scalars(
+            select(KnowledgeBaseRepository).where(
+                KnowledgeBaseRepository.knowledge_base_id == knowledge_base.id
+            )
+        )
+    )
+    components = list(
+        await session.scalars(
+            select(KnowledgeBaseComponent).where(
+                KnowledgeBaseComponent.knowledge_base_id == knowledge_base.id
+            )
+        )
+    )
+    groups = await session.scalars(
+        select(KnowledgeBaseGroup).where(
+            KnowledgeBaseGroup.knowledge_base_id == knowledge_base.id
         )
     )
     return SystemMapRead(
         layout=knowledge_base.map_layout,  # type: ignore[arg-type]
         positions={
-            row.repository_id: MapPoint(x=row.map_x or 0.0, y=row.map_y or 0.0)
-            for row in rows
+            **_placed(applications, "repository_id"),
+            **_placed(components, "id"),
+            **_placed(groups, "id"),
+        },
+        groups={
+            **{a.repository_id: a.group_id for a in applications if a.group_id},
+            **{c.id: c.group_id for c in components if c.group_id},
         },
     )
 
@@ -576,7 +694,9 @@ async def get_system_map(
 ) -> SystemMapRead:
     """
     The knowledge base's system map as people left it: each placed
-    application's place, and the layout last picked. Everyone sees the same.
+    application's, component's and group's place, which group each
+    application and component is in, and the layout last picked. Everyone
+    sees the same.
     \f
     :raises HTTPException: 403 without ``organizations:read``; 404 for
         another organization's knowledge base, or none; 409 for a RAG one.
@@ -597,13 +717,15 @@ async def update_system_map(
     enforcer: Enforcer,
 ) -> SystemMapRead:
     """
-    Move some of the knowledge base's applications on its system map (one
-    dragged, or all of them arranged again), or pick its layout. Only the
-    applications given move, so two people moving different ones don't undo
-    each other.
+    Move some of the knowledge base's applications, components and groups
+    on its system map (one dragged, or all of them arranged again), put
+    some in a group or take them out, or pick its layout. Only those given
+    change, so two people moving different ones don't undo each other.
+    Agents are told which group each is in.
     \f
     :raises HTTPException: 403 without ``knowledge_bases:manage``; 404 for
-        another organization's knowledge base, or none; 409 for a RAG one.
+        another organization's knowledge base, or none; 409 for a RAG one;
+        422 for a group the knowledge base doesn't have.
     """
     knowledge_base = await knowledge_base_of(
         session,
@@ -614,17 +736,59 @@ async def update_system_map(
         manage=True,
         kind=SYSTEM,
     )
-    if body.layout is not None:
-        knowledge_base.map_layout = body.layout
-    if body.positions:
-        rows = await session.scalars(
-            select(KnowledgeBaseRepository).where(
-                KnowledgeBaseRepository.knowledge_base_id == knowledge_base_id,
-                KnowledgeBaseRepository.repository_id.in_(list(body.positions)),
+    wanted = {g for g in body.groups.values() if g is not None}
+    if wanted:
+        known = set(
+            await session.scalars(
+                select(KnowledgeBaseGroup.id).where(
+                    KnowledgeBaseGroup.knowledge_base_id == knowledge_base_id,
+                    KnowledgeBaseGroup.id.in_(wanted),
+                )
             )
         )
-        for row in rows:
-            point = body.positions[row.repository_id]
-            row.map_x, row.map_y = point.x, point.y
+        if wanted - known:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "The knowledge base has no such group",
+            )
+    if body.layout is not None:
+        knowledge_base.map_layout = body.layout
+    changed = set(body.positions) | set(body.groups)
+    if changed:
+        for application in await session.scalars(
+            select(KnowledgeBaseRepository).where(
+                KnowledgeBaseRepository.knowledge_base_id == knowledge_base_id,
+                KnowledgeBaseRepository.repository_id.in_(changed),
+            )
+        ):
+            _move(application, application.repository_id, body)
+        for component in await session.scalars(
+            select(KnowledgeBaseComponent).where(
+                KnowledgeBaseComponent.knowledge_base_id == knowledge_base_id,
+                KnowledgeBaseComponent.id.in_(changed),
+            )
+        ):
+            _move(component, component.id, body)
+        for group in await session.scalars(
+            select(KnowledgeBaseGroup).where(
+                KnowledgeBaseGroup.knowledge_base_id == knowledge_base_id,
+                KnowledgeBaseGroup.id.in_(list(body.positions)),
+            )
+        ):
+            point = body.positions[group.id]
+            group.map_x, group.map_y = point.x, point.y
     await session.commit()
     return await _system_map(session, knowledge_base)
+
+
+def _move(
+    row: KnowledgeBaseRepository | KnowledgeBaseComponent,
+    key: str,
+    body: SystemMapUpdate,
+) -> None:
+    """Give an application or a component its new place, or group."""
+    point = body.positions.get(key)
+    if point is not None:
+        row.map_x, row.map_y = point.x, point.y
+    if key in body.groups:
+        row.group_id = body.groups[key]

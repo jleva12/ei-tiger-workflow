@@ -1,15 +1,24 @@
 import * as React from "react"
 
+import {
+  useCredentialAuthMethods,
+  useOrganizationCredentials,
+} from "@/features/credentials/lib/api"
+import {
+  lookupOf,
+  type CredentialLookup,
+} from "@/features/credentials/lib/display"
 import { useOrganizationKnowledgeBases } from "@/features/knowledge/lib/api"
 import { useOrganizationMcpServers } from "@/features/mcp-servers/lib/api"
 import type { KnowledgeBaseLookup, McpServerLookup } from "./chat-agent-store"
 
 /*
- * The organization's MCP servers and knowledge bases, as tools pick them
- * (their names, an MCP server's tools) and as their checks see them (whether
- * a server is signed in to, how many of a knowledge base's documents are
- * searchable): for the Agents builder's tool nodes and a workflow's LLM
- * agents' tools alike.
+ * The organization's MCP servers, knowledge bases and API credentials, as
+ * tools pick them (their names, an MCP server's tools, where a credential
+ * may go) and as their checks see them (whether a server or a credential is
+ * signed in to, how many of a knowledge base's documents are searchable):
+ * for the Agents builder's tool nodes, a workflow's LLM agents' tools and
+ * its HTTP steps alike.
  */
 
 export type ToolChecks = {
@@ -22,20 +31,30 @@ export type ToolChecks = {
     string,
     { name: string; kind: "rag" | "system"; ready: number }
   >
+  credentials?: Map<string, CredentialLookup>
 }
 
 export function useToolLookups(organizationId: string): {
   lookups: {
     mcpServers: Record<string, McpServerLookup>
     knowledgeBases: Record<string, KnowledgeBaseLookup>
+    credentials: Record<string, CredentialLookup>
   }
   checks: ToolChecks
 } {
   const mcpServers = useOrganizationMcpServers(organizationId)
   const knowledgeBases = useOrganizationKnowledgeBases(organizationId)
+  const credentialList = useOrganizationCredentials(organizationId)
+  const methods = useCredentialAuthMethods()
   return React.useMemo(() => {
     const servers = mcpServers.data ?? []
     const bases = knowledgeBases.data ?? []
+    const methodNames = Object.fromEntries(
+      (methods.data ?? []).map((m) => [m.kind, m.label])
+    )
+    const credentials = (credentialList.data ?? []).map(
+      (c): [string, CredentialLookup] => [c.id, lookupOf(c, methodNames)]
+    )
     const tools = (s: (typeof servers)[number]) =>
       s.checked_at ? s.tools.map((t) => t.name) : null
     return {
@@ -59,6 +78,7 @@ export function useToolLookups(organizationId: string): {
             },
           ])
         ),
+        credentials: Object.fromEntries(credentials),
       },
       checks: {
         mcpServers: mcpServers.isSuccess
@@ -85,6 +105,11 @@ export function useToolLookups(organizationId: string): {
               ])
             )
           : undefined,
+        // Unknown until they load (or when they can't be read): a pick
+        // isn't called deleted meanwhile.
+        credentials: credentialList.isSuccess
+          ? new Map(credentials)
+          : undefined,
       },
     }
   }, [
@@ -92,5 +117,8 @@ export function useToolLookups(organizationId: string): {
     mcpServers.isSuccess,
     knowledgeBases.data,
     knowledgeBases.isSuccess,
+    credentialList.data,
+    credentialList.isSuccess,
+    methods.data,
   ])
 }

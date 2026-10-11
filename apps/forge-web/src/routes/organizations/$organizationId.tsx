@@ -12,6 +12,7 @@ import {
 import { OrganizationAgents } from "@/features/adk-workflows/components/organization-agents"
 import { OrganizationChatAgents } from "@/features/agents/components/organization-chat-agents"
 import { OrganizationMcpServers } from "@/features/mcp-servers/components/organization-mcp-servers"
+import { OrganizationCredentials } from "@/features/credentials/components/organization-credentials"
 import { OrganizationApiKeys } from "@/features/api-keys/components/organization-api-keys"
 import { OrganizationKnowledge } from "@/features/knowledge/components/organization-knowledge"
 import { OrganizationMembers } from "@/features/admin/components/organization-members"
@@ -46,7 +47,9 @@ import {
  * `agentRunTab`); Agents lists its chat agents, each opening its builder at
  * /organizations/$organizationId/chat-agents/$chatAgentId; MCP servers lists
  * the remote MCP servers its agents use as tools, one open in a dialog
- * (`mcpServer`); Knowledge bases lists its knowledge bases, each opening its
+ * (`mcpServer`); Credentials lists what its HTTP steps and HTTP and OpenAPI
+ * tools sign in to APIs with, one open in a dialog (`credential`; an OAuth
+ * sign-in comes back through /oauth/credentials/callback); Knowledge bases lists its knowledge bases, each opening its
  * own page, and on its Code repositories tab (`knowledgeTab=repositories`;
  * the old `view=code-repositories` lands there) the GitHub repositories it
  * ingests into the code graph, one open in a side panel (`repository`);
@@ -85,6 +88,9 @@ export const Route = createFileRoute("/organizations/$organizationId")({
       ...(view === "mcp-servers" &&
         typeof search.mcpServer === "string" &&
         search.mcpServer && { mcpServer: search.mcpServer }),
+      ...(view === "credentials" &&
+        typeof search.credential === "string" &&
+        search.credential && { credential: search.credential }),
       ...(view === "knowledge" &&
         repositories && {
           knowledgeTab: "repositories" as const,
@@ -105,6 +111,7 @@ function OrganizationWorkspacePage() {
     agentRun,
     agentRunTab = "overview",
     mcpServer,
+    credential,
     knowledgeTab,
     repository,
   } = Route.useSearch()
@@ -264,6 +271,18 @@ function OrganizationWorkspacePage() {
           onOpenServer={(id) =>
             void navigate({
               search: (prev) => ({ ...prev, mcpServer: id }),
+              replace: true,
+            })
+          }
+        />
+      ) : view === "credentials" ? (
+        <OrganizationCredentials
+          organizationId={organizationId}
+          organizationName={organization.name}
+          openCredential={credential}
+          onOpenCredential={(id) =>
+            void navigate({
+              search: (prev) => ({ ...prev, credential: id }),
               replace: true,
             })
           }

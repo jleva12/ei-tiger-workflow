@@ -104,6 +104,15 @@ function NodeName({ id, step }: { id: string; step: ChatStep }) {
 
 const NO_STATE: Record<string, unknown> = {}
 
+/** What a template reads in a chat: the run request, and the state the chat agent declares. */
+function useChatScope() {
+  const stateSchema = useChatBuilder((s) => {
+    const entry = s.nodes.find((n) => n.data.kind === "agent")?.data
+    return entry?.kind === "agent" ? entry.config.state_schema : NO_STATE
+  })
+  return React.useMemo(() => chatScope(stateSchema), [stateSchema])
+}
+
 /**
  * An agent's instruction, a template completed and checked against what
  * the chat sends: the run request, and the state the chat agent declares.
@@ -115,11 +124,7 @@ function InstructionField({
   value: string
   onChange: (value: string) => void
 }) {
-  const stateSchema = useChatBuilder((s) => {
-    const entry = s.nodes.find((n) => n.data.kind === "agent")?.data
-    return entry?.kind === "agent" ? entry.config.state_schema : NO_STATE
-  })
-  const scope = React.useMemo(() => chatScope(stateSchema), [stateSchema])
+  const scope = useChatScope()
   // Its issues, but for its template's: it checks those itself.
   const { issues, key } = useFieldIssues("instruction")
   return (
@@ -284,6 +289,8 @@ function ChatToolFields<K extends ToolKind>({
   const set = useSet<K>(id)
   const updateStep = useChatBuilder((s) => s.updateStep)
   const self = useChatBuilder((s) => s.meta.id)
+  const organizationId = useChatBuilder((s) => s.meta.organization_id)
+  const scope = useChatScope()
   const lookups = useChatBuilder((s) => s.lookups)
   const patch = React.useCallback(
     (values: Partial<ChatConfigs[K]>, key: string) =>
@@ -300,8 +307,16 @@ function ChatToolFields<K extends ToolKind>({
       kind={kind}
       bind={{ config, set, patch }}
       lookups={lookups}
+      organizationId={organizationId}
       self={self}
       confirmAbout="The chat asks before the call is made, showing what the model wants to send."
+      scope={scope}
+      valuesAbout={
+        <>
+          what the chat sends ({code("{{ state.… }}")}) or who&apos;s chatting
+          ({code("{{ request.… }}")})
+        </>
+      }
     />
   )
 }

@@ -81,11 +81,8 @@ func TestAdmissionChecksPublishedCommitAndReturnsRevisionMetadata(t *testing.T) 
 	if _, err := store.AdmitIngestion(ctx, a); !errors.Is(err, deployment.ErrStaleDeployment) {
 		t.Fatalf("published during validation: %v", err)
 	}
-	commit, err := store.GenerationCommit(ctx, repo, 1)
-	if err != nil || commit != testCommit1 {
-		t.Fatalf("published revision: %q %v", commit, err)
-	}
-	if _, err := store.GenerationCommit(ctx, repo, 2); err == nil {
-		t.Fatal("unpublished generation exposed")
+	state, err := store.State(ctx, repo)
+	if err != nil || state.LiveGeneration != 1 || state.LiveCommit != testCommit1 || state.LiveRunID != run.Key.RunID {
+		t.Fatalf("published revision: %+v %v", state, err)
 	}
 }

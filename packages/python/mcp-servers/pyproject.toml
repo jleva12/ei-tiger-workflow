@@ -11,6 +11,9 @@ dependencies = [
     "httpx2>=2.13.1",
     # Listing a server's tools; ADK's McpToolset, which takes 1.x or 2.x.
     "mcp>=2.3.0,<3",
+    # Its tools' results checked against their output schemas on the bounded
+    # engine, off the interpreter lock (forge_common.mcp).
+    "forge-common[mcp]",
     "google-adk>=2.9.2",
     "pydantic>=2.11",
     # A server's row, read and its grant kept (SqlServerStore).

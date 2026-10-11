@@ -1,23 +1,24 @@
 """
 Reading an organization's code repository in the code graph: what the web
-console's code graph explorer and Ingestion overview show, relayed from the
-code graph worker's API (``forge_codegraph``).
+console's code graph explorer and Ingestion overview show, read from the
+worker's Spanner database as every app reads it (``forge_codegraph_query``).
 
 Reading needs ``repositories:read`` in the organization. Every graph read
 names a generation; 0 means the live one, and the first answer says which
 that is, so the explorer pins it for the reads that follow. Graph reads
 answer 409 before an ingestion of the repository succeeded; the stats answer
-whatever the worker can tell, and say why when it can't.
+whatever the code graph can tell, and say why when it can't.
 """
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 import casbin
 from fastapi import APIRouter, HTTPException, Query, Request, status
-from forge_codegraph import CodeGraph, WorkerError
+from forge_codegraph_query import CodeGraph, GraphError, NotFound, to_json
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +27,12 @@ from forge_admin.api.routes.common import NodeId, Session
 from forge_admin.auth.access import CurrentUser, Enforcer, Level, Scope, authorize
 from forge_admin.code_repositories.access import repository_of
 from forge_admin.db.audit import UtcDateTime
-from forge_admin.knowledge.graph import codegraph_of, graph_ids, unavailable
+from forge_admin.knowledge.graph import (
+    codegraph_of,
+    graph_ids,
+    not_set_up,
+    unavailable,
+)
 from forge_admin.models import CodeIngestionJob, CodeRepository
 
 logger = logging.getLogger(__name__)
@@ -35,7 +41,7 @@ router = APIRouter(tags=["code repositories"])
 
 #: Reading the organization's code in the code graph (0015repositories_read).
 READ = "repositories:read"
-#: Seconds the stats wait for the worker: they never fail because of it.
+#: Seconds the stats wait for the code graph: they never fail because of it.
 STATS_TIMEOUT = 5.0
 
 Generation = Annotated[int, Query(ge=0, description="0 for the live generation")]
@@ -61,9 +67,9 @@ async def _read(
     user: str,
     organization_id: str,
     repository_id: str,
-    what: str,
-    params: dict[str, str | int],
-) -> dict[str, Any]:
+    read: Callable[[CodeGraph, str], Awaitable[Any]],
+) -> Any:
+    """``read(graph, graph_id)`` of the repository's graph, as JSON."""
     repository = await _repository(
         session, enforcer, user, organization_id, repository_id
     )
@@ -76,8 +82,8 @@ async def _read(
         )
     graph = codegraph_of(request)
     try:
-        return await graph.read(graph_id, what, params)
-    except WorkerError as error:
+        return to_json(await read(graph, graph_id))
+    except GraphError as error:
         raise unavailable(error) from None
 
 
@@ -100,8 +106,7 @@ async def graph_view(
     \f
     :raises HTTPException: 403 without ``repositories:read``; 404 for another
         organization's repository, or none; 409 before an ingestion of it
-        succeeded; 502 when the worker refuses; 503 when it isn't set up or
-        doesn't answer.
+        succeeded; 503 when it isn't set up or doesn't answer.
     """
     return await _read(
         request,
@@ -110,8 +115,9 @@ async def graph_view(
         user,
         organization_id,
         repository_id,
-        "graph",
-        {"kind": kind, "generation": generation, "cursor": cursor},
+        lambda graph, graph_id: graph.view(
+            graph_id, generation=generation, kind=kind, cursor=cursor
+        ),
     )
 
 
@@ -139,14 +145,14 @@ async def graph_neighbors(
         user,
         organization_id,
         repository_id,
-        "neighbors",
-        {
-            "node": node,
-            "generation": generation,
-            "direction": direction,
-            "limit": limit,
-            "cursor": cursor,
-        },
+        lambda graph, graph_id: graph.neighbors(
+            graph_id,
+            node,
+            direction=direction,
+            generation=generation,
+            limit=limit,
+            cursor=cursor,
+        ),
     )
 
 
@@ -165,15 +171,15 @@ async def graph_symbols(
     limit: Annotated[int, Query(ge=1, le=200)] = 20,
 ) -> dict[str, Any]:
     """The nodes named exactly ``name``: ``{"nodes": [...]}``."""
+
+    async def symbols(graph: CodeGraph, graph_id: str) -> dict[str, Any]:
+        nodes = await graph.symbols(
+            graph_id, name=name, generation=generation, limit=limit
+        )
+        return {"nodes": nodes}
+
     return await _read(
-        request,
-        session,
-        enforcer,
-        user,
-        organization_id,
-        repository_id,
-        "symbols",
-        {"name": name.strip(), "generation": generation, "limit": limit},
+        request, session, enforcer, user, organization_id, repository_id, symbols
     )
 
 
@@ -203,8 +209,9 @@ async def graph_source(
         user,
         organization_id,
         repository_id,
-        "source",
-        {"node": node, "generation": generation, "context": context},
+        lambda graph, graph_id: graph.source(
+            graph_id, node, generation=generation, context=context
+        ),
     )
 
 
@@ -233,13 +240,12 @@ async def graph_node(
         user,
         organization_id,
         repository_id,
-        "node",
-        {"node": node, "generation": generation},
+        lambda graph, graph_id: graph.node(graph_id, node, generation=generation),
     )
 
 
 class GraphEmbeddings(BaseModel):
-    # The model and dimensions the worker embeds with; empty when it doesn't.
+    # The model and dimensions questions are embedded with; empty when off.
     model: str = ""
     dimensions: int = 0
     # Searchable nodes whose stored vector matches what they are now.
@@ -318,7 +324,7 @@ class GraphRun(BaseModel):
 
 class CodeGraphStats(BaseModel):
     # ok; not_ingested before the worker took up an ingestion of it, or
-    # when it no longer has it; unavailable when the worker isn't set up or
+    # when it no longer has it; unavailable when the code graph isn't set up or
     # didn't answer.
     status: Literal["ok", "not_ingested", "unavailable"]
     # Why it's unavailable or missing.
@@ -347,8 +353,9 @@ async def code_repository_stats(
     """
     What the code graph holds of the repository, to audit its ingestions:
     its live graph (nodes, edges, searchable nodes and their embeddings)
-    with the worker's latest runs and what each found and wrote. A worker
-    that isn't set up or doesn't answer leaves them unavailable, with why.
+    with the worker's latest runs and what each found and wrote. A code
+    graph that isn't set up or doesn't answer leaves them unavailable, with
+    why.
     \f
     :param runs: How many of the latest runs to include.
     :raises HTTPException: 403 without ``repositories:read``; 404 for another
@@ -372,62 +379,39 @@ async def code_repository_stats(
     graph: CodeGraph | None = getattr(request.app.state, "codegraph", None)
     return RepositoryStatsRead(
         repository_id=repository.id,
-        code_graph=await _code_graph(graph, graph_id, runs),
+        code_graph=await _code_graph(request, graph, graph_id, runs),
         as_of=datetime.now(UTC),
     )
 
 
 async def _code_graph(
-    graph: CodeGraph | None, graph_id: str | None, runs: int
+    request: Request, graph: CodeGraph | None, graph_id: str | None, runs: int
 ) -> CodeGraphStats:
     if graph is None:
         return CodeGraphStats(
-            status="unavailable",
-            error="The code graph isn't set up on this server "
-            "(FORGE_ADMIN_CODEGRAPH_URL)",
+            status="unavailable", error=not_set_up(request.app.state.settings)
         )
     if graph_id is None:
         return CodeGraphStats(status="not_ingested")
     try:
         async with asyncio.timeout(STATS_TIMEOUT):
-            answers: list[dict[str, Any] | BaseException] = await asyncio.gather(
-                graph.read(graph_id, "stats"),
-                graph.read(graph_id, "runs", {"limit": runs}),
-                return_exceptions=True,
+            totals, listed = await asyncio.gather(
+                graph.stats(graph_id), graph.runs(graph_id, limit=runs)
             )
     except TimeoutError:
-        return CodeGraphStats(status="unavailable", error="The worker didn't answer")
-    totals, listed = answers
-    if isinstance(totals, BaseException):
-        return _refused(totals)
-    if isinstance(listed, BaseException):
-        return _refused(listed)
-    try:
         return CodeGraphStats(
-            status="ok",
-            totals=GraphTotals.model_validate(totals),
-            runs=[GraphRun.of(run) for run in listed.get("runs") or []],
+            status="unavailable", error="The code graph didn't answer"
         )
-    except ValueError:
-        logger.warning("The code graph worker's stats didn't parse", exc_info=True)
-        return CodeGraphStats(
-            status="unavailable", error="The worker's answer didn't parse"
-        )
-
-
-def _refused(error: BaseException) -> CodeGraphStats:
-    """:raises BaseException: ``error``, unless it's the worker's."""
-    if not isinstance(error, WorkerError):
-        raise error
-    if error.status == status.HTTP_404_NOT_FOUND and error.code != "invalid_response":
+    except NotFound:
         return CodeGraphStats(
             status="not_ingested",
             error="The code graph no longer has this repository",
         )
-    if error.status == 0:
-        return CodeGraphStats(status="unavailable", error="The worker didn't answer")
-    logger.warning("The code graph worker refused the stats: %s", error)
+    except GraphError as error:
+        logger.warning("The code graph refused the stats: %s", error)
+        return CodeGraphStats(status="unavailable", error=error.detail)
     return CodeGraphStats(
-        status="unavailable",
-        error=error.message or f"The worker answered {error.status}",
+        status="ok",
+        totals=GraphTotals.model_validate(to_json(totals)),
+        runs=[GraphRun.of(run) for run in listed.runs],
     )

@@ -37,7 +37,6 @@ from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
-from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
@@ -46,7 +45,9 @@ from forge_agent_runtime.document import ChatAgentDocument, DocumentError, load_
 from forge_agent_runtime.refs import AgentNotFound, AgentRef, Version
 from forge_agent_runtime.services import RuntimeServices
 from forge_agent_runtime.templating import REQUEST_KEY
+from forge_agent_runtime.tools import http_client
 from forge_common.adk.models import ProviderModels
+from forge_common.patterns import schema_errors
 
 log = logging.getLogger(__name__)
 
@@ -183,20 +184,34 @@ def check_state(doc: ChatAgentDocument, delta: Mapping[str, Any] | None) -> dict
     """
     :return: The state a request sets, when its agent allows it: the model
         picker's two keys and the fields its state schema declares, each of
-        its declared type.
+        its declared type. The schema's patterns run on forge-common's
+        bounded engine (``schema_errors``): one that runs away refuses the
+        state, rather than holding the interpreter lock.
     :raises StateRefused: Anything else.
     """
     if not delta:
         return {}
-    declared = doc.state_schema.get("properties")
+    state_schema = doc.state_schema
+    declared = state_schema.get("properties")
     properties = {**FIXED_STATE, **(declared if isinstance(declared, dict) else {})}
     unknown = sorted(key for key in delta if key not in properties)
     if unknown:
         raise StateRefused([f"{doc.name} doesn't take these state keys: {', '.join(unknown)}"])
-    validator = Draft202012Validator({"type": "object", "properties": properties})
+    # A delta sets some of the state: only its keys' schemas apply, not the
+    # state schema's own keywords (required and the like). Their references
+    # resolve as in the state schema, against its $id and the schemas in its
+    # $defs or definitions; one that isn't a schema is left out, so a
+    # reference to it is refused rather than raising.
+    schema: dict[str, Any] = {"type": "object", "properties": properties}
+    if isinstance(state_schema.get("$id"), str):
+        schema["$id"] = state_schema["$id"]
+    for keyword in ("$defs", "definitions"):
+        defs = state_schema.get(keyword)
+        if isinstance(defs, dict):
+            schema[keyword] = {name: each for name, each in defs.items() if isinstance(each, (dict, bool))}
     problems = [
         f"{'.'.join(str(p) for p in error.absolute_path) or 'stateDelta'}: {error.message}"
-        for error in validator.iter_errors(dict(delta))
+        for error in schema_errors(schema, dict(delta))
     ]
     if problems:
         raise StateRefused(problems)
@@ -263,7 +278,7 @@ class AgentExecutor:
             services = services.but(resolve_agent=self._latest)
         self.services = services
         self._owns_http = http is None
-        self.http = http or httpx.AsyncClient()
+        self.http = http or http_client()
         self.cache_size = cache_size
         self._runners: OrderedDict[str, Runner] = OrderedDict()
         self._building: dict[str, asyncio.Lock] = {}

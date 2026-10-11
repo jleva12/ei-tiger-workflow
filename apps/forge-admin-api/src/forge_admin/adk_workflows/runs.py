@@ -46,6 +46,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from forge_common.patterns import schema_errors
 from forge_task_adk_workflows.files import save_run_files
 from forge_task_adk_workflows.graph.uses import (
     AgentUse,
@@ -125,7 +126,10 @@ def misfits(
     schema: dict[str, Any], value: Any, *, not_a_schema: str, whole: str = "input"
 ) -> str:
     """
-    How a value doesn't fit a JSON Schema (Draft 2020-12), for a refusal.
+    How a value doesn't fit a JSON Schema (Draft 2020-12), for a refusal. Its
+    patterns run on forge-common's bounded engine (``schema_errors``): one that
+    runs away refuses the value in half a second, rather than holding the
+    interpreter lock, and the event loop with it, for as long as it backtracks.
 
     :param schema: The schema; ``{}`` takes anything.
     :param value: The value.
@@ -141,8 +145,7 @@ def misfits(
         Draft202012Validator.check_schema(schema)
     except SchemaError as error:
         raise AdkRunError(f"{not_a_schema}: {error.message}") from None
-    validator = Draft202012Validator(schema)
-    found = sorted(validator.iter_errors(value), key=lambda e: list(e.absolute_path))
+    found = sorted(schema_errors(schema, value), key=lambda e: list(e.absolute_path))
     return "; ".join(
         f"{'/'.join(map(str, e.absolute_path)) or whole}: {e.message}"
         for e in found[:MAX_PROBLEMS]

@@ -395,11 +395,19 @@ function useLookups(organizationId: string) {
     })
     state.setContext({
       selfId: state.meta.id,
+      // Their documents too: what a saved-workflow node takes and hands back.
       agents: new Map(
-        agents.map((a) => [a.id, { name: a.name, uses: usesOf(a) }])
+        agents.map((a) => [
+          a.id,
+          {
+            name: a.name,
+            uses: usesOf(a),
+            document: storedAgent(a, organizationId),
+          },
+        ])
       ),
     })
-  }, [api, agents, records])
+  }, [api, agents, records, organizationId])
 }
 
 /** Saving the agent to the organization as it's built. */

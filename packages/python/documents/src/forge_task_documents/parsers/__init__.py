@@ -1,5 +1,6 @@
 from forge_task_documents.parsers.csv import CsvParser
 from forge_task_documents.parsers.docx import DocxParser
+from forge_task_documents.parsers.html import HtmlParser
 from forge_task_documents.parsers.markdown import MarkdownParser
 from forge_task_documents.parsers.mermaid import MermaidParser
 from forge_task_documents.parsers.ocr import OcrEngine, TesseractOcr
@@ -24,6 +25,7 @@ def default_registry(*, load_plugins: bool = True) -> ParserRegistry:
             XlsxParser(),
             CsvParser(),
             MarkdownParser(),
+            HtmlParser(),
             MermaidParser(),
             TextParser(),
             VisioParser(),
@@ -38,6 +40,7 @@ def default_registry(*, load_plugins: bool = True) -> ParserRegistry:
 __all__ = [
     "CsvParser",
     "DocxParser",
+    "HtmlParser",
     "MarkdownParser",
     "MermaidParser",
     "OcrEngine",

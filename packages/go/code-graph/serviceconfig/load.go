@@ -58,6 +58,10 @@ type Options struct {
 	// was set on the command line outranks the environment.
 	Flags    *pflag.FlagSet
 	FlagKeys map[string]string
+	// Retired names environment variables of removed settings. An env file
+	// that still sets one loads, and the line is ignored, its ${NAME}
+	// references included, rather than failing as an unknown setting.
+	Retired []string
 }
 
 // Load populates cfg, a pointer to a struct, through Viper from four layers
@@ -95,7 +99,11 @@ func Load(cfg any, opts Options) error {
 			known[name] = true
 		}
 	}
-	if err := loadDotenv(known); err != nil {
+	retired := map[string]bool{}
+	for _, name := range opts.Retired {
+		retired[name] = true
+	}
+	if err := loadDotenv(known, retired); err != nil {
 		return err
 	}
 
@@ -142,7 +150,7 @@ func Load(cfg any, opts Options) error {
 // loadDotenv places the dotenv file's variables in the environment without
 // overriding what is already set, after rejecting unknown CODEGRAPH_ keys and
 // resolving the file's references to the shared .env.common.
-func loadDotenv(known map[string]bool) error {
+func loadDotenv(known, retired map[string]bool) error {
 	file, explicit := os.LookupEnv(EnvFileVar)
 	if !explicit {
 		file = EnvFile
@@ -162,9 +170,11 @@ func loadDotenv(known map[string]bool) error {
 	if err != nil {
 		return errors.New("cannot read env file; check dotenv syntax and file permissions")
 	}
+	// A retired setting's line is never read, so its references need not
+	// resolve either.
 	if err := checkReferences(file, string(env), common.names, common.missing, func(name string) bool {
 		_, set := os.LookupEnv(name)
-		return set
+		return set || retired[name]
 	}); err != nil {
 		return err
 	}
@@ -180,6 +190,9 @@ func loadDotenv(known map[string]bool) error {
 	}
 	sort.Strings(names)
 	for _, name := range names {
+		if retired[name] && !known[name] {
+			continue
+		}
 		if strings.HasPrefix(name, EnvPrefix+"_") && !known[name] {
 			return fmt.Errorf("unknown setting %s in env file", name)
 		}

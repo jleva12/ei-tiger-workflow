@@ -11,6 +11,15 @@ SPANNER ?= emulator
 # variables to a container by itself.
 COMPOSE = $(DOCKER) compose --env-file .env.compose --env-file .env.common -f compose.yaml $(if $(filter cloud,$(SPANNER)),-f compose.cloud.yaml)
 CLOUD_SPANNER_DATABASE = $(shell sed -n 's/^WORKER_CLOUD_SPANNER_DATABASE=//p' .env.compose 2>/dev/null | tr -d "\"'" | head -1)
+# The Spanner emulator's published gRPC port (worker-spanner), where the
+# native apps find it.
+SPANNER_EMULATOR = 127.0.0.1:$(or $(shell sed -n 's/^SPANNER_GRPC_PORT=//p' .env.compose 2>/dev/null | tr -d "\"'" | head -1),19030)
+# The Spanner client's environment for a native reader of the code graph whose
+# database setting is $(1): the emulator, or with SPANNER=cloud the managed
+# database, as your gcloud user.
+codegraph_env = $(if $(filter cloud,$(SPANNER)),env -u SPANNER_EMULATOR_HOST $(1)="$(CLOUD_SPANNER_DATABASE)" SPANNER_DISABLE_BUILTIN_METRICS=true,SPANNER_EMULATOR_HOST=$(SPANNER_EMULATOR))
+# With SPANNER=cloud, fails unless .env.compose names the managed database.
+cloud_spanner_set = $(if $(filter cloud,$(SPANNER)),@test -n "$(CLOUD_SPANNER_DATABASE)" || { echo "Set WORKER_CLOUD_SPANNER_DATABASE in .env.compose"; exit 1; })
 SERVICES := web admin async-worker-adk-workflows async-worker-documents worker codegraph-mcp
 # The web apps each own package.json and node_modules; the Python apps and
 # packages are one uv workspace, with one uv.lock and .venv at the root
@@ -23,10 +32,13 @@ ASYNC_WORKER_DIR := apps/forge-async-worker
 WORKER_DIR := apps/forge-codegraph-worker
 # One ./... pattern cannot span several modules of the go.work, so each is
 # listed.
-WORKER_GO_PACKAGES := ./$(WORKER_DIR)/... $(foreach m,agentquery authorization domain serviceconfig storage tree-sitter-java,./packages/go/code-graph/$(m)/...)
+WORKER_GO_PACKAGES := ./$(WORKER_DIR)/... $(foreach m,authorization domain serviceconfig storage tree-sitter-java,./packages/go/code-graph/$(m)/...)
 # The code graph MCP server: a Python app of the uv workspace that reads the
 # graph the worker writes.
 CODEGRAPH_MCP_DIR := apps/forge-codegraph-mcp
+# Every read of the code graph (the admin API, ADK workflows, the MCP server):
+# packages/python/codegraph-query.
+CODEGRAPH_QUERY_DIR := packages/python/codegraph-query
 # Every app embeds with the one model and vector length in .env.common
 # (FORGE_EMBEDDING_*): each app's embedding settings, as file:setting:shared
 # name, which make env points at .env.common's by reference.
@@ -34,15 +46,32 @@ EMBEDDING_REFERENCES := \
   $(ADMIN_DIR)/.env:FORGE_ADMIN_KNOWLEDGE_EMBEDDING__DOCUMENT_MODEL:FORGE_EMBEDDING_MODEL \
   $(ADMIN_DIR)/.env:FORGE_ADMIN_KNOWLEDGE_EMBEDDING__DIMENSIONS:FORGE_EMBEDDING_DIMENSIONS \
   $(ADMIN_DIR)/.env:FORGE_ADMIN_KNOWLEDGE_EMBEDDING__BASE_URL:FORGE_EMBEDDING_BASE_URL \
+  $(ADMIN_DIR)/.env:FORGE_ADMIN_CODEGRAPH__EMBEDDING__MODEL:FORGE_EMBEDDING_MODEL \
+  $(ADMIN_DIR)/.env:FORGE_ADMIN_CODEGRAPH__EMBEDDING__DIMENSIONS:FORGE_EMBEDDING_DIMENSIONS \
+  $(ADMIN_DIR)/.env:FORGE_ADMIN_CODEGRAPH__EMBEDDING__BASE_URL:FORGE_EMBEDDING_BASE_URL \
   $(ASYNC_WORKER_DIR)/.env:HYBRID_EMBEDDING__DOCUMENT_MODEL:FORGE_EMBEDDING_MODEL \
   $(ASYNC_WORKER_DIR)/.env:HYBRID_EMBEDDING__DIMENSIONS:FORGE_EMBEDDING_DIMENSIONS \
   $(ASYNC_WORKER_DIR)/.env:HYBRID_EMBEDDING__BASE_URL:FORGE_EMBEDDING_BASE_URL \
+  $(ASYNC_WORKER_DIR)/.env:HYBRID_ADK_WORKFLOWS__CODEGRAPH__EMBEDDING__MODEL:FORGE_EMBEDDING_MODEL \
+  $(ASYNC_WORKER_DIR)/.env:HYBRID_ADK_WORKFLOWS__CODEGRAPH__EMBEDDING__DIMENSIONS:FORGE_EMBEDDING_DIMENSIONS \
+  $(ASYNC_WORKER_DIR)/.env:HYBRID_ADK_WORKFLOWS__CODEGRAPH__EMBEDDING__BASE_URL:FORGE_EMBEDDING_BASE_URL \
   $(WORKER_DIR)/.env:CODEGRAPH_EMBEDDING_MODEL:FORGE_EMBEDDING_MODEL \
   $(WORKER_DIR)/.env:CODEGRAPH_EMBEDDING_DIMENSIONS:FORGE_EMBEDDING_DIMENSIONS \
   $(WORKER_DIR)/.env:CODEGRAPH_EMBEDDING_BASE_URL:FORGE_EMBEDDING_BASE_URL \
   $(CODEGRAPH_MCP_DIR)/.env:CODEGRAPH_EMBEDDING__MODEL:FORGE_EMBEDDING_MODEL \
   $(CODEGRAPH_MCP_DIR)/.env:CODEGRAPH_EMBEDDING__DIMENSIONS:FORGE_EMBEDDING_DIMENSIONS \
   $(CODEGRAPH_MCP_DIR)/.env:CODEGRAPH_EMBEDDING__BASE_URL:FORGE_EMBEDDING_BASE_URL
+# Every reader of the code graph reads the same database, signs cursors with
+# the same key and searches with the same query enhancement, from
+# .env.common (FORGE_CODEGRAPH_*): each reader's settings, as file:setting:
+# shared name, which make env points at .env.common's by reference.
+CODEGRAPH_REFERENCES := \
+  $(foreach s,DATABASE CURSOR_SIGNING_KEY,$(ADMIN_DIR)/.env:FORGE_ADMIN_CODEGRAPH__SPANNER__$(s):FORGE_CODEGRAPH_$(if $(filter DATABASE,$(s)),SPANNER_DATABASE,$(s))) \
+  $(ADMIN_DIR)/.env:FORGE_ADMIN_CODEGRAPH__SEARCH__ENHANCE_QUERY:FORGE_CODEGRAPH_SEARCH_ENHANCE_QUERY \
+  $(foreach s,DATABASE CURSOR_SIGNING_KEY,$(ASYNC_WORKER_DIR)/.env:HYBRID_ADK_WORKFLOWS__CODEGRAPH__SPANNER__$(s):FORGE_CODEGRAPH_$(if $(filter DATABASE,$(s)),SPANNER_DATABASE,$(s))) \
+  $(ASYNC_WORKER_DIR)/.env:HYBRID_ADK_WORKFLOWS__CODEGRAPH__SEARCH__ENHANCE_QUERY:FORGE_CODEGRAPH_SEARCH_ENHANCE_QUERY \
+  $(foreach s,DATABASE CURSOR_SIGNING_KEY,$(CODEGRAPH_MCP_DIR)/.env:CODEGRAPH_SPANNER__$(s):FORGE_CODEGRAPH_$(if $(filter DATABASE,$(s)),SPANNER_DATABASE,$(s))) \
+  $(CODEGRAPH_MCP_DIR)/.env:CODEGRAPH_SEARCH__ENHANCE_QUERY:FORGE_CODEGRAPH_SEARCH_ENHANCE_QUERY
 # The task packages the async worker bundles: checked and tested with it.
 TASK_PACKAGES := $(addprefix packages/python/,task-sdk adk-workflows documents embeddings)
 # Python packages the apps share.
@@ -59,9 +88,11 @@ LOCAL_APPS := web admin async-worker worker codegraph-mcp
 .PHONY: web web-install web-check web-test web-build web-lint web-token
 .PHONY: admin admin-install admin-deps admin-migrate admin-check admin-test-mysql admin-fmt
 .PHONY: async-worker async-worker-install async-worker-deps async-worker-check async-worker-fmt async-worker-test-redis
+.PHONY: docs-eval docs-eval-check docs-eval-compare
 .PHONY: worker worker-install worker-deps worker-check worker-fmt worker-test-python worker-test-typescript worker-test-spanner worker-test-mysql worker-test-java
 .PHONY: worker-spanner-cloud worker-spanner-cloud-update worker-spanner-cloud-reset
 .PHONY: codegraph-mcp codegraph-mcp-install codegraph-mcp-check codegraph-mcp-fmt
+.PHONY: codegraph-query-check codegraph-query-fmt codegraph-query-test-spanner
 .PHONY: common-check common-fmt
 .PHONY: agent-runtime-check agent-runtime-fmt starter-wheels mcp-servers-check codegraph-check
 .PHONY: shared-deps infrastructure-check
@@ -81,8 +112,8 @@ help:
 	@echo "make infrastructure-check Validate the Compose stack: shared services, connections and queues"
 	@echo "make web-token          Sign the web console in as you: a bearer token in apps/forge-web/.env.local and .env.compose"
 	@echo "make start / make up    Build and start web, admin, the async workers (the adk_workflows and documents queues), the code graph worker and MCP server and their databases (web on 18190, admin on 18201, worker on 18090, MCP on 18203)"
-	@echo "make up SPANNER=cloud   The same with the code graph worker on managed Cloud Spanner; no emulator"
-	@echo "make up-all-local       Start the databases, then run web, admin, async-worker, worker and codegraph-mcp natively in this terminal; Ctrl-C stops them"
+	@echo "make up SPANNER=cloud   The same with the code graph worker and its readers (admin, ADK workflows, MCP server) on managed Cloud Spanner; no emulator"
+	@echo "make up-all-local       Start the databases, then run web, admin, async-worker, worker and codegraph-mcp natively in this terminal; Ctrl-C stops them (SPANNER=cloud: on managed Cloud Spanner)"
 	@echo "make down               Stop the stack (MySQL, MongoDB and Redis data persist in their volumes; the Spanner emulator keeps nothing)"
 	@echo "make logs / logs-web / logs-admin / logs-async-worker / logs-worker / logs-codegraph-mcp  Follow logs"
 	@echo "make status             Show service status"
@@ -92,7 +123,7 @@ help:
 	@echo "make web                Run the React dev server on http://localhost:5190"
 	@echo "make web-check / web-test / web-build / web-lint  Run one web step"
 	@echo "make admin-deps         Start admin MySQL plus the shared MongoDB and Redis for native runs"
-	@echo "make admin              Run the admin API natively with reload on http://localhost:8101"
+	@echo "make admin              Run the admin API natively with reload on http://localhost:8101, reading the code graph in the emulator (SPANNER=cloud: managed)"
 	@echo "make admin-migrate      Apply admin database migrations natively"
 	@echo "make admin-check        Admin lint, format check and unit tests"
 	@echo "make admin-test-mysql   Start admin MySQL and run the admin integration tests"
@@ -104,7 +135,7 @@ help:
 	@echo "make async-worker-test-redis  Start the shared Redis and run the SAQ worker integration tests"
 	@echo "make worker-install     Build the code graph worker's Python and TypeScript analyzers and download its Go modules"
 	@echo "make worker-deps        Start the Spanner emulator (127.0.0.1:19030) and the admin MySQL (its job queue) for native worker runs"
-	@echo "make worker             Run the code graph ingestion worker natively against the emulator (health and admission API on http://localhost:8090)"
+	@echo "make worker             Run the code graph ingestion worker natively against the emulator (health probes on http://localhost:8090)"
 	@echo "make worker SPANNER=cloud  The same against managed Cloud Spanner (WORKER_CLOUD_SPANNER_DATABASE), as your gcloud user"
 	@echo "make worker-spanner-cloud  Create the managed database with the codegraph schema (gcloud; the instance must exist)"
 	@echo "make worker-spanner-cloud-update  Add the tables and indexes a newer schema has to it, after showing them (FORCE=1 skips asking)"
@@ -124,7 +155,10 @@ help:
 	@echo "make agent-runtime-check The chat agent runtime (forge-agent-runtime): lint, format check, types, tests and a package build"
 	@echo "make starter-wheels     The runtime's wheels standalone agent projects carry (into the runtime's dist/)"
 	@echo "make mcp-servers-check  Organizations' MCP servers (forge-mcp-servers, admin and worker): lint, format check, types and tests"
-	@echo "make codegraph-check    The code graph worker's client (forge-codegraph, admin and worker): lint, format check, types and tests"
+	@echo "make codegraph-check    System design knowledge bases for agents (forge-codegraph, admin and workflows): lint, format check, types and tests"
+	@echo "make codegraph-query-check Every read of the code graph (forge-codegraph-query, admin, workflows, MCP): lint, format check, types, unit and Go contract tests"
+	@echo "make codegraph-query-test-spanner  Start the emulator and run the code graph store's tests against it"
+	@echo "make codegraph-query-fmt Format and autofix the code graph reader"
 	@echo "make common-fmt         Format and autofix the shared Python package sources"
 	@echo "make jsonata-check      Local JSONata engine: lint, format and full upstream compatibility suite"
 	@echo "make jsonata-fmt        Format and autofix the local JSONata engine"
@@ -140,33 +174,46 @@ env:
 	  test -e $$dir/.env || (umask 077; cp $$dir/.env.example $$dir/.env); \
 	done
 	@# The code graph's shared settings: a .env.common from before them takes
-	@# the template's lines, then the admission token and the cursor signing
-	@# key are generated, once.
-	@grep -q '^FORGE_CODEGRAPH_ADMISSION_TOKEN=' .env.common || { \
+	@# the template's lines, one from before every reader shared the database
+	@# and the query enhancement takes those, then the cursor signing key is
+	@# generated, once. The worker serves no API now: its token goes.
+	@grep -q '^FORGE_CODEGRAPH_CURSOR_SIGNING_KEY=' .env.common || { \
 	  { [ -z "$$(tail -c1 .env.common)" ] || echo; echo; \
 	    sed -n '/^# The code graph:/,/^FORGE_GITHUB_TOKEN=/p' .env.common.example; } >> .env.common; \
 	  echo "Added the code graph settings to .env.common"; }
-	@for name in FORGE_CODEGRAPH_ADMISSION_TOKEN FORGE_CODEGRAPH_CURSOR_SIGNING_KEY; do \
-	  grep -Eq "^$$name=.{32}" .env.common || { \
-	    perl -i -pe "s/^$$name=.*/$$name=$$(openssl rand -hex 32)/" .env.common; \
-	    echo "Generated $$name in .env.common"; }; \
+	@for name in FORGE_CODEGRAPH_SPANNER_DATABASE FORGE_CODEGRAPH_SEARCH_ENHANCE_QUERY; do \
+	  grep -q "^$$name=" .env.common || { \
+	    $(call append,$$(grep "^$$name=" .env.common.example),.env.common); \
+	    echo "Added $$name to .env.common"; }; \
 	done
+	@grep -Eq "^FORGE_CODEGRAPH_CURSOR_SIGNING_KEY=.{32}" .env.common || { \
+	  perl -i -pe "s/^FORGE_CODEGRAPH_CURSOR_SIGNING_KEY=.*/FORGE_CODEGRAPH_CURSOR_SIGNING_KEY=$$(openssl rand -hex 32)/" .env.common; \
+	  echo "Generated FORGE_CODEGRAPH_CURSOR_SIGNING_KEY in .env.common"; }
+	@! grep -q '^FORGE_CODEGRAPH_ADMISSION_TOKEN=' .env.common || { \
+	  perl -i -ne 'print unless /^FORGE_CODEGRAPH_ADMISSION_TOKEN=/' .env.common; \
+	  echo "Removed FORGE_CODEGRAPH_ADMISSION_TOKEN from .env.common: the code graph worker serves no API now"; }
+	@! grep -Eq '^CODEGRAPH_(ADMISSION_TOKEN|SEARCH_ENHANCE_QUERY)=' $(WORKER_DIR)/.env || { \
+	  perl -i -ne 'print unless /^CODEGRAPH_(ADMISSION_TOKEN|SEARCH_ENHANCE_QUERY)=/' $(WORKER_DIR)/.env; \
+	  echo "Removed CODEGRAPH_ADMISSION_TOKEN and CODEGRAPH_SEARCH_ENHANCE_QUERY from $(WORKER_DIR)/.env: it only ingests now"; }
 	@# The code graph worker claims its jobs from the admin API's MySQL: a
 	@# worker .env from before the queue moved there takes the template's line.
 	@grep -q '^CODEGRAPH_JOBS_MYSQL_DSN=' $(WORKER_DIR)/.env || { \
 	  { [ -z "$$(tail -c1 $(WORKER_DIR)/.env)" ] || echo; \
 	    grep '^CODEGRAPH_JOBS_MYSQL_DSN=' $(WORKER_DIR)/.env.example; } >> $(WORKER_DIR)/.env; \
 	  echo "Added CODEGRAPH_JOBS_MYSQL_DSN to $(WORKER_DIR)/.env"; }
-	@# Graph knowledge bases: the admin API and the workflows worker call the
-	@# code graph worker's API; a .env from before them takes the template's
-	@# lines.
+	@# The admin API and the workflows worker read the code graph themselves
+	@# (packages/python/codegraph-query): a .env from when they called the
+	@# worker's API loses those settings, and takes the code graph's
+	@# embedding API key (the rest come by reference, below).
 	@for entry in $(ADMIN_DIR):FORGE_ADMIN_CODEGRAPH $(ASYNC_WORKER_DIR):HYBRID_ADK_WORKFLOWS__CODEGRAPH; do \
 	  dir=$${entry%%:*}; prefix=$${entry#*:}; \
-	  for setting in $${prefix}_URL $${prefix}_TOKEN; do \
-	    grep -q "^$$setting=" $$dir/.env || { \
-	      { [ -z "$$(tail -c1 $$dir/.env)" ] || echo; grep "^$$setting=" $$dir/.env.example; } >> $$dir/.env; \
-	      echo "Added $$setting to $$dir/.env"; }; \
-	  done; \
+	  ! grep -Eq "^$${prefix}_(URL|TOKEN|TIMEOUT)=" $$dir/.env || { \
+	    PREFIX=$$prefix perl -i -ne 'print unless /^\Q$$ENV{PREFIX}\E_(URL|TOKEN|TIMEOUT)=/' $$dir/.env; \
+	    echo "Removed $${prefix}_URL and _TOKEN from $$dir/.env: it reads the code graph itself now"; }; \
+	  setting=$${prefix}__EMBEDDING__API_KEY; \
+	  grep -q "^$$setting=" $$dir/.env || { \
+	    $(call append,$$(grep "^$$setting=" $$dir/.env.example),$$dir/.env); \
+	    echo "Added $$setting to $$dir/.env"; }; \
 	done
 	@# Workflow runs' files (ADK artifacts in S3): a .env.common, admin .env or
 	@# worker .env from before them takes the template's lines.
@@ -197,6 +244,14 @@ env:
 	@! grep -q '^FORGE_CODEGRAPH_EMBEDDING_' .env.common || { \
 	  perl -i -ne 'print unless /^FORGE_CODEGRAPH_EMBEDDING_(MODEL|DIMENSIONS)=/' .env.common; \
 	  echo "Removed FORGE_CODEGRAPH_EMBEDDING_* from .env.common: FORGE_EMBEDDING_* replaced them"; }
+	@for entry in $(CODEGRAPH_REFERENCES); do \
+	  file=$${entry%%:*}; rest=$${entry#*:}; setting=$${rest%%:*}; reference="\$${$${rest#*:}}"; \
+	  [ "$$(sed -n "s/^$$setting=//p" $$file | tail -1)" = "$$reference" ] && continue; \
+	  if grep -q "^$$setting=" $$file; then \
+	    SETTING=$$setting REFERENCE=$$reference perl -i -pe 's/^\Q$$ENV{SETTING}\E=.*/$$ENV{SETTING}=$$ENV{REFERENCE}/' $$file; \
+	    echo "Pointed $$setting in $$file at $$reference"; \
+	  else $(call append,$$setting=$$reference,$$file); echo "Added $$setting=$$reference to $$file"; fi; \
+	done
 	@for entry in $(EMBEDDING_REFERENCES); do \
 	  file=$${entry%%:*}; rest=$${entry#*:}; setting=$${rest%%:*}; reference="\$${$${rest#*:}}"; \
 	  old=$$(sed -n "s/^$$setting=//p" $$file | tail -1); \
@@ -311,7 +366,7 @@ restart: env
 docker-build: env
 	$(COMPOSE) build $(SERVICES)
 
-check: infrastructure-check web-check web-test web-build admin-check async-worker-check worker-check codegraph-mcp-check common-check agent-runtime-check mcp-servers-check codegraph-check jsonata-check forge-ui-check
+check: infrastructure-check web-check web-test web-build admin-check async-worker-check worker-check codegraph-mcp-check codegraph-query-check common-check agent-runtime-check mcp-servers-check codegraph-check jsonata-check forge-ui-check
 
 web-install:
 	cd $(WEB_DIR) && $(NPM) ci
@@ -359,8 +414,13 @@ infrastructure-check:
 admin-deps: shared-deps
 	$(COMPOSE) up -d --wait admin-mysql
 
+# Natively with reload and settings from apps/forge-admin-api/.env, reading
+# the code graph in the emulator (make worker provisions its database), or
+# with SPANNER=cloud in the managed database, as your gcloud user.
 admin: env
-	cd $(ADMIN_DIR) && FORGE_ADMIN_RELOAD=true $(UV) run forge-admin
+	$(call cloud_spanner_set)
+	cd $(ADMIN_DIR) && $(call codegraph_env,FORGE_ADMIN_CODEGRAPH__SPANNER__DATABASE) \
+	  FORGE_ADMIN_RELOAD=true $(UV) run forge-admin
 
 admin-migrate: env
 	cd $(ADMIN_DIR) && $(UV) run alembic upgrade head
@@ -385,9 +445,12 @@ async-worker-deps: env
 # apps/forge-async-worker/.env): sets up the ADK session tables and checks the
 # run store's, and the knowledge bases' Atlas Search and Vector Search
 # indexes, then runs the adk_workflows queue's runs and upkeep and the
-# documents queue's ingests.
+# documents queue's ingests. Its workflows search the code graph in the
+# emulator, or with SPANNER=cloud in the managed database.
 async-worker: async-worker-deps
-	cd $(ASYNC_WORKER_DIR) && $(UV) run forge-async-worker worker --ensure-schema
+	$(call cloud_spanner_set)
+	cd $(ASYNC_WORKER_DIR) && $(call codegraph_env,HYBRID_ADK_WORKFLOWS__CODEGRAPH__SPANNER__DATABASE) \
+	  $(UV) run forge-async-worker worker --ensure-schema
 
 # The worker, then each task package it bundles.
 async-worker-check:
@@ -397,6 +460,31 @@ async-worker-check:
 	  (cd $$dir && $(UV) run ruff check . && $(UV) run ruff format --check . \
 	    && $(UV) run mypy src && $(UV) run pytest) || exit 1; \
 	done
+
+# Labelled retrieval evaluation (packages/python/documents/eval/README.md):
+# the suite's documents through the real ingest pipeline and knowledge-base
+# search, scored against its labelled questions. Runs in memory with the
+# worker's settings and models (apps/forge-async-worker/.env), so it needs
+# no running services, only the embedding API key.
+#   make docs-eval NAME=baseline
+#   make docs-eval NAME=small SET="embedding.document_model=text-embedding-3-small"
+#   make docs-eval-compare A=baseline B=small MAX_DROP=0.02
+# SUITE picks another suite (default core); EVAL_ARGS passes more flags
+# (--answers, --backend configured).
+EVAL_SUITE := packages/python/documents/eval/suites/$(or $(SUITE),core)
+
+docs-eval: env
+	@test -n "$(NAME)" || { echo "usage: make docs-eval NAME=<run> [SET=\"key=value ...\"]"; exit 2; }
+	cd $(ASYNC_WORKER_DIR) && $(UV) run forge-async-worker docs eval run ../../$(EVAL_SUITE) \
+	  --name $(NAME) $(foreach s,$(SET),--set $(s)) $(EVAL_ARGS)
+
+docs-eval-check: env
+	cd $(ASYNC_WORKER_DIR) && $(UV) run forge-async-worker docs eval check ../../$(EVAL_SUITE) $(foreach s,$(SET),--set $(s))
+
+docs-eval-compare: env
+	@test -n "$(A)" -a -n "$(B)" || { echo "usage: make docs-eval-compare A=<baseline run> B=<candidate run> [MAX_DROP=0.02]"; exit 2; }
+	cd $(ASYNC_WORKER_DIR) && $(UV) run forge-async-worker docs eval compare \
+	  ../../$(EVAL_SUITE)/results/$(A).json ../../$(EVAL_SUITE)/results/$(B).json $(if $(MAX_DROP),--max-drop $(MAX_DROP))
 
 async-worker-fmt:
 	cd $(ASYNC_WORKER_DIR) && $(UV) run ruff check --fix . && $(UV) run ruff format .
@@ -476,6 +564,21 @@ codegraph-mcp-check:
 
 codegraph-mcp-fmt:
 	cd $(CODEGRAPH_MCP_DIR) && $(UV) run ruff check --fix . && $(UV) run ruff format .
+
+# Lint, types, the unit tests and the contract with the worker (its Go tests'
+# golden file); the store's SQL needs the emulator (codegraph-query-test-spanner).
+codegraph-query-check:
+	cd $(CODEGRAPH_QUERY_DIR) && $(UV) run ruff check . && $(UV) run ruff format --check . && $(UV) run mypy src tests && $(UV) run pytest
+
+codegraph-query-fmt:
+	cd $(CODEGRAPH_QUERY_DIR) && $(UV) run ruff check --fix . && $(UV) run ruff format .
+
+# The Spanner store against the emulator: a database of its own per run, with
+# the worker's schema.
+codegraph-query-test-spanner: env
+	$(COMPOSE) up -d --wait worker-spanner
+	host=$$($(COMPOSE) port worker-spanner 9010) && cd $(CODEGRAPH_QUERY_DIR) && \
+	  SPANNER_EMULATOR_HOST=$$host $(UV) run pytest -m spanner
 
 worker-test-python:
 	cd $(WORKER_DIR)/python-analyzer && $(NPM) ci --ignore-scripts && $(NPM) run build && $(NPM) test

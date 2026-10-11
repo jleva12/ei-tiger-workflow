@@ -28,7 +28,7 @@ def test_defaults() -> None:
     assert settings.mcp.path == "/mcp" and settings.mcp.stateless_http
     assert settings.mcp.instructions and "list_repositories" in settings.mcp.instructions
     assert settings.embedding.vector_length == 3072
-    assert settings.spanner.database.endswith("/databases/codegraph")
+    assert (settings.spanner.database or "").endswith("/databases/codegraph")
     # The admin API as make admin serves it, its answers kept a minute.
     assert settings.mcp.auth.admin_url == "http://localhost:8101/api/v1"
     assert settings.mcp.auth.cache_seconds == 60

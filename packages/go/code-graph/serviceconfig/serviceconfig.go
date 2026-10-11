@@ -1,9 +1,8 @@
-// Package serviceconfig holds the settings every codegraph process shares
-// (the Spanner database, embeddings, search and logging), the Viper-based
-// loader that reads them from defaults, a configuration file, the
-// environment and flags, and the opener that turns them into a verified
-// store and embedding provider. The worker adds its own settings on top;
-// the MCP server and the operator CLIs use these alone.
+// Package serviceconfig holds the settings a codegraph process shares (the
+// Spanner database, embeddings and logging), the Viper-based loader that
+// reads them from defaults, a configuration file, the environment and flags,
+// and the opener that turns them into a verified store and embedding
+// provider. The ingestion worker adds its own settings on top.
 package serviceconfig
 
 import (
@@ -24,7 +23,9 @@ type Spanner struct {
 	Database string `mapstructure:"database"`
 	// Scope namespaces this deployment's data inside the database.
 	Scope string `mapstructure:"scope" env:"CODEGRAPH_SCOPE"`
-	// CursorSigningKey signs pagination cursors; at least 32 bytes.
+	// CursorSigningKey signs the store's pagination cursors, which the
+	// embedding pass and the ingestion's baseline reads page with; at least
+	// 32 bytes.
 	CursorSigningKey string `mapstructure:"cursor_signing_key" env:"CODEGRAPH_GRAPH_CURSOR_SIGNING_KEY"`
 	// AutoProvision creates the emulator instance, database and schema at
 	// startup. It requires SPANNER_EMULATOR_HOST and never touches managed
@@ -33,8 +34,8 @@ type Spanner struct {
 }
 
 // Embedding configures the embedding provider. Model and APIKey together
-// enable the semantic branch of search; Dimensions fixes the vector length
-// of the database's embedding column.
+// turn on the embedding pass that vector search reads; Dimensions fixes the
+// vector length of the database's embedding column.
 type Embedding struct {
 	APIKey      string `mapstructure:"api_key" env:"OPENAI_API_KEY"`
 	BaseURL     string `mapstructure:"base_url"`
@@ -65,13 +66,6 @@ func (e Embedding) Provider() (codesearch.Provider, error) {
 		return nil, nil
 	}
 	return codesearch.NewOpenAI(codesearch.OpenAIConfig{APIKey: e.APIKey, BaseURL: e.BaseURL, Model: e.Model, Dimensions: e.Dimensions, MaxInputBytes: e.MaxInputBytes, Logger: slog.Default()})
-}
-
-// Search tunes the agent-facing search. EnhanceQuery turns on Spanner's
-// query enhancement (spelling correction, synonyms, plurals, and the IDF
-// part of scoring) on managed Spanner; the emulator accepts and ignores it.
-type Search struct {
-	EnhanceQuery bool `mapstructure:"enhance_query"`
 }
 
 // Log configures structured logging: Level is debug, info, warn or error;
@@ -109,7 +103,6 @@ func (l Log) validate() error {
 type Config struct {
 	Spanner   Spanner   `mapstructure:"spanner"`
 	Embedding Embedding `mapstructure:"embedding"`
-	Search    Search    `mapstructure:"search"`
 	Log       Log       `mapstructure:"log"`
 	Queue     string    `mapstructure:"queue"`
 }

@@ -1,11 +1,20 @@
 """Code search hits as knowledge base passages: the shape the knowledge base
 tool hands the model (``forge_agent_runtime.services.KnowledgeBases``), so a
-graph knowledge base's code is cited like a document's passages."""
+system design knowledge base's code is cited like a document's passages.
+
+:func:`search_passages` is the one search of system design knowledge bases'
+code, for the admin API (its search route, hosted chat agents) and ADK
+workflows alike."""
 
 import hashlib
+import logging
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+
+from forge_codegraph_query import MAX_SEARCH_REPOSITORIES, CodeGraph, to_json
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -14,7 +23,7 @@ class Repository:
     A repository a graph knowledge base includes.
 
     :ivar id: Forge's repository ID (``code_repositories.id``).
-    :ivar graph_id: Its graph on the worker (``repo:…``).
+    :ivar graph_id: Its graph in the code graph (``repo:…``).
     :ivar name: ``owner/name``.
     """
 
@@ -46,7 +55,8 @@ def code_passages(
     repositories: Sequence[Repository],
 ) -> list[dict[str, Any]]:
     """
-    :param hits: The worker's search hits (``CodeGraph.search``), best first.
+    :param hits: Code search hits as JSON (``forge_codegraph_query``'s
+        ``CodeGraph.search``, with source), best first.
     :param knowledge_base_id: The graph knowledge base searched.
     :param knowledge_base: Its name.
     :param repositories: Its repositories; a hit in any other is dropped.
@@ -121,3 +131,61 @@ def _location(file: str, start: Any, end: Any) -> str:
     if isinstance(end, int) and end > start:
         return f"{file}, lines {start}–{end}" if file else f"lines {start}–{end}"
     return f"{file}, line {start}" if file else f"line {start}"
+
+
+@dataclass(frozen=True)
+class Searched:
+    """
+    A system design knowledge base a search covers.
+
+    :ivar id: Its ID.
+    :ivar name: Its name, which its passages are cited from.
+    :ivar repositories: Its repositories with a graph to search.
+    """
+
+    id: str
+    name: str
+    repositories: Sequence[Repository]
+
+
+async def search_passages(
+    graph: CodeGraph, knowledge_bases: Sequence[Searched], query: str, *, limit: int
+) -> list[dict[str, Any]]:
+    """
+    Search system design knowledge bases' code, ranked together: one search
+    over their repositories (the first :data:`MAX_SEARCH_REPOSITORIES`), each
+    hit with its code and cited as from the first knowledge base that
+    includes its repository.
+
+    :return: The passages, best first (:func:`code_passages`); none without a
+        repository to search.
+    :raises forge_codegraph_query.GraphError: The code graph refused the
+        search or didn't answer.
+    """
+    owners: dict[str, tuple[Searched, Repository]] = {}
+    for knowledge_base in knowledge_bases:
+        for repository in knowledge_base.repositories:
+            owners.setdefault(repository.graph_id, (knowledge_base, repository))
+    if not owners:
+        return []
+    if len(owners) > MAX_SEARCH_REPOSITORIES:
+        logger.warning(
+            "Searching the first %d of %d repositories",
+            MAX_SEARCH_REPOSITORIES,
+            len(owners),
+        )
+    found = await graph.search(
+        list(owners)[:MAX_SEARCH_REPOSITORIES], query, limit=limit, source=True
+    )
+    passages: list[dict[str, Any]] = []
+    for hit in to_json(found.hits):
+        owner = owners.get(str(hit.get("repository_id", "")))
+        if owner is not None:
+            knowledge_base, repository = owner
+            passages += code_passages(
+                [hit],
+                knowledge_base_id=knowledge_base.id,
+                knowledge_base=knowledge_base.name,
+                repositories=[repository],
+            )
+    return passages

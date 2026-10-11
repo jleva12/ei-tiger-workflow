@@ -95,11 +95,27 @@ export type ChatConfigs = {
     /** What it does: the model reads this to decide when to call it. */
     description: string
     method: HttpMethod
-    /** Where it calls; `{name}` puts in an argument of that name. */
+    /**
+     * Where it calls, a template: `{name}` puts in the model's argument of
+     * that name, `{{ expression }}` one of the run's values.
+     */
     url: string
     headers: HeaderRow[]
-    /** A JSON Schema of the arguments the model fills in. */
+    /**
+     * Its JSON body (POST, PUT, PATCH), a template like its URL: a
+     * placeholder that's a whole value goes in as it is. Empty for none.
+     */
+    body: string
+    /**
+     * A JSON Schema of the arguments: their types and descriptions. The
+     * model is offered those the URL and body name (lib/http-template.ts).
+     */
     parameters: Record<string, unknown>
+    /**
+     * One of the organization's credentials, by ID (the Credentials page):
+     * how it signs its requests, sent only to the URLs it's for. Empty for none.
+     */
+    credential: string
     /** A person confirms each call before it's made. */
     confirm: boolean
   }
@@ -109,8 +125,13 @@ export type ChatConfigs = {
     url: string
     /** An OpenAPI 3 spec, JSON or YAML. */
     spec: string
-    /** The operation IDs it may call, comma-separated; empty for all. */
+    /**
+     * The operations it may call, comma-separated, by their tool names (or
+     * operation IDs); empty for all.
+     */
     operations: string
+    /** One of the organization's credentials, by ID: how its calls sign in. Empty for none. */
+    credential: string
     confirm: boolean
   }
   mcp: {
@@ -260,7 +281,9 @@ export const CHAT_KINDS: { [K in ChatKind]: ChatKindInfo<K> } = {
       method: "GET",
       url: "",
       headers: [],
+      body: "",
       parameters: {},
+      credential: "",
       confirm: false,
     }),
   },
@@ -276,6 +299,7 @@ export const CHAT_KINDS: { [K in ChatKind]: ChatKindInfo<K> } = {
       url: "",
       spec: "",
       operations: "",
+      credential: "",
       confirm: false,
     }),
   },

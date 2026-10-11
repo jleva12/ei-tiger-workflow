@@ -1,6 +1,5 @@
 import * as React from "react"
 import { Link } from "@tanstack/react-router"
-import { GithubIcon } from "@hugeicons/core-free-icons"
 
 import { PrimaryAction } from "@/components/forge/app-shell"
 import {
@@ -33,9 +32,7 @@ import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -71,7 +68,15 @@ import {
   useKnowledgeBaseRepositories,
   useKnowledgeBaseRepositoryMutations,
 } from "../lib/repositories"
-import { SYSTEM_ICON } from "../lib/system"
+import {
+  components as componentsResource,
+  groups as groupsResource,
+  SYSTEM_ICON,
+} from "../lib/system"
+import {
+  AddApplicationItems,
+  type ApplicationSource,
+} from "./add-application-items"
 import { IncludeRepositoryDialog } from "./include-repository-dialog"
 import type { SearchChange } from "./knowledge-page"
 import { KnowledgeSearchDialog } from "./knowledge-search"
@@ -212,11 +217,14 @@ function RepositoryMenu({ repository }: { repository: CodeRepository }) {
 
 /**
  * A system design knowledge base's page: a system's applications (some of
- * the organization's code repositories), how they connect, and their code
- * graphs, which its agents search. It opens on the system map, where those
- * who manage knowledge bases draw the connections between applications
- * (what calls what, what sends messages to what) and say where in the code
- * each happens; All applications (`show=applications`) tables them with
+ * the organization's code repositories), the parts their code doesn't show
+ * (databases, queues, external systems…), the groups they're in, how they
+ * all connect, and the applications' code graphs, which its agents search.
+ * It opens on the system map, where those who manage knowledge bases draw
+ * the system (what calls what, what writes where, what sends messages to
+ * what) and say where in the code a connection between two applications
+ * happens; one without applications yet opens on it once something's drawn,
+ * or to draw first. All applications (`show=applications`) tables them with
  * their graphs' sizes. Its own sub nav lists them, each with how its latest
  * ingestion stands; one opens its code graph to explore (`?repository=`, at
  * `node`) and its Ingestion tab (`section=ingestion`), auditing what its
@@ -250,7 +258,14 @@ export function SystemKnowledge({
   const list = useKnowledgeBaseRepositories(scope)
   const { include, remove } = useKnowledgeBaseRepositoryMutations(scope)
   const ingest = useIngestCodeRepository(organizationId)
-  const [adding, setAdding] = React.useState<"existing" | "new">()
+  const [adding, setAdding] = React.useState<ApplicationSource>()
+  // The map opens without applications once something's drawn on it, or
+  // when someone starts drawing the system before adding its code.
+  const [drawing, setDrawing] = React.useState(false)
+  const componentList = componentsResource.scope(scope).useList()
+  const groupList = groupsResource.scope(scope).useList()
+  const drawn =
+    drawing || !!componentList.data?.length || !!groupList.data?.length
   const [removing, setRemoving] = React.useState<CodeRepository>()
   const [testing, setTesting] = React.useState(false)
   const repositories = React.useMemo(() => list.data ?? [], [list.data])
@@ -473,30 +488,39 @@ export function SystemKnowledge({
             System map
           </Button>
         </PageEmpty>
-      ) : !list.isPending && repositories.length === 0 ? (
+      ) : !list.isPending &&
+        repositories.length === 0 &&
+        !componentList.isPending &&
+        !groupList.isPending &&
+        !drawn ? (
         <EmptyWorkspace
           illustration={<EmptyIllustration name="tasks" />}
-          title={`Map ${base.name}'s applications`}
+          title={`Map ${base.name}'s system`}
           description={
             canManage
-              ? `A system design knowledge base holds a system's applications — code repositories ingested into the code graph — and how they connect: what calls what, what sends messages to what. Agents searching ${base.name} are told the system and find the code that answers their question. Add ${organizationName}'s repositories, or a GitHub repository, then connect them.`
+              ? `A system design knowledge base holds a system's design: its applications — code repositories ingested into the code graph — the parts their code doesn't show, like databases, queues and external systems, the groups they're in, and how they all connect. Agents searching ${base.name} are told the design and find the code that answers their question. Add ${organizationName}'s repositories, or a GitHub repository, or start drawing the system first.`
               : `${base.name} has no applications yet. Those who manage ${organizationName}'s knowledge bases add them.`
           }
           actions={
             canManage ? (
-              <AddMenu
-                trigger={<Button variant="outline" />}
-                organizationName={organizationName}
-                onPick={setAdding}
-              >
-                Add an application
-                <Icon icon="down" data-icon="inline-end" />
-              </AddMenu>
+              <>
+                <AddMenu
+                  trigger={<Button variant="outline" />}
+                  organizationName={organizationName}
+                  onPick={setAdding}
+                >
+                  Add an application
+                  <Icon icon="down" data-icon="inline-end" />
+                </AddMenu>
+                <Button variant="ghost" onClick={() => setDrawing(true)}>
+                  Draw the system first
+                </Button>
+              </>
             ) : undefined
           }
           steps={[
             { icon: CODE_REPOSITORIES_ICON, label: "Add applications" },
-            { icon: "link", label: "Connect them on the map" },
+            { icon: "link", label: "Draw and connect the rest" },
             { icon: "robot", label: "Attach it to agents" },
           ]}
         />
@@ -507,9 +531,11 @@ export function SystemKnowledge({
           <SystemMap
             scope={scope}
             baseName={base.name}
+            organizationName={organizationName}
             applications={repositories}
             canManage={canManage}
             onOpen={openAt}
+            onAddApplication={canManage ? setAdding : undefined}
           />
         )
       ) : (
@@ -598,41 +624,16 @@ function AddMenu({
   trigger: React.ReactElement
   children: React.ReactNode
   organizationName: string
-  onPick: (from: "existing" | "new") => void
+  onPick: (from: ApplicationSource) => void
 }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={trigger}>{children}</DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80">
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Add an application…</DropdownMenuLabel>
-          <DropdownMenuItem
-            onClick={() => onPick("existing")}
-            className="items-start"
-          >
-            <Icon icon={CODE_REPOSITORIES_ICON} className="mt-0.5" />
-            <span className="flex min-w-0 flex-col">
-              <span className="text-foreground">
-                From {organizationName}'s repositories
-              </span>
-              <span className="text-2xs text-muted-foreground">
-                One under Knowledge bases → Code repositories
-              </span>
-            </span>
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={() => onPick("new")}
-            className="items-start"
-          >
-            <Icon icon={GithubIcon} className="mt-0.5" />
-            <span className="flex min-w-0 flex-col">
-              <span className="text-foreground">A GitHub repository</span>
-              <span className="text-2xs text-muted-foreground">
-                By its URL, added to {organizationName} and ingested
-              </span>
-            </span>
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
+        <AddApplicationItems
+          organizationName={organizationName}
+          onPick={onPick}
+        />
       </DropdownMenuContent>
     </DropdownMenu>
   )

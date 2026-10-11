@@ -26,7 +26,6 @@ COPY packages/go/code-graph/domain/go.mod packages/go/code-graph/domain/go.sum /
 COPY packages/go/code-graph/authorization/go.mod packages/go/code-graph/authorization/go.sum /src/packages/go/code-graph/authorization/
 COPY packages/go/code-graph/storage/go.mod packages/go/code-graph/storage/go.sum /src/packages/go/code-graph/storage/
 COPY packages/go/code-graph/serviceconfig/go.mod packages/go/code-graph/serviceconfig/go.sum /src/packages/go/code-graph/serviceconfig/
-COPY packages/go/code-graph/agentquery/go.mod packages/go/code-graph/agentquery/go.sum /src/packages/go/code-graph/agentquery/
 # go.mod replaces the Java grammar with this audited local module.
 COPY packages/go/code-graph/tree-sitter-java /src/packages/go/code-graph/tree-sitter-java
 RUN go mod download
@@ -35,7 +34,6 @@ COPY packages/go/code-graph/domain/ /src/packages/go/code-graph/domain/
 COPY packages/go/code-graph/storage/ /src/packages/go/code-graph/storage/
 COPY packages/go/code-graph/authorization/ /src/packages/go/code-graph/authorization/
 COPY packages/go/code-graph/serviceconfig/ /src/packages/go/code-graph/serviceconfig/
-COPY packages/go/code-graph/agentquery/ /src/packages/go/code-graph/agentquery/
 RUN go build -trimpath -ldflags="-s -w" -o /out/codegraph-worker ./cmd/codegraph-worker
 
 FROM ghcr.io/astral-sh/uv:0.11.17 AS uv

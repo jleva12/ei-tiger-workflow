@@ -6,13 +6,14 @@ carry on with their answer. Each asks under an ID of its own
 - ``approval``: asks the approvers to decide (``{kind: "approval", approvers,
   expires_at}``) and takes its Approved or Rejected way, handing on
   ``{approved, decided_by, comment, decided_at}``. With a time limit, a
-  decision after it, or the timer's (``pauses.EXPIRED``), is a rejection by
+  decision made after it (when it was made, as the run hands it on, not when
+  the run reads it), or the timer's (``pauses.EXPIRED``), is a rejection by
   Forge; a limit of 0 waits until someone decides.
 - ``human_input``: asks its question and hands on the answer, held to its
   response schema (a Pydantic model ADK checks answers against).
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from google.adk import Context, Event
@@ -46,6 +47,9 @@ class Decision(BaseModel):
     #: Who decided: the person, or Forge for the timer.
     decided_by: str | None = None
     comment: str | None = None
+    #: When it was made (ISO 8601), as the run hands it on: the time limit
+    #: holds to it, not to when the run reads it.
+    decided_at: str | None = None
     #: Set by the timer when the time ran out, never by a person.
     expired: bool | None = None
 
@@ -56,11 +60,13 @@ def approval(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
     services = ctx.services
     fallback = f"Approve {text(node.get('name')) or 'this step'}?"
 
-    def run(adk: Context, node_input: Any) -> Any:
+    async def run(adk: Context, node_input: Any) -> Any:
         key = interrupt_id(node, adk)
         if key not in adk.resume_inputs:
             try:
-                message = services.evaluator.render(s.message, ctx.data(adk, node_input), what="Its message").strip()
+                message = (
+                    await services.evaluator.render(s.message, ctx.data(adk, node_input), what="Its message")
+                ).strip()
             except StepFailed as error:
                 raise failed(node, error) from None
             deadline = services.clock() + limit if limit else None
@@ -78,9 +84,9 @@ def approval(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
         answer = _answer(adk.resume_inputs[key])
         if not isinstance(answer, dict):
             answer = {"approved": answer is True}
-        now = services.clock()
+        decided_at = _when(answer.get("decided_at")) or services.clock()
         expires_at = asked(adk, key).get("expires_at")
-        late = isinstance(expires_at, str) and now > datetime.fromisoformat(expires_at)
+        late = isinstance(expires_at, str) and decided_at > _utc(datetime.fromisoformat(expires_at))
         hours = f"{s.timeout_hours:g} hour{'s' if s.timeout_hours != 1 else ''}"
         if answer.get("expired"):
             decision = {
@@ -101,7 +107,7 @@ def approval(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
                 "decided_by": text(answer.get("decided_by")),
                 "comment": text(answer.get("comment")),
             }
-        decision["decided_at"] = now.isoformat()
+        decision["decided_at"] = decided_at.isoformat()
         return Event(output=decision, route="approved" if decision["approved"] else "rejected")  # type: ignore[call-arg]  # ADK's shorthand for actions.route
 
     return FunctionNode(name=adk_name(text(node.get("name"))), func=run, rerun_on_resume=True)
@@ -114,11 +120,11 @@ def human_input(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
     model = to_model(schema) if schema else None
     services = ctx.services
 
-    def run(adk: Context, node_input: Any) -> Any:
+    async def run(adk: Context, node_input: Any) -> Any:
         key = interrupt_id(node, adk)
         if key not in adk.resume_inputs:
             try:
-                question = services.evaluator.render(message, ctx.data(adk, node_input), what="Its message")
+                question = await services.evaluator.render(message, ctx.data(adk, node_input), what="Its message")
             except StepFailed as error:
                 raise failed(node, error) from None
             return RequestInput(
@@ -139,6 +145,18 @@ def human_input(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
             ) from None
 
     return FunctionNode(name=adk_name(text(node.get("name"))), func=run, rerun_on_resume=True)
+
+
+def _when(value: Any) -> datetime | None:
+    """:return: When a decision was made, as an answer says (ISO 8601); None when it doesn't."""
+    try:
+        return _utc(datetime.fromisoformat(value)) if isinstance(value, str) and value else None
+    except ValueError:
+        return None
+
+
+def _utc(when: datetime) -> datetime:
+    return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
 
 
 def _answer(value: Any) -> Any:

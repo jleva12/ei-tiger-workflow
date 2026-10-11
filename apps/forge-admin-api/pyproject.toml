@@ -13,9 +13,11 @@ dependencies = [
     "cryptography>=50.0.1",
     "fastapi>=0.141.1",
     # The assistant's toolsets: ForgeBaseToolset's guard, and its models from
-    # the shared model_provider.yaml (packages/python/common); and structured
-    # logging with request ids (forge_common.logging).
-    "forge-common[adk,adk-models,logging]",
+    # the shared model_provider.yaml (packages/python/common); structured
+    # logging with request ids (forge_common.logging); and runs' inputs and
+    # answers held to their JSON Schemas with the patterns bounded in time and
+    # off the interpreter lock (forge_common.patterns).
+    "forge-common[adk,adk-models,logging,patterns]",
     # Organizations' chat agents, run by ID (packages/python/agent-runtime):
     # built from their documents and served over ADK's run API and A2A.
     "forge-agent-runtime[server,a2a]",
@@ -29,9 +31,12 @@ dependencies = [
     "boto3>=1.40",
     "forge-task-documents",
     "python-multipart>=0.0.20",
-    # Graph knowledge bases and the code graph explorer: the code graph
-    # worker's read and search API (packages/python/codegraph).
+    # System design knowledge bases: their code as agents' passages and their
+    # designs as agents read them (packages/python/codegraph).
     "forge-codegraph",
+    # The code graph in the worker's Spanner database, read as every app reads
+    # it: search, the explorer, the audit, code links (packages/python/codegraph-query).
+    "forge-codegraph-query",
     "google-adk>=2.9.2",
     "httpx2>=2.13.1",
     "jsonschema>=4.26",

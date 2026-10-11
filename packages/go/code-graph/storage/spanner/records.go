@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 
 	"cloud.google.com/go/spanner"
@@ -21,8 +20,6 @@ import (
 // invisible.
 
 const recordSelect = "RecordKind, RecordID, GenFrom, GenTo, CommitFrom, CommitTo, Retired, Lineage, FactDigest, Payload"
-
-var recordColumns = []string{"RecordKind", "RecordID", "GenFrom", "GenTo", "CommitFrom", "CommitTo", "Retired", "Lineage", "FactDigest", "Payload"}
 
 // nullFilteredHint lets the emulator use a NULL_FILTERED index for queries
 // whose predicates already exclude NULL keys (equality, IN UNNEST, GenTo>@live),
@@ -43,7 +40,7 @@ func openAt(genFrom int64, genTo spanner.NullInt64, generation uint64) bool {
 }
 
 // resolveGeneration maps 0 to the live generation and rejects generations
-// above it: a generation still loading is never visible through the Reader.
+// above it: a generation still loading is never visible to a read.
 func resolveGeneration(live, requested uint64) (uint64, error) {
 	if requested == 0 {
 		return live, nil
@@ -150,7 +147,7 @@ func validKinds(kinds []string) bool {
 	return true
 }
 
-// --- graph.Reader ---------------------------------------------------------
+// --- reads ----------------------------------------------------------------
 
 func (s *Store) State(ctx context.Context, repositoryID string) (graph.RepositoryState, error) {
 	if !validRepositoryID(repositoryID) {
@@ -166,71 +163,9 @@ func (s *Store) State(ctx context.Context, repositoryID string) (graph.Repositor
 	return r.state()
 }
 
-// GenerationCommit reports the exact revision of a successfully published
-// generation. Failed attempts at the same generation are never returned.
-func (s *Store) GenerationCommit(ctx context.Context, repo string, generation uint64) (string, error) {
-	if !validRepositoryID(repo) || generation == 0 || generation > math.MaxInt64 {
-		return "", graph.ErrInvalid
-	}
-	it := s.client.Single().Query(ctx, spanner.Statement{SQL: "SELECT CommitSHA FROM CGRuns WHERE RepositoryID=@repo AND Generation=@gen AND Phase=@phase LIMIT 1", Params: map[string]any{"repo": repo, "gen": int64(generation), "phase": string(deployment.Succeeded)}})
-	defer it.Stop()
-	row, err := nextRow(it)
-	if err != nil {
-		return "", err
-	}
-	if row == nil {
-		return "", graph.ErrNotFound
-	}
-	var commit string
-	err = row.Columns(&commit)
-	return commit, err
-}
-
-func (s *Store) GetNode(ctx context.Context, repositoryID, id string, generation uint64) (graph.Version, error) {
-	return s.getRecord(ctx, repositoryID, graph.Key{Kind: graph.RecordNode, ID: id}, generation)
-}
-
-func (s *Store) GetEdge(ctx context.Context, repositoryID, id string, generation uint64) (graph.Version, error) {
-	return s.getRecord(ctx, repositoryID, graph.Key{Kind: graph.RecordEdge, ID: id}, generation)
-}
-
-func (s *Store) getRecord(ctx context.Context, repo string, key graph.Key, generation uint64) (graph.Version, error) {
-	if !validRepositoryID(repo) || !graph.ValidID(key.ID) {
-		return graph.Version{}, fmt.Errorf("%w: repository or record id", graph.ErrInvalid)
-	}
-	t := s.client.ReadOnlyTransaction()
-	defer t.Close()
-	gen, live, err := s.generationFor(ctx, t, repo, generation)
-	if err != nil {
-		return graph.Version{}, err
-	}
-	return readOpenRecord(ctx, t, repo, key, gen, live)
-}
-
-// readOpenRecord returns the version of one record open at gen.
-func readOpenRecord(ctx context.Context, t reader, repo string, key graph.Key, gen, live uint64) (graph.Version, error) {
-	it := t.Query(ctx, spanner.Statement{
-		SQL:    "SELECT " + recordSelect + " FROM CGRecords WHERE RepositoryID=@repo AND RecordKind=@kind AND RecordID=@id AND " + openPredicate("") + " LIMIT 1",
-		Params: map[string]any{"repo": repo, "kind": string(key.Kind), "id": key.ID, "gen": int64(gen)},
-	})
-	vs, err := collectVersions(it, live)
-	if err != nil {
-		return graph.Version{}, err
-	}
-	if len(vs) == 0 {
-		return graph.Version{}, fmt.Errorf("%w: %s %s at generation %d", graph.ErrNotFound, key.Kind, key.ID, gen)
-	}
-	return vs[0], nil
-}
-
 func (s *Store) ListNodes(ctx context.Context, q graph.ListQuery) (graph.NodePage, error) {
 	gen, vs, next, err := s.listRecords(ctx, graph.RecordNode, q)
 	return graph.NodePage{Generation: gen, Nodes: vs, NextCursor: next}, err
-}
-
-func (s *Store) ListEdges(ctx context.Context, q graph.ListQuery) (graph.EdgePage, error) {
-	gen, vs, next, err := s.listRecords(ctx, graph.RecordEdge, q)
-	return graph.EdgePage{Generation: gen, Edges: vs, NextCursor: next}, err
 }
 
 func (s *Store) listRecords(ctx context.Context, kind graph.RecordKind, q graph.ListQuery) (uint64, []graph.Version, string, error) {
@@ -453,33 +388,6 @@ func (s *Store) getVersions(ctx context.Context, repo string, kind graph.RecordK
 	return readLatestVersions(ctx, t, repo, kind, ids, gen, live)
 }
 
-// History returns every version of a record oldest first, as seen at the live
-// generation: versions above live are omitted and a closure above live is
-// presented as still open.
-func (s *Store) History(ctx context.Context, repositoryID string, key graph.Key) ([]graph.Version, error) {
-	if !validRepositoryID(repositoryID) || !graph.ValidID(key.ID) || (key.Kind != graph.RecordNode && key.Kind != graph.RecordEdge) {
-		return nil, fmt.Errorf("%w: history key", graph.ErrInvalid)
-	}
-	t := s.client.ReadOnlyTransaction()
-	defer t.Close()
-	live, err := liveGeneration(ctx, t, repositoryID)
-	if err != nil {
-		return nil, err
-	}
-	it := t.Read(ctx, "CGRecords", spanner.Key{repositoryID, string(key.Kind), key.ID}.AsPrefix(), recordColumns)
-	vs, err := collectVersions(it, live)
-	if err != nil {
-		return nil, err
-	}
-	out := vs[:0]
-	for _, v := range vs {
-		if v.GenFrom <= live {
-			out = append(out, v)
-		}
-	}
-	return out, nil
-}
-
 // RecordsByLineage returns the versions open at a generation for one file lineage.
 func (s *Store) RecordsByLineage(ctx context.Context, repositoryID, lineage string, generation uint64) ([]graph.Version, error) {
 	if !validRepositoryID(repositoryID) || !graph.ValidID(lineage) {
@@ -498,8 +406,8 @@ func (s *Store) RecordsByLineage(ctx context.Context, repositoryID, lineage stri
 	return collectVersions(it, live)
 }
 
-// CountOpen counts the nodes and edges open at generation. Unlike the Reader
-// it accepts a generation above live so a load can be checked before the flip;
+// CountOpen counts the nodes and edges open at generation. Unlike the other
+// reads it accepts a generation above live so a load can be checked before the flip;
 // zero still means live.
 func (s *Store) CountOpen(ctx context.Context, repo string, generation uint64) (nodes, edges uint64, err error) {
 	if !validRepositoryID(repo) {

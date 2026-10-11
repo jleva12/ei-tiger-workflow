@@ -4,6 +4,14 @@ This module holds the reusable graph, semantic, deployment, ingestion request,
 search, build context, syntax IR and parser contracts. Backend implementations
 live in `apps/forge-codegraph-worker/internal`; shared packages must not import them.
 
+`codesearch/testdata/reader_contract.json` is what the graph's readers, the
+Python package `forge_codegraph_query`, test against: node payloads as the
+store writes them, their documents and hashes, graph IDs and the embedding
+transform. `TestReaderContract` fails when ingestion drifts from it; after an
+intended change, regenerate it from `packages/go/code-graph` with
+`go test ./domain/codesearch -run TestReaderContract -update` and update the
+readers.
+
 The module path remains `ei-aitiger-codegraph/pkg`, preserving existing imports
 such as `ei-aitiger-codegraph/pkg/graph` after the directory move.
 

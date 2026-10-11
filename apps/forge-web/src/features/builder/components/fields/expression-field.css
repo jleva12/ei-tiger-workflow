@@ -81,6 +81,52 @@
   color: var(--foreground);
 }
 
+/* {name}: an argument the model fills in (an HTTP tool's), told apart from {{ … }}. */
+.forge-expression .cm-argument {
+  border-radius: var(--radius-chip);
+  background: var(--tone-pink);
+  padding: 0.0625rem 0.1875rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--tone-pink-foreground);
+}
+
+/* A step a path names: its mark and name, over its ID (which is what's saved). */
+.forge-expression .cm-stepRef {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 14rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--background);
+  padding: 0 0.3125rem 0 0.1875rem;
+  vertical-align: baseline;
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--foreground);
+  cursor: default;
+}
+.forge-expression .cm-stepRef .cm-completionMark {
+  width: 0.9375rem;
+  height: 0.9375rem;
+}
+.forge-expression .cm-stepRef .cm-completionMark[data-mark="orb"] {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+.forge-expression .cm-stepRef .cm-completionMark svg {
+  width: 0.625rem;
+  height: 0.625rem;
+}
+.forge-expression .cm-stepRef-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Problems. */
 .forge-expression .cm-editor .cm-lintRange {
   background-image: none;

@@ -105,6 +105,112 @@ func (f *fakeQueue) settled() int {
 	return len(f.succeeded) + len(f.requeued) + len(f.failed)
 }
 
+const (
+	testDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	headSHA    = "2222222222222222222222222222222222222222"
+	pinnedSHA  = "3333333333333333333333333333333333333333"
+)
+
+// fakeStore is the graph's store: repositories, runs and submissions.
+type fakeStore struct {
+	mu          sync.Mutex
+	repos       map[string]deployment.Repository
+	puts        int
+	admitted    []deployment.Admission
+	reused      bool
+	runs        map[deployment.RunKey]deployment.Run
+	submissions map[string]deployment.RunKey
+	failedRuns  []string
+	state       graph.RepositoryState
+	// events, when set, is shared with a fakeQueue to see the order of
+	// writes to both.
+	events *[]string
+}
+
+func newFakeStore() *fakeStore {
+	return &fakeStore{repos: map[string]deployment.Repository{}, runs: map[deployment.RunKey]deployment.Run{}, submissions: map[string]deployment.RunKey{}}
+}
+
+func (f *fakeStore) event(e string) {
+	if f.events != nil {
+		*f.events = append(*f.events, e)
+	}
+}
+
+func (f *fakeStore) GetRepository(_ context.Context, id string) (deployment.Repository, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r, ok := f.repos[id]; ok {
+		return r, nil
+	}
+	return deployment.Repository{}, deployment.ErrNotFound
+}
+
+func (f *fakeStore) PutRepository(_ context.Context, r deployment.Repository) (deployment.Repository, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.puts++
+	r.Revision++
+	f.repos[r.RepositoryID] = r
+	return r, nil
+}
+
+func (f *fakeStore) AdmitIngestion(_ context.Context, a deployment.Admission) (deployment.AdmissionResult, error) {
+	if err := a.ValidateIngestion(); err != nil {
+		return deployment.AdmissionResult{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.event("admit")
+	f.admitted = append(f.admitted, a)
+	key := deployment.RunKey{RepositoryID: a.Request.RepositoryID, RunID: fmt.Sprintf("run-%d", len(f.admitted))}
+	run := deployment.Run{Key: key, Request: a.Request, Phase: deployment.Accepted}
+	f.runs[key] = run
+	f.submissions[a.SubmissionID] = key
+	return deployment.AdmissionResult{Run: run, Reused: f.reused}, nil
+}
+
+func (f *fakeStore) SubmissionRun(_ context.Context, id string) (deployment.RunKey, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if key, ok := f.submissions[id]; ok {
+		return key, nil
+	}
+	return deployment.RunKey{}, deployment.ErrNotFound
+}
+
+func (f *fakeStore) GetRun(_ context.Context, k deployment.RunKey) (deployment.Run, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r, ok := f.runs[k]; ok {
+		return r, nil
+	}
+	return deployment.Run{}, deployment.ErrNotFound
+}
+
+func (f *fakeStore) FailRun(_ context.Context, k deployment.RunKey, code string, _ bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.event("fail run")
+	f.failedRuns = append(f.failedRuns, code)
+	return nil
+}
+
+func (f *fakeStore) State(context.Context, string) (graph.RepositoryState, error) {
+	return f.state, nil
+}
+
+// fakeBranches records which repository each branch was read from.
+type fakeBranches struct {
+	err error
+	as  []string
+}
+
+func (f *fakeBranches) ResolveBranch(_ context.Context, owner, name, branch string) (string, error) {
+	f.as = append(f.as, owner+"/"+name)
+	return headSHA, f.err
+}
+
 type fakeRunner struct {
 	err   error
 	block bool

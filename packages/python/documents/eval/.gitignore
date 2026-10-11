@@ -1,0 +1,2 @@
+# Each run's report (make docs-eval); baselines/ holds the reference runs worth keeping.
+suites/*/results/

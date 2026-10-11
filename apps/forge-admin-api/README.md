@@ -83,6 +83,8 @@ src/forge_admin/
     route_tools.py       RouteToolset: the base of the toolsets over this API's routes
     access_tools.py      The access toolset
     admin_tools.py       The administration toolset
+    knowledge_tools.py   The knowledge base toolset
+    code_tools.py        The code toolset: the code graph MCP server's tools, as the person
     runtime.py           AgentRuntime: a runner per agent, the session and artifact services
     wire.py              ADK's models as the JSON the web console reads
   api/                   The HTTP service
@@ -275,12 +277,14 @@ follows the branch it was first ingested on.
 | GET | `/organizations/{id}/code-repositories/{repository_id}/ingestions/{job_id}` | One ingestion: `status` (`QUEUED`, `RUNNING`, `SUCCEEDED`, `SUPERSEDED`, `FAILED`), `commit_sha`, `attempts`, `error_code` and `error_message`, the graph's `codegraph_repository_id`, `run_id`, `generation` and `metrics` | `organizations:read` |
 | POST | `/organizations/{id}/code-repositories/{repository_id}/ingestions/{job_id}/retry` | Queue a failed ingestion again with its attempts reset; it ingests the same commit and resumes its run. 409 unless it failed and no other is queued or running | `repositories:manage` |
 
-A repository's code graph, relayed from the worker's API
-(`FORGE_ADMIN_CODEGRAPH_URL`, with its token `FORGE_ADMIN_CODEGRAPH_TOKEN`),
-for the web console's code graph explorer and Ingestion tab. Graph reads take
-`generation` (0 for the live one) and answer 409 before an ingestion of the
-repository succeeded, 503 when the worker isn't set up or doesn't answer, and
-502 when it refuses the admin API's token.
+A repository's code graph, read from the worker's Spanner database as every
+app reads it (`packages/python/codegraph-query`, settings
+`FORGE_ADMIN_CODEGRAPH__*` from `.env.common`'s `FORGE_CODEGRAPH_*` and
+`FORGE_EMBEDDING_*`), for the web console's code graph explorer and Ingestion
+tab. Graph reads take `generation` (0 for the live one) and answer 409 before
+an ingestion of the repository succeeded, 400 for arguments the code graph
+refuses, 404 for a node it doesn't have, and 503 when it isn't set up or the
+database doesn't answer.
 
 | Method | Path | What | Needs |
 |---|---|---|---|
@@ -327,9 +331,12 @@ Runs of the organization's ADK workflows (its agents); see
 | GET | `/organizations/{id}/adk-runs` | The organization's runs, newest first, `?agent_id=&status=&limit=&offset=` (`status` repeatable; `limit` 1–100, 20): `{"items", "total"}` | `organizations:read` |
 | GET | `/organizations/{id}/adk-runs/{run_id}` | One run: what it runs, its input and result, what it waits for, its activity and the actions its status allows | `organizations:read` |
 | GET | `/organizations/{id}/adk-runs/{run_id}/steps` | A run's steps, read from its ADK session: `{"steps", "session_id"}` | `organizations:read` |
+| GET | `/organizations/{id}/adk-runs/{run_id}/session-files` | The files in a run's session: those it started with (`origin: input`) and those its agents saved (`run`), each version with the step that saved it | `organizations:read` |
+| GET | `/organizations/{id}/adk-runs/{run_id}/files/{name}[?version=]` | Download one of them: a file it started with as it was sent, else the latest version (or the one asked for) | `organizations:read` |
+| GET | `/organizations/{id}/adk-runs/{run_id}/trace` | Everything a run did in its ADK session: each event, the state before and after, what the worker keeps | `agents:manage_runs` |
 | POST | `/organizations/{id}/adk-runs/{run_id}/decisions` | Approve or reject the approval it waits at, `{"request_id", "approved", "comment"?}`: 202 with the run | `agents:approve` or `agents:run`, as the approval step names its approvers |
 | POST | `/organizations/{id}/adk-runs/{run_id}/answers` | Answer the question (human input) it waits at, `{"request_id", "answer"}`: 202 with the run | `agents:run` |
-| POST | `/organizations/{id}/adk-runs/{run_id}/retry`, `.../resubmit`, `.../abandon` | Retry a failed run as its next attempt (202); run a finished one again as a new run (202 with the new run); give one up (200) | `agents:manage_runs` |
+| POST | `/organizations/{id}/adk-runs/{run_id}/retry`, `.../resubmit`, `.../abandon` | Retry a failed run as its next attempt (202); run a finished one again as a new run (202 with the new run); give one up (200; 202 while its worker stops a running one) | `agents:manage_runs` |
 
 ### Assistant routes
 
@@ -358,7 +365,7 @@ Below `/api/v1/runtime`, for outside apps; who may call is
 | GET | `/runtime/workflows/{ref}` | A workflow at a version (`ag_x`, `ag_x@3`, `ag_x@draft`): its name, what it does, the input its start takes |
 | POST | `/runtime/workflows/{ref}/runs` | Run it, `{"input", "wait"?}`: 201 with the run (and `Location`), once it pauses or ends or `wait` runs out |
 | GET | `/runtime/workflows/{ref}/runs/{run}?wait=` | Follow a run |
-| POST | `/runtime/workflows/{ref}/runs/{run}/answers`, `…/decisions`, `…/cancel` | Answer the question it waits at, `{"request_id", "answer", "wait"?}`; decide the approval, `{"request_id", "approved", "comment"?, "wait"?}`; give it up |
+| POST | `/runtime/workflows/{ref}/runs/{run}/answers`, `…/decisions`, `…/cancel` | Answer the question it waits at, `{"request_id", "answer", "wait"?}`; decide the approval, `{"request_id", "approved", "comment"?, "wait"?}`; give it up (202 while its worker stops a running one) |
 
 ### Outside the API prefix
 
@@ -583,8 +590,13 @@ runs, its `trigger`, its activity (`events`, oldest first: `{"id", "at",
 "kind", "message", "actor": {"id", "name"} | null, "attributes"}`, the kinds
 `created`, `started`, `resumed`, `note`, `paused`, `decided`, `answered`,
 `declined`, `timed_out`, `waiting`, `succeeded`, `failed`, `retried`,
-`recovered`, `abandoned`), and the `actions` its status allows (`retry`,
-`resubmit`, `abandon`, `decide`, `answer`; the web checks the permissions).
+`recovered`, `cancel_requested`, `abandoned`), whether that activity misses
+notes (`activity_incomplete`: the run noted as many as a run may, or some
+couldn't be written), the runs it started (`children`: workflows its LLM
+agents called as tools, as lists show runs, oldest first), and the `actions`
+its status allows (`retry`, `resubmit`, `abandon`, `decide`, `answer`; the
+web checks the permissions). Every run says when someone abandoned it while
+it ran (`cancel_requested_at`), and which run started it (`parent_run_id`).
 
 **Its steps.** `GET /organizations/{id}/adk-runs/{run_id}/steps`
 (`organizations:read`) reads the run's ADK session here (503 while the
@@ -608,6 +620,33 @@ the document it runs, in order (`forge_task_adk_workflows.steps`):
 A step inside a loop's body shows its last item's; a team's sub-agents and a
 saved ADK workflow's own steps count for their node.
 
+Each step also says what it was handed (`input`, its `previous`) and which
+step handed it on (`input_from`: the step before it that handed on last before
+it started; through an If, Switch or Match, what that was handed), and what it
+set in the session's state (`state_changes`: `{"key", "value", "at"}`, in
+order, its sub-agents' too).
+
+**Its files.** Wherever the worker keeps artifacts
+(`HYBRID_ADK_WORKFLOWS__ARTIFACTS`), every LLM agent of a run, an agent from
+the Agents page too, has ADK's `load_artifacts` (it's told the session's files
+and reads those it asks for) and Forge's `save_file` (a `.txt`, `.md`, `.csv`,
+`.json`, `.html` or `.xml` file of at most 2 MB, saved as an artifact of the
+run's session; never over a file the run started with). `…/session-files`
+lists them and `…/files/{name}` downloads them; the run page's Overview offers
+them.
+
+**Its trace.** `GET /organizations/{id}/adk-runs/{run_id}/trace`
+(`agents:manage_runs`, the run page's Trace tab) lists every event of the run
+in its ADK session (`forge_task_adk_workflows.trace`): its author, step and
+node path, its text and the model's thoughts, the functions called and their
+answers, what it handed on, its `state_delta` and `artifact_delta`, the way it
+took, its error and the model's token usage. It answers the session's state as
+the run's first event found it (`state_before`), once its events applied
+(`state_after`), and now (`state`, with `later_changes` when a later run in
+the session changed it), and what the worker keeps of the run (`worker`). Long
+strings are cut at 20,000 characters, and a run with over 2,000 events lists
+its latest (`omitted`). `?session_id=` reads a session it ran in before.
+
 **What it waits for.** A paused run's `pause` says what: its `kind` is
 `approval` or `human_input`, its `details` `{"kind", "approvers"?,
 "expires_at"?, "response_schema"?, "step", "step_name", "workflow_name",
@@ -620,16 +659,18 @@ saved ADK workflow's own steps count for their node.
 
 Both answer 202 with the run, queued, and 409 when the request isn't open any
 more (answered, or the run moved on). Nobody deciding by the approval's
-deadline is a rejection the worker makes.
+deadline is a rejection the worker makes; a decision made in time stands,
+however long its run's job waits. A run queued again after a hiccup says when
+it's tried again (`next_attempt_at`).
 
 **Retrying, resubmitting, abandoning** need `agents:manage_runs`
 (`org:admin` by default), and record who did it in the run's activity:
 
 | Route (below `/organizations/{id}/adk-runs/{run_id}`) | What |
 |---|---|
-| `POST /retry` | A failed run's next attempt: it carries on from what it kept. 202 with the run, queued; 409 unless it failed |
+| `POST /retry` | A failed run's next attempt: it carries on from what it kept. 202 with the run, queued; 409 unless it failed, or when an A2A task started it (A2A's final states are final: its task would go on saying it failed, so it's resubmitted instead, as a run of its own) |
 | `POST /resubmit` | A finished run's payload again, as a new run (`resubmit_of` names the old; another invocation of the same ADK session). 202 with the new run; 409 unless it's finished |
-| `POST /abandon` | Give a queued, paused, waiting or failed run up: it never carries on. 200 with the run; 409 while it's running or once it's finished otherwise |
+| `POST /abandon` | Give a queued, paused, waiting or failed run up: it never carries on. 200 with the run. A running one is stopped by its worker (at its next step, or within a minute) and abandoned then: 202 with the run, still running, `cancel_requested_at` set (asking again changes nothing); should it end first, it ends as it did. The runs it started that are still going, and theirs, are abandoned with it (running ones stopped first). 409 once it succeeded or was abandoned |
 
 | Answer | When |
 |---|---|
@@ -863,6 +904,8 @@ results are cut down.
 |---|---|---|
 | `access` | `access_tools.py` | The person's profile, organizations, memberships and access, and why something was refused; the roles there are and what each grants; finding people; a scope's members and someone's access; giving or removing roles (`members:update`) |
 | `administration` | `admin_tools.py` | Read, create and update organizations, role definitions, permission definitions and users; never deletes |
+| `knowledge` | `knowledge_tools.py` | An organization's knowledge bases and documents, how their ingestion went, answering from them with cited passages, retrying and re-indexing |
+| `code` | `code_tools.py` | The code graph MCP server's tools, the same definitions (`forge_codegraph.tools`): explore and search code, callers, callees, impact, paths, hubs, changes, exact source, how repositories and systems connect. Each takes the `organization_id` whose code it reads and reads only what the person may there (`repositories:read`, as `GET /organizations/{id}/code-graph/access` answers, kept 30 seconds); read-only |
 
 No toolset reaches ADK workflows, their runs or agents yet; on those pages
 the assistant says so (`screens.yaml`'s `organization` screen). Left out on

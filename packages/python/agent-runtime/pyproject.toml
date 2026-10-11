@@ -18,12 +18,17 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "forge-common[adk,adk-models]",   # ProviderModels, model_provider.yaml, ForgeBaseToolset
+    # ProviderModels, model_provider.yaml, ForgeBaseToolset; state schemas'
+    # patterns, bounded in time and off the interpreter lock (forge_common.patterns);
+    # and MCP tools' results held to their output schemas so (forge_common.mcp)
+    "forge-common[adk,adk-models,mcp,patterns]",
     "forge-jsonata",                  # instructions' {{ }} templates are JSONata
     "google-adk>=2.9.2",
     "httpx>=0.28",
     "jsonschema>=4.23",
-    "mcp>=1.23,<3",                   # MCP tools: ADK's McpToolset exists only with it
+    # MCP tools: ADK's McpToolset exists only with it; 2.x's results check is
+    # the one forge_common.mcp swaps
+    "mcp>=2.3.0,<3",
     "pydantic>=2.11",
     "pydantic-settings>=2.6",
 ]

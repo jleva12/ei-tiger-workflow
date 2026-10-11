@@ -1,0 +1,12 @@
+---
+title: FNOL intake flow
+---
+flowchart TD
+    A[Customer reports a loss] --> B{Anyone injured?}
+    B -- Yes --> C[Route to the Bodily Injury team]
+    B -- No --> D{Estimated damage under 2,000 USD?}
+    D -- Yes --> E[Fast-track: photo estimate, paid within 48 hours]
+    D -- No --> F[Assign a field adjuster]
+    F --> G{Fraud score above 80?}
+    G -- Yes --> H[Refer to SIU]
+    G -- No --> I[Inspect and settle]

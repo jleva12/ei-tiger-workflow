@@ -40,6 +40,10 @@ class Decision:
     actor_id: str | None = None
     actor_name: str = ""
     request_id: str | None = None
+    #: When it was made (UTC), as it was kept: a deadline is held to it, not
+    #: to when the run reads it. None when unknown: the run takes the time it
+    #: reads it.
+    decided_at: datetime | None = None
 
 
 @dataclass(frozen=True)

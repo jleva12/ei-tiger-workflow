@@ -1,8 +1,8 @@
 """
 The settings of a ``forge.agent/v1`` document's Forge step kinds (the start,
-approval, http, transform, delay, if, switch, match, loop, merge and end), as
-their factories read them (``graph.factories.base.settings_of``). Keys a kind
-doesn't know are ignored.
+approval, http, transform, filter, delay, if, switch, match, loop, for_each,
+merge and end), as their factories read them
+(``graph.factories.base.settings_of``). Keys a kind doesn't know are ignored.
 """
 
 from __future__ import annotations
@@ -22,6 +22,9 @@ class EntryConfig(_Config):
     # forge_task_adk_workflows.files.FILE_TYPES); none takes any type.
     allow_files: bool = False
     file_types: list[str] = Field(default_factory=list)
+    # Whether a run ADK can't carry on where it stopped starts over in a new
+    # session, its steps running again (runs.AdkRun._recover); off, it fails.
+    start_over: bool = False
 
 
 class ApprovalConfig(_Config):
@@ -45,11 +48,21 @@ class HttpConfig(_Config):
     retries: int = 0
     # A JSON Schema of the response's body; empty leaves it undeclared.
     output_schema: dict[str, Any] = Field(default_factory=dict)
+    # One of the organization's credentials, by ID: signs its requests, sent
+    # only to the URLs it's for. Empty for none.
+    credential: str = ""
 
 
 class TransformConfig(_Config):
     expression: str = ""
     output_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class FilterConfig(_Config):
+    items: str = ""
+    # What its condition calls the item it's on.
+    item_name: str = "item"
+    condition: str = ""
 
 
 #: A delay's unit, in seconds.
@@ -88,6 +101,7 @@ class MatchConfig(_Config):
 
 
 class LoopConfig(_Config):
+    # A loop's, and a for-each's.
     items: str = ""
     item_name: str = "item"
     max_iterations: int = 100

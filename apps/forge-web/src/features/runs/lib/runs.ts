@@ -20,7 +20,7 @@ import {
   OPEN_POLL_MS,
   runsPollMs,
 } from "@/features/runs/lib/display"
-import { agentPath } from "@/features/adk-workflows/lib/api"
+import { agentPath, organizationAgents } from "@/features/adk-workflows/lib/api"
 import {
   AGENT_FORMAT,
   type AgentDocument,
@@ -147,6 +147,12 @@ export type AdkRun = {
   pause: AdkRunPause | null
   /** Why it failed, or the last hiccup it was retried after. */
   error: AdkRunFailure | null
+  /** When someone abandoned it while it ran: its worker stops it, then it's abandoned. */
+  cancel_requested_at?: string | null
+  /** The run that started it: a workflow its LLM agent called as a tool. */
+  parent_run_id?: string | null
+  /** A run queued again after a hiccup isn't tried again before then (its backoff). */
+  next_attempt_at?: string | null
 }
 
 /** One page of runs, newest first. */
@@ -168,6 +174,7 @@ export type AdkRunEventKind =
   | "failed"
   | "retried"
   | "recovered"
+  | "cancel_requested"
   | "abandoned"
   | (string & {})
 
@@ -214,6 +221,10 @@ export type AdkRunDetail = AdkRun & {
   trigger: Record<string, unknown> | null
   /** Its activity, oldest first. */
   events: AdkRunEvent[]
+  /** Its activity misses notes: it noted as many as a run may, or some couldn't be saved. */
+  activity_incomplete?: boolean
+  /** The runs it started (workflows its LLM agents called as tools), oldest first. */
+  children?: AdkRun[]
   actions: AdkRunActions
 }
 
@@ -296,6 +307,7 @@ const EVENT_TITLES: Record<string, string> = {
   failed: "Failed",
   retried: "Retried",
   recovered: "Recovered",
+  cancel_requested: "Asked to stop",
   abandoned: "Abandoned",
 }
 
@@ -326,11 +338,14 @@ export type AgentsTab = "overview" | "runs"
 export const isAgentsTab = (value: unknown): value is AgentsTab =>
   value === "overview" || value === "runs"
 
-/** A run's page's tabs; Overview is the default. */
-export type AdkRunTab = "overview" | "steps" | "activity"
+/** A run's page's tabs; Overview is the default. Trace is its admins'. */
+export type AdkRunTab = "overview" | "steps" | "activity" | "trace"
 
 export const isAdkRunTab = (value: unknown): value is AdkRunTab =>
-  value === "overview" || value === "steps" || value === "activity"
+  value === "overview" ||
+  value === "steps" ||
+  value === "activity" ||
+  value === "trace"
 
 /* -------------------------------------------------------------------------- */
 /* Steps                                                                      */
@@ -368,7 +383,15 @@ export type AdkRunStep = {
   finished_at: string | null
   /** The tools its LLM agents called, in order; absent from older APIs. */
   calls?: AdkToolCall[]
+  /** What it was handed (its `previous`), and the step that handed it on; absent from older APIs. */
+  input?: unknown
+  input_from?: string | null
+  /** What it set in the session's state, in order; absent from older APIs. */
+  state_changes?: AdkStateChange[]
 }
+
+/** A value a step set in the session's state. */
+export type AdkStateChange = { key: string; value: unknown; at: string | null }
 
 /** A tool an LLM agent in a step called, and what it answered. */
 export type AdkToolCall = {
@@ -482,6 +505,21 @@ export function runDocumentOf(document: unknown) {
 }
 
 /**
+ * The workflow a run ran: the snapshot it started with, else the workflow
+ * as it's saved now (read only when there's no snapshot).
+ */
+export function useRunDocument(
+  organizationId: string,
+  run: Pick<AdkRunDetail, "agent_id" | "document"> | undefined
+): AgentDocument | undefined {
+  const snapshot = runDocumentOf(run?.document)
+  const saved = organizationAgents
+    .scope({ organizationId })
+    .useDetail(run && !snapshot ? run.agent_id || undefined : undefined)
+  return snapshot ?? saved.data?.document
+}
+
+/**
  * A step's kind as the builder knows it: its node's in the document when
  * there is one, else what the run said; undefined for a kind the builder
  * doesn't have.
@@ -559,6 +597,8 @@ export const adkRunKeys = {
     [...adkRunKeys.all(organizationId), "run", runId] as const,
   steps: (organizationId: string, runId: string) =>
     [...adkRunKeys.all(organizationId), "steps", runId] as const,
+  files: (organizationId: string, runId: string) =>
+    [...adkRunKeys.all(organizationId), "files", runId] as const,
 }
 
 // A run acted on reaches a worker seconds later, so for a minute after one
@@ -773,16 +813,89 @@ export function useRunAdkWorkflow(
   })
 }
 
-/** A file a run started with, as it was sent. */
+/**
+ * A file of a run: one it started with, as it was sent, or one its agents
+ * saved (its latest version, or `version`).
+ */
 export function downloadAdkRunFile(
   organizationId: string,
   runId: string,
-  name: string
+  name: string,
+  version?: number
 ) {
   return api.get<Blob>(
     `${runPath(organizationId, runId)}/files/${encodeURIComponent(name)}`,
-    { responseType: "blob", silent: true }
+    {
+      responseType: "blob",
+      silent: true,
+      params: version === undefined ? undefined : { version },
+    }
   )
+}
+
+/** A version of a file in a run's session. */
+export type AdkRunFileVersion = {
+  version: number
+  saved_at: string | null
+  media_type: string | null
+  size_bytes: number | null
+  /** The step whose agent saved it, and the agent; null for a file it started with. */
+  step: string | null
+  saved_by: string | null
+}
+
+/** A file in a run's session: one it started with (`input`), or one its agents saved (`run`). */
+export type AdkRunSessionFile = {
+  name: string
+  origin: "input" | "run"
+  media_type: string | null
+  /** Oldest first. */
+  versions: AdkRunFileVersion[]
+}
+
+export type AdkRunSessionFiles = {
+  files: AdkRunSessionFile[]
+  session_id: string
+  /** Whether runs' files are kept at all. */
+  kept: boolean
+}
+
+/**
+ * The files in a run's session: those it started with and those its agents
+ * saved. Refreshes as its steps do.
+ */
+export function useAdkRunSessionFiles(
+  organizationId: string,
+  run: Pick<AdkRun, "id" | "status" | "updated_at"> | undefined
+) {
+  const client = useQueryClient()
+  const runId = run?.id ?? ""
+  const query = useQuery({
+    queryKey: adkRunKeys.files(organizationId, runId),
+    queryFn: ({ signal }) =>
+      api.get<AdkRunSessionFiles>(
+        `${runPath(organizationId, runId)}/session-files`,
+        { signal }
+      ),
+    enabled: Boolean(organizationId && runId),
+    refetchInterval: (query) =>
+      query.state.status === "error"
+        ? false
+        : stepsPollMs(run, isFollowingAdkRun(organizationId, runId)),
+    meta: { errorTitle: "Couldn't refresh the run's files" },
+  })
+  const updated = run?.updated_at
+  const seen = React.useRef(updated)
+  React.useEffect(() => {
+    if (seen.current === updated) return
+    const first = seen.current === undefined
+    seen.current = updated
+    if (!first)
+      void client.invalidateQueries({
+        queryKey: adkRunKeys.files(organizationId, runId),
+      })
+  }, [client, organizationId, runId, updated])
+  return query
 }
 
 /**
@@ -894,7 +1007,7 @@ export function useResubmitAdkRun(organizationId: string, runId: string) {
   })
 }
 
-/** Give a run up: it never carries on. */
+/** Give a run up: it never carries on. A running one stops on its worker first. */
 export function useAbandonAdkRun(
   organizationId: string,
   runId: string,
@@ -905,9 +1018,17 @@ export function useAbandonAdkRun(
     mutationFn: () =>
       api.post<AdkRun>(`${runPath(organizationId, runId)}/abandon`),
     meta: { errorTitle: "Couldn't abandon the run", ...meta },
-    onSuccess: async () => {
+    onSuccess: async (run) => {
       await refreshAdkRuns(client, organizationId, runId)
-      toast.add({ title: "Abandoned.", type: "success" })
+      toast.add(
+        run.status === "running"
+          ? {
+              title: "Stopping.",
+              description: "Its worker stops it, then it's abandoned.",
+              type: "success",
+            }
+          : { title: "Abandoned.", type: "success" }
+      )
     },
   })
 }

@@ -144,3 +144,47 @@ def test_a_document_saved_before_llm_agents_had_tools_is_filled_in() -> None:
         if s["kind"] == "llm"
     )
     assert all("source" not in s["config"] for s in team["config"]["sub_agents"])
+
+
+def test_an_http_tool_saved_before_its_body_sends_what_it_sent() -> None:
+    document = example()
+    llm = next(n for n in document["nodes"] if n["kind"] == "llm")
+    team = next(n for n in document["nodes"] if n["config"].get("sub_agents"))
+    sub = next(s for s in team["config"]["sub_agents"] if s["kind"] == "llm")
+    parameters = {
+        "type": "object",
+        "properties": {"order_id": {"type": "string"}, "note": {"type": "string"}},
+    }
+
+    def older(tool_id: str, method: str) -> dict[str, Any]:
+        return {
+            "id": tool_id,
+            "kind": "http_tool",
+            "name": "Orders",
+            "config": {
+                "description": "",
+                "method": method,
+                "url": "https://api.example.com/orders/{order_id}",
+                "headers": [],
+                "parameters": parameters,
+                "confirm": False,
+            },
+        }
+
+    llm["config"]["tools"] = [older("tool_get", "GET")]
+    sub["config"]["tools"] = [older("tool_post", "POST")]
+    stored = check(document)
+    [getting] = next(n for n in stored["nodes"] if n["id"] == llm["id"])["config"][
+        "tools"
+    ]
+    assert (
+        getting["config"]["url"]
+        == "https://api.example.com/orders/{order_id}?note={note}"
+    )
+    assert (getting["config"]["body"], getting["config"]["credential"]) == ("", "")
+    stored_team = next(n for n in stored["nodes"] if n["id"] == team["id"])
+    [posting] = next(
+        s for s in stored_team["config"]["sub_agents"] if s["id"] == sub["id"]
+    )["config"]["tools"]
+    assert posting["config"]["url"] == "https://api.example.com/orders/{order_id}"
+    assert posting["config"]["body"] == '{\n  "note": {note}\n}'

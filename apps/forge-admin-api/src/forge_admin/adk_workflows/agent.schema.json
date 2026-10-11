@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Forge agent",
-  "description": "An organization's agent: a Google ADK graph workflow of nodes (ADK agents and other agents, and Forge's workflow steps: approvals, HTTP requests, transforms, delays, If / Switch / Match, loops, merges, ends) joined by edges, run from its start.",
+  "description": "An organization's agent: a Google ADK graph workflow of nodes (ADK agents and other agents, and Forge's workflow steps: approvals, HTTP requests, transforms, filters, delays, If / Switch / Match, loops, for-eachs, merges, ends) joined by edges, run from its start. Every expression (JSONata; in text, inside {{ }}) reads input (the run's), previous (what the node before handed on), steps.<id>.output and .error (the nodes that ran before it), state (the session's) and, in a loop's or for-each's body, its item and index. What each kind hands on is in its config's description.",
   "type": "object",
   "required": [
     "format",
@@ -102,11 +102,13 @@
             "human_input",
             "http",
             "transform",
+            "filter",
             "delay",
             "if",
             "switch",
             "match",
             "loop",
+            "for_each",
             "merge",
             "end"
           ]
@@ -291,6 +293,22 @@
           "if": {
             "properties": {
               "kind": {
+                "const": "filter"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_filter"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
                 "const": "delay"
               }
             }
@@ -363,6 +381,22 @@
             "properties": {
               "config": {
                 "$ref": "#/$defs/config_loop"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "for_each"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_for_each"
               }
             }
           }
@@ -657,11 +691,12 @@
     },
     "config_start": {
       "type": "object",
-      "description": "Where every run starts: what the person or system sends in.",
+      "description": "Where every run starts: what the person or system sends in. Every node reads the run's input, held to input_schema, as input (steps.<start id>.output too).",
       "required": [
         "input_schema",
         "allow_files",
-        "file_types"
+        "file_types",
+        "start_over"
       ],
       "additionalProperties": false,
       "properties": {
@@ -700,12 +735,16 @@
           },
           "uniqueItems": true,
           "description": "The types of files it takes, by their extension; none takes any type."
+        },
+        "start_over": {
+          "type": "boolean",
+          "description": "When a run stops mid-way (its worker went, a hiccup) and ADK can't carry it on where it stopped, whether it starts over in a new session, every step running again. Off, the run fails and can be resubmitted. A step that fails once the run carried on fails it either way."
         }
       }
     },
     "config_llm": {
       "type": "object",
-      "description": "A model works on what comes in with your instruction, and can hand off to its sub-agents.",
+      "description": "A model works on what comes in with your instruction, and can hand off to its sub-agents. Hands on its answer: JSON held to output_schema when it declares one, else text.",
       "required": [
         "description",
         "instruction",
@@ -855,7 +894,7 @@
     },
     "config_sequential": {
       "type": "object",
-      "description": "Runs its sub-agents one after another, each seeing what the last did.",
+      "description": "Runs its sub-agents one after another, each seeing what the last did. Hands on its last sub-agent's answer.",
       "required": [
         "description",
         "sub_agents"
@@ -877,7 +916,7 @@
     },
     "config_parallel": {
       "type": "object",
-      "description": "Runs its sub-agents at the same time, each on its own.",
+      "description": "Runs its sub-agents at the same time, each on its own. Hands on each sub-agent's answer, by the sub-agent's ID: {<id>: answer}.",
       "required": [
         "description",
         "sub_agents"
@@ -899,7 +938,7 @@
     },
     "config_loop_agent": {
       "type": "object",
-      "description": "Runs its sub-agents in order, again and again, up to a number of passes.",
+      "description": "Runs its sub-agents in order, again and again, up to a number of passes. Hands on the answer of the sub-agent that answered last.",
       "required": [
         "description",
         "sub_agents",
@@ -927,10 +966,11 @@
     },
     "config_saved": {
       "type": "object",
-      "description": "Runs another of the organization's workflows here, whole.",
+      "description": "Runs another of the organization's workflows here, whole. Its inputs, when any is filled in, else what comes in, are the other workflow's input (held to its start's input_schema); it hands on that workflow's result: its End's result.",
       "required": [
         "agent",
-        "version"
+        "version",
+        "inputs"
       ],
       "additionalProperties": false,
       "properties": {
@@ -952,12 +992,19 @@
             }
           ],
           "description": "Which of its versions runs: a published one, its draft, or null for its latest published (as each run starts)."
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The fields of its start's input_schema, each a JSONata expression over the run's data. With any filled in, they're its input (an expression that finds nothing leaves its field out); with none, what comes in is."
         }
       }
     },
     "config_approval": {
       "type": "object",
-      "description": "The run waits for a person to approve or reject.",
+      "description": "The run waits for a person to approve or reject. Hands on {approved, decided_by, comment, decided_at} by its approved or rejected way.",
       "required": [
         "message",
         "approvers",
@@ -984,7 +1031,7 @@
     },
     "config_human_input": {
       "type": "object",
-      "description": "Pauses for a person to answer; their answer is what it hands on.",
+      "description": "Pauses for a person to answer; their answer is what it hands on. Hands on the person's answer, held to response_schema.",
       "required": [
         "message",
         "response_schema"
@@ -1003,7 +1050,7 @@
     },
     "config_http": {
       "type": "object",
-      "description": "Calls a URL and hands on the response.",
+      "description": "Calls a URL and hands on the response. Hands on {status, headers, body} by its success way, body held to output_schema when it declares one. Its error way hands on nothing; steps.<id>.error is {message, status?, body?, expression?}.",
       "required": [
         "method",
         "url",
@@ -1011,7 +1058,8 @@
         "body",
         "timeout_seconds",
         "retries",
-        "output_schema"
+        "output_schema",
+        "credential"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1066,12 +1114,16 @@
         "output_schema": {
           "type": "object",
           "description": "A JSON Schema of the response's body; {} leaves it undeclared."
+        },
+        "credential": {
+          "type": "string",
+          "description": "One of the organization's credentials, by ID: its auth (an API key, a token, OAuth) goes with each request, and only to the URLs it's for. Empty for none."
         }
       }
     },
     "config_transform": {
       "type": "object",
-      "description": "Reshapes data with a JSONata expression.",
+      "description": "Reshapes data with a JSONata expression. Hands on what its expression makes, held to output_schema when it declares one.",
       "required": [
         "expression",
         "output_schema"
@@ -1088,9 +1140,34 @@
         }
       }
     },
+    "config_filter": {
+      "type": "object",
+      "description": "Keeps the items of a list its condition holds for. Hands on {count, results}: the items its condition is true for, in order.",
+      "required": [
+        "items",
+        "item_name",
+        "condition"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "string",
+          "description": "A JSONata expression giving a list."
+        },
+        "item_name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "What the condition calls the item it's on."
+        },
+        "condition": {
+          "type": "string",
+          "description": "A JSONata condition, read per item (as item_name, with index); the step hands on {count, results}: the items it's true for, in order."
+        }
+      }
+    },
     "config_delay": {
       "type": "object",
-      "description": "Waits a while before going on.",
+      "description": "Waits a while before going on. Hands on {resumed_at}.",
       "required": [
         "amount",
         "unit"
@@ -1114,7 +1191,7 @@
     },
     "config_if": {
       "type": "object",
-      "description": "Takes one of two ways, on a condition.",
+      "description": "Takes one of two ways, on a condition. Hands on what came into it; steps.<id>.output records the way it took: {branch}.",
       "required": [
         "condition"
       ],
@@ -1128,7 +1205,7 @@
     },
     "config_switch": {
       "type": "object",
-      "description": "Routes on one value: to the case it equals.",
+      "description": "Routes on one value: to the case it equals. Hands on what came into it; steps.<id>.output records the way it took: {branch}.",
       "required": [
         "value",
         "cases"
@@ -1162,7 +1239,7 @@
     },
     "config_match": {
       "type": "object",
-      "description": "Routes to the first rule whose condition holds, or to every one.",
+      "description": "Routes to the first rule whose condition holds, or to every one. Hands on what came into it; steps.<id>.output records the way it took: {branch}, or {branches} in mode all.",
       "required": [
         "arms",
         "mode"
@@ -1205,7 +1282,36 @@
     },
     "config_loop": {
       "type": "object",
-      "description": "Runs its body once for each item in a list.",
+      "description": "Runs its body once for each item in a list, collecting what each hands back. Its body (what its each way reaches before coming back to it) runs per item, reading the item as item_name and its place as index; by its done way it hands on {count, results}, results what each item's body handed back.",
+      "required": [
+        "items",
+        "item_name",
+        "max_iterations",
+        "concurrency"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "string",
+          "description": "A JSONata expression giving a list."
+        },
+        "item_name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "config_for_each": {
+      "type": "object",
+      "description": "Runs its steps once for each item in a list; nothing comes back to it. Its body (what its each way reaches; nothing leads back) runs per item, reading the item as item_name and its place as index; by its done way it hands on {count}.",
       "required": [
         "items",
         "item_name",
@@ -1234,7 +1340,7 @@
     },
     "config_merge": {
       "type": "object",
-      "description": "Waits for the ways coming into it, then goes on as one.",
+      "description": "Waits for the ways coming into it, then goes on as one. Hands on what each way into it handed on, by the step it came from: {<step id>: ...}.",
       "required": [
         "mode"
       ],
@@ -1251,7 +1357,7 @@
     },
     "config_end": {
       "type": "object",
-      "description": "Finishes the run, as succeeded or failed, with a result.",
+      "description": "Finishes the run, as succeeded or failed, with a result. Finishes its way with its result: its expression's, or what came in when it has none.",
       "required": [
         "outcome",
         "result"
@@ -1367,7 +1473,9 @@
         "method",
         "url",
         "headers",
+        "body",
         "parameters",
+        "credential",
         "confirm"
       ],
       "additionalProperties": false,
@@ -1388,7 +1496,7 @@
         },
         "url": {
           "type": "string",
-          "description": "Where it calls; {name} puts in an argument of that name."
+          "description": "Where it calls: {name} puts in the model's argument of that name, {{ expression }} one of the run's values. A query parameter that's one argument is left out when the model doesn't send it."
         },
         "headers": {
           "type": "array",
@@ -1413,9 +1521,17 @@
             }
           }
         },
+        "body": {
+          "type": "string",
+          "description": "Its JSON body (POST, PUT, PATCH), with placeholders as its URL has; one that's a whole value goes in as it is. Empty for none."
+        },
         "parameters": {
           "type": "object",
-          "description": "A JSON Schema of the arguments the model fills in; {} takes none."
+          "description": "A JSON Schema of the arguments: their types and descriptions. The model is offered those the URL and body name."
+        },
+        "credential": {
+          "type": "string",
+          "description": "One of the organization's credentials, by ID: its auth (an API key, a token, OAuth) goes with each call, and only to the URLs it's for. Empty for none."
         },
         "confirm": {
           "type": "boolean",
@@ -1431,6 +1547,7 @@
         "url",
         "spec",
         "operations",
+        "credential",
         "confirm"
       ],
       "additionalProperties": false,
@@ -1452,7 +1569,11 @@
         },
         "operations": {
           "type": "string",
-          "description": "The operation IDs it may call, comma-separated; empty for all."
+          "description": "The operations it may call, comma-separated: their tool names (the operationId in snake case) or operation IDs; empty for all."
+        },
+        "credential": {
+          "type": "string",
+          "description": "One of the organization's credentials, by ID: its auth goes with each call, and only to the URLs it's for. Empty for none."
         },
         "confirm": {
           "type": "boolean"

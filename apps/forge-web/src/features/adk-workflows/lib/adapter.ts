@@ -26,8 +26,12 @@ import {
   outputsOf,
   type AgentStep,
 } from "./model"
-import { agentScopesOf } from "./scope"
-import { validateAgent, type AgentValidationContext } from "./validate"
+import { agentTypes } from "./scope"
+import {
+  typeContextOf,
+  validateAgent,
+  type AgentValidationContext,
+} from "./validate"
 
 // Forge's steps keep their kind names here, so a loop's body and each
 // way's tone are found as in a workflow (a Loop agent runs its
@@ -72,8 +76,11 @@ export const AGENT_ADAPTER: BuilderAdapter<
   toGraph,
   toDocument,
   check: (graph, context) => {
-    const scopeOf = agentScopesOf(graph)
-    return { scopeOf, issues: validateAgent(graph, context, scopeOf) }
+    const types = agentTypes(graph, typeContextOf(context))
+    return {
+      scopeOf: types.scopeOf,
+      issues: validateAgent(graph, context, types),
+    }
   },
   tidy: (graph: AgentGraph, measure) =>
     tidyGraph(graph, measure, {
@@ -92,5 +99,6 @@ export const AGENT_ADAPTER: BuilderAdapter<
     workflowVersions: {},
     mcpServers: {},
     knowledgeBases: {},
+    credentials: {},
   }),
 }

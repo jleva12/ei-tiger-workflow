@@ -37,6 +37,7 @@ from forge_task_adk_workflows.graph import (
 )
 from forge_task_adk_workflows.graph.factories.logic import MergeAll
 from forge_task_adk_workflows.graph.schemas import is_model
+from forge_task_adk_workflows.support.expressions import Evaluator
 
 from .scripted_llm import ScriptedLlm
 
@@ -251,11 +252,13 @@ def test_every_kind_has_a_factory() -> None:
             "human_input",
             "http",
             "transform",
+            "filter",
             "delay",
             "if",
             "switch",
             "match",
             "loop",
+            "for_each",
             "merge",
             "end",
         }
@@ -541,6 +544,22 @@ def test_only_a_loops_each_item_way_leads_into_its_body() -> None:
         "Node 'Shape': it's in the body of loop 'Each', and node 'start', outside it, "
         "leads into it; only the loop's Each item way may."
     )
+
+
+def test_an_item_cant_be_called_what_every_step_reads() -> None:
+    for kind in ("loop", "for_each", "filter"):
+        document = agent(
+            [
+                START_NODE,
+                node("each", kind, {"items": "[1]", "item_name": "input", "condition": "true"}),
+                transform("shape", "input"),
+            ],
+            [("start", "next", "each"), ("each", "each" if kind != "filter" else "next", "shape")],
+        )
+        assert refused(document) == (
+            "Node 'Each': its item can't be called input: that's the run's input, which the steps "
+            "reading the item read too; call it something else."
+        )
 
 
 def test_settings_a_kind_cant_run_with_are_refused() -> None:
@@ -956,6 +975,93 @@ def test_an_http_response_that_doesnt_fit_its_output_schema_takes_the_error_way(
     assert error["body"] == {"id": "seven"}
 
 
+class Credentials:
+    """The organization's credentials, as the worker signs with them:
+    ``cred_1`` for https://api.example.com, in org_1."""
+
+    def __init__(self) -> None:
+        self.asked: list[tuple[str, str | None, str]] = []
+
+    async def __call__(self, credential_id: str, *, organization_id: str | None, url: str) -> Any:
+        from forge_agent_runtime import RequestAuth
+
+        self.asked.append((credential_id, organization_id, url))
+        if credential_id != "cred_1" or organization_id != "org_1":
+            raise LookupError("The organization has no credential 'cred_9': it was deleted")
+        if not url.startswith("https://api.example.com/"):
+            raise LookupError("The credential Orders is only sent to https://api.example.com")
+        return RequestAuth(headers={"Authorization": "Bearer t0k"}, params={"key": "k1"})
+
+
+def credential_document(url: str, credential: str = "cred_1") -> dict[str, Any]:
+    return agent(
+        [
+            START_NODE,
+            node("get", "http", {"url": url, "credential": credential, "retries": 2}),
+            end("ok", "steps.get.output.body"),
+            end("failed", "steps.get.error.message"),
+        ],
+        [("start", "next", "get"), ("get", "success", "ok"), ("get", "error", "failed")],
+    )
+
+
+def test_an_http_request_is_signed_with_its_credential() -> None:
+    seen: list[httpx.Request] = []
+
+    def api(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/v1/old":
+            return httpx.Response(302, headers={"location": "https://elsewhere.example.com/new"})
+        return httpx.Response(200, json={"ok": True})
+
+    provider = Credentials()
+    signed = services(api, credentials=provider, organization_id="org_1")
+    session = run(lambda: ran(credential_document("https://api.example.com/v1/x?page=2"), svc=signed))
+    assert session.result == {"ok": True}
+    assert seen[0].headers["authorization"] == "Bearer t0k"
+    assert dict(seen[0].url.params) == {"page": "2", "key": "k1"}
+    assert provider.asked == [("cred_1", "org_1", "https://api.example.com/v1/x?page=2")]
+    # A redirect to where it isn't for goes without it.
+    seen.clear()
+    elsewhere = services(
+        api,
+        credentials=Credentials(),
+        organization_id="org_1",
+        allowed_hosts=("api.example.com", "elsewhere.example.com"),
+    )
+    run(lambda: ran(credential_document("https://api.example.com/v1/old"), svc=elsewhere))
+    assert seen[0].headers["authorization"] == "Bearer t0k"
+    assert "authorization" not in seen[1].headers and "key" not in dict(seen[1].url.params)
+
+
+def test_a_credential_that_cant_sign_takes_the_error_way_untried() -> None:
+    calls: list[httpx.Request] = []
+
+    def api(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200)
+
+    clock = Clock()
+    cases = [
+        ("https://evil.example.com/x", "cred_1", "only sent to https://api.example.com"),
+        ("https://api.example.com/x", "cred_9", "it was deleted"),
+    ]
+    for url, credential, says in cases:
+        signed = services(
+            api,
+            clock,
+            credentials=Credentials(),
+            organization_id="org_1",
+            allowed_hosts=("api.example.com", "evil.example.com"),
+        )
+        session = run(lambda u=url, c=credential, svc=signed: ran(credential_document(u, c), svc=svc))
+        assert says in session.result
+    # Nothing was sent, and nothing retried.
+    assert calls == [] and clock.slept == []
+    without = run(lambda: ran(credential_document("https://api.example.com/x"), svc=services(api)))
+    assert "which this worker can't use" in without.result
+
+
 def test_http_requests_never_reach_a_private_network() -> None:
     calls: list[httpx.Request] = []
 
@@ -1084,12 +1190,15 @@ def test_a_failed_end_fails_the_run_once_every_way_has_ended() -> None:
     finished = session.finished
     assert finished is not None
     assert finished["outcome"] == "failed"
-    assert finished["error"] == "Refused (refused) failed the run: No refund; Lost (lost) failed the run"
-    assert finished["step"] == "refused"
-    assert [(e["step"], e["outcome"]) for e in finished["result"]] == [
-        ("refused", "failed"),
-        ("notify", "succeeded"),
+    # In the order the ways ended, which ways side by side don't keep.
+    failures = ["Refused (refused) failed the run: No refund", "Lost (lost) failed the run"]
+    assert sorted(finished["error"].split("; ")) == sorted(failures)
+    first = finished["error"].split("; ")[0]
+    assert finished["step"] == ("refused" if first == failures[0] else "lost")
+    assert sorted((e["step"], e["outcome"]) for e in finished["result"]) == [
         ("lost", "failed"),
+        ("notify", "succeeded"),
+        ("refused", "failed"),
     ]
 
 
@@ -1366,6 +1475,70 @@ def test_a_delay_woken_long_before_its_time_pauses_again() -> None:
     assert session.result == {"resumed_at": "2026-09-26T14:00:00+00:00"}
 
 
+# ------------------------------------------------------------------- filters
+
+
+def filter_agent(items: str, condition: str, **config: Any) -> dict[str, Any]:
+    """Start, a filter over ``items`` keeping what ``condition`` holds for, and
+    an End with what it kept."""
+    return agent(
+        [
+            START_NODE,
+            node("keep", "filter", {"items": items, "condition": condition, **config}),
+            end("done", "steps.keep.output"),
+        ],
+        [("start", "next", "keep"), ("keep", "next", "done")],
+    )
+
+
+def test_a_filter_keeps_the_items_its_condition_holds_for() -> None:
+    issues = [
+        {"key": "A", "status": "open"},
+        {"key": "B", "status": "closed"},
+        {"key": "C", "status": "open"},
+    ]
+    document = filter_agent("input.issues", 'item.status = "open"')
+    session = run(lambda: ran(document, {"issues": issues}))
+    assert session.result == {"count": 2, "results": [issues[0], issues[2]]}
+    # Its item's index, too.
+    document = filter_agent("input.issues", 'item.status = "open" and index > 0')
+    assert run(lambda: ran(document, {"issues": issues})).result == {"count": 1, "results": [issues[2]]}
+
+
+def test_a_filters_condition_reads_its_item_by_name_beside_the_runs_data() -> None:
+    document = filter_agent("input.scores", "score >= input.pass", item_name="score")
+    session = run(lambda: ran(document, {"scores": [3, 9, 5, 7], "pass": 5}))
+    assert session.result == {"count": 3, "results": [9, 5, 7]}
+
+
+def test_a_filter_takes_nothing_as_no_items_and_one_value_as_one() -> None:
+    assert run(lambda: ran(filter_agent("input.none", "true"), {})).result == {"count": 0, "results": []}
+    assert run(lambda: ran(filter_agent("input.one", "true"), {"one": "x"})).result == {
+        "count": 1,
+        "results": ["x"],
+    }
+
+
+def test_a_filter_keeps_an_item_only_when_its_condition_is_true() -> None:
+    # Anything but true (text, a number, nothing) drops the item.
+    document = filter_agent("[1, 2, 3, 4]", 'index = 0 ? true : index = 1 ? "yes" : index = 2 ? 1 : false')
+    assert run(lambda: ran(document)).result == {"count": 1, "results": [1]}
+
+
+def test_a_filters_failing_condition_fails_the_run_saying_which_item() -> None:
+    document = filter_agent('["a", 1]', '$uppercase(item) = "A"')
+    with pytest.raises(RunFailed, match=r"Keep \(keep\) failed: Its condition \(item 1\) failed"):
+        run(lambda: ran(document))
+
+
+def test_a_filter_that_goes_on_past_its_list_timeout_fails_the_run() -> None:
+    # Each item's condition is well within its own timeout; all of them aren't.
+    document = filter_agent("[1..20000]", "$count([1..200][$ % item = 0]) > 1")
+    svc = services(evaluator=Evaluator(list_timeout_ms=50))
+    with pytest.raises(RunFailed, match=r"Keep \(keep\) failed: Its condition took longer than 0.05 seconds"):
+        run(lambda: ran(document, svc=svc))
+
+
 # ------------------------------------------------------------------- loops
 
 
@@ -1402,9 +1575,9 @@ def test_a_loop_runs_its_body_per_item_several_at_once() -> None:
     )
     session = run(lambda: ran(document, {"labels": ["a", "b", "c", "d"]}))
     assert session.result == {"count": 4, "results": ["A#0", "B#1", "C#2", "D#3"]}
-    # Each item's body is a graph of its own, run by the loop's node.
+    # Each item's body is a graph of its own, run by the loop's node (several at once: in any order).
     paths = [e.node_info.path for e in session.events if name_of(e) == "shout"]
-    assert paths == [f"test_agent@1/each@1/each__each@item_{i}/shout@1" for i in range(4)]
+    assert sorted(paths) == [f"test_agent@1/each@1/each__each@item_{i}/shout@1" for i in range(4)]
 
 
 def test_a_loops_items_run_up_to_its_concurrency_at_once() -> None:
@@ -1489,6 +1662,83 @@ def test_a_pause_inside_a_loops_body_resumes_one_item_at_a_time() -> None:
         {"label": "a", "index": 0},
         {"label": "b", "index": 1},
     ]
+
+
+# ---------------------------------------------------------------- for-each
+
+
+def for_each_agent(items: str, body: list[dict[str, Any]], **config: Any) -> dict[str, Any]:
+    """Start, a for-each over ``items`` whose body is ``body`` in a line (its
+    last step ending there), and an End after Done with what it handed on."""
+    ids = [step["id"] for step in body]
+    return agent(
+        [
+            START_NODE,
+            node(
+                "each",
+                "for_each",
+                {"items": items, "item_name": "label", "max_iterations": 10, **config},
+            ),
+            *body,
+            end("done", "steps.each.output"),
+        ],
+        [
+            ("start", "next", "each"),
+            ("each", "each", ids[0]),
+            *[(a, "next", b) for a, b in zip(ids, ids[1:], strict=False)],
+            ("each", "done", "done"),
+        ],
+    )
+
+
+def test_a_for_each_runs_its_body_per_item_and_collects_nothing() -> None:
+    document = for_each_agent(
+        "input.labels",
+        [transform("shout", '$uppercase(label) & "#" & $string(index)'), transform("tag", '"tagged " & previous')],
+        concurrency=2,
+    )
+    session = run(lambda: ran(document, {"labels": ["a", "b", "c"]}))
+    # Each item's way ends where it ends: only Done goes on, with the count.
+    assert session.finished == {"outcome": "succeeded", "result": {"count": 3}}
+    assert sorted(session.outputs("tag")) == ["tagged A#0", "tagged B#1", "tagged C#2"]
+    paths = sorted(e.node_info.path for e in session.events if name_of(e) == "shout")
+    assert paths == [f"test_agent@1/each@1/each__each@item_{i}/shout@1" for i in range(3)]
+
+
+def test_a_for_each_takes_nothing_as_no_items_and_one_value_as_one() -> None:
+    body = [transform("shout", "$uppercase(label)")]
+    assert run(lambda: ran(for_each_agent("input.none", body), {})).result == {"count": 0}
+    session = run(lambda: ran(for_each_agent("input.one", body), {"one": "x"}))
+    assert session.result == {"count": 1}
+    assert session.outputs("shout") == ["X"]
+
+
+def test_a_for_each_over_too_many_items_fails() -> None:
+    document = for_each_agent("[1..5]", [transform("x", "1")], max_iterations=3)
+    with pytest.raises(RunFailed, match=r"Each \(each\) has 5 items to go through; the most it may is 3"):
+        run(lambda: ran(document))
+
+
+def test_a_step_failing_in_a_for_eachs_body_fails_the_run() -> None:
+    document = for_each_agent("[1, 2]", [transform("bad", "$uppercase(label)")])
+    with pytest.raises(RunFailed, match=r"Bad \(bad\) failed: Its expression failed"):
+        run(lambda: ran(document))
+
+
+def test_a_for_each_takes_nothing_back() -> None:
+    document = agent(
+        [START_NODE, node("each", "for_each", {"items": "[1]"}), transform("x", "item")],
+        [("start", "next", "each"), ("each", "each", "x"), ("x", "next", "each")],
+    )
+    assert refused(document) == (
+        "Node 'X': it leads back to for-each 'Each', which takes nothing back; "
+        "use a Loop to collect each item's result."
+    )
+    straight_back = agent(
+        [START_NODE, node("each", "for_each", {"items": "[1]"})],
+        [("start", "next", "each"), ("each", "each", "each")],
+    )
+    assert "it leads back to for-each 'Each'" in refused(straight_back)
 
 
 def test_steps_in_a_loops_body_read_the_items_and_the_graph_around_it() -> None:
@@ -1852,6 +2102,53 @@ def test_a_saved_agents_input_must_fit_its_start() -> None:
         run(lambda: ran(OUTER, {"base": "four"}, svc=svc))
 
 
+def mapping(inputs: dict[str, str]) -> dict[str, Any]:
+    # OUTER, its saved node starting the inner agent with its own inputs.
+    return agent(
+        [
+            START_NODE,
+            transform("shape", '{"n": 100}'),
+            node(
+                "check",
+                "saved",
+                {"agent": "ag_inner00001", "inputs": inputs},
+                name="Check the number",
+            ),
+            transform("after", '{"previous": previous, "check": steps.check.output}'),
+        ],
+        [
+            ("start", "next", "shape"),
+            ("shape", "next", "check"),
+            ("check", "next", "after"),
+        ],
+        agent_id="ag_outer00001",
+        name="Outer",
+    )
+
+
+def test_a_saved_agents_inputs_are_its_input_instead_of_what_came_in() -> None:
+    svc = services(resolve={"ag_inner00001": INNER}.get)
+    # What came in ({"n": 100}) isn't its input; its inputs read the run's data.
+    session = run(lambda: ran(mapping({"n": "input.base", "unused": ""}), {"base": "4"}, svc=svc))
+    inner = {"n": 5, "start": {"n": 4}, "state": {"base": "4"}}
+    assert session.outputs("after") == [{"previous": inner, "check": inner}]
+
+
+def test_a_saved_agents_inputs_that_find_nothing_are_left_out() -> None:
+    svc = services(resolve={"ag_inner00001": INNER}.get)
+    with pytest.raises(
+        RunFailed,
+        match="Node 'Check the number': its input doesn't fit agent ag_inner00001's start: n: Field required",
+    ):
+        run(lambda: ran(mapping({"n": "input.missing"}), {"base": "4"}, svc=svc))
+
+
+def test_a_saved_agents_input_that_fails_fails_its_step() -> None:
+    svc = services(resolve={"ag_inner00001": INNER}.get)
+    with pytest.raises(RunFailed, match=r"Check the number \(check\) failed: Its input n failed"):
+        run(lambda: ran(mapping({"n": "$number('x') +"}), {"base": "4"}, svc=svc))
+
+
 # ------------------------------------------------- surviving the process
 
 
@@ -1912,17 +2209,29 @@ def example_services(llm: ScriptedLlm, sent: list[httpx.Request]) -> RunServices
     return services(api, model=llm, allowed_hosts=("api.example.com", "hooks.example.com"))
 
 
+def example_llm(triage: str, sentiment: str, *, turns: list[Any] | None = None) -> ScriptedLlm:
+    """The example's model: its triage and sentiment steps, which ask side by
+    side (in either order), answer ``triage`` and ``sentiment``; then ``turns``."""
+    return ScriptedLlm(
+        routed={
+            "Say whether it's about a BUG": [[types.Part(text=triage)]],
+            "How do they feel": [[types.Part(text=sentiment)]],
+        },
+        turns=list(turns or []),
+    )
+
+
 MESSAGE = {"message": "It crashes", "customer_id": "c1"}
 
 
 def test_the_example_takes_a_bug_to_a_person_then_emails_each_contact() -> None:
-    llm = ScriptedLlm(
+    llm = example_llm(
+        '{"category": "BUG", "summary": "It crashes"}',
+        '{"mood": "annoyed"}',
         turns=[
-            [types.Part(text='{"category": "BUG", "summary": "It crashes"}')],
-            [types.Part(text='{"mood": "annoyed"}')],
             [types.Part(text="1. Open it. 2. It crashes.")],
             [types.Part(text="Sorry! It's fixed.")],
-        ]
+        ],
     )
     sent: list[httpx.Request] = []
 
@@ -1940,16 +2249,16 @@ def test_the_example_takes_a_bug_to_a_person_then_emails_each_contact() -> None:
             "sentiment": {"mood": "annoyed"},
         }
     ]
-    assert [(r.method, str(r.url), json.loads(r.content or b"null")) for r in sent] == [
-        ("GET", "https://api.example.com/customers/c1", None),
-        *[
-            (
-                "POST",
-                "https://hooks.example.com/support/replies",
-                {"to": to, "reply": "Sorry! It's fixed."},
-            )
-            for to in ("a@x.com", "b@x.com")
-        ],
+    calls = [(r.method, str(r.url), json.loads(r.content or b"null")) for r in sent]
+    assert calls[0] == ("GET", "https://api.example.com/customers/c1", None)
+    # Each contact's email, its loop's items several at once: in any order.
+    assert sorted(calls[1:], key=lambda call: call[2]["to"]) == [
+        (
+            "POST",
+            "https://hooks.example.com/support/replies",
+            {"to": to, "reply": "Sorry! It's fixed."},
+        )
+        for to in ("a@x.com", "b@x.com")
     ]
     assert session.finished is not None
     assert session.finished["outcome"] == "succeeded"
@@ -1957,12 +2266,10 @@ def test_the_example_takes_a_bug_to_a_person_then_emails_each_contact() -> None:
 
 
 def test_the_example_asks_before_refunding_and_a_rejection_declines() -> None:
-    llm = ScriptedLlm(
-        turns=[
-            [types.Part(text='{"category": "BILLING", "summary": "Charged twice"}')],
-            [types.Part(text='{"mood": "angry"}')],
-            [types.Part(text='{"answer": "We charged you twice.", "refund": 20}')],
-        ]
+    llm = example_llm(
+        '{"category": "BILLING", "summary": "Charged twice"}',
+        '{"mood": "angry"}',
+        turns=[[types.Part(text='{"answer": "We charged you twice.", "refund": 20}')]],
     )
     sent: list[httpx.Request] = []
 
@@ -1983,14 +2290,10 @@ def test_the_example_asks_before_refunding_and_a_rejection_declines() -> None:
 
 
 def test_the_example_researches_anything_else_in_parallel() -> None:
-    llm = ScriptedLlm(
-        turns=[
-            [types.Part(text='{"category": "ELSE", "summary": "How do exports work?"}')],
-            [types.Part(text='{"mood": "calm"}')],
-            [types.Part(text="The docs say: use Export.")],
-            [types.Part(text="The forum says: it works.")],
-        ]
-    )
+    llm = example_llm('{"category": "ELSE", "summary": "How do exports work?"}', '{"mood": "calm"}')
+    # Its researchers ask side by side too.
+    llm.routed["Find what the docs say"] = [[types.Part(text="The docs say: use Export.")]]
+    llm.routed["Find what the forum says"] = [[types.Part(text="The forum says: it works.")]]
     session = run(lambda: ran(example(), MESSAGE, svc=example_services(llm, [])))
     # Its researchers run at once, each reading the triage's summary.
     assert sorted(str(r.config.system_instruction).split("\n")[0] for r in llm.requests[2:]) == [
@@ -2014,13 +2317,13 @@ def test_the_example_fails_for_a_customer_it_cant_find() -> None:
 
 
 def test_the_example_polishes_an_approved_refunds_reply_in_a_loop() -> None:
-    llm = ScriptedLlm(
+    llm = example_llm(
+        '{"category": "BILLING", "summary": "Charged twice"}',
+        '{"mood": "angry"}',
         turns=[
-            [types.Part(text='{"category": "BILLING", "summary": "Charged twice"}')],
-            [types.Part(text='{"mood": "angry"}')],
             [types.Part(text='{"answer": "We charged you twice.", "refund": 20}')],
             *[[types.Part(text=f"{who} {n}")] for n in (1, 2, 3) for who in ("Draft", "Critique")],
-        ]
+        ],
     )
 
     async def main() -> Run:
@@ -2087,13 +2390,14 @@ def test_run_services_take_the_workers_settings() -> None:
         inline_delay_seconds=5,
         max_loop_items=7,
         expression_timeout_ms=100,
+        expression_list_timeout_ms=900,
     )
     made = RunServices.of(settings, model="forge/model")
     assert made.allow_private is True
     assert made.allowed_hosts == ("intranet",)
     assert made.inline_delay_seconds == 5
     assert made.max_loop_items == 7
-    assert made.evaluator.timeout_ms == 100
+    assert (made.evaluator.timeout_ms, made.evaluator.list_timeout_ms) == (100, 900)
     assert made.model == "forge/model"
     # None changes nothing.
     assert made.but(model=None, resolve=None) == made

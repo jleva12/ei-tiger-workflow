@@ -7,18 +7,21 @@ build. A search finds the passages that best match the model's query: of a
 RAG knowledge base's documents, each with the document it's from; of a graph
 knowledge base's code, each with the repository, file and declaration
 (``forge_admin.knowledge.graph``). So the agent can say where an answer
-comes from.
+comes from. A system design knowledge base's design (its applications,
+components, groups and connections, ``forge_admin.knowledge.designs``) is
+read whole, or around one part, by the tool beside the search.
 """
 
 from collections.abc import Sequence
 from typing import Any
 
-from forge_codegraph import CodeGraph, WorkerError, interleave, system_summary
+from forge_codegraph import design_summary, design_view, interleave
+from forge_codegraph_query import CodeGraph, GraphError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from forge_admin.knowledge.connections import connections_of
-from forge_admin.knowledge.graph import linked, search_code, searchable
+from forge_admin.knowledge.designs import designs_of
+from forge_admin.knowledge.graph import search_code, searchable
 from forge_admin.knowledge.search import KnowledgeSearch
 from forge_admin.models import KnowledgeBase, KnowledgeDocument
 from forge_admin.models.knowledge import SYSTEM
@@ -31,8 +34,9 @@ class OrganizationKnowledgeBases:
     :param sessions: Makes the admin database's sessions.
     :param search: The search over what the async worker embedded; None when
         it isn't set up, and every search of a RAG knowledge base says so.
-    :param codegraph: The code graph worker's API; None when it isn't set
-        up, and every search of a system design knowledge base says so.
+    :param codegraph: The code graph (``forge_codegraph_query``); None when
+        it isn't set up, and every search of a system design knowledge base
+        says so.
     """
 
     def __init__(
@@ -50,8 +54,8 @@ class OrganizationKnowledgeBases:
     ) -> list[tuple[str, str]]:
         """
         :return: Each knowledge base's name and what it holds, in order: its
-            description, and a system design knowledge base's applications
-            and how they connect.
+            description, and a system design knowledge base's applications,
+            other parts, groups and how they connect.
         :raises LookupError: The organization has no such knowledge base.
         """
         found = await self._find(knowledge_base_ids, organization_id)
@@ -59,19 +63,42 @@ class OrganizationKnowledgeBases:
             i for i in dict.fromkeys(knowledge_base_ids) if found[i].kind == SYSTEM
         ]
         async with self._sessions() as session:
-            repositories = await linked(session, systems)
-            connections = await connections_of(session, systems)
+            designs = await designs_of(session, systems)
 
         def about(knowledge_base: KnowledgeBase) -> str:
             if knowledge_base.kind != SYSTEM:
                 return knowledge_base.description
-            return system_summary(
-                knowledge_base.description,
-                [f"{r.owner}/{r.name}" for r in repositories[knowledge_base.id]],
-                connections[knowledge_base.id],
+            return design_summary(
+                knowledge_base.description, designs[knowledge_base.id]
             )
 
         return [(found[i].name, about(found[i])) for i in knowledge_base_ids]
+
+    async def design(
+        self,
+        knowledge_base_ids: Sequence[str],
+        *,
+        organization_id: str | None,
+        focus: str = "",
+    ) -> dict[str, Any] | None:
+        """
+        :return: The design of the system design knowledge bases among
+            these (``forge_codegraph.design_view``), whole or around the
+            part ``focus`` names; None when none of them is one.
+        :raises LookupError: The organization has no such knowledge base.
+        """
+        found = await self._find(knowledge_base_ids, organization_id)
+        systems = [
+            i for i in dict.fromkeys(knowledge_base_ids) if found[i].kind == SYSTEM
+        ]
+        if not systems:
+            return None
+        async with self._sessions() as session:
+            designs = await designs_of(session, systems)
+        return design_view(
+            [(found[i].name, found[i].description, designs[i]) for i in systems],
+            focus,
+        )
 
     async def search(
         self,
@@ -144,7 +171,7 @@ class OrganizationKnowledgeBases:
         if self._codegraph is None:
             raise RuntimeError(
                 "System design knowledge base search isn't set up on this server "
-                "(FORGE_ADMIN_CODEGRAPH_URL)."
+                "(FORGE_ADMIN_CODEGRAPH__SPANNER__DATABASE)."
             )
         async with self._sessions() as session:
             repositories = await searchable(session, knowledge_base_ids)
@@ -155,10 +182,8 @@ class OrganizationKnowledgeBases:
                 query,
                 limit=limit,
             )
-        except WorkerError as error:
-            raise RuntimeError(
-                f"The code graph is unavailable; try again ({error.code})."
-            ) from None
+        except GraphError as error:
+            raise RuntimeError(f"The code graph couldn't search: {error}.") from None
 
     async def _find(
         self, knowledge_base_ids: Sequence[str], organization_id: str | None

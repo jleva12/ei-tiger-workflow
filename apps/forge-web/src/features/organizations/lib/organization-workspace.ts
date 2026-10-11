@@ -3,6 +3,7 @@ import {
   BookOpen01Icon,
   FlowSquareIcon,
   Key01Icon,
+  LockKeyIcon,
   McpServerIcon,
 } from "@hugeicons/core-free-icons"
 
@@ -20,7 +21,8 @@ import type { AdkRunTab } from "@/features/runs/lib/runs"
  * agents, each opening its builder at
  * /organizations/$organizationId/chat-agents/$chatAgentId), MCP servers
  * (the remote MCP servers its agents use as tools, each opening in a dialog),
- * Knowledge bases (each opening its own page, and, as its second tab, the
+ * Credentials (what its HTTP steps and its agents' HTTP and OpenAPI tools
+ * sign in to APIs with, each opening in a dialog), Knowledge bases (each opening its own page, and, as its second tab, the
  * GitHub repositories it ingests into the code graph, each opening in a side
  * panel), Members (who holds which role in it; its admins change them) and API keys
  * (what outside apps send to call its agents and workflows). Overview is
@@ -32,6 +34,9 @@ export const WORKSPACE_VIEWS = {
   agents: { label: "Workflows", icon: FlowSquareIcon },
   "chat-agents": { label: "Agents", icon: AiBrain01Icon },
   "mcp-servers": { label: "MCP servers", icon: McpServerIcon },
+  // API credentials: keys, tokens and OAuth sign-ins, each sent only to the
+  // URLs it names.
+  credentials: { label: "Credentials", icon: LockKeyIcon },
   // Each knowledge base opens its own page, at
   // /organizations/$organizationId/knowledge/$knowledgeBaseId.
   // Its Code repositories tab lists the GitHub repositories it ingests into
@@ -52,7 +57,7 @@ export const WORKSPACE_SECTIONS: { title: string; views: WorkspaceView[] }[] = [
   { title: "Workflows and agents", views: ["agents", "chat-agents"] },
   {
     title: "Integrations",
-    views: ["mcp-servers", "knowledge"],
+    views: ["mcp-servers", "credentials", "knowledge"],
   },
   { title: "Settings", views: ["config", "api-keys"] },
 ]
@@ -81,6 +86,8 @@ export type WorkspaceSearch = {
   agentRunTab?: Exclude<AdkRunTab, "overview">
   /** On MCP servers, the server open in its dialog (its ID). */
   mcpServer?: string
+  /** On Credentials, the credential open in its dialog (its ID). */
+  credential?: string
   /** Knowledge bases' tab: Code repositories; the knowledge bases when absent. */
   knowledgeTab?: "repositories"
   /** On Code repositories, the repository open in its side panel (its ID). */

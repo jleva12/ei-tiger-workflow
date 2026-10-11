@@ -16,6 +16,7 @@ COPY apps/forge-codegraph-mcp/pyproject.toml apps/forge-codegraph-mcp/
 COPY packages/python/adk-workflows/pyproject.toml packages/python/adk-workflows/
 COPY packages/python/agent-runtime/pyproject.toml packages/python/agent-runtime/
 COPY packages/python/codegraph/pyproject.toml packages/python/codegraph/
+COPY packages/python/codegraph-query/pyproject.toml packages/python/codegraph-query/
 COPY packages/python/common/pyproject.toml packages/python/common/
 COPY packages/python/documents/pyproject.toml packages/python/documents/
 COPY packages/python/embeddings/pyproject.toml packages/python/embeddings/
@@ -27,6 +28,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY packages/python/adk-workflows/ packages/python/adk-workflows/
 COPY packages/python/agent-runtime/ packages/python/agent-runtime/
 COPY packages/python/codegraph/ packages/python/codegraph/
+COPY packages/python/codegraph-query/ packages/python/codegraph-query/
 COPY packages/python/common/ packages/python/common/
 COPY packages/python/documents/ packages/python/documents/
 COPY packages/python/embeddings/ packages/python/embeddings/

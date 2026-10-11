@@ -10,8 +10,8 @@
 # specific screens first: their prompts come first, and at most six are
 # suggested.
 #
-# Toolsets (assistant/forge.py registers them): access, administration and
-# knowledge. Each
+# Toolsets (assistant/forge.py registers them): access, administration,
+# knowledge and code. Each
 # is held by a specialist agent of the same name, which the supervisor is
 # offered on the screens that name its toolset. `- name` with `tools` gives the specialist only
 # those tools, by the names the model sees. Instructions go to the supervisor
@@ -35,6 +35,9 @@ everywhere:
         - list_knowledge_documents
         - get_knowledge_document
         - search_knowledge_bases
+    # Asking how the organization's code works works from any page too: the
+    # code graph MCP server's tools, every one read-only.
+    - name: code
   prompts:
     - title: Why was that refused?
       label: and who can give me access
@@ -74,14 +77,18 @@ screens:
     title: Knowledge base
     when:
       route: /organizations/$organizationId_/knowledge/$knowledgeBaseId
-    toolsets: [knowledge]
+    toolsets: [knowledge, code]
     instructions: |
       The person is on one of their organization's knowledge bases: the
       organization is the page's organizationId parameter and the knowledge
       base its knowledgeBaseId (also the knowledge_base on the page). A
       document search parameter is the document open in its viewer, by its
       ID. "This knowledge base" is this one: search it, unless they name
-      others.
+      others. On a system design knowledge base, the code specialist reads
+      its applications' code: a repository search parameter is the code
+      repository open in its explorer, by Forge's ID (match it by owner/name
+      in list_repositories), and a node parameter the node selected in its
+      graph, by the code graph's node id.
     prompts:
       - title: Ask this knowledge base
         label: a question

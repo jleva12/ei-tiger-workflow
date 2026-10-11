@@ -67,21 +67,16 @@ func Serve(ctx context.Context, c Config, deps Dependencies, logger *slog.Logger
 	if c.GitHubToken == "" {
 		logger.Info("CODEGRAPH_GITHUB_TOKEN is not set: GitHub is read anonymously, so only public repositories can be ingested")
 	}
-	var api *workerAPI
-	if c.AdmissionToken != "" {
-		api = newWorkerAPI(c.AdmissionToken, storage.Store, storeGraph{storage.Store}, storeGraph{storage.Store}, newStoreAudit(storage.Store, runtime.Embedder),
-			storeSearch{store: storage.Store, embedder: runtime.Embedder, enhance: c.Search.EnhanceQuery}, logger)
-	}
 	w := &ingester{c: c, logger: logger, queue: jobqueue.New(db, c.Queue), runs: storage.Store, branches: runtime.Source, pipeline: runtime.Pipeline, digest: digest}
-	return serveJobs(ctx, w, storage.Store, registration, api)
+	return serveJobs(ctx, w, storage.Store, registration)
 }
 
-func serveJobs(ctx context.Context, w *ingester, spanner registry, registration spannerstore.WorkerRegistration, api *workerAPI) (retErr error) {
+func serveJobs(ctx context.Context, w *ingester, spanner registry, registration spannerstore.WorkerRegistration) (retErr error) {
 	c, logger := w.c, w.logger
 	startup, cancel := context.WithTimeout(ctx, c.StartupTimeout)
 	defer cancel()
 	status := &healthStatus{}
-	health, healthDone, err := startHealth(startup, c.HealthAddr, status, api, logger)
+	health, healthDone, err := startHealth(startup, c.HealthAddr, status, logger)
 	if err != nil {
 		return err
 	}

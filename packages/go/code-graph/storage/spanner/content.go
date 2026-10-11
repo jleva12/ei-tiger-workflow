@@ -50,27 +50,3 @@ func (s *Store) PutSource(ctx context.Context, repo, sha256sum string, data []by
 	})
 	return existed, err
 }
-
-// GetSource returns retained bytes; the hash is re-verified because it is the key.
-func (s *Store) GetSource(ctx context.Context, repo, sha256sum string) ([]byte, error) {
-	if !validRepositoryID(repo) || !validSHA256(sha256sum) {
-		return nil, fmt.Errorf("%w: repository and content hash", deployment.ErrInvalidRequest)
-	}
-	row, err := s.client.Single().ReadRow(ctx, "CGContent", spanner.Key{repo, sha256sum}, []string{"UncompressedBytes", "Payload"})
-	if err != nil {
-		return nil, mapRead(err, fmt.Errorf("%w: source %s", deployment.ErrNotFound, sha256sum))
-	}
-	var size int64
-	var z []byte
-	if err = row.Columns(&size, &z); err != nil {
-		return nil, err
-	}
-	data, err := gunzipBytes(z, size)
-	if err != nil {
-		return nil, err
-	}
-	if sum := sha256.Sum256(data); int64(len(data)) != size || hex.EncodeToString(sum[:]) != sha256sum {
-		return nil, fmt.Errorf("%w: source %s content differs from its hash", deployment.ErrIntegrity, sha256sum)
-	}
-	return data, nil
-}

@@ -68,6 +68,104 @@ def test_markdown(registry, files):
     assert [e.text for e in nested] == ["Check fraud score"]
 
 
+def test_html(registry, files):
+    doc = parse(registry, "help_center.html", files["help_center.html"])
+    assert doc.source_type == "html"
+    assert doc.title == "Chargeback disputes"  # the lone H1, not <title> with the site's name
+    assert doc.metadata == {"author": "Disputes Team", "keywords": ["chargebacks", "disputes"], "language": "en"}
+    text = " ".join(e.text for e in doc.elements)
+    # scripts, styles, comments, hidden elements and the page's nav, banner, sidebar and footer are left out
+    for chrome in ("analytics", "color: red", "draft note", "Internal only", "Help", "Acme", "Popular articles"):
+        assert chrome not in text
+    headings = [(e.text, e.level, e.section_path) for e in doc.elements if e.kind is ElementKind.HEADING]
+    assert headings == [
+        ("Evidence", 2, ["Evidence"]),
+        ("Submitting", 3, ["Evidence", "Submitting"]),
+    ]
+    paras = [e.text for e in doc.elements if e.kind is ElementKind.PARAGRAPH]
+    # a <br> is a line break; spaces between inline tags still separate words
+    assert paras[0] == "A cardholder can dispute a charge with their bank.\nAnswer every case under ticket CB-2210."
+    # loose text in a <div> is a paragraph, and an unclosed <p> ends at the </div>
+    assert paras[1:3] == ["Gather the evidence listed here", "Send it before the deadline."]
+    # a layout table's cells are read as blocks
+    assert paras[3:] == ["Won cases close automatically.", "Lost cases can be appealed once."]
+    items = [(e.text, e.level) for e in doc.elements if e.kind is ElementKind.LIST_ITEM]
+    assert items == [("Delivery proof", 0), ("Carrier tracking number", 1), ("Customer emails", 0)]
+    (table,) = [e for e in doc.elements if e.kind is ElementKind.TABLE]
+    assert table.section_path == ["Evidence"]
+    assert table.table.caption == "Reason codes"
+    # two header rows, joined per column; a body colspan keeps the next column aligned
+    assert table.table.headers == ["Network", "Days to respond / Domestic", "Days to respond / Cross-border"]
+    assert table.table.rows == [["Visa", "30", "45"], ["Mastercard (any region)", "", "45"]]
+    (code,) = [e for e in doc.elements if e.kind is ElementKind.CODE]
+    assert code.language == "python" and code.text.startswith("def submit_evidence") and code.text.endswith(")")
+    (graph,) = [e.graph for e in doc.elements if e.kind is ElementKind.GRAPH]
+    assert {n.label for n in graph.nodes} == {"Dispute opened", "Evidence sent"}
+
+
+def test_markdown_list_markers_and_continuations(registry):
+    md = b"""# Steps
+
+3. Gather the evidence
+
+   Photos and receipts.
+   - Police report
+4) Send it
+- Bullet
+"""
+    doc = parse(registry, "steps.md", md)
+    items = [(e.text, e.level, e.attrs) for e in doc.elements if e.kind is ElementKind.LIST_ITEM]
+    assert items == [
+        ("Gather the evidence", 0, {"marker": "3."}),
+        ("Photos and receipts.", 0, {"continuation": True}),
+        ("Police report", 1, {"marker": "-"}),
+        ("Send it", 0, {"marker": "4)"}),
+        ("Bullet", 0, {"marker": "-"}),
+    ]
+
+
+def test_html_list_markers_and_continuations(registry):
+    page = b"""<ol start="2">
+      <li><p>Open a ticket</p><p>Use the claims queue.</p>
+        <ul><li>Attach the file</li></ul></li>
+      <li value="7">Notify the member</li>
+      <li>Close it</li>
+    </ol>"""
+    doc = parse(registry, "steps.html", page)
+    items = [(e.text, e.level, e.attrs) for e in doc.elements if e.kind is ElementKind.LIST_ITEM]
+    assert items == [
+        ("Open a ticket", 0, {"marker": "2."}),
+        ("Use the claims queue.", 0, {"continuation": True}),
+        ("Attach the file", 1, {"marker": "-"}),
+        ("Notify the member", 0, {"marker": "7."}),
+        ("Close it", 0, {"marker": "8."}),
+    ]
+
+
+def test_html_title_and_encoding(registry):
+    page = (
+        "<html><head><title>Café hours</title><meta charset='windows-1252'></head><body><p>Open à 9h</p></body></html>"
+    )
+    doc = parse(registry, "hours.htm", page.encode("cp1252"))
+    # no single leading H1: <title> is the title; the declared charset is honoured
+    assert doc.title == "Café hours"
+    assert [e.text for e in doc.elements] == ["Open à 9h"]
+    # two H1s are sections, and a fragment without <title> is named after its file
+    doc = parse(registry, "two_parts.html", b"<h1>Part one</h1><p>a</p><h1>Part two</h1><p>b</p>")
+    assert doc.title == "two parts"
+    assert [e.section_path for e in doc.elements if e.kind is ElementKind.HEADING] == [["Part one"], ["Part two"]]
+
+
+def test_html_table_without_header_uses_first_row(registry):
+    doc = parse(registry, "t.html", b"<table><tr><td>Name<td>Team<tr><td>Ana<td>Billing<tr><td>Bo</table>")
+    (table,) = [e.table for e in doc.elements if e.kind is ElementKind.TABLE]
+    assert table.headers == ["Name", "Team"] and table.rows == [["Ana", "Billing"], ["Bo", ""]]
+    # a hostile colspan is cut, not laid out
+    doc = parse(registry, "wide.html", b"<table><tr><th>A<th colspan=100000>B<tr><td>1<td>2</table>")
+    (table,) = [e.table for e in doc.elements if e.kind is ElementKind.TABLE]
+    assert len(table.headers) == 256 and table.rows == [["1", "2"] + [""] * 254]
+
+
 def test_text_encoding_and_headings(registry, files):
     doc = parse(registry, "incident.txt", files["incident.txt"])
     text = " ".join(e.text for e in doc.elements)
@@ -240,6 +338,12 @@ def test_registry_resolution(registry, files):
     assert registry.resolve(source("upload.bin", files["refund_guide.pdf"])).name == "pdf"
     assert registry.resolve(source("scan", b"", media_type="application/pdf")).name == "pdf"
     assert registry.resolve(source("deck.pptm", b"")).name == "pptx"
+    # HTML by extension, media type, or its doctype / <html> tag
+    assert registry.resolve(source("page.htm", b"")).name == "html"
+    assert registry.resolve(source("blob", b"", media_type="text/html; charset=utf-8")).name == "html"
+    assert sniff_extension(files["help_center.html"]) == "html"
+    assert sniff_extension(b"\xef\xbb\xbf\n  <HTML><body>hi</body></HTML>") == "html"
+    assert sniff_extension(b"plain words <html> later") == "txt"
     with pytest.raises(UnsupportedFormatError):
         registry.resolve(source("image.png", b"\x89PNG\r\n\x1a\n\x00\x00"))
 

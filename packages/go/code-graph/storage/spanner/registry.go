@@ -185,65 +185,6 @@ func (s *Store) GetRun(ctx context.Context, key deployment.RunKey) (deployment.R
 	return r, err
 }
 
-type runPosition struct {
-	Sequence uint64 `json:"seq"`
-	RunID    string `json:"run"`
-}
-
-// ListRuns pages a repository's runs newest deployment first.
-func (s *Store) ListRuns(ctx context.Context, repo string, limit int, cursor string) ([]deployment.Run, string, error) {
-	if !validRepositoryID(repo) {
-		return nil, "", fmt.Errorf("%w: repository id", deployment.ErrInvalidRequest)
-	}
-	if limit <= 0 || limit > s.limits.MaxPageSize {
-		limit = s.limits.MaxPageSize
-	}
-	scope := s.cursors.scope("runs", repo)
-	position, err := s.cursors.decode(scope, 0, cursor)
-	if err != nil {
-		return nil, "", err
-	}
-	stmt := spanner.Statement{
-		SQL:    "SELECT RunID, Payload FROM CGRuns WHERE RepositoryID=@repo ORDER BY DeploymentSequence DESC, RunID LIMIT @limit",
-		Params: map[string]any{"repo": repo, "limit": int64(limit + 1)},
-	}
-	if position != "" {
-		var p runPosition
-		if json.Unmarshal([]byte(position), &p) != nil {
-			return nil, "", fmt.Errorf("%w: cursor position", deployment.ErrInvalidRequest)
-		}
-		stmt.SQL = "SELECT RunID, Payload FROM CGRuns WHERE RepositoryID=@repo AND (DeploymentSequence<@seq OR (DeploymentSequence=@seq AND RunID>@run)) ORDER BY DeploymentSequence DESC, RunID LIMIT @limit"
-		stmt.Params["seq"] = int64(p.Sequence)
-		stmt.Params["run"] = p.RunID
-	}
-	it := s.client.Single().Query(ctx, stmt)
-	defer it.Stop()
-	var out []deployment.Run
-	for {
-		row, err := nextRow(it)
-		if err != nil {
-			return nil, "", err
-		}
-		if row == nil {
-			return out, "", nil
-		}
-		var id string
-		var b []byte
-		if err = row.Columns(&id, &b); err != nil {
-			return nil, "", err
-		}
-		if len(out) == limit {
-			last := out[limit-1]
-			return out, s.cursors.encode(scope, 0, string(payload(runPosition{Sequence: last.Request.DeploymentSequence, RunID: last.Key.RunID}))), nil
-		}
-		r, err := decodeRun(b, deployment.RunKey{RepositoryID: repo, RunID: id})
-		if err != nil {
-			return nil, "", err
-		}
-		out = append(out, r)
-	}
-}
-
 // UpdateRun replaces a run under compare-and-set on Revision and the phase
 // graph. Identity fields (key, request, acceptance time) are kept from the
 // stored row; Revision and UpdatedAt are assigned here. A run becomes

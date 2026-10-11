@@ -40,6 +40,24 @@ def statements(sql: str) -> set[str]:
     return found
 
 
+def before_designs(statement: str) -> str:
+    """A connection's table as it was before 0019system_designs: both ends
+    applications, no components."""
+    statement = re.sub(
+        r", (source|target)_component_id VARCHAR\(36\) CHARACTER SET ascii "
+        r"COLLATE ascii_bin|, FOREIGN KEY\((source|target)_component_id\) "
+        r"REFERENCES knowledge_base_components \(id\) ON DELETE CASCADE",
+        "",
+        statement,
+    )
+    return re.sub(
+        r"((source|target)_repository_id VARCHAR\(36\) CHARACTER SET ascii "
+        r"COLLATE ascii_bin),",
+        r"\1 NOT NULL,",
+        statement,
+    )
+
+
 def test_it_follows_graph_knowledge_bases() -> None:
     assert revision().down_revision == "0016graph_knowledge_bases"
 
@@ -55,11 +73,17 @@ def test_on_mysql_it_makes_the_models_tables() -> None:
     made = statements(output.getvalue())
     for model in (KnowledgeBaseConnection, KnowledgeBaseCodeLink):
         table = model.__table__
-        expected = statements(str(CreateTable(table).compile(dialect=mysql.dialect())))  # type: ignore[arg-type]
-        for index in table.indexes:  # type: ignore[attr-defined]
-            expected |= statements(
-                str(CreateIndex(index).compile(dialect=mysql.dialect()))
+        expected = {
+            before_designs(statement)
+            for statement in statements(
+                str(CreateTable(table).compile(dialect=mysql.dialect()))  # type: ignore[arg-type]
             )
+        }
+        for index in table.indexes:  # type: ignore[attr-defined]
+            if not any("component" in column.name for column in index.columns):
+                expected |= statements(
+                    str(CreateIndex(index).compile(dialect=mysql.dialect()))
+                )
         assert expected <= made, model
     assert "UPDATE knowledge_bases SET kind = 'system' WHERE kind = 'graph'" in made
     # MySQL names constraints in at most 64 characters.

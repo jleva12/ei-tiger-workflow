@@ -14,8 +14,9 @@ through unchecked.
   nullable form ``[t, "null"]`` (``Optional``); ``enum`` and ``const``, with
   or without a type (``Literal``).
 - strings' ``minLength``, ``maxLength`` and ``pattern`` (a JSON Schema pattern
-  matches anywhere in the text, as it does here); ``format`` (date, email,
-  uri…) leaves a string a string, so data stays JSON.
+  matches anywhere in the text, as it does here; one Rust's regex engine
+  doesn't read runs on the bounded engine, ``forge_common.patterns``);
+  ``format`` (date, email, uri…) leaves a string a string, so data stays JSON.
 - numbers' ``minimum``, ``maximum``, the exclusive forms (draft 2020-12's
   numbers and draft 4's flags) and ``multipleOf``. A number that's whole is
   handed on as an integer, as JSON has it.
@@ -39,6 +40,7 @@ from collections.abc import Callable
 from functools import lru_cache
 from typing import Annotated, Any, Literal, Union
 
+from forge_common import patterns
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -312,10 +314,13 @@ def _one_of(values: list[Any]) -> Callable[[Any], Any]:
 
 
 def _matching(pattern: str) -> Callable[[str], str]:
-    compiled = re.compile(pattern)
+    # Python's re would hold the interpreter lock while such a pattern
+    # (lookarounds, backreferences) backtracks; this one's bounded, and a
+    # value it can't check in time doesn't fit (PatternTimeout, a ValueError).
+    patterns.compiled(pattern, seconds=patterns.SCHEMA_SECONDS)  # one that doesn't compile is refused now
 
     def check(value: str) -> str:
-        if not compiled.search(value):
+        if not patterns.searches(pattern, value, seconds=patterns.SCHEMA_SECONDS):
             raise PydanticCustomError(
                 "string_pattern_mismatch",
                 "String should match pattern '{pattern}'",

@@ -94,6 +94,49 @@ class KnowledgeBases(Protocol):
         """
         ...
 
+    async def design(
+        self,
+        knowledge_base_ids: Sequence[str],
+        *,
+        organization_id: str | None,
+        focus: str = "",
+    ) -> dict[str, Any] | None:
+        """
+        :param focus: An application's, component's or group's name: only
+            that part, what it connects to and how; everything when empty.
+        :return: What the system design knowledge bases among these say of
+            their systems (``forge_codegraph.design_view``): ``{"systems":
+            [...]}``, each with its groups, applications, components (its
+            databases, queues, external systems…) and how they all connect;
+            and a ``note`` when the focus picks nothing. None when none of
+            them is a system design knowledge base.
+        :raises LookupError: The organization has no such knowledge base.
+        """
+        ...
+
+
+@dataclass(frozen=True)
+class RequestAuth:
+    """What a credential has a request send: headers, and query parameters."""
+
+    headers: Mapping[str, str] = field(default_factory=dict)
+    params: Mapping[str, str] = field(default_factory=dict)
+
+
+class CredentialProvider(Protocol):
+    """Signs requests with the organization's API credentials, as an HTTP or
+    OpenAPI tool names one (its ``credential``): each sent only to the URLs
+    it was given for."""
+
+    async def __call__(self, credential_id: str, *, organization_id: str | None, url: str) -> RequestAuth:
+        """
+        :return: What a request to ``url`` sends through the credential.
+        :raises LookupError: There's no such credential, it may not be sent
+            to ``url``, nobody signed in with it, or what it sends can't be
+            had; the error says which.
+        """
+        ...
+
 
 class McpServers(Protocol):
     """Connects to the MCP servers an agent names by ID (an ``mcp`` node's ``server``)."""
@@ -102,6 +145,22 @@ class McpServers(Protocol):
         """
         :return: The server's toolset, filtered and confirmed as ``config`` says.
         :raises LookupError: There's no such server.
+        """
+        ...
+
+
+class ToolValues(Protocol):
+    """Fills in the ``{{ expression }}`` parts of an HTTP tool's URL and body
+    as it's called, from what the run has: a workflow's data, where its
+    agent runs in one."""
+
+    async def __call__(self, expression: str, context: ToolContext | None, *, what: str) -> Any:
+        """
+        :param expression: The part's JSONata.
+        :param context: The call's: its session's state.
+        :param what: What's being filled in, for errors.
+        :return: What it gives, as plain JSON.
+        :raises ToolFailure: It failed, saying why.
         """
         ...
 
@@ -125,6 +184,12 @@ class RuntimeServices:
         must say its URL itself.
     :ivar knowledge_bases: Searches knowledge bases by ID; without it, agents
         searching one don't build.
+    :ivar credentials: Signs HTTP and OpenAPI tools' requests with the
+        organization's credentials; without it, a tool naming one doesn't build.
+    :ivar environment_note: What a ``${NAME}`` the environment doesn't have
+        adds to its error: where a deployment's names are listed.
+    :ivar tool_values: Fills in ``{{ }}`` in HTTP tools' URLs and bodies;
+        without it, from the chat's request and state, as instructions are.
     """
 
     environment: Mapping[str, str] = field(default_factory=lambda: os.environ)
@@ -138,6 +203,9 @@ class RuntimeServices:
     workflows: WorkflowRunner | None = None
     mcp_servers: McpServers | None = None
     knowledge_bases: KnowledgeBases | None = None
+    credentials: CredentialProvider | None = None
+    environment_note: str = ""
+    tool_values: ToolValues | None = None
 
     def but(self, **changes: Any) -> RuntimeServices:
         """:return: These services with some changed."""

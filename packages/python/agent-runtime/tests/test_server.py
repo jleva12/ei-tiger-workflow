@@ -1,6 +1,7 @@
 import contextlib
 import copy
 import json
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from fastapi.testclient import TestClient
 from google.genai import types
 
 from forge_agent_runtime.cli import main as cli
+from forge_agent_runtime.document import load_document
 from forge_agent_runtime.executor import (
     AgentExecutor,
     AgentNotFound,
@@ -18,10 +20,12 @@ from forge_agent_runtime.executor import (
     DirectoryAgentSource,
     FileAgentSource,
     RunRequest,
+    StateRefused,
+    check_state,
 )
 from forge_agent_runtime.server import create_app, create_router
 from forge_agent_runtime.services import RuntimeServices
-from tests.conftest import EXAMPLE, call, text, without
+from tests.conftest import EXAMPLE, EXAMPLE_HOSTS, call, text, without
 
 AGENT = "ca_1k2cuqsuev"
 STATE = {
@@ -129,6 +133,102 @@ def test_state_the_agent_doesnt_declare_is_refused(client):
     assert client.post(f"/apps/{AGENT}/users/ada/sessions", json={"state": {"app:x": 1}}).status_code == 422
 
 
+@pytest.mark.timeout(10)
+def test_state_a_pattern_cant_check_in_time_is_refused(tmp_path, example, models, web):
+    doc = without(example, "help")
+    doc["nodes"][0]["config"]["state_schema"] = {
+        "type": "object",
+        "properties": {"code": {"type": "string", "pattern": "^(a|aa)+$"}},
+    }
+    agent = load_document(doc)
+    runaway = "a" * 60 + "b"  # ^(a|aa)+$ backtracks on it for ages
+
+    began = time.perf_counter()
+    with pytest.raises(StateRefused) as refused:
+        check_state(agent, {"code": runaway})
+    assert time.perf_counter() - began < 2
+    assert refused.value.problems == [
+        "code: its regular expression /^(a|aa)+$/ took longer than the 500 ms "
+        "a value's regular expressions get"
+    ]
+    assert check_state(agent, {"code": "aaaa"}) == {"code": "aaaa"}
+
+    path = tmp_path / "agent.json"
+    path.write_text(json.dumps(doc))
+    executor = AgentExecutor(
+        FileAgentSource(path),
+        models=models,
+        services=RuntimeServices(allowed_hosts=("api.example.com",)),
+        http=web(lambda request: httpx.Response(200)),
+    )
+    with TestClient(create_app(executor)) as client:
+        began = time.perf_counter()
+        created = client.post(f"/apps/{AGENT}/users/ada/sessions", json={"state": {"code": runaway}})
+        assert created.status_code == 422 and "took longer than" in created.text
+        assert time.perf_counter() - began < 2
+
+
+@pytest.mark.timeout(10)
+def test_state_is_refused_for_a_reference_that_cant_be_resolved(tmp_path, example, models, web):
+    elsewhere = "http://127.0.0.1:9/code.json"  # never fetched: only references within the schema are read
+    doc = without(example, "help")
+    doc["nodes"][0]["config"]["state_schema"] = {
+        "type": "object",
+        "properties": {"code": {"$ref": elsewhere}},
+    }
+    agent = load_document(doc)
+
+    with pytest.raises(StateRefused) as refused:
+        check_state(agent, {"code": "A1"})
+    assert refused.value.problems == [
+        f"code: its $ref {elsewhere!r} can't be resolved: only references within the schema are read"
+    ]
+
+    path = tmp_path / "agent.json"
+    path.write_text(json.dumps(doc))
+    executor = AgentExecutor(
+        FileAgentSource(path),
+        models=models,
+        services=RuntimeServices(allowed_hosts=("api.example.com",)),
+        http=web(lambda request: httpx.Response(200)),
+    )
+    with TestClient(create_app(executor)) as client:
+        created = client.post(f"/apps/{AGENT}/users/ada/sessions", json={"state": {"code": "A1"}})
+        assert created.status_code == 422 and "can't be resolved" in created.text
+
+
+def test_state_references_resolve_within_the_state_schema(example):
+    doc = without(example, "help")
+    doc["nodes"][0]["config"]["state_schema"] = {
+        "$id": "https://example.com/state.json",
+        "type": "object",
+        "$defs": {"tier": {"enum": ["free", "pro"]}, "broken": "not a schema"},
+        "definitions": {"code": {"type": "string", "maxLength": 2}},
+        "properties": {
+            "customer_tier": {"$ref": "#/$defs/tier"},
+            "code": {"$ref": "https://example.com/state.json#/definitions/code"},
+            "broken": {"$ref": "#/$defs/broken"},
+        },
+        "required": ["customer_tier", "code"],
+    }
+    agent = load_document(doc)
+
+    fitting = {"customer_tier": "pro", "code": "A1"}
+    assert check_state(agent, fitting) == fitting
+    assert check_state(agent, {"customer_tier": "pro"}) == {"customer_tier": "pro"}  # needn't set all
+    with pytest.raises(StateRefused) as refused:
+        check_state(agent, {"customer_tier": "gold", "code": "A12"})
+    assert refused.value.problems == [
+        "customer_tier: 'gold' is not one of ['free', 'pro']",
+        "code: 'A12' is too long",
+    ]
+    with pytest.raises(StateRefused) as refused:
+        check_state(agent, {"broken": "A1"})
+    assert refused.value.problems == [
+        "broken: its $ref '#/$defs/broken' can't be resolved: only references within the schema are read"
+    ]
+
+
 def test_unknown_agents_and_conversations_are_404s(client):
     assert run(client, "nope", "hi").status_code == 404
     assert run(client, "nope", "hi", app="ca_other").status_code == 404
@@ -156,7 +256,12 @@ async def test_versions_are_pinned_and_built_agents_reused(tmp_path, example, mo
         doc["version"] = version
         doc["nodes"][0]["config"]["instruction"] = f"Version {version}."
         (tmp_path / f"v{version}.json").write_text(json.dumps(doc))
-    executor = AgentExecutor(DirectoryAgentSource(tmp_path), models=models, http=web())
+    executor = AgentExecutor(
+        DirectoryAgentSource(tmp_path),
+        models=models,
+        http=web(),
+        services=RuntimeServices(allowed_hosts=EXAMPLE_HOSTS),
+    )
     latest, resolved = await executor.runner(AGENT)
     assert resolved.version == 2
     again, _ = await executor.runner(AGENT)
@@ -195,7 +300,13 @@ class Watching:
 async def test_an_observer_sees_each_agent_built_and_each_turn(tmp_path, example, models, web, llm):
     (tmp_path / "agent.json").write_text(json.dumps(without(example, "help")))
     watching = Watching()
-    executor = AgentExecutor(DirectoryAgentSource(tmp_path), models=models, http=web(), observer=watching)
+    executor = AgentExecutor(
+        DirectoryAgentSource(tmp_path),
+        models=models,
+        http=web(),
+        observer=watching,
+        services=RuntimeServices(allowed_hosts=EXAMPLE_HOSTS),
+    )
     await executor.sessions.create_session(app_name=AGENT, user_id="ada", session_id="s-1")
     request = RunRequest(
         app_name=AGENT,
@@ -250,7 +361,13 @@ def test_authorize_decides_each_call_before_the_agent_is_built(agent_file, model
         if user_id == "mallory":
             raise HTTPException(403, "Not yours")
 
-    executor = AgentExecutor(FileAgentSource(agent_file), models=models, http=web(), observer=Watching())
+    executor = AgentExecutor(
+        FileAgentSource(agent_file),
+        models=models,
+        http=web(),
+        observer=Watching(),
+        services=RuntimeServices(allowed_hosts=EXAMPLE_HOSTS),
+    )
     app = FastAPI()
     app.include_router(create_router(executor, authorize=authorize))
     with TestClient(app) as client:

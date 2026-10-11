@@ -25,7 +25,7 @@ console's form pick it up from there.
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, get_args, get_origin
 
 import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -70,6 +70,8 @@ class Credentials:
     #: A grant to keep in place of the old one (a refreshed token); None
     #: when it's unchanged.
     grant: dict[str, Any] | None = None
+    #: Query parameters to add (an API key some APIs take in the query).
+    params: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,9 @@ class AuthField(BaseModel):
     required: bool = False
     default: str = ""
     placeholder: str = ""
+    #: The only values it takes, for a field with a few (a select); empty
+    #: for free text.
+    choices: list[str] = []
 
 
 class AuthMethodInfo(BaseModel):
@@ -267,6 +272,12 @@ def _fields(model: type[BaseModel], *, secret: bool) -> Iterator[AuthField]:
             info.json_schema_extra if isinstance(info.json_schema_extra, dict) else {}
         )
         default = info.get_default() if not info.is_required() else ""
+        # A Literal's values: the form offers only those.
+        choices = (
+            [str(value) for value in get_args(info.annotation)]
+            if get_origin(info.annotation) is Literal
+            else []
+        )
         yield AuthField(
             name=name,
             label=info.title or name.replace("_", " ").capitalize(),
@@ -275,4 +286,5 @@ def _fields(model: type[BaseModel], *, secret: bool) -> Iterator[AuthField]:
             required=info.is_required(),
             default=str(default) if default is not None else "",
             placeholder=str(extra.get("placeholder", "")),
+            choices=choices,
         )

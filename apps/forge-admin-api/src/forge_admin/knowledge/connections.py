@@ -1,12 +1,12 @@
 """A system design knowledge base's connections: how its applications (the
-code repositories it includes) connect, drawn by hand on its system map
-(``knowledge_base_connections``), and where in their code
-(``knowledge_base_code_links``).
+code repositories it includes) and components connect, drawn by hand on its
+system map (``knowledge_base_connections``), and where in two applications'
+code (``knowledge_base_code_links``).
 
 The knowledge base's code links are written into the code graph as
 cross-repository links, which the graph's queries follow from one repository
-into the other. The worker keeps one set per knowledge base (owner
-``kb:<id>``), which the knowledge base's whole set replaces whenever it
+into the other. The code graph keeps one set per knowledge base (owner
+``kb:<id>``, ``CGCrossLinks``), which the knowledge base's whole set replaces whenever it
 changes: when a code link is added or removed, and when a connection, an
 application or the knowledge base with code links goes. Callers sync before
 they commit, so a refusal leaves nothing changed.
@@ -16,8 +16,8 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
-from fastapi import HTTPException, status
-from forge_codegraph import CodeGraph, WorkerError
+from fastapi import HTTPException
+from forge_codegraph_query import CodeGraph, GraphError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,13 +32,20 @@ from forge_admin.models.knowledge import SYSTEM
 
 logger = logging.getLogger(__name__)
 
-#: Each connection kind as the code graph's cross-repository link kinds name it.
+#: Each connection kind as the code graph's cross-repository link kinds name
+#: it. Consuming from another application points against the events' way, so
+#: the graph is told only that the two connect.
 CROSS_KINDS: dict[str, str] = {
     "connects_to": "connects_to",
     "calls": "calls_api",
     "depends_on": "depends_on",
     "events": "sends_event",
     "shares_data": "shares_data",
+    "reads_from": "shares_data",
+    "writes_to": "shares_data",
+    "reads_writes": "shares_data",
+    "publishes_to": "sends_event",
+    "consumes_from": "connects_to",
 }
 
 
@@ -103,10 +110,10 @@ async def sync_code_links(
     with its code links as the session sees them (flush first). Code links
     whose repository has no graph any more are left out until it has one.
 
-    :raises WorkerError: The worker refused the set, or can't be reached.
+    :raises GraphError: The code graph refused the set, or didn't answer.
     """
     if codegraph is None:
-        # Nothing reached a graph without a worker.
+        # Nothing reached a graph that isn't set up.
         return
     rows = (
         await session.execute(
@@ -129,14 +136,16 @@ async def sync_code_links(
                     connection.source_repository_id,
                     connection.target_repository_id,
                 )
+                if repository is not None
             }
         ),
     )
     owner = owner_of(knowledge_base_id)
     links: list[dict[str, Any]] = []
     for code, connection in rows:
-        source = graphs.get(connection.source_repository_id)
-        target = graphs.get(connection.target_repository_id)
+        # Only connections between two applications have code links.
+        source = graphs.get(connection.source_repository_id or "")
+        target = graphs.get(connection.target_repository_id or "")
         if source is None or target is None or source == target:
             continue
         links.append(
@@ -161,24 +170,12 @@ async def sync_code_links(
                 "created_by": code.created_by,
             }
         )
-    await codegraph.put_cross_links(owner, links)
+    await codegraph.replace_cross_links(owner, links)
 
 
-def _outdated(error: WorkerError) -> HTTPException | None:
-    """A worker from before cross-repository links answers their route with
-    its router's plain-text 404: say so rather than blame the request."""
-    if error.status == status.HTTP_404_NOT_FOUND and error.code == "invalid_response":
-        return HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "The code graph worker doesn't know cross-repository links yet: "
-            "restart it on the current version",
-        )
-    return None
-
-
-def refused(error: WorkerError) -> HTTPException:
-    """The HTTP error for a cross-link call the worker refused."""
-    return _outdated(error) or unavailable(error)
+def refused(error: GraphError) -> HTTPException:
+    """The HTTP error for a cross-link call the code graph refused."""
+    return unavailable(error)
 
 
 async def commit_synced(
@@ -188,56 +185,19 @@ async def commit_synced(
 ) -> None:
     """
     Flush, write the knowledge bases' code links into the code graph, then
-    commit; when the worker refuses or can't be reached, nothing is
+    commit; when the code graph refuses them or doesn't answer, nothing is
     committed.
 
-    :raises HTTPException: The worker's refusal (:func:`refused`).
+    :raises HTTPException: The code graph's refusal (:func:`refused`).
     """
     await session.flush()
     try:
         for knowledge_base_id in knowledge_base_ids:
             await sync_code_links(session, codegraph, knowledge_base_id)
-    except WorkerError as error:
+    except GraphError as error:
         await session.rollback()
         raise refused(error) from None
     await session.commit()
-
-
-async def connections_of(
-    session: AsyncSession, knowledge_base_ids: Sequence[str]
-) -> dict[str, list[dict[str, str]]]:
-    """:return: Each knowledge base's connections, ``{source, kind, target,
-    description}`` with the ends as ``owner/name``, oldest first, by
-    knowledge base; for its agents (``forge_codegraph.system_summary``)."""
-    found: dict[str, list[dict[str, str]]] = {i: [] for i in knowledge_base_ids}
-    if not knowledge_base_ids:
-        return found
-    connections = list(
-        await session.scalars(
-            select(KnowledgeBaseConnection)
-            .where(KnowledgeBaseConnection.knowledge_base_id.in_(list(found)))
-            .order_by(KnowledgeBaseConnection.created_at, KnowledgeBaseConnection.id)
-        )
-    )
-    ids = {
-        r for c in connections for r in (c.source_repository_id, c.target_repository_id)
-    }
-    names = {
-        repository.id: f"{repository.owner}/{repository.name}"
-        for repository in await session.scalars(
-            select(CodeRepository).where(CodeRepository.id.in_(ids))
-        )
-    }
-    for connection in connections:
-        found[connection.knowledge_base_id].append(
-            {
-                "source": names.get(connection.source_repository_id, "?"),
-                "kind": connection.kind,
-                "target": names.get(connection.target_repository_id, "?"),
-                "description": connection.description,
-            }
-        )
-    return found
 
 
 def _end(row: KnowledgeBaseCodeLink, side: str) -> dict[str, str]:
@@ -255,11 +215,13 @@ async def organization_map(
 ) -> tuple[list[str], list[dict[str, Any]]]:
     """
     What an organization's system design knowledge bases say about how its
-    repositories connect, for the code graph's MCP server.
+    repositories connect, for the code graph's MCP server; their components
+    and groups are in their designs (``forge_admin.knowledge.designs``).
 
     :return: The owners of their cross-repository links in the graph
         (``kb:<id>``, one per system design knowledge base), and every
-        connection on their maps, oldest first: ``{id, knowledge_base_id,
+        connection between two repositories on their maps, oldest first:
+        ``{id, knowledge_base_id,
         knowledge_base, kind, description, source, target, code_links}``,
         the ends ``{url, owner, name}``, each code link ``{source, target,
         label}`` with node ends ``{node_id, kind, name, qualified_name,
@@ -295,6 +257,7 @@ async def organization_map(
                         i
                         for c in connections
                         for i in (c.source_repository_id, c.target_repository_id)
+                        if i is not None
                     }
                 )
             )
@@ -325,8 +288,8 @@ async def organization_map(
             "knowledge_base": bases[c.knowledge_base_id].name,
             "kind": c.kind,
             "description": c.description,
-            "source": end(c.source_repository_id),
-            "target": end(c.target_repository_id),
+            "source": end(c.source_repository_id or ""),
+            "target": end(c.target_repository_id or ""),
             "code_links": links.get(c.id, []),
         }
         for c in connections

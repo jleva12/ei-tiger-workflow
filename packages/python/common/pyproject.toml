@@ -33,6 +33,16 @@ adk-memory = [
 # forge_common.adk.artifacts: ADK artifacts in S3 (or MinIO, RustFS, R2); its
 # conditional writes (If-None-Match) need botocore 1.35.16
 adk-artifacts-s3 = ["boto3>=1.35.16", "google-adk>=2.9.2"]
+# forge_common.templates: Jinja templates rendered to HTML, and their settings
+templates = ["jinja2>=3.1", "pydantic>=2.11"]
+# forge_common.patterns: documents' regular expressions (JSON Schema's, JSONata's)
+# on the regex engine, bounded in time and off the interpreter lock; their
+# schemas' references looked up offline (referencing, as jsonschema needs it)
+patterns = ["jsonschema>=4.23", "referencing>=0.28.4", "regex>=2024.11.6"]
+# forge_common.mcp: MCP tools' results checked against their output schemas on
+# the bounded engine (forge_common.patterns) rather than by the mcp client; its
+# check to swap (ClientSession.validate_tool_result) is mcp 2.x's
+mcp = ["forge-common[patterns]", "mcp>=2.3.0,<3"]
 
 [build-system]
 requires = ["uv_build>=0.11.17,<0.12.0"]
@@ -40,7 +50,7 @@ build-backend = "uv_build"
 
 # Every extra's libraries, for the tests (the tools are the workspace root's).
 [dependency-groups]
-dev = ["forge-common[adk,adk-artifacts-s3,adk-memory,adk-models,logging]"]
+dev = ["forge-common[adk,adk-artifacts-s3,adk-memory,adk-models,logging,mcp,patterns,templates]"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

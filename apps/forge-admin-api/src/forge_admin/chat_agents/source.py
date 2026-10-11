@@ -26,10 +26,11 @@ from forge_agent_runtime import (
     RuntimeServices,
     parse_document,
 )
-from forge_codegraph import CodeGraph
+from forge_codegraph_query import CodeGraph
 from forge_common.adk.models import ProviderModels
 from forge_common.adk.usage import price_from
 from forge_common.model_provider import load_model_provider_config
+from forge_mcp_servers.api_credentials import ApiCredentials
 from forge_mcp_servers.service import McpServers
 from forge_task_adk_workflows.run_store import RunStore
 from forge_task_adk_workflows.usage_store import UsageStore
@@ -55,6 +56,11 @@ from forge_admin.adk_workflows.versions import (
     WorkflowGone,
     resolve_workflow,
     workflow_finder,
+)
+from forge_admin.api_credentials import (
+    TOOL_ENVIRONMENT_NOTE,
+    OrganizationCredentials,
+    tool_environment,
 )
 from forge_admin.assistant.language_models import gemini_config
 from forge_admin.chat_agents.store import ChatAgentStore
@@ -252,18 +258,27 @@ def create_executor(
     models: ProviderModels | None = None,
     knowledge_search: KnowledgeSearch | None = None,
     codegraph: CodeGraph | None = None,
+    api_credentials: ApiCredentials | None = None,
 ) -> AgentExecutor:
     """
     The hosted runtime: agents from ``store``, conversations in the admin
     database (ADK's tables, beside the assistant's), what tools may reach as
-    the settings say, ``${NAME}`` in tools filled in from the environment.
+    the settings say, their requests signed with the organization's
+    credentials, and ``${NAME}`` in tools filled in only from the variables
+    the settings list (``agent_tool_environment``).
     """
     services = RuntimeServices(
-        environment=env_files.environment(),
+        environment=tool_environment(
+            settings.agent_tool_environment, env_files.environment()
+        ),
+        environment_note=TOOL_ENVIRONMENT_NOTE,
         allow_private=settings.agent_tools_allow_private,
         allowed_hosts=tuple(settings.agent_tools_allowed_hosts),
         mcp_servers=OrganizationMcpServers(mcp_servers, sessions)
         if mcp_servers is not None
+        else None,
+        credentials=OrganizationCredentials(api_credentials, sessions)
+        if api_credentials is not None
         else None,
         workflows=OrganizationWorkflows(
             agents,

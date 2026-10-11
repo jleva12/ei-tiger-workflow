@@ -9,10 +9,16 @@ the run's session ID) before the run is queued.
 
 The worker's runner has the same artifact service, so a node reads a file as
 ADK has it read artifacts: ``ctx.load_artifact(name)``, and an LLM agent
-with ADK's ``load_artifacts`` tool, which the agents of a run with files
-are given. The run's ``state.files`` lists them (:class:`RunFile`), and its
-payload keeps the list. A run that starts over in a new session takes its
-files along (:func:`copy_run_files`).
+with ADK's ``load_artifacts`` tool. The run's ``state.files`` lists them
+(:class:`RunFile`), and its payload keeps the list. A run that starts over in
+a new session takes its files along (:func:`copy_run_files`).
+
+Wherever the worker keeps artifacts, every LLM agent of a run has
+:func:`file_tools`: ``load_artifacts``, which lists the session's files to the
+model and reads those it asks for, and ``save_file``, which saves a text file
+(a report, a table, JSON) as an artifact of the run's session, for later steps
+to read and for the run's page to offer. A file the run started with can't be
+saved over.
 
 The artifacts are where :func:`artifact_service` says: ``s3://bucket/prefix``
 (``forge_common.adk.artifacts.S3ArtifactService``, which the admin API and
@@ -35,6 +41,9 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 from google.adk.artifacts import BaseArtifactService
+from google.adk.tools import FunctionTool, ToolContext
+from google.adk.tools.base_tool import BaseTool
+from google.adk.tools.load_artifacts_tool import LoadArtifactsTool
 from google.genai import types
 from pydantic import BaseModel, Field
 
@@ -48,8 +57,10 @@ __all__ = [
     "checked_file",
     "clean_name",
     "copy_run_files",
+    "file_tools",
     "files_rule",
     "save_run_files",
+    "SAVED_TYPES",
     "unique_names",
 ]
 
@@ -115,6 +126,14 @@ FILE_TYPES: dict[str, FileType] = {
     )
 }
 _BY_EXTENSION = {ext: (t, media) for t in FILE_TYPES.values() for ext, media in t.extensions.items()}
+#: What an agent saves a file as (``save_file``), by its name's extension: text only.
+SAVED_TYPES: dict[str, str] = {
+    ext: media
+    for type_id in ("text", "markdown", "csv", "json", "html", "xml")
+    for ext, media in FILE_TYPES[type_id].extensions.items()
+}
+#: The most an agent saves in one file, in bytes (UTF-8).
+MAX_SAVED_BYTES = 2_000_000
 
 
 class RunFile(BaseModel):
@@ -344,3 +363,54 @@ def artifact_service(
     from google.adk.artifacts import FileArtifactService
 
     return FileArtifactService(root_dir=where.removeprefix("file://"))
+
+
+def file_tools(inputs: Iterable[str] = ()) -> list[BaseTool]:
+    """
+    The tools an LLM agent of a run works with files through.
+
+    :param inputs: The names of the files the run started with: never saved over.
+    :return: ADK's ``load_artifacts`` (spreadsheets read as tables) and
+        ``save_file``.
+    """
+    return [LoadArtifactsTool(enable_spreadsheet_parsing=True), FunctionTool(_saver(inputs))]
+
+
+def _saver(inputs: Iterable[str]) -> Any:
+    taken = {name.casefold() for name in inputs}
+    kinds = ", ".join(sorted(SAVED_TYPES))
+
+    async def save_file(name: str, content: str, tool_context: ToolContext) -> dict[str, Any]:
+        """
+        Save a text file in the run: a report, a summary, a table (CSV), data
+        (JSON). Later steps read it with load_artifacts, and the person who ran
+        the workflow can download it. Saving a name again keeps a new version.
+
+        Args:
+            name: The file's name, with its extension: .txt, .md, .csv, .json,
+                .html or .xml (e.g. "summary.md").
+            content: Everything the file holds, as text.
+        """
+        kept = clean_name(name)
+        media_type = SAVED_TYPES.get(_extension(kept))
+        if media_type is None:
+            return {"status": "failed", "reason": f"{kept}: a saved file's name ends in one of {kinds}"}
+        if kept.casefold() in taken:
+            return {
+                "status": "failed",
+                "reason": f"{kept} is a file the run started with: save under another name",
+            }
+        data = content.encode("utf-8")
+        if len(data) > MAX_SAVED_BYTES:
+            return {
+                "status": "failed",
+                "reason": f"{kept} is {len(data):,} bytes: a saved file holds at most {MAX_SAVED_BYTES:,}",
+            }
+        version = await tool_context.save_artifact(
+            kept,
+            types.Part(inline_data=types.Blob(data=data, mime_type=media_type, display_name=kept)),
+            custom_metadata={"size_bytes": len(data), "saved_by": tool_context.agent_name},
+        )
+        return {"status": "saved", "name": kept, "version": version, "media_type": media_type, "size_bytes": len(data)}
+
+    return save_file

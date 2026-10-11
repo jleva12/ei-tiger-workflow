@@ -4,11 +4,16 @@ Every tool is guarded (``forge_common.adk.ForgeBaseToolset``): a call that
 fails answers the model with why, instead of failing the turn, and an
 oversized answer is cut down to fit.
 
-An HTTP tool's URL is written by the agent's author and its arguments by the
-model, so a request must not reach the runtime's own network: private,
+An HTTP tool's URL and body are templates its author writes
+(:mod:`.http_templates`) and the model fills in with its arguments, so a
+request must not reach the runtime's own network: private,
 loopback, link-local (cloud metadata), multicast and reserved addresses are
 refused unless the deployment allows the host or private networks. Redirects
 are followed one hop at a time, each checked the same way.
+
+One HTTP client serves every conversation (hosted, every organization's), so
+it keeps no cookies (:func:`http_client`): a cookie one response sets never
+goes out with anyone else's request.
 """
 
 from __future__ import annotations
@@ -19,8 +24,9 @@ import json
 import re
 import socket
 from collections.abc import Mapping
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any
-from urllib.parse import quote, urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from google.adk.agents.readonly_context import ReadonlyContext
@@ -29,34 +35,60 @@ from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
-from forge_agent_runtime.services import KnowledgeBases, RuntimeServices, WorkflowRunner
+from forge_agent_runtime.http_templates import (
+    BODY_METHODS,
+    OMITTED,
+    UrlTemplate,
+    body_arguments,
+    parameters_of,
+    parse_body,
+    render_body,
+    render_url,
+    run_values,
+)
+from forge_agent_runtime.services import (
+    KnowledgeBases,
+    RequestAuth,
+    RuntimeServices,
+    WorkflowRunner,
+)
 from forge_common.adk import ForgeBaseToolset, ToolFailure
 
 #: The most redirects one request follows.
 MAX_REDIRECTS = 5
 #: ``${NAME}``: a secret or setting, filled in from the environment.
 REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
-#: ``{name}`` in an HTTP tool's URL: one of its arguments.
-ARGUMENT = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def http_client(**options: Any) -> httpx.AsyncClient:
+    """
+    :param options: ``httpx.AsyncClient``'s (a timeout, a transport).
+    :return: An HTTP client that keeps no cookies: whoever's request it sends
+        next, it sends none that an earlier response set.
+    """
+    return httpx.AsyncClient(cookies=CookieJar(policy=DefaultCookiePolicy(allowed_domains=[])), **options)
 
 
 class MissingSetting(LookupError):
     """``${NAME}`` names something the environment doesn't have."""
 
 
-def fill_references(text: str, environment: Mapping[str, str], *, where: str) -> str:
-    """:return: ``text`` with each ``${NAME}`` filled in from ``environment``."""
+def fill_references(text: str, environment: Mapping[str, str], *, where: str, note: str = "") -> str:
+    """
+    :param note: What a missing one's error adds (where a deployment lists them).
+    :return: ``text`` with each ``${NAME}`` filled in from ``environment``.
+    """
 
     def fill(match: re.Match[str]) -> str:
         name = match.group(1)
         if name not in environment:
-            raise MissingSetting(f"{where} uses ${{{name}}}, which isn't set")
+            raise MissingSetting(f"{where} uses ${{{name}}}, which isn't set{note}")
         return environment[name]
 
     return REFERENCE.sub(fill, text)
 
 
-def header_dict(rows: Any, environment: Mapping[str, str], *, where: str) -> dict[str, str]:
+def header_dict(rows: Any, environment: Mapping[str, str], *, where: str, note: str = "") -> dict[str, str]:
     """:return: A tool's header rows (``[{name, value}]``) as headers, secrets filled in."""
     headers: dict[str, str] = {}
     for row in rows if isinstance(rows, list) else []:
@@ -64,7 +96,7 @@ def header_dict(rows: Any, environment: Mapping[str, str], *, where: str) -> dic
             continue
         name = str(row.get("name") or "").strip()
         if name:
-            headers[name] = fill_references(str(row.get("value") or ""), environment, where=where)
+            headers[name] = fill_references(str(row.get("value") or ""), environment, where=where, note=note)
     return headers
 
 
@@ -124,10 +156,21 @@ def _body(raw: bytes, content_type: str) -> Any:
 
 class HttpTool(BaseTool):
     """
-    An HTTP endpoint the model calls with arguments its JSON Schema declares.
-    ``{name}`` in the URL takes the argument of that name; the rest go in the
-    query (GET, DELETE) or as a JSON body. It answers with the status and
-    the body (JSON when it's JSON).
+    An HTTP endpoint the model calls with the arguments its URL and body name
+    (:mod:`.http_templates`): ``{name}`` takes the argument of that name,
+    ``{{ expression }}`` one of the run's values. It answers with the status
+    and the body (JSON when it's JSON).
+
+    With a ``credential`` (one of the organization's), each request is signed
+    with it, where it may go: the first is refused when it may not, and a
+    redirect elsewhere goes without it.
+
+    :param url: Its URL, a template.
+    :param body: Its JSON body, a template; sent by POST, PUT and PATCH only.
+    :param parameters: A JSON Schema of the arguments: their types and
+        descriptions. The model is offered those the URL and body name.
+    :raises MissingSetting: A ``${NAME}`` in them isn't in the environment.
+    :raises TemplateProblem: The body isn't JSON, or a ``{{ }}`` is empty.
     """
 
     def __init__(
@@ -142,15 +185,58 @@ class HttpTool(BaseTool):
         confirm: bool,
         services: RuntimeServices,
         http: httpx.AsyncClient,
+        body: str = "",
+        credential: str = "",
+        organization_id: str | None = None,
+        label: str = "",
     ) -> None:
         super().__init__(name=name, description=description or f"Calls {method} {url}")
+        label = label or name
+
+        def fill(setting: str, *, where: str) -> str:
+            return fill_references(
+                f"${{{setting}}}", services.environment, where=where, note=services.environment_note
+            )
+
         self.method = method.upper()
-        self.url = url
+        self.url = UrlTemplate.parse(
+            url, lambda n: fill(n, where=f"{label!r}'s URL"), what=f"{label!r}'s URL"
+        )
+        self.body = (
+            parse_body(body, lambda n: fill(n, where=f"{label!r}'s body"), what=f"{label!r}'s body")
+            if self.method in BODY_METHODS
+            else None
+        )
         self.headers = headers
-        self.parameters = parameters if parameters else {"type": "object", "properties": {}}
+        names, required = self.url.arguments()
+        in_body = body_arguments(self.body)
+        optional = {n for n in names if n not in required and n not in in_body}
+        names += [n for n in in_body if n not in names]
+        self.parameters = parameters_of(
+            parameters if isinstance(parameters, dict) else {}, names, required, optional
+        )
         self.confirm = confirm
         self.services = services
         self.http = http
+        self.credential = credential
+        self.organization_id = organization_id
+
+    async def _signed(self, url: str, *, first: bool) -> RequestAuth:
+        """What the credential has a request to ``url`` send; nothing without one."""
+        if not self.credential:
+            return RequestAuth()
+        provider = self.services.credentials
+        if provider is None:
+            raise ToolFailure(
+                "It uses one of the organization's credentials, which only the hosted runtime has."
+            )
+        try:
+            return await provider(self.credential, organization_id=self.organization_id, url=url)
+        except LookupError as error:
+            if first:
+                raise ToolFailure(str(error)) from None
+            # A redirect away from where the credential may go: without it.
+            return RequestAuth()
 
     def _get_declaration(self) -> types.FunctionDeclaration:
         return types.FunctionDeclaration(
@@ -161,30 +247,26 @@ class HttpTool(BaseTool):
         return self.confirm
 
     async def run_async(self, *, args: dict[str, Any], tool_context: ToolContext) -> Any:
-        rest = dict(args)
-
-        def put(match: re.Match[str]) -> str:
-            name = match.group(1)
-            if name not in rest:
-                raise ToolFailure(f"Its URL needs the {name!r} argument.", [f"Call it again with {name}."])
-            return quote(str(rest.pop(name)), safe="")
-
-        url = ARGUMENT.sub(put, self.url)
-        query, body = (rest, None) if self.method in ("GET", "DELETE", "HEAD") else (None, rest)
-        for _ in range(MAX_REDIRECTS + 1):
+        # Only what its URL and body name: anything else the model sends goes nowhere.
+        values = run_values(self.services.tool_values, tool_context, what=f"{self.name!r}")
+        url = await render_url(self.url, args, values)
+        body = OMITTED if self.body is None else await render_body(self.body, args, values)
+        for hop in range(MAX_REDIRECTS + 1):
             await check_url(url, self.services)
+            signed = await self._signed(url, first=hop == 0)
+            params = dict(signed.params)
             request = self.http.build_request(
                 self.method,
-                url,
-                headers=self.headers,
-                params=query or None,
-                json=body,
+                # Added to the URL's own query (httpx's params would replace it).
+                httpx.URL(url).copy_merge_params(params) if params else url,
+                headers={**self.headers, **signed.headers},
+                json=None if body is OMITTED else body,
                 timeout=self.services.http_timeout,
             )
             response = await self.http.send(request, stream=True)
             try:
                 if response.is_redirect and "location" in response.headers:
-                    url, query = urljoin(url, response.headers["location"]), None
+                    url = urljoin(url, response.headers["location"])
                     continue
                 raw = b""
                 async for chunk in response.aiter_bytes():
@@ -284,6 +366,51 @@ class KnowledgeBaseTool(BaseTool):
                 "note": "Nothing in the knowledge base matches; don't make up an answer.",
             }
         return {"searched": self.knowledge_base_names, "passages": passages}
+
+
+class SystemDesignTool(BaseTool):
+    """Reads the design of the system design knowledge bases a knowledge base
+    tool searches: their applications, the other parts of their systems
+    (databases, queues, external systems…), the groups those are in and how
+    they all connect; whole, or around one part (``focus``). Built beside
+    the search when it searches one."""
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        description: str,
+        knowledge_base_ids: list[str],
+        organization_id: str | None,
+        knowledge_bases: KnowledgeBases,
+    ) -> None:
+        super().__init__(name=name, description=description)
+        self.knowledge_base_ids = knowledge_base_ids
+        self.organization_id = organization_id
+        self.knowledge_bases = knowledge_bases
+
+    def _get_declaration(self) -> types.FunctionDeclaration:
+        return types.FunctionDeclaration(
+            name=self.name,
+            description=self.description,
+            parameters_json_schema={
+                "type": "object",
+                "properties": {
+                    "focus": {
+                        "type": "string",
+                        "description": "An application's, component's or group's name (or part of it): "
+                        "only that part, what it connects to and how. Leave it out for the whole design.",
+                    }
+                },
+            },
+        )
+
+    async def run_async(self, *, args: dict[str, Any], tool_context: ToolContext) -> Any:
+        focus = str(args.get("focus") or "").strip()
+        found = await self.knowledge_bases.design(
+            self.knowledge_base_ids, organization_id=self.organization_id, focus=focus
+        )
+        return found if found is not None else {"systems": []}
 
 
 async def _always(args: dict[str, Any], tool_context: ToolContext) -> bool:

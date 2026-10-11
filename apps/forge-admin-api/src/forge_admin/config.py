@@ -13,6 +13,7 @@ forge_admin.env_files.
 from functools import lru_cache
 from pathlib import Path
 
+from forge_codegraph_query import CodeGraphSettings
 from forge_common.logging import LoggingSettings
 from forge_embeddings.config import EmbeddingSettings, RerankSettings
 from forge_task_documents.retrieval.service import SearchConfig
@@ -154,16 +155,16 @@ class Settings(BaseSettings):
     # relevance a passage needs (none: a question the documents don't answer
     # still finds the nearest passages), or __MIN_RERANK_SCORE with a reranker.
     knowledge_search: SearchConfig = SearchConfig()
-    # Graph knowledge bases and the code graph explorer: the code graph
-    # worker's API (apps/forge-codegraph-worker, CODEGRAPH_HEALTH_ADDR) and
-    # its token (CODEGRAPH_ADMISSION_TOKEN, from .env.common's
-    # FORGE_CODEGRAPH_ADMISSION_TOKEN). Unset, searching a graph knowledge
-    # base and reading a repository's graph answer that it isn't set up;
-    # ingestions still queue, in MySQL.
-    codegraph_url: str | None = Field(default=None, pattern=r"^https?://\S+$")
-    codegraph_token: SecretStr | None = Field(default=None, min_length=32)
-    # Seconds the admin API waits for the worker to answer.
-    codegraph_timeout: float = Field(default=30.0, gt=0, le=120)
+    # System design knowledge bases, the code graph explorer and code links:
+    # the code graph the worker (apps/forge-codegraph-worker) writes to
+    # Spanner, read as every app reads it (forge_codegraph_query).
+    # FORGE_ADMIN_CODEGRAPH__SPANNER__DATABASE and __CURSOR_SIGNING_KEY (from
+    # .env.common's FORGE_CODEGRAPH_*), __EMBEDDING__MODEL and the rest of
+    # FORGE_EMBEDDING_*, __SEARCH__ENHANCE_QUERY. Unset, searching a system
+    # design knowledge base and reading a repository's graph answer that it
+    # isn't set up; ingestions still queue, in MySQL. The Spanner client
+    # finds the emulator in SPANNER_EMULATOR_HOST.
+    codegraph: CodeGraphSettings = CodeGraphSettings()
 
     # The assistant: Google ADK agents (forge_admin.assistant). The models it may
     # run on: a model_provider.yaml, the file ADK workflows' LLM nodes read too, e.g.
@@ -226,6 +227,12 @@ class Settings(BaseSettings):
     # networks (local development only), or these hosts.
     agent_tools_allow_private: bool = False
     agent_tools_allowed_hosts: list[str] = []
+    # The variables of this process's environment that ${NAME} in chat agents'
+    # HTTP and MCP tools (their URLs and headers) and OpenAPI spec URLs may
+    # read: none by default, so an agent can never send this API's own
+    # secrets anywhere. Put API keys and tokens in the organization's
+    # credentials instead.
+    agent_tool_environment: list[str] = []
     # Standalone agent projects (the builder's Generate standalone agent): where
     # their runtime comes from. wheels: the wheels in starter_wheels are copied
     # into each project's vendor/, until the runtime is on PyPI; pypi:<version>
@@ -275,8 +282,6 @@ class Settings(BaseSettings):
         "mcp_server_defaults",
         "starter_wheels",
         "api_key",
-        "codegraph_token",
-        "codegraph_url",
         "documents_bucket",
         "embedding_redis_url",
         "google_api_key",

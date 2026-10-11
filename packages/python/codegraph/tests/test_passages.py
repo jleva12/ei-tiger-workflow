@@ -1,6 +1,16 @@
 from typing import Any
 
-from forge_codegraph import Repository, citation_ref, code_passages, interleave
+from forge_codegraph_query import MAX_SEARCH_REPOSITORIES, CodeGraph
+from forge_codegraph_query.testing import SHOP, build_shop
+
+from forge_codegraph import (
+    Repository,
+    Searched,
+    citation_ref,
+    code_passages,
+    interleave,
+    search_passages,
+)
 
 REPOS = [
     Repository(id="r1", graph_id="repo:a", name="pallets/itsdangerous"),
@@ -81,3 +91,50 @@ def test_interleave_merges_by_rank_without_repeats() -> None:
     ]
     assert [p["ref"] for p in interleave([documents, code], 3)] == ["D1", "C1", "D2"]
     assert interleave([], 5) == []
+
+
+async def test_knowledge_bases_code_is_searched_as_cited_passages() -> None:
+    shop = build_shop()
+    other = shop.store.add("repo:other")
+    graph = CodeGraph(shop.store)
+    orders = Repository(id="r1", graph_id=SHOP, name="acme/shop")
+    first = Searched(id="kb1", name="Checkout", repositories=[orders])
+    # The same repository in a second knowledge base is cited from the first.
+    second = Searched(
+        id="kb2",
+        name="Everything",
+        repositories=[
+            orders,
+            Repository(id="r2", graph_id=other.repo, name="acme/other"),
+        ],
+    )
+
+    passages = await search_passages(graph, [first, second], "placeOrder", limit=5)
+
+    assert [(p["knowledge_base"], p["node_id"]) for p in passages] == [
+        ("Checkout", shop.place_order["id"]),
+        ("Checkout", shop.order_service["id"]),
+    ]
+    assert passages[0]["text"].startswith("public Order placeOrder(Cart cart)")
+    assert passages[0]["location"] == "src/shop/OrderService.java, lines 4–7"
+    # One search over both graphs, the source attached.
+    [asked] = shop.store.searches
+    assert asked.repository_ids == [SHOP, "repo:other"] and asked.limit == 5
+    # Nothing to search asks nothing.
+    assert (
+        await search_passages(graph, [Searched("kb3", "Empty", [])], "x", limit=5) == []
+    )
+    assert len(shop.store.searches) == 1
+
+
+async def test_a_search_covers_at_most_the_code_graphs_repositories() -> None:
+    shop = build_shop()
+    many = [
+        Repository(id=f"r{i}", graph_id=f"repo:{i}", name=f"o/{i}") for i in range(40)
+    ]
+
+    await search_passages(
+        CodeGraph(shop.store), [Searched("kb", "Many", many)], "placeOrder", limit=5
+    )
+
+    assert len(shop.store.searches[0].repository_ids) == MAX_SEARCH_REPOSITORIES

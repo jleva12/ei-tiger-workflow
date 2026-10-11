@@ -1,0 +1,8 @@
+// cytoscape-fcose ships no types: it's a Cytoscape extension, registered
+// with cytoscape.use, that adds the "fcose" layout.
+declare module "cytoscape-fcose" {
+  import type { Ext } from "cytoscape"
+
+  const fcose: Ext
+  export default fcose
+}

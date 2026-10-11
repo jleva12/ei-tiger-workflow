@@ -172,6 +172,8 @@ def sqlite_tables() -> MetaData:
         "code_ingestion_jobs",
         # Removing a repository removes it from knowledge bases' system maps.
         "knowledge_bases",
+        "knowledge_base_groups",
+        "knowledge_base_components",
         "knowledge_base_repositories",
         "knowledge_base_connections",
         "knowledge_base_code_links",

@@ -7,6 +7,12 @@ wrong about the relationships. This document records the code that has to be
 added so that this implementation also sees the rest of the repository,
 without giving up the property that made it worth building.
 
+The query side the items below name (`Store.FindNodes`, the search branches,
+the `/v1/...` reads, impact and callers) has since moved to the Python
+package `forge_codegraph_query` (`packages/python/codegraph-query`); the
+worker only writes the tables those items added. Read the query-side checks
+as checks on that package.
+
 ## Rules for every item below
 
 1. **Provenance is a fact, not a score.** Every edge and node gets a
@@ -248,7 +254,7 @@ known scaling defect.
 
 | Order | Item | Size | Depends on |
 |---|---|---|---|
-| 1 | G1 name lookup | S | done: `CGSearchDocumentsByName`, `Store.FindNodes`, `/v1/repos/{repo}/symbols` |
+| 1 | G1 name lookup | S | done: `CGSearchDocumentsByName`; the lookup is now `forge_codegraph_query`'s |
 | 2 | G2 lexical search | M | done: `CGSearchDocuments` search index, weighted fusion, exact tier, graph rerank |
 | 3 | G3 override-aware impact | M | none |
 | 4 | G6 dependency and structure nodes | S | none |

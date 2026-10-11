@@ -38,9 +38,7 @@ def start(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
     top = ctx.top
     misfit = ctx.input_misfit
     files = (
-        [as_data(file) for file in ctx.services.files]
-        if top and settings_of(node, EntryConfig).allow_files
-        else None
+        [as_data(file) for file in ctx.services.files] if top and settings_of(node, EntryConfig).allow_files else None
     )
 
     def run(adk: Context, node_input: Any) -> Any:

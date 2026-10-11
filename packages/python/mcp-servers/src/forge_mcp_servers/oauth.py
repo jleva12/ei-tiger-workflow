@@ -262,9 +262,12 @@ async def _token_request(
     token_endpoint: str,
     client: dict[str, Any],
     data: dict[str, str],
+    *,
+    again: str = "connect the server again",
 ) -> dict[str, Any]:
     """Ask a token endpoint for tokens, as the client authenticates there.
 
+    :param again: What a refused grant tells the person to do.
     :raises NotConnected: It refused the grant (``invalid_grant``).
     :raises AuthError: It refused otherwise, or didn't answer.
     """
@@ -298,7 +301,7 @@ async def _token_request(
         except (ValueError, AttributeError):
             refused = False
         if refused:
-            raise NotConnected(f"{failure}; connect the server again") from None
+            raise NotConnected(f"{failure}; {again}") from None
         raise failure
     try:
         body = response.json()

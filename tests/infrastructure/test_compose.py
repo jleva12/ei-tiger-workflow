@@ -34,6 +34,14 @@ QUEUE_CONNECTIONS = {
     "async-worker-adk-workflows": "HYBRID_REDIS_URL",
 }
 
+# Every reader of the code graph (packages/python/codegraph-query): its
+# service, and the prefix its code graph settings share.
+CODEGRAPH_READERS = {
+    "admin": "FORGE_ADMIN_CODEGRAPH__",
+    "async-worker-adk-workflows": "HYBRID_ADK_WORKFLOWS__CODEGRAPH__",
+    "codegraph-mcp": "CODEGRAPH_",
+}
+
 
 def env_file(path):
     """A dotenv file's assignments, comments left out."""
@@ -243,7 +251,6 @@ class SharedInfrastructureTest(unittest.TestCase):
         )
         self.assertEqual(environment["CODEGRAPH_EMBEDDING_DIMENSIONS"], "1024")
         for setting in (
-            "CODEGRAPH_ADMISSION_TOKEN",
             "CODEGRAPH_GRAPH_CURSOR_SIGNING_KEY",
             "CODEGRAPH_GITHUB_TOKEN",
             "OPENAI_API_KEY",
@@ -253,6 +260,9 @@ class SharedInfrastructureTest(unittest.TestCase):
         self.assertFalse(
             [key for key in environment if key.startswith("CODEGRAPH_GITHUB_TOKENS_")]
         )
+        # It only ingests: no API token, no search settings.
+        self.assertNotIn("CODEGRAPH_ADMISSION_TOKEN", environment)
+        self.assertNotIn("CODEGRAPH_SEARCH_ENHANCE_QUERY", environment)
 
     def test_every_app_embeds_with_the_shared_model(self):
         # Knowledge bases (written by the documents worker, searched by the
@@ -268,8 +278,14 @@ class SharedInfrastructureTest(unittest.TestCase):
             "worker": ("CODEGRAPH_EMBEDDING_", "MODEL"),
             "codegraph-mcp": ("CODEGRAPH_EMBEDDING__", "MODEL"),
         }
+        # Every reader of the code graph embeds its questions alike.
+        consumers |= {
+            f"{service}/code graph": (prefix + "EMBEDDING__", "MODEL")
+            for service, prefix in CODEGRAPH_READERS.items()
+            if service != "codegraph-mcp"
+        }
         for service, (prefix, model) in consumers.items():
-            environment = self.services[service]["environment"]
+            environment = self.services[service.partition("/")[0]]["environment"]
             with self.subTest(service=service):
                 self.assertEqual(environment[prefix + model], shared["FORGE_EMBEDDING_MODEL"])
                 self.assertEqual(
@@ -309,23 +325,30 @@ class SharedInfrastructureTest(unittest.TestCase):
         port = self.services["codegraph-mcp"]["ports"][0]["target"]
         self.assertEqual(url, f"http://codegraph-mcp:{port}/mcp")
 
-    def test_graph_knowledge_bases_are_searched_on_the_workers_api(self):
-        # The admin API (graph knowledge bases, the code graph explorer) and
-        # the workflows worker (their knowledge base tools) call the code
-        # graph worker's API at its container port, with its token.
+    def test_every_reader_reads_the_workers_graph_alike(self):
+        # The admin API, the workflows worker and the MCP server read the
+        # graph the worker writes with packages/python/codegraph-query: the
+        # same database, cursor key, embedding model and query enhancement.
         worker = self.services["worker"]["environment"]
-        port = worker["CODEGRAPH_HEALTH_ADDR"].rpartition(":")[2]
-        callers = {
-            "admin": "FORGE_ADMIN_CODEGRAPH",
-            "async-worker-adk-workflows": "HYBRID_ADK_WORKFLOWS__CODEGRAPH",
-        }
-        for service, prefix in callers.items():
+        shared = env_file(ROOT / ".env.common.example")
+        for service, prefix in CODEGRAPH_READERS.items():
             environment = self.services[service]["environment"]
             with self.subTest(service=service):
-                self.assertEqual(environment[f"{prefix}_URL"], f"http://worker:{port}")
+                self.assertEqual(environment["SPANNER_EMULATOR_HOST"], "worker-spanner:9010")
                 self.assertEqual(
-                    environment[f"{prefix}_TOKEN"], worker["CODEGRAPH_ADMISSION_TOKEN"]
+                    environment[prefix + "SPANNER__DATABASE"], worker["CODEGRAPH_SPANNER_DATABASE"]
                 )
+                self.assertEqual(
+                    environment[prefix + "SPANNER__CURSOR_SIGNING_KEY"],
+                    worker["CODEGRAPH_GRAPH_CURSOR_SIGNING_KEY"],
+                )
+                self.assertEqual(environment[prefix + "EMBEDDING__API_KEY"], worker["OPENAI_API_KEY"])
+                self.assertEqual(
+                    environment[prefix + "SEARCH__ENHANCE_QUERY"],
+                    shared["FORGE_CODEGRAPH_SEARCH_ENHANCE_QUERY"],
+                )
+                # Nothing calls the worker: it serves only its probes.
+                self.assertFalse([key for key in environment if key.endswith("CODEGRAPH_URL")])
 
     def test_the_code_graph_mcp_server_has_the_admin_check_its_callers(self):
         # Each caller's credential goes to the admin API on the stack's
@@ -336,7 +359,7 @@ class SharedInfrastructureTest(unittest.TestCase):
         self.assertEqual(url, f"http://admin:{port}/api/v1")
         self.assertEqual(admin["ports"][0]["target"], int(port))
 
-    def test_cloud_spanner_overlay_moves_only_the_worker_and_its_reader(self):
+    def test_cloud_spanner_overlay_moves_the_worker_and_its_readers(self):
         database = "projects/p/instances/i/databases/codegraph"
         cloud = render(
             "compose.cloud.yaml",
@@ -347,15 +370,22 @@ class SharedInfrastructureTest(unittest.TestCase):
         self.assertEqual(environment["CODEGRAPH_SPANNER_DATABASE"], database)
         self.assertEqual(environment["CODEGRAPH_SPANNER_AUTO_PROVISION"], "false")
         self.assertNotIn("worker-spanner", cloud["worker"].get("depends_on", {}))
-        mcp = cloud["codegraph-mcp"]["environment"]
-        self.assertEqual(mcp["SPANNER_EMULATOR_HOST"], "")
-        self.assertEqual(mcp["CODEGRAPH_SPANNER__DATABASE"], database)
-        self.assertEqual(
-            mcp["GOOGLE_APPLICATION_CREDENTIALS"],
-            environment["GOOGLE_APPLICATION_CREDENTIALS"],
-        )
+        for service, prefix in CODEGRAPH_READERS.items():
+            reader = cloud[service]
+            with self.subTest(service=service):
+                self.assertEqual(reader["environment"]["SPANNER_EMULATOR_HOST"], "")
+                self.assertEqual(reader["environment"][prefix + "SPANNER__DATABASE"], database)
+                # Query enhancement works on managed Spanner, for every reader.
+                self.assertEqual(reader["environment"][prefix + "SEARCH__ENHANCE_QUERY"], "true")
+                self.assertEqual(
+                    reader["environment"]["GOOGLE_APPLICATION_CREDENTIALS"],
+                    environment["GOOGLE_APPLICATION_CREDENTIALS"],
+                )
+                credentials = environment["GOOGLE_APPLICATION_CREDENTIALS"]
+                [mount] = [v for v in reader["volumes"] if v["target"] == credentials]
+                self.assertIn(mount, cloud["worker"]["volumes"])
         for name, service in self.services.items():
-            if name not in ("worker", "codegraph-mcp"):
+            if name != "worker" and name not in CODEGRAPH_READERS:
                 with self.subTest(service=name):
                     self.assertEqual(cloud[name], service)
 

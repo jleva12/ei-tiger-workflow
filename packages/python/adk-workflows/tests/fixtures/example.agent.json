@@ -28,7 +28,8 @@
           }
         },
         "allow_files": false,
-        "file_types": []
+        "file_types": [],
+        "start_over": false
       },
       "outputs": [
         "next"
@@ -79,7 +80,8 @@
               }
             }
           }
-        }
+        },
+        "credential": ""
       },
       "outputs": [
         "success",
@@ -340,7 +342,8 @@
         "body": "{\n  \"to\": contact,\n  \"reply\": steps.bug_team.output\n}",
         "timeout_seconds": 30,
         "retries": 0,
-        "output_schema": {}
+        "output_schema": {},
+        "credential": ""
       },
       "outputs": [
         "success",

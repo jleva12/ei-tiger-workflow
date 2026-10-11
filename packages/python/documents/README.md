@@ -5,7 +5,7 @@ See [vector store setup and migration](../embeddings/VECTOR_STORE.md).
 
 The `documents` task (`import forge_task_documents`), on the `documents` queue:
 load a file (local path or `s3://`), parse it (PDF, Word, PowerPoint, Excel, CSV,
-Markdown, text, Visio, Mermaid; docling optional), chunk, enrich, embed and store it in MongoDB Atlas or Spanner for
+Markdown, HTML, text, Visio, Mermaid; docling optional), chunk, enrich, embed and store it in MongoDB Atlas or Spanner for
 hybrid (BM25 + vector) search. It registers with the
 [async worker](../../../../apps/forge-async-worker/README.md) through the
 `forge_async_worker.tasks` entry point; its model clients come from
@@ -20,8 +20,16 @@ Parsers feed a common IR; `ChunkEngine` applies type-aware strategies:
 | .pptx / .ppsx | python-pptx | a section per slide (title, bullets, notes); tables and chart data as tables |
 | .ppt, .doc, .xls, .rtf, .odp, .odt, .ods | LibreOffice → the OOXML parser above | as the format converted to |
 | .xlsx / .csv | openpyxl streaming / csv sniffer | row groups with repeated headers + a summary chunk |
-| .md / .txt | markdown-it-py / encoding detection | heading-aware prose, atomic code |
+| .md / .txt | markdown-it-py / encoding detection | heading-aware prose, nested lists (see below), atomic code |
+| .html / .htm | BeautifulSoup (lxml) | the page's content only (no nav, banner, footer, scripts, hidden elements); heading-aware prose, nested lists (see below), tables with header rows and spans, atomic code |
 | .vsdx | vsdx | edges `[A] --label--> [B]` in flow order + summary |
+
+**Lists keep their hierarchy.** A list item is rendered indented by depth under
+its marker (`-`, or its number in an ordered list), and a later paragraph of the
+same item is indented under it without one. An item and everything nested under
+it stay in one chunk when they fit; a chunk that starts inside a list repeats the
+items above it (cut to fit a quarter of the budget), so a nested bullet is never
+embedded or returned without its parents.
 
 Fallbacks that need system packages turn on when those are installed (the
 worker image has Tesseract; the deployment installs LibreOffice):
@@ -54,6 +62,13 @@ a service outside the worker opens the same store with
 `storage.open_storage(...)` (it follows `FORGE_VECTOR_STORE`).
 
 **Agent search.** In Forge, agents search the documents through the code graph MCP server ([apps/forge-codegraph-mcp](../../../../apps/forge-codegraph-mcp/README.md#document-search)), which ports `HybridSearchService`'s search to Go over this MongoDB, as the same read-only user as commit search, for the teams (tenants) the admin API says each caller may read, all at once. A change to the search here (`storage/mongo/pipelines.py`, `forge_embeddings/identifiers.py`, the chunk fields or the `chunks_text` / `chunks_vector` indexes) belongs there too.
+
+**Evaluation.** [`eval/`](eval/README.md) holds a labelled suite: ten documents, one
+per format, and 80 questions labelled with their answers and evidence. It runs
+through this pipeline and search with any settings, embedding model or
+reranker, scores what the search finds, and compares two runs
+(`make docs-eval NAME=…`, `make docs-eval-compare A=… B=…`). Run it before and
+after changing the chunking, parsers, embeddings or search.
 
 ## MongoDB schema
 

@@ -1,4 +1,6 @@
-// codegraph-worker consumes admitted ingestion jobs from Spanner.
+// codegraph-worker claims ingestion jobs from the Forge admin API's MySQL
+// queue and builds their graphs in Spanner. It serves /livez and /readyz
+// only; queries live in the Python package forge_codegraph_query.
 package main
 
 import (

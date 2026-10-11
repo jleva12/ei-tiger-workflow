@@ -1,8 +1,9 @@
 """The SAQ worker on a real Redis: runs go concurrently up to the limit, a
-hiccup's retry is scheduled with backoff, the maintenance has its cron key,
-the health check sees this host, a stop waits for running runs but not for
-idle workers, and a bare enqueue (as the admin API's) runs under the worker's
-settings. The run store is a SQLite file, on the real clock.
+hiccup's retry is scheduled with backoff, the maintenance has its cron key on
+the upkeep's queue, whose jobs go on while runs fill every slot, the health
+check sees this host, a stop waits for running runs but not for idle workers,
+and a bare enqueue (as the admin API's) runs under the worker's settings. The
+run store is a SQLite file, on the real clock.
 
 Needs HYBRID_TEST_REDIS_URL, a Redis database these tests clear (SAQ keys):
 make async-worker-test-redis uses database 15 of shared Redis."""
@@ -23,7 +24,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from forge_async_worker import saq_worker
 from forge_async_worker.queue import HEARTBEAT, RunQueue
 from forge_async_worker.saq_worker import WorkerState
-from forge_task_adk_workflows.run_store import QUEUED, SUCCEEDED, RunStore, metadata
+from forge_async_worker.watchdog import Watchdog
+from forge_task_adk_workflows.run_store import PAUSED, QUEUED, RUNNING, SUCCEEDED, RunStore, metadata
 from forge_tasks.control import JobControl
 from forge_tasks.errors import TransientError
 
@@ -39,8 +41,9 @@ pytestmark = [
 
 async def _clear(queue: RunQueue) -> None:
     redis = queue.queue.redis
-    async for key in redis.scan_iter(match="saq:*"):
-        await redis.delete(key)
+    for match in ("saq:*", "forge:adk-run-failure:*"):
+        async for key in redis.scan_iter(match=match):
+            await redis.delete(key)
 
 
 @dataclass
@@ -97,6 +100,9 @@ async def stack(tmp_path: Path) -> AsyncIterator[Stack]:
     state = await saq_worker.start_state(
         settings, registry=toy_registry(), store=RunStore(engine), queue=queue, redis_url=None
     )
+    assert state.jobs is not None
+    halts: list[str] = []
+    state.jobs.watchdog = Watchdog(halt=halts.append)  # never this process's end
     workers = saq_worker.build_workers(state, concurrency=2)
     stop = asyncio.Event()  # what SIGINT and SIGTERM set
     running = asyncio.create_task(saq_worker.run_workers(workers, grace_period=10, stop=stop))
@@ -105,6 +111,7 @@ async def stack(tmp_path: Path) -> AsyncIterator[Stack]:
     await running
     await _clear(queue)
     await saq_worker.close_state(state)
+    assert halts == [], "the watchdog would have ended the process"
 
 
 async def test_runs_go_concurrently_up_to_the_limit(stack: Stack) -> None:
@@ -141,16 +148,46 @@ async def test_a_hiccups_retry_is_scheduled_with_backoff(stack: Stack) -> None:
     assert queued["error"]["category"] == "transient"
     retry = await stack.queue.queue.job(f"adk-run:{run_id}:retry-2")
     assert retry is not None and 22.5 - 1 <= retry.scheduled - started <= 37.5 + 5  # backoff(0): 30s +-25%
+    # The run store holds it to the same time: a job for it sooner takes nothing.
+    assert 0 <= retry.scheduled - queued["next_attempt_at"].timestamp() <= 1
 
 
-async def test_the_maintenance_has_its_own_cron_key(stack: Stack) -> None:
+async def test_the_maintenance_has_its_own_cron_key_on_the_upkeeps_queue(stack: Stack) -> None:
     job = None
     for _ in range(50):
-        job = await stack.queue.queue.job("cron:maintain")
+        job = await stack.queue.upkeep.job("cron:maintain")
         if job is not None:
             break
         await asyncio.sleep(0.1)
     assert job is not None and job.scheduled > time.time() - 1 and job.scheduled % 60 == 0
+    assert await stack.queue.queue.job("cron:maintain") is None
+
+
+async def test_the_upkeep_goes_on_while_runs_fill_every_slot(stack: Stack) -> None:
+    release = asyncio.Event()
+
+    async def blocks(control: JobControl, index: int) -> None:
+        await release.wait()
+
+    stack.task.hook = blocks
+    paused = await stack.start({"do": "approve", "timeout": 1})
+    await stack.queue.run_adk(paused)
+    await stack.until(paused, PAUSED)
+    busy = [await stack.start({"do": "hook"}) for _ in range(2)]  # concurrency=2
+    for run_id in busy:
+        await stack.queue.run_adk(run_id)
+    for run_id in busy:
+        await stack.until(run_id, RUNNING)
+
+    try:
+        # Its pause expires on time, though no run can start till a slot frees.
+        timed_out = await stack.until(paused, QUEUED)
+        assert timed_out["decisions"]["gate-0"]["approved"] is False
+        assert [(await stack.store.get(run_id))["status"] for run_id in busy] == [RUNNING, RUNNING]  # type: ignore[index]
+    finally:
+        release.set()
+    for run_id in [*busy, paused]:
+        await stack.until(run_id, SUCCEEDED)
 
 
 async def test_the_health_check_sees_this_hosts_worker(stack: Stack) -> None:

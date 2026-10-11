@@ -745,7 +745,7 @@ def generate_project(
             files[f"vendor/{wheel.name}"] = wheel.read_bytes()
         dependencies = [
             f'"forge-agent-runtime[{extras}]"',
-            '"forge-common[adk,adk-models]"',
+            '"forge-common[adk,adk-models,patterns]"',
             '"forge-jsonata"',
         ]
         sources = "\n[tool.uv.sources]\n" + "".join(

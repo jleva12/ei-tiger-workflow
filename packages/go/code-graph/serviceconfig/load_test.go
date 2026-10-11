@@ -234,6 +234,28 @@ func TestLoadDotenvAndConfigFile(t *testing.T) {
 	}
 }
 
+// A removed setting's name left in an env file is ignored, not rejected.
+func TestLoadDotenvIgnoresRetiredSettings(t *testing.T) {
+	dir := isolate(t)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("CODEGRAPH_WORK_DIR=/from/dotenv\nCODEGRAPH_RETIRED_TOKEN=secret\nCODEGRAPH_RETIRED_FLAG=${GONE_FROM_ENV_COMMON}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := defaults()
+	// Unretired, the lines fail the load: an undefined reference, an unknown key.
+	if err := Load(&c, Options{}); err == nil || !strings.Contains(err.Error(), "CODEGRAPH_RETIRED_") {
+		t.Fatalf("unknown dotenv keys: %v", err)
+	}
+	c = defaults()
+	if err := Load(&c, Options{Retired: []string{"CODEGRAPH_RETIRED_TOKEN", "CODEGRAPH_RETIRED_FLAG"}}); err != nil || c.WorkDir != "/from/dotenv" {
+		t.Fatalf("retired dotenv key: %+v %v", c, err)
+	}
+	for _, name := range []string{"CODEGRAPH_RETIRED_TOKEN", "CODEGRAPH_RETIRED_FLAG"} {
+		if _, set := os.LookupEnv(name); set {
+			t.Fatalf("retired %s reached the environment", name)
+		}
+	}
+}
+
 func TestLoadFlags(t *testing.T) {
 	isolate(t)
 	t.Setenv("CODEGRAPH_WORK_DIR", "/from/env")

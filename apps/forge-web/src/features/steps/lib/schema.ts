@@ -46,6 +46,11 @@ export const CONFIGS: Record<StepKind, Record<string, unknown>> = {
       description:
         "A JSON Schema of the response's body; {} leaves it undeclared.",
     },
+    credential: {
+      ...text,
+      description:
+        "One of the organization's credentials, by ID: its auth (an API key, a token, OAuth) goes with each request, and only to the URLs it's for. Empty for none.",
+    },
   },
   transform: {
     expression: {
@@ -55,6 +60,19 @@ export const CONFIGS: Record<StepKind, Record<string, unknown>> = {
     output_schema: {
       type: "object",
       description: "A JSON Schema of what it makes; {} leaves it undeclared.",
+    },
+  },
+  filter: {
+    items: { ...text, description: "A JSONata expression giving a list." },
+    item_name: {
+      type: "string",
+      pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
+      description: "What the condition calls the item it's on.",
+    },
+    condition: {
+      ...text,
+      description:
+        "A JSONata condition, read per item (as item_name, with index); the step hands on {count, results}: the items it's true for, in order.",
     },
   },
   delay: {
@@ -88,6 +106,12 @@ export const CONFIGS: Record<StepKind, Record<string, unknown>> = {
     },
   },
   loop: {
+    items: { ...text, description: "A JSONata expression giving a list." },
+    item_name: { type: "string", pattern: "^[A-Za-z_][A-Za-z0-9_]*$" },
+    max_iterations: count(1),
+    concurrency: count(1),
+  },
+  for_each: {
     items: { ...text, description: "A JSONata expression giving a list." },
     item_name: { type: "string", pattern: "^[A-Za-z_][A-Za-z0-9_]*$" },
     max_iterations: count(1),

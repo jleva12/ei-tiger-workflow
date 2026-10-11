@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -165,11 +166,60 @@ func retire(before graph.Version) graph.Change {
 
 func mustNode(t *testing.T, repo, id string, generation uint64) graph.Version {
 	t.Helper()
-	v, err := store.GetNode(context.Background(), repo, id, generation)
+	v, err := node(context.Background(), repo, id, generation)
 	if err != nil {
 		t.Fatalf("get node %s at %d: %v", id, generation, err)
 	}
 	return v
+}
+
+// node reads a node through GetNodes, as ingestion does: the version open at
+// generation (zero is live), or graph.ErrNotFound.
+func node(ctx context.Context, repo, id string, generation uint64) (graph.Version, error) {
+	return openVersion(ctx, repo, graph.Key{Kind: graph.RecordNode, ID: id}, generation)
+}
+
+// edge is node for edges, through GetEdges.
+func edge(ctx context.Context, repo, id string, generation uint64) (graph.Version, error) {
+	return openVersion(ctx, repo, graph.Key{Kind: graph.RecordEdge, ID: id}, generation)
+}
+
+func openVersion(ctx context.Context, repo string, key graph.Key, generation uint64) (graph.Version, error) {
+	read := store.GetNodes
+	if key.Kind == graph.RecordEdge {
+		read = store.GetEdges
+	}
+	vs, err := read(ctx, repo, []string{key.ID}, generation)
+	if err != nil {
+		return graph.Version{}, err
+	}
+	at := generation
+	if at == 0 {
+		state, err := store.State(ctx, repo)
+		if err != nil {
+			return graph.Version{}, err
+		}
+		at = state.LiveGeneration
+	}
+	if v, ok := vs[key.ID]; ok && v.OpenAt(at) {
+		return v, nil
+	}
+	return graph.Version{}, fmt.Errorf("%w: %s %s at generation %d", graph.ErrNotFound, key.Kind, key.ID, at)
+}
+
+// versions returns every stored version of a record, oldest first, as
+// written: a closure by an unpublished generation is not masked.
+func versions(t *testing.T, repo string, key graph.Key) []graph.Version {
+	t.Helper()
+	it := store.client.Single().Query(context.Background(), spanner.Statement{
+		SQL:    "SELECT " + recordSelect + " FROM CGRecords WHERE RepositoryID=@repo AND RecordKind=@kind AND RecordID=@id ORDER BY GenFrom",
+		Params: map[string]any{"repo": repo, "kind": string(key.Kind), "id": key.ID},
+	})
+	vs, err := collectVersions(it, math.MaxUint64)
+	if err != nil {
+		t.Fatalf("versions of %s %s: %v", key.Kind, key.ID, err)
+	}
+	return vs
 }
 
 func wantErr(t *testing.T, err, want error, what string) {
@@ -247,19 +297,6 @@ func TestAdmissionDedupeAndStaleSequence(t *testing.T) {
 	if err != nil || res.Reused || res.Run.Key == first.Run.Key {
 		t.Fatalf("different configuration is a new run: %+v %v", res, err)
 	}
-	runs, next, err := store.ListRuns(ctx, repo, 10, "")
-	if err != nil || len(runs) != 2 || next != "" {
-		t.Fatalf("list runs: %d %q %v", len(runs), next, err)
-	}
-	page1, next, err := store.ListRuns(ctx, repo, 1, "")
-	if err != nil || len(page1) != 1 || next == "" {
-		t.Fatalf("first page: %d %q %v", len(page1), next, err)
-	}
-	page2, next2, err := store.ListRuns(ctx, repo, 1, next)
-	if err != nil || len(page2) != 1 || next2 != "" || page2[0].Key == page1[0].Key {
-		t.Fatalf("second page: %d %q %v", len(page2), next2, err)
-	}
-
 	// Publish sequence 2 at generation 1, then sequence 1 is stale.
 	run, lease := startGeneration(t, repo, 2, 1)
 	load(t, lease, 1, add(testNode("class", "Stale", nil), ""))
@@ -413,10 +450,10 @@ func TestLoaderAcrossGenerations(t *testing.T) {
 	if st.Added != 7 || st.Batches != 4 || st.Updated+st.Retired+st.Reopened != 0 {
 		t.Fatalf("generation 1 stats: %+v", st)
 	}
-	if _, err := store.GetNode(ctx, repo, foo.Node.ID, 0); !errors.Is(err, graph.ErrNotFound) {
+	if _, err := node(ctx, repo, foo.Node.ID, 0); !errors.Is(err, graph.ErrNotFound) {
 		t.Fatalf("unpublished generation is invisible at live: %v", err)
 	}
-	if _, err := store.GetNode(ctx, repo, foo.Node.ID, 1); !errors.Is(err, graph.ErrInvalid) {
+	if _, err := node(ctx, repo, foo.Node.ID, 1); !errors.Is(err, graph.ErrInvalid) {
 		t.Fatalf("explicit generation above live is rejected: %v", err)
 	}
 	if n, e, err := store.CountOpen(ctx, repo, 1); err != nil || n != 4 || e != 3 {
@@ -466,8 +503,12 @@ func TestLoaderAcrossGenerations(t *testing.T) {
 	if v := mustNode(t, repo, bar.Node.ID, 0); v.GenFrom != 1 || v.GenTo != 0 {
 		t.Fatalf("bar at live before publish: %+v", v)
 	}
-	if h, err := store.History(ctx, repo, foo.Key()); err != nil || len(h) != 1 || h[0].GenTo != 0 || h[0].Retired {
-		t.Fatalf("history masks closure above live: %+v %v", h, err)
+	// Generation 2 wrote foo's closure; reads mask it until the flip.
+	if h := versions(t, repo, foo.Key()); len(h) != 1 || h[0].GenTo != 2 || !h[0].Retired || h[0].CommitTo != testCommit2 {
+		t.Fatalf("foo's closure by generation 2: %+v", h)
+	}
+	if v, err := node(ctx, repo, foo.Node.ID, 0); err != nil || v.GenTo != 0 || v.Retired || v.CommitTo != "" {
+		t.Fatalf("a closure above live is masked: %+v %v", v, err)
 	}
 	wrongGen := run2
 	wrongGen.Generation = 3
@@ -475,64 +516,37 @@ func TestLoaderAcrossGenerations(t *testing.T) {
 	wantErr(t, err, deployment.ErrStaleDeployment, "publish must target live+1")
 	publish(t, lease2, run2)
 
-	// The change set of generation 2: bar updated, foo retired; the cascade
-	// retired the two contains edges. Generation 1 added every node.
-	changes, err := store.Changes(ctx, repo, 0, graph.RecordNode, 10, "")
-	if err != nil || changes.Generation != 2 || changes.Commit != testCommit2 || changes.Added != 0 || changes.Updated != 1 || changes.Retired != 1 || len(changes.Changes) != 2 {
-		t.Fatalf("node changes at 2: %+v %v", changes, err)
-	}
-	ops := map[string]ChangeOp{}
-	for _, c := range changes.Changes {
-		ops[c.ID] = c.Op
-		if c.Op == ChangeUpdated && (c.Before == nil || c.Before.GenTo != 2 || c.Version.GenFrom != 2) {
-			t.Fatalf("updated change carries both versions: %+v", c)
-		}
-	}
-	if ops[bar.Node.ID] != ChangeUpdated || ops[foo.Node.ID] != ChangeRetired {
-		t.Fatalf("ops: %v", ops)
-	}
-	if changes, err = store.Changes(ctx, repo, 2, graph.RecordEdge, 10, ""); err != nil || changes.Retired != 2 || changes.Updated != 0 || changes.Added != 0 || len(changes.Changes) != 2 {
-		t.Fatalf("edge changes at 2: %+v %v", changes, err)
-	}
-	first, err := store.Changes(ctx, repo, 1, graph.RecordNode, 3, "")
-	if err != nil || first.Added != 4 || len(first.Changes) != 3 || first.NextCursor == "" {
-		t.Fatalf("generation 1 page: %+v %v", first, err)
-	}
-	if rest, err := store.Changes(ctx, repo, 1, graph.RecordNode, 3, first.NextCursor); err != nil || len(rest.Changes) != 1 || rest.NextCursor != "" || rest.Changes[0].ID == first.Changes[2].ID {
-		t.Fatalf("generation 1 second page: %+v %v", rest, err)
-	}
-	if _, err = store.Changes(ctx, repo, 3, graph.RecordNode, 10, ""); !errors.Is(err, graph.ErrInvalid) {
-		t.Fatalf("generation above live: %v", err)
-	}
-
 	if v := mustNode(t, repo, bar.Node.ID, 0); v.GenFrom != 2 || graph.Text(v.Fact.Node.Properties, "source_text") != "void bar() { log(); }" {
 		t.Fatalf("bar at live: %+v", v)
 	}
 	if v := mustNode(t, repo, bar.Node.ID, 1); v.GenFrom != 1 || v.GenTo != 2 || v.CommitTo != testCommit2 || v.Retired {
 		t.Fatalf("bar at 1: %+v", v)
 	}
-	if _, err = store.GetNode(ctx, repo, foo.Node.ID, 0); !errors.Is(err, graph.ErrNotFound) {
+	if _, err = node(ctx, repo, foo.Node.ID, 0); !errors.Is(err, graph.ErrNotFound) {
 		t.Fatalf("retired foo at live: %v", err)
 	}
 	if v := mustNode(t, repo, foo.Node.ID, 1); v.GenFrom != 1 || v.GenTo != 2 || !v.Retired || v.CommitTo != testCommit2 {
 		t.Fatalf("foo at 1 shows its published closure: %+v", v)
 	}
-	if _, err = store.GetEdge(ctx, repo, contains.Edge.ID, 0); !errors.Is(err, graph.ErrNotFound) {
+	if _, err = edge(ctx, repo, contains.Edge.ID, 0); !errors.Is(err, graph.ErrNotFound) {
 		t.Fatalf("cascaded edge at live: %v", err)
 	}
-	if e, err := store.GetEdge(ctx, repo, contains.Edge.ID, 1); err != nil || e.GenFrom != 1 {
+	if e, err := edge(ctx, repo, contains.Edge.ID, 1); err != nil || e.GenFrom != 1 {
 		t.Fatalf("cascaded edge at 1: %+v %v", e, err)
 	}
-	if e, err := store.GetEdge(ctx, repo, calls.Edge.ID, 0); err != nil || e.GenFrom != 1 || e.GenTo != 0 {
+	if e, err := edge(ctx, repo, calls.Edge.ID, 0); err != nil || e.GenFrom != 1 || e.GenTo != 0 {
 		t.Fatalf("untouched edge survives: %+v %v", e, err)
 	}
-	h, err := store.History(ctx, repo, foo.Key())
-	if err != nil || len(h) != 1 || h[0].GenTo != 2 || !h[0].Retired || h[0].CommitTo != testCommit2 {
-		t.Fatalf("foo history: %+v %v", h, err)
+	if n, e, err := store.CountOpen(ctx, repo, 0); err != nil || n != 3 || e != 1 {
+		t.Fatalf("open at live: %d nodes %d edges %v", n, e, err)
 	}
-	h, err = store.History(ctx, repo, bar.Key())
-	if err != nil || len(h) != 2 || h[0].GenFrom != 1 || h[0].GenTo != 2 || h[0].Retired || h[1].GenFrom != 2 || h[1].GenTo != 0 {
-		t.Fatalf("bar history: %+v %v", h, err)
+	h := versions(t, repo, foo.Key())
+	if len(h) != 1 || h[0].GenTo != 2 || !h[0].Retired || h[0].CommitTo != testCommit2 {
+		t.Fatalf("foo history: %+v", h)
+	}
+	h = versions(t, repo, bar.Key())
+	if len(h) != 2 || h[0].GenFrom != 1 || h[0].GenTo != 2 || h[0].Retired || h[1].GenFrom != 2 || h[1].GenTo != 0 {
+		t.Fatalf("bar history: %+v", h)
 	}
 
 	// Listing and lineage reads at both generations.
@@ -564,10 +578,6 @@ func TestLoaderAcrossGenerations(t *testing.T) {
 	_, err = store.ListNodes(ctx, graph.ListQuery{RepositoryID: repo, Limit: 2, Cursor: page.NextCursor})
 	if page.NextCursor != "" && err == nil {
 		t.Fatal("cursor from another query must be rejected")
-	}
-	edges, err := store.ListEdges(ctx, graph.ListQuery{RepositoryID: repo})
-	if err != nil || len(edges.Edges) != 1 || edges.Edges[0].Fact.Edge.ID != calls.Edge.ID {
-		t.Fatalf("edges at live: %+v %v", edges, err)
 	}
 	byLineage, err := store.RecordsByLineage(ctx, repo, fooLineage, 1)
 	if err != nil || len(byLineage) != 5 {
@@ -621,9 +631,9 @@ func TestLoaderAcrossGenerations(t *testing.T) {
 	if v := mustNode(t, repo, foo.Node.ID, 0); v.GenFrom != 3 {
 		t.Fatalf("reopened foo: %+v", v)
 	}
-	h, err = store.History(ctx, repo, foo.Key())
-	if err != nil || len(h) != 2 || h[0].GenTo != 2 || h[1].GenFrom != 3 || h[1].GenTo != 0 {
-		t.Fatalf("foo history after reopen: %+v %v", h, err)
+	h = versions(t, repo, foo.Key())
+	if len(h) != 2 || h[0].GenTo != 2 || h[1].GenFrom != 3 || h[1].GenTo != 0 {
+		t.Fatalf("foo history after reopen: %+v", h)
 	}
 	superseded, err := store.GetRun(ctx, older.Key)
 	if err != nil || superseded.Phase != deployment.Superseded || superseded.Revision != 2 || superseded.FinishedAt == nil {
@@ -632,7 +642,7 @@ func TestLoaderAcrossGenerations(t *testing.T) {
 	if r, err := store.GetRun(ctx, run3.Key); err != nil || r.Phase != deployment.Succeeded || r.Generation != 3 {
 		t.Fatalf("published run 3: %+v %v", r, err)
 	}
-	if _, err = store.GetNode(ctx, repo, foo.Node.ID, 4); !errors.Is(err, graph.ErrInvalid) {
+	if _, err = node(ctx, repo, foo.Node.ID, 4); !errors.Is(err, graph.ErrInvalid) {
 		t.Fatalf("generation 4 is not live: %v", err)
 	}
 }
@@ -860,14 +870,14 @@ func TestCascadeSkipsNodesOpenAtGeneration(t *testing.T) {
 		t.Fatalf("cascade closed %d edges of a continued entity: %v", closed, err)
 	}
 	publish(t, lease2, run2)
-	if e, err := store.GetEdge(ctx, repo, calls.Edge.ID, 0); err != nil || e.GenFrom != 1 || e.GenTo != 0 {
+	if e, err := edge(ctx, repo, calls.Edge.ID, 0); err != nil || e.GenFrom != 1 || e.GenTo != 0 {
 		t.Fatalf("call edge into the renamed class must survive: %+v %v", e, err)
 	}
 	if v := mustNode(t, repo, helper.Node.ID, 0); v.GenFrom != 2 || v.Lineage != newLineage {
 		t.Fatalf("continued class at live: %+v", v)
 	}
-	if h, err := store.History(ctx, repo, helper.Key()); err != nil || len(h) != 2 || h[0].Retired || h[0].GenTo != 2 {
-		t.Fatalf("continued class history must show a replacement, not a retirement: %+v %v", h, err)
+	if h := versions(t, repo, helper.Key()); len(h) != 2 || h[0].Retired || h[0].GenTo != 2 {
+		t.Fatalf("continued class history must show a replacement, not a retirement: %+v", h)
 	}
 }
 
@@ -913,11 +923,11 @@ func TestSweepAboveLive(t *testing.T) {
 	if v := mustNode(t, repo, a.Node.ID, 0); v.GenTo != 0 || v.Retired || v.CommitTo != "" {
 		t.Fatalf("A reopened: %+v", v)
 	}
-	if h, err := store.History(ctx, repo, b.Key()); err != nil || len(h) != 1 || h[0].GenTo != 0 || h[0].Fact.Node.QualifiedName == "changed.B" {
-		t.Fatalf("B history after sweep: %+v %v", h, err)
+	if h := versions(t, repo, b.Key()); len(h) != 1 || h[0].GenTo != 0 || h[0].Fact.Node.QualifiedName == "changed.B" {
+		t.Fatalf("B history after sweep: %+v", h)
 	}
-	if h, err := store.History(ctx, repo, c.Key()); err != nil || len(h) != 0 {
-		t.Fatalf("C is gone: %+v %v", h, err)
+	if h := versions(t, repo, c.Key()); len(h) != 0 {
+		t.Fatalf("C is gone: %+v", h)
 	}
 	if ids, err := store.GetFileIdentities(ctx, repo, lineage, 2); err != nil || ids.ContentSHA256 != strings.Repeat("11", 32) {
 		t.Fatalf("identities above live swept: %+v %v", ids, err)
@@ -991,202 +1001,120 @@ func TestGenerationInputsRoundTripAndSweep(t *testing.T) {
 	_ = run2
 }
 
-// Regression for the audit's finding 5: the lexical branch runs on the search
-// index and needs no embeddings; identifier fragments and substrings match;
-// exact names win; connectivity and path proximity rerank ties; a document
-// written by an unpublished or abandoned generation never speaks for live.
-func TestLexicalSearchAndRerank(t *testing.T) {
+// The loader writes each document-bearing node's CGSearchDocuments row, which
+// the readers' lexical search and exact-name lookups use; nodes without a
+// document get none. A row an unpublished generation rewrote no longer
+// matches the live record's search hash, so readers drop it, and sweeping the
+// abandoned generation restores the live document and removes the rows of
+// nodes it added.
+func TestLoaderWritesSearchDocuments(t *testing.T) {
 	ctx := context.Background()
-	repo := "lexical-" + t.Name()
+	repo := "documents-" + t.Name()
 	register(t, repo)
 	sha := strings.Repeat("0d", 32)
-	agentPath, flowPath, testPath := "core/src/main/java/agents/LlmAgent.java", "core/src/main/java/flows/LlmFlow.java", "core/src/test/java/agents/LlmAgentTest.java"
-	agentLineage, flowLineage, testLineage := graph.Lineage(repo, "core", "main", agentPath), graph.Lineage(repo, "core", "main", flowPath), graph.Lineage(repo, "core", "test", testPath)
-	node := func(kind, name, qualified, path, text, lineage string) graph.Fact {
-		f := testNode(kind, name, map[string]graph.PropertyValue{"file_path": graph.StringValue(path), "source_text": graph.StringValue(text), "signature": graph.StringValue(strings.SplitN(text, "{", 2)[0])})
+	path := "core/src/main/java/flows/LlmFlow.java"
+	lineage := graph.Lineage(repo, "core", "main", path)
+	method := func(name, qualified, text string) graph.Fact {
+		f := testNode("method", name, map[string]graph.PropertyValue{"file_path": graph.StringValue(path), "source_text": graph.StringValue(text), "signature": graph.StringValue(strings.SplitN(text, "{", 2)[0])})
 		f.Node.QualifiedName = qualified
 		f.Node.Source = anchor(lineage, sha)
 		return f
 	}
-	agent := node("class", "LlmAgent", "com.acme.agents.LlmAgent", agentPath, "public class LlmAgent extends BaseAgent { }", agentLineage)
-	runImpl := node("method", "runAsyncImpl", "runAsyncImpl(com.acme.agents.InvocationContext)", agentPath, "protected Flowable<Event> runAsyncImpl(InvocationContext ctx) { return llmFlow.run(ctx); }", agentLineage)
-	flowRun := node("method", "run", "run(com.acme.agents.InvocationContext)", flowPath, "public Flowable<Event> run(InvocationContext ctx) { return steps(ctx); }", flowLineage)
-	helper := node("method", "runHelper", "runHelper()", testPath, "void runHelper() { run(); run(); run(); run(); run(); }", testLineage)
-	call1 := testEdge(graph.EdgeCalls, runImpl.Node.ID, flowRun.Node.ID)
-	call1.Edge.Source = anchor(agentLineage, sha)
-	call2 := testEdge(graph.EdgeCalls, helper.Node.ID, flowRun.Node.ID)
-	call2.Edge.Source = anchor(testLineage, sha)
+	run := method("runAsyncImpl", "runAsyncImpl(com.acme.agents.InvocationContext)", "protected Flowable<Event> runAsyncImpl(InvocationContext ctx) { return steps(ctx); }")
+	list := testNode(graph.NodeExternalSymbol, "java.util.List", nil)
 	run1, lease1 := startGeneration(t, repo, 1, 1)
-	load(t, lease1, 1, add(agent, agentLineage), add(runImpl, agentLineage), add(flowRun, flowLineage), add(helper, testLineage), add(call1, agentLineage), add(call2, testLineage))
+	load(t, lease1, 1, add(run, lineage), add(list, ""))
 	publish(t, lease1, run1)
-	search := func(q SearchRequest) []SearchHit {
-		t.Helper()
-		q.RepositoryIDs = []string{repo}
-		hits, err := store.HybridSearch(ctx, q)
-		if err != nil {
-			t.Fatalf("search %+v: %v", q, err)
-		}
-		return hits
+
+	doc, ok := codesearch.FromNode(*run.Node)
+	if !ok {
+		t.Fatal("a method is a document")
 	}
-	first := func(hits []SearchHit) string {
-		if len(hits) == 0 {
-			return ""
-		}
-		return hits[0].Node.Fact.Node.Name
+	want := searchDocumentRow{Repository: repo, NodeID: run.Node.ID, Generation: 1, Kind: "method", Name: "runAsyncImpl", QualifiedName: run.Node.QualifiedName,
+		FilePath: path, Document: doc, Identifiers: codesearch.IdentifierTerms(run.Node.Name, run.Node.QualifiedName)}
+	if got, ok := searchDocument(t, repo, run.Node.ID); !ok || got != want {
+		t.Fatalf("search document:\n got %+v\nwant %+v", got, want)
+	}
+	if hash := liveSearchHash(t, repo, run.Node.ID); hash != doc.Hash {
+		t.Fatalf("record search hash %q, document %q", hash, doc.Hash)
+	}
+	if got, ok := searchDocument(t, repo, list.Node.ID); ok {
+		t.Fatalf("an external symbol has no document: %+v", got)
 	}
 
-	// An identifier fragment reaches the camelCase name through the identifier tokens.
-	hits := search(SearchRequest{Text: "async"})
-	if first(hits) != "runAsyncImpl" || hits[0].Lexical <= 0 || hits[0].Vector != 0 || hits[0].ExactMatch || len(hits[0].Matched) == 0 || hits[0].Snippet == "" || hits[0].Signature == "" {
-		t.Fatalf("identifier fragment: %+v", hits)
-	}
-	// A partial identifier reaches it through the substring tokens.
-	if hits = search(SearchRequest{Text: "AsyncImp"}); first(hits) != "runAsyncImpl" {
-		t.Fatalf("substring: %+v", hits)
-	}
-	// The exact name wins over a document that repeats the word.
-	hits = search(SearchRequest{Text: "run"})
-	if first(hits) != "run" || !hits[0].ExactMatch || hits[0].Callers != 2 {
-		t.Fatalf("exact name first with its callers: %+v", hits)
-	}
-	// An exact qualified name is recognised too.
-	hits = search(SearchRequest{Text: "com.acme.agents.LlmAgent"})
-	if first(hits) != "LlmAgent" || !hits[0].ExactMatch {
-		t.Fatalf("exact qualified name: %+v", hits)
-	}
-	// Level two: near the caller's file and better connected ranks first.
-	hits = search(SearchRequest{Text: "run ctx", NearPath: "core/src/main/java/flows/Steps.java"})
-	if first(hits) != "run" {
-		t.Fatalf("connectivity and proximity rerank: %+v", hits)
-	}
-	for _, h := range hits {
-		switch h.Node.Fact.Node.Name {
-		case "run":
-			if h.Callers != 2 || h.Callees != 0 {
-				t.Fatalf("degrees of run: %+v", h)
-			}
-		case "runAsyncImpl":
-			if h.Callers != 0 || h.Callees != 1 {
-				t.Fatalf("degrees of runAsyncImpl: %+v", h)
-			}
-		}
-	}
-	// Filters apply to the lexical branch.
-	if hits = search(SearchRequest{Text: "run", Kinds: []string{"method"}, PathPrefix: "core/src/test/"}); len(hits) != 1 || first(hits) != "runHelper" {
-		t.Fatalf("filters: %+v", hits)
-	}
-	if hits = search(SearchRequest{Text: "run", Mode: SearchLexical}); len(hits) == 0 {
-		t.Fatalf("lexical mode: %+v", hits)
-	}
-	_, err := store.HybridSearch(ctx, SearchRequest{RepositoryIDs: []string{repo}, Text: "run", Mode: SearchSemantic})
-	wantErr(t, err, deployment.ErrInvalidRequest, "semantic mode without a vector")
-	_, err = store.HybridSearch(ctx, SearchRequest{RepositoryIDs: []string{repo}, Text: "run", Mode: "fuzzy"})
-	wantErr(t, err, deployment.ErrInvalidRequest, "unknown mode")
-
-	// A document rewritten by an unpublished generation does not speak for
-	// the live node, and an abandoned generation's rows are restored.
+	// Generation 2 rewrites the document and adds a node, then is abandoned.
 	run2, lease2 := startGeneration(t, repo, 2, 2)
-	before := mustNode(t, repo, flowRun.Node.ID, 0)
-	changed := flowRun
-	changed.Node.Properties = map[string]graph.PropertyValue{"file_path": graph.StringValue(flowPath), "source_text": graph.StringValue("public Flowable<Event> run(InvocationContext ctx) { return fastPath(ctx); }")}
-	load(t, lease2, 2, update(before, changed))
-	for _, h := range search(SearchRequest{Text: "run"}) {
-		if h.Node.Fact.Node.ID == flowRun.Node.ID {
-			t.Fatalf("stale document must not match live: %+v", h)
-		}
+	before := mustNode(t, repo, run.Node.ID, 0)
+	changed := method("runAsyncImpl", run.Node.QualifiedName, "protected Flowable<Event> runAsyncImpl(InvocationContext ctx) { return fastPath(ctx); }")
+	added := method("fastPath", "fastPath(com.acme.agents.InvocationContext)", "Flowable<Event> fastPath(InvocationContext ctx) { return Flowable.empty(); }")
+	load(t, lease2, 2, update(before, changed), add(added, lineage))
+	if got, ok := searchDocument(t, repo, run.Node.ID); !ok || got.Generation != 2 || got.Document.Hash == doc.Hash || got.Document.Hash == liveSearchHash(t, repo, run.Node.ID) {
+		t.Fatalf("a loading generation's document must not match live: %+v", got)
 	}
 	run2.Phase, run2.ErrorCode = deployment.Failed, "abandoned"
-	if _, err = store.UpdateRun(ctx, run2); err != nil {
+	if _, err := store.UpdateRun(ctx, run2); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = store.SweepAboveLive(ctx, lease2); err != nil {
+	if _, _, err := store.SweepAboveLive(ctx, lease2); err != nil {
 		t.Fatal(err)
 	}
-	if hits = search(SearchRequest{Text: "steps"}); first(hits) != "run" {
-		t.Fatalf("sweep must restore the live document: %+v", hits)
+	if got, ok := searchDocument(t, repo, run.Node.ID); !ok || got != want {
+		t.Fatalf("sweep must restore the live document:\n got %+v\nwant %+v", got, want)
 	}
-	if err = store.ReleaseLease(ctx, lease2); err != nil {
+	if got, ok := searchDocument(t, repo, added.Node.ID); ok {
+		t.Fatalf("sweep must remove the abandoned node's document: %+v", got)
+	}
+	if err := store.ReleaseLease(ctx, lease2); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestFindNodesAndBackfill(t *testing.T) {
-	ctx := context.Background()
-	repo := "find-" + t.Name()
-	register(t, repo)
-	lineage := graph.Lineage(repo, "m", "main", "src/Foo.java")
-	sha := strings.Repeat("0e", 32)
-	foo := testNode("class", "Foo", map[string]graph.PropertyValue{"file_path": graph.StringValue("src/Foo.java")})
-	foo.Node.QualifiedName = "com.acme.Foo"
-	foo.Node.Source = anchor(lineage, sha)
-	bar := testNode("method", "bar", map[string]graph.PropertyValue{"file_path": graph.StringValue("src/Foo.java"), "source_text": graph.StringValue("void bar() { }")})
-	bar.Node.QualifiedName = "bar()"
-	bar.Node.Source = anchor(lineage, sha)
-	other := testNode("method", "bar", map[string]graph.PropertyValue{"file_path": graph.StringValue("src/Foo.java"), "source_text": graph.StringValue("void bar(int n) { }")})
-	other.Node.ID, other.Node.QualifiedName = graph.ID("method", "bar-int"), "bar(int)"
-	other.Node.Source = anchor(lineage, sha)
-	run1, lease1 := startGeneration(t, repo, 1, 1)
-	load(t, lease1, 1, add(foo, lineage), add(bar, lineage), add(other, lineage))
-	publish(t, lease1, run1)
-
-	nodes, err := store.FindNodes(ctx, repo, "bar", "", nil, 0, 10)
-	if err != nil || len(nodes) != 2 {
-		t.Fatalf("by name: %+v %v", nodes, err)
+// searchDocument reads a node's CGSearchDocuments row.
+func searchDocument(t *testing.T, repo, id string) (searchDocumentRow, bool) {
+	t.Helper()
+	row, err := store.client.Single().ReadRow(context.Background(), "CGSearchDocuments", spanner.Key{repo, id},
+		[]string{"Generation", "Kind", "Name", "NameLower", "QualifiedName", "FilePath", "DocumentHash", "DocumentVersion", "DocumentText", "Identifiers"})
+	if rowNotFound(err) {
+		return searchDocumentRow{}, false
 	}
-	if nodes, err = store.FindNodes(ctx, repo, "", "bar(int)", nil, 0, 10); err != nil || len(nodes) != 1 || nodes[0].Fact.Node.ID != other.Node.ID {
-		t.Fatalf("by qualified name: %+v %v", nodes, err)
+	if err != nil {
+		t.Fatalf("search document %s: %v", id, err)
 	}
-	if nodes, err = store.FindNodes(ctx, repo, "", "com.acme.Foo", []string{"class"}, 0, 10); err != nil || len(nodes) != 1 || nodes[0].Fact.Node.ID != foo.Node.ID {
-		t.Fatalf("qualified class with kind: %+v %v", nodes, err)
-	}
-	if nodes, err = store.FindNodes(ctx, repo, "BAR", "", []string{"class"}, 0, 10); err != nil || len(nodes) != 0 {
-		t.Fatalf("kind filter and case folding: %+v %v", nodes, err)
-	}
-	_, err = store.FindNodes(ctx, repo, "bar", "bar()", nil, 0, 10)
-	wantErr(t, err, graph.ErrInvalid, "name and qualified name together")
-
-	// A qualified lookup among many same-named declarations must not depend
-	// on the wanted one sorting into the candidate window of a name search.
-	var crowd []graph.Fact
-	for i := 0; i < 3*candidateFactor+2; i++ {
-		m := testNode("method", "run", map[string]graph.PropertyValue{"file_path": graph.StringValue("src/Foo.java")})
-		m.Node.ID, m.Node.QualifiedName = graph.ID("method", fmt.Sprintf("run-%02d", i)), fmt.Sprintf("com.acme.Runner%02d.run", i)
-		m.Node.Source = anchor(lineage, sha)
-		crowd = append(crowd, m)
-	}
-	changes := make([]graph.Change, 0, len(crowd))
-	for _, m := range crowd {
-		changes = append(changes, add(m, lineage))
-	}
-	run2, lease2 := startGeneration(t, repo, 2, 2)
-	load(t, lease2, 2, changes...)
-	publish(t, lease2, run2)
-	last := crowd[len(crowd)-1]
-	if nodes, err = store.FindNodes(ctx, repo, "", last.Node.QualifiedName, []string{"method"}, 0, 1); err != nil || len(nodes) != 1 || nodes[0].Fact.Node.ID != last.Node.ID {
-		t.Fatalf("qualified lookup beyond the name window: %+v %v", nodes, err)
-	}
-
-	// A graph loaded before documents existed is backfilled at live.
-	if _, err = store.client.Apply(ctx, []*spanner.Mutation{spanner.Delete("CGSearchDocuments", spanner.KeyRange{Start: spanner.Key{repo}, End: spanner.Key{repo}, Kind: spanner.ClosedClosed})}); err != nil {
+	r := searchDocumentRow{Repository: repo, NodeID: id, Document: codesearch.Document{NodeID: id}}
+	var generation, version int64
+	var lower string
+	if err = row.Columns(&generation, &r.Kind, &r.Name, &lower, &r.QualifiedName, &r.FilePath, &r.Document.Hash, &version, &r.Document.Text, &r.Identifiers); err != nil {
 		t.Fatal(err)
 	}
-	if nodes, err = store.FindNodes(ctx, repo, "bar", "", nil, 0, 10); err != nil || len(nodes) != 0 {
-		t.Fatalf("no documents, no lookup: %+v %v", nodes, err)
+	if lower != strings.ToLower(r.Name) {
+		t.Fatalf("NameLower %q for %q", lower, r.Name)
 	}
-	written, err := store.BackfillSearchDocuments(ctx, repo)
-	if err != nil || written != uint64(3+len(crowd)) {
-		t.Fatalf("backfill: %d %v", written, err)
+	r.Generation, r.Document.Version = uint64(generation), int(version)
+	return r, true
+}
+
+// liveSearchHash is the search hash of a node's record open at live.
+func liveSearchHash(t *testing.T, repo, id string) string {
+	t.Helper()
+	ctx := context.Background()
+	state, err := store.State(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if written, err = store.BackfillSearchDocuments(ctx, repo); err != nil || written != 0 {
-		t.Fatalf("backfill is idempotent: %d %v", written, err)
+	it := store.client.Single().Query(ctx, spanner.Statement{
+		SQL:    "SELECT SearchHash FROM CGRecords WHERE RepositoryID=@repo AND RecordKind='node' AND RecordID=@id AND " + openPredicate(""),
+		Params: map[string]any{"repo": repo, "id": id, "gen": int64(state.LiveGeneration)},
+	})
+	defer it.Stop()
+	row, err := nextRow(it)
+	if err != nil || row == nil {
+		t.Fatalf("live record %s: %v", id, err)
 	}
-	if nodes, err = store.FindNodes(ctx, repo, "bar", "", nil, 0, 10); err != nil || len(nodes) != 2 {
-		t.Fatalf("after backfill: %+v %v", nodes, err)
+	var hash spanner.NullString
+	if err = row.Columns(&hash); err != nil {
+		t.Fatal(err)
 	}
-	hits, err := store.HybridSearch(ctx, SearchRequest{RepositoryIDs: []string{repo}, Text: "Foo"})
-	if err != nil || len(hits) == 0 || hits[0].Node.Fact.Node.ID != foo.Node.ID || !hits[0].ExactMatch {
-		t.Fatalf("search after backfill: %+v %v", hits, err)
-	}
+	return hash.StringVal
 }
 
 // --- file identities, content ------------------------------------------------
@@ -1239,21 +1167,47 @@ func TestContentPutGetDedupe(t *testing.T) {
 	if err != nil || !existed {
 		t.Fatalf("second put dedupes: %v %v", existed, err)
 	}
-	got, err := store.GetSource(ctx, repo, sha)
-	if err != nil || !bytes.Equal(got, data) {
-		t.Fatalf("get: %d bytes %v", len(got), err)
+	if got, ok := retained(t, repo, sha); !ok || !bytes.Equal(got, data) {
+		t.Fatalf("retained: %d bytes %v", len(got), ok)
 	}
-	_, err = store.GetSource(ctx, repo, strings.Repeat("ff", 32))
-	wantErr(t, err, deployment.ErrNotFound, "unknown content")
+	if _, ok := retained(t, repo, strings.Repeat("ff", 32)); ok {
+		t.Fatal("unknown content retained")
+	}
 	_, err = store.PutSource(ctx, repo, strings.Repeat("ff", 32), data)
 	wantErr(t, err, deployment.ErrInvalidRequest, "hash mismatch")
 	empty := sha256.Sum256(nil)
 	if _, err = store.PutSource(ctx, repo, hex.EncodeToString(empty[:]), nil); err != nil {
 		t.Fatalf("empty file: %v", err)
 	}
-	if got, err = store.GetSource(ctx, repo, hex.EncodeToString(empty[:])); err != nil || len(got) != 0 {
-		t.Fatalf("empty get: %v %v", got, err)
+	if got, ok := retained(t, repo, hex.EncodeToString(empty[:])); !ok || len(got) != 0 {
+		t.Fatalf("empty file retained: %v %v", got, ok)
 	}
+}
+
+// retained reads a CGContent row as the readers do: gunzipped, and checked
+// against its size and the hash that keys it.
+func retained(t *testing.T, repo, sha string) ([]byte, bool) {
+	t.Helper()
+	row, err := store.client.Single().ReadRow(context.Background(), "CGContent", spanner.Key{repo, sha}, []string{"UncompressedBytes", "Payload"})
+	if rowNotFound(err) {
+		return nil, false
+	}
+	if err != nil {
+		t.Fatalf("content %s: %v", sha, err)
+	}
+	var size int64
+	var z []byte
+	if err = row.Columns(&size, &z); err != nil {
+		t.Fatal(err)
+	}
+	data, err := gunzipBytes(z, size)
+	if err != nil {
+		t.Fatalf("content %s: %v", sha, err)
+	}
+	if sum := sha256.Sum256(data); int64(len(data)) != size || hex.EncodeToString(sum[:]) != sha {
+		t.Fatalf("content %s differs from its hash or size", sha)
+	}
+	return data, true
 }
 
 // --- search ---------------------------------------------------------------
@@ -1264,7 +1218,10 @@ func unit(i, dims int) []float64 {
 	return v
 }
 
-func TestSearchDocumentsEmbeddingsHybrid(t *testing.T) {
+// The embedding pass reads the documents whose embedding is missing or stale
+// and stores vectors only for documents that still match the live record;
+// the readers' vector search uses what it stores.
+func TestSearchDocumentsAndEmbeddings(t *testing.T) {
 	ctx := context.Background()
 	repo := "search-" + t.Name()
 	register(t, repo)
@@ -1291,24 +1248,23 @@ func TestSearchDocumentsEmbeddingsHybrid(t *testing.T) {
 	if err != nil || page.Generation != 1 || len(page.Documents) != 3 || page.NextCursor != "" {
 		t.Fatalf("documents to embed: %+v %v", page, err)
 	}
+	if pending, err := store.PendingDocuments(ctx, repo, model, dims); err != nil || pending != 3 {
+		t.Fatalf("pending documents: %d %v", pending, err)
+	}
 	var rows []codesearch.Embedding
-	byID := map[string]int{}
 	for i, d := range page.Documents {
-		if d.Version != codesearch.DocumentVersion || d.Text == "" {
-			t.Fatalf("document: %+v", d)
+		want, ok := codesearch.FromNode(*nodes[slices.IndexFunc(nodes, func(f graph.Fact) bool { return f.Node.ID == d.NodeID })].Node)
+		if !ok || d != want || d.Version != codesearch.DocumentVersion || d.Text == "" {
+			t.Fatalf("document: %+v, want %+v", d, want)
 		}
 		rows = append(rows, codesearch.Embedding{Document: d, Vector: unit(i, dims)})
-		byID[d.NodeID] = i
 	}
-	target := page.Documents[1].NodeID
 	// The embedding column and its vector index have the database's fixed
 	// length: other dimensions are rejected before Spanner sees them.
 	_, err = store.SearchDocuments(ctx, repo, model, 8, "")
 	wantErr(t, err, deployment.ErrInvalidRequest, "documents for another dimension")
 	err = store.PutEmbeddings(ctx, repo, model, 1, []codesearch.Embedding{{Document: rows[0].Document, Vector: unit(0, 8)}})
 	wantErr(t, err, deployment.ErrInvalidRequest, "embeddings of another dimension")
-	_, err = store.HybridSearch(ctx, SearchRequest{RepositoryIDs: []string{repo}, Model: model, Vector: unit(0, 8)})
-	wantErr(t, err, deployment.ErrInvalidRequest, "query vector of another dimension")
 	err = store.PutEmbeddings(ctx, repo, model, 2, rows)
 	wantErr(t, err, deployment.ErrStaleDeployment, "embeddings for a generation that is not live")
 	stale := rows[0]
@@ -1322,151 +1278,50 @@ func TestSearchDocumentsEmbeddingsHybrid(t *testing.T) {
 	if err != nil || len(page.Documents) != 0 {
 		t.Fatalf("everything embedded: %+v %v", page, err)
 	}
-	hits, err := store.HybridSearch(ctx, SearchRequest{RepositoryIDs: []string{repo}, Model: model, Vector: unit(1, dims), Limit: 5})
-	if err != nil || len(hits) != 3 || hits[0].Node.Fact.Node.ID != target || math.Abs(hits[0].Vector-1) > 1e-9 || hits[0].Lexical != 0 {
-		t.Fatalf("vector search: %+v %v", hits, err)
+	if pending, err := store.PendingDocuments(ctx, repo, model, dims); err != nil || pending != 0 {
+		t.Fatalf("pending after the pass: %d %v", pending, err)
 	}
-	hits, err = store.HybridSearch(ctx, SearchRequest{RepositoryIDs: []string{repo}, Model: model, Text: "inventory reserve stock"})
-	if err != nil || len(hits) == 0 || hits[0].Node.Fact.Node.Name != "InventoryService.reserve" || hits[0].Lexical <= 0 || hits[0].Vector != 0 {
-		t.Fatalf("lexical search: %+v %v", hits, err)
-	}
-	hits, err = store.HybridSearch(ctx, SearchRequest{RepositoryIDs: []string{repo}, Model: model, Text: "placeOrder", Vector: unit(byID[graph.ID("class", "OrderService")], dims), Limit: 2})
-	if err != nil || len(hits) != 2 || hits[0].Score <= hits[1].Score {
-		t.Fatalf("hybrid: %+v %v", hits, err)
-	}
-	for _, h := range hits {
-		if h.RepositoryID != repo || h.Node.GenFrom != 1 {
-			t.Fatalf("hit: %+v", h)
-		}
-	}
-	hits, err = store.HybridSearch(ctx, SearchRequest{RepositoryIDs: []string{repo}, Model: model, Vector: unit(0, dims), Kinds: []string{"method"}})
-	if err != nil || len(hits) != 2 {
-		t.Fatalf("kind filter: %+v %v", hits, err)
-	}
-	for _, h := range hits {
-		if h.Node.Fact.Node.Kind != "method" {
-			t.Fatalf("kind filter leaked: %+v", h)
-		}
-	}
-	hits, err = store.HybridSearch(ctx, SearchRequest{RepositoryIDs: []string{repo}, Model: model, Vector: unit(0, dims), PathPrefix: "src/inventory/"})
-	if err != nil || len(hits) != 1 || hits[0].Node.Fact.Node.Name != "InventoryService.reserve" {
-		t.Fatalf("path filter: %+v %v", hits, err)
-	}
-	hits, err = store.HybridSearch(ctx, SearchRequest{RepositoryIDs: []string{repo, "search-unknown"}, Model: model, Text: "order"})
-	wantErr(t, err, graph.ErrNotFound, "unknown repository")
-	_, err = store.HybridSearch(ctx, SearchRequest{RepositoryIDs: []string{repo}, Model: model})
-	wantErr(t, err, deployment.ErrInvalidRequest, "empty query")
-	_ = hits
-}
-
-func TestNaturalLanguageSearch(t *testing.T) {
-	ctx := context.Background()
-	repo := "nl-" + t.Name()
-	register(t, repo)
-	sha := strings.Repeat("0e", 32)
-	svcPath, orderPath, invPath, ctlPath := "core/src/main/java/shop/OrderService.java", "core/src/main/java/shop/Order.java", "core/src/main/java/inventory/InventoryService.java", "web/src/main/java/shop/CheckoutController.java"
-	lineage := func(module, path string) string { return graph.Lineage(repo, module, "main", path) }
-	node := func(kind, name, qualified, path, text, module string) graph.Fact {
-		f := testNode(kind, name, map[string]graph.PropertyValue{"file_path": graph.StringValue(path), "source_text": graph.StringValue(text), "signature": graph.StringValue(strings.SplitN(text, "{", 2)[0])})
-		f.Node.QualifiedName = qualified
-		f.Node.Source = anchor(lineage(module, path), sha)
-		return f
-	}
-	orderService := node("class", "OrderService", "shop.OrderService", svcPath, "public class OrderService { /* places orders and reserves stock */ }", "core")
-	placeOrder := node("method", "placeOrder", "placeOrder(shop.Cart)", svcPath, "public Order placeOrder(Cart cart) { inventory.reserve(cart); return orders.save(cart); }", "core")
-	orderField := node("field", "order", "order", svcPath, "private Order order;", "core")
-	order := node("class", "Order", "shop.Order", orderPath, "public class Order { long id; }", "core")
-	reserve := node("method", "reserve", "reserve(shop.Cart)", invPath, "public void reserve(Cart cart) { stock.hold(cart.items()); }", "core")
-	checkout := node("method", "checkout", "checkout(shop.Cart)", ctlPath, "public Response checkout(Cart cart) { return orderService.placeOrder(cart); }", "web")
-	call1 := testEdge(graph.EdgeCalls, checkout.Node.ID, placeOrder.Node.ID)
-	call1.Edge.Source = anchor(lineage("web", ctlPath), sha)
-	call2 := testEdge(graph.EdgeCalls, placeOrder.Node.ID, reserve.Node.ID)
-	call2.Edge.Source = anchor(lineage("core", svcPath), sha)
-	run1, lease1 := startGeneration(t, repo, 1, 1)
-	load(t, lease1, 1,
-		add(orderService, lineage("core", svcPath)), add(placeOrder, lineage("core", svcPath)), add(orderField, lineage("core", svcPath)),
-		add(order, lineage("core", orderPath)), add(reserve, lineage("core", invPath)), add(checkout, lineage("web", ctlPath)),
-		add(call1, lineage("web", ctlPath)), add(call2, lineage("core", svcPath)))
-	publish(t, lease1, run1)
-	search := func(text string) []SearchHit {
-		t.Helper()
-		hits, err := store.HybridSearch(ctx, SearchRequest{RepositoryIDs: []string{repo}, Text: text})
+	// Each vector is stored with the document it embeds, for the generation
+	// it was computed at.
+	stored := map[string]bool{}
+	it := store.client.Single().Read(ctx, "CGSearchEmbeddings", spanner.Key{repo, model, int64(dims)}.AsPrefix(),
+		[]string{"NodeID", "DocumentHash", "DocumentVersion", "DocumentText", "Embedding", "UpdatedGeneration"})
+	defer it.Stop()
+	for {
+		row, err := nextRow(it)
 		if err != nil {
-			t.Fatalf("search %q: %v", text, err)
+			t.Fatal(err)
 		}
-		return hits
-	}
-	find := func(hits []SearchHit, name string) *SearchHit {
-		for i := range hits {
-			if hits[i].Node.Fact.Node.Name == name {
-				return &hits[i]
-			}
+		if row == nil {
+			break
 		}
-		return nil
-	}
-
-	// A question naming a symbol puts that symbol first as an exact match,
-	// and a plain word equal to a method name is a name match behind it.
-	hits := search("who calls placeOrder from the checkout flow?")
-	if len(hits) == 0 || hits[0].Node.Fact.Node.Name != "placeOrder" || !hits[0].ExactMatch || hits[0].NameMatch {
-		t.Fatalf("symbol in a question: %+v", hits)
-	}
-	if h := find(hits, "checkout"); h == nil || !h.NameMatch || h.ExactMatch {
-		t.Fatalf("plain word naming a method: %+v", hits)
-	}
-	// Question words never match: nothing in the graph is named "who" or "flow".
-	for _, h := range hits {
-		for _, term := range h.Matched {
-			if term == "who" || term == "calls" || term == "from" || term == "the" {
-				t.Fatalf("stop word reported as matched: %+v", h)
-			}
+		var id, hash, text string
+		var version, generation int64
+		var vector []float32
+		if err = row.Columns(&id, &hash, &version, &text, &vector, &generation); err != nil {
+			t.Fatal(err)
 		}
-	}
-
-	// A member reference names both the owner and the member.
-	hits = search("explain OrderService.placeOrder() to me")
-	if a, b := find(hits, "placeOrder"), find(hits, "OrderService"); a == nil || b == nil || !a.ExactMatch || !b.ExactMatch {
-		t.Fatalf("member reference: %+v", hits)
-	}
-
-	// A plain word equal to a type name is a name match on the type, never
-	// on a field that happens to share it, and never an exact match.
-	hits = search("how is an order placed and reserved")
-	if h := find(hits, "Order"); h == nil || !h.NameMatch || h.ExactMatch {
-		t.Fatalf("plain word naming a class: %+v", hits)
-	}
-	if h := find(hits, "order"); h != nil && h.NameMatch {
-		t.Fatalf("field must not be a name match: %+v", h)
-	}
-	for _, h := range hits {
-		if h.ExactMatch {
-			t.Fatalf("no symbol was named: %+v", h)
+		i := slices.IndexFunc(rows, func(r codesearch.Embedding) bool { return r.Document.NodeID == id })
+		if i < 0 || hash != rows[i].Document.Hash || int(version) != codesearch.DocumentVersion || text != rows[i].Document.Text || generation != 1 || !slices.Equal(vector, float32Vector(rows[i].Vector)) {
+			t.Fatalf("stored embedding of %s: %s %d %v %d", id, hash, version, vector, generation)
 		}
+		stored[id] = true
 	}
-
-	// A path mention lifts the hit under it.
-	hits = search("where does reserve hold stock under core/src/main/java/inventory")
-	if len(hits) == 0 || hits[0].Node.Fact.Node.Name != "reserve" || !hits[0].NameMatch {
-		t.Fatalf("path hint: %+v", hits)
+	if len(stored) != len(rows) {
+		t.Fatalf("stored %d embeddings, want %d", len(stored), len(rows))
 	}
-
-	// A single identifier still behaves as before, and a question made only
-	// of stop words is still a valid lexical query.
-	if hits = search("placeOrder"); len(hits) == 0 || hits[0].Node.Fact.Node.Name != "placeOrder" || !hits[0].ExactMatch {
-		t.Fatalf("identifier: %+v", hits)
-	}
-	if _, err := store.HybridSearch(ctx, SearchRequest{RepositoryIDs: []string{repo}, Text: "what is the class"}); err != nil {
-		t.Fatalf("stop words only: %v", err)
-	}
-	// Kinds restrict the name tier too: asking for fields, a word cannot name one.
-	hits, err := store.HybridSearch(ctx, SearchRequest{RepositoryIDs: []string{repo}, Text: "how is an order placed", Kinds: []string{"field"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, h := range hits {
-		if h.NameMatch || h.Node.Fact.Node.Kind != "field" {
-			t.Fatalf("kinds filter on the name tier: %+v", h)
-		}
+	// A new text makes the stored vector stale: the next pass embeds it again.
+	run2, lease2 := startGeneration(t, repo, 2, 2)
+	before := mustNode(t, repo, rows[0].Document.NodeID, 0)
+	changed := before.Fact
+	n := *changed.Node
+	n.Properties = map[string]graph.PropertyValue{"file_path": graph.StringValue(graph.Text(n.Properties, "file_path")), "source_text": graph.StringValue("// rewritten")}
+	changed.Node = &n
+	load(t, lease2, 2, update(before, changed))
+	publish(t, lease2, run2)
+	page, err = store.SearchDocuments(ctx, repo, model, dims, "")
+	if err != nil || page.Generation != 2 || len(page.Documents) != 1 || page.Documents[0].NodeID != n.ID || page.Documents[0].Hash == rows[0].Document.Hash {
+		t.Fatalf("a changed document is stale: %+v %v", page, err)
 	}
 }
 

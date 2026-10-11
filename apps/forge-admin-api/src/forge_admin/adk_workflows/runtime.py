@@ -11,7 +11,7 @@ The organizations' workflows for outside apps, over REST
 - ``GET /workflows/{ref}/runs/{run}``: the run, waiting as long again.
 - ``POST …/answers``: answer the question it waits at; ``…/decisions``:
   approve or reject the approval (or tool call) it waits at; ``…/cancel``:
-  give it up.
+  give it up (a running one stops on its worker first: 202).
 
 ``{ref}`` is ``ag_x`` (its latest published version), ``ag_x@3`` or
 ``ag_x@draft`` (``versions.py``, outside rules). Who may call is
@@ -32,7 +32,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request, Response, status
 from forge_task_adk_workflows.files import FILE_TYPES, RunFile, files_rule
-from forge_task_adk_workflows.run_store import ABANDONABLE, PAUSED, Actor
+from forge_task_adk_workflows.run_store import CANCELABLE, PAUSED, RUNNING, Actor
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo.errors import PyMongoError
 from starlette.routing import NoMatchFound
@@ -227,6 +227,9 @@ class RuntimeRun(BaseModel):
     #: Where to follow it, and act on it: ``self``, ``answers``,
     #: ``decisions``, ``cancel``.
     links: dict[str, str]
+    #: When it was cancelled while it ran: its worker stops it, and it's
+    #: abandoned then (unless it ended first).
+    cancel_requested_at: str | None = None
 
 
 def _iso(value: Any) -> str | None:
@@ -270,7 +273,7 @@ def runtime_run(request: Request, run: dict[str, Any]) -> RuntimeRun:
         links["answers" if pause.kind == HUMAN_INPUT else "decisions"] = (
             f"{base}/{'answers' if pause.kind == HUMAN_INPUT else 'decisions'}"
         )
-    if run["status"] in ABANDONABLE:
+    if run["status"] in CANCELABLE and run.get("cancel_requested_at") is None:
         links["cancel"] = f"{base}/cancel"
     error = run.get("error")
     return RuntimeRun(
@@ -295,6 +298,7 @@ def runtime_run(request: Request, run: dict[str, Any]) -> RuntimeRun:
         pause=pause,
         files=run_files(run.get("payload")),
         links=links,
+        cancel_requested_at=_iso(run.get("cancel_requested_at")),
     )
 
 
@@ -734,15 +738,30 @@ async def decide_workflow_run(
     return runtime_run(request, await _settled(request, decided, body.wait))
 
 
-@router.post("/{ref}/runs/{run_id}/cancel", summary="Give a run up")
+@router.post(
+    "/{ref}/runs/{run_id}/cancel",
+    summary="Give a run up",
+    responses={
+        202: {
+            "model": RuntimeRun,
+            "description": "It's running: its worker stops it, then gives it up",
+        }
+    },
+)
 async def cancel_workflow_run(
-    request: Request, ref: WorkflowRef, run_id: RunId, caller: Caller
+    request: Request,
+    response: Response,
+    ref: WorkflowRef,
+    run_id: RunId,
+    caller: Caller,
 ) -> RuntimeRun:
     """
-    Give the run up: it never carries on.
+    Give the run up: it never carries on. A running run is stopped by its
+    worker (at its next step, or within a minute) and given up then: 202,
+    still running, with ``cancel_requested_at`` set.
     \f
     :raises HTTPException: 404 for no such run, or one the caller may not
-        cancel; 409 when it's running or finished.
+        cancel; 409 once it's finished (but failed).
     """
     run = await _run_of(request, caller, ref, run_id)
     if not await may(request, caller, run, MANAGE_RUNS):
@@ -750,4 +769,6 @@ async def cancel_workflow_run(
     actor = await caller_actor(request, caller)
     with store_errors():
         abandoned = await run_store(request).abandon(run_id, actor=actor)
+    if abandoned["status"] == RUNNING:
+        response.status_code = status.HTTP_202_ACCEPTED
     return runtime_run(request, abandoned)

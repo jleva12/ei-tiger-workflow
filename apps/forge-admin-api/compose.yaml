@@ -85,11 +85,22 @@ services:
       # (apps/forge-codegraph-mcp), for servers added from it: the admin API
       # and the async worker both reach it there.
       FORGE_ADMIN_CODEGRAPH_MCP_URL: http://codegraph-mcp:8103/mcp
-      # Graph knowledge bases and the code graph explorer: the code graph
-      # worker's API on the stack's network (apps/forge-codegraph-worker),
-      # with its token from .env.common. Called on use, so no depends_on.
-      FORGE_ADMIN_CODEGRAPH_URL: http://worker:8080
-      FORGE_ADMIN_CODEGRAPH_TOKEN: ${FORGE_CODEGRAPH_ADMISSION_TOKEN:-}
+      # System design knowledge bases, the code graph explorer and code
+      # links: the code graph in the worker's database (worker-spanner, or
+      # WORKER_SPANNER_DATABASE), read as every app reads it
+      # (packages/python/codegraph-query). The worker creates the emulator's
+      # database on start; until then those answer that the code graph is
+      # unavailable, so no depends_on.
+      FORGE_ADMIN_CODEGRAPH__SPANNER__DATABASE: ${WORKER_SPANNER_DATABASE:-projects/codegraph-local/instances/codegraph/databases/codegraph}
+      FORGE_ADMIN_CODEGRAPH__SPANNER__SCOPE: ${WORKER_SCOPE:-codegraph}
+      FORGE_ADMIN_CODEGRAPH__SPANNER__CURSOR_SIGNING_KEY: ${FORGE_CODEGRAPH_CURSOR_SIGNING_KEY:-}
+      FORGE_ADMIN_CODEGRAPH__EMBEDDING__MODEL: ${FORGE_EMBEDDING_MODEL:-text-embedding-3-large}
+      FORGE_ADMIN_CODEGRAPH__EMBEDDING__DIMENSIONS: ${FORGE_EMBEDDING_DIMENSIONS:-1024}
+      FORGE_ADMIN_CODEGRAPH__EMBEDDING__BASE_URL: ${FORGE_EMBEDDING_BASE_URL:-}
+      FORGE_ADMIN_CODEGRAPH__EMBEDDING__API_KEY: ${OPENAI_API_KEY:-}
+      # Query enhancement is a managed-Spanner feature the emulator ignores.
+      FORGE_ADMIN_CODEGRAPH__SEARCH__ENHANCE_QUERY: ${CODEGRAPH_SEARCH_ENHANCE_QUERY:-false}
+      SPANNER_EMULATOR_HOST: worker-spanner:9010
       # Searches embedded with the model every app shares (FORGE_EMBEDDING_*
       # in .env.common), as the async worker embedded the chunks.
       FORGE_ADMIN_KNOWLEDGE_EMBEDDING__DOCUMENT_MODEL: ${FORGE_EMBEDDING_MODEL:-text-embedding-3-large}

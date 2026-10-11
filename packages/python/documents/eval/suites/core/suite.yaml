@@ -1,0 +1,39 @@
+name: core
+description: >-
+  One fictional insurer's (Northwind Mutual's) documents, one per format, and
+  labelled questions of every kind the knowledge-base search should answer:
+  plain facts, reworded questions, table cells, nested lists, procedures,
+  diagrams, identifiers, code, speaker notes, questions needing two documents,
+  and questions the documents don't answer.
+documents:
+  - id: claims-manual
+    file: corpus/claims_operations_manual.md
+    about: Authority matrix nested region > role > line of business; CAT procedure with numbered sub-steps; SIU flags.
+  - id: expense-policy
+    file: corpus/travel_expense_policy.docx
+    about: Word headings, a lodging table, numbered and bulleted lists.
+  - id: premium-rates
+    file: corpus/auto_premium_rates_2026.xlsx
+    about: Two sheets; 36 rate rows (split into row groups, plus a summary) and a discounts table.
+  - id: incident-runbook
+    file: corpus/incident_response_runbook.html
+    about: Page chrome to drop, a severity table, nested ordered and bulleted lists, a code block.
+  - id: business-review
+    file: corpus/q3_2026_business_review.pptx
+    about: Slides with nested bullets, speaker notes, a table and chart data.
+  - id: vendor-agreement
+    file: corpus/acme_repairs_service_agreement.pdf
+    about: Two-page contract, numbered clauses, a ruled fee table, a running header.
+  - id: adjuster-roster
+    file: corpus/adjuster_roster.csv
+    about: 20 rows, split into row groups with repeated headers.
+  - id: release-notes
+    file: corpus/claimscenter_release_notes.txt
+    about: Plain text with version lines and ticket identifiers (CC-4821).
+  - id: fnol-flow
+    file: corpus/fnol_intake_flow.mmd
+    about: Mermaid flowchart with decisions.
+  - id: payment-flow
+    file: corpus/payment_approval.vsdx
+    about: Visio diagram with a labelled connector and an annotation.
+questions: questions.yaml

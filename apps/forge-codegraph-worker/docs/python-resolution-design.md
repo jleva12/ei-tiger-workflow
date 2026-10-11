@@ -365,7 +365,7 @@ from semantic results. Every semantic cache key includes all effective inputs.
 | `packages/go/code-graph/domain/semantic/` | Structured evidence and candidate completeness |
 | `apps/forge-codegraph-worker/internal/ingestion/affected.go` | Environment fingerprints and dependency invalidation |
 | `apps/forge-codegraph-worker/internal/graphanalysis/projector.go` | Candidate/evidence projection and new relation roles |
-| `packages/go/code-graph/agentquery/` | Exact/possible target distinction in graph queries |
+| `packages/python/codegraph-query/` (`forge_codegraph_query`) | Exact/possible target distinction in graph queries |
 
 Update codecs, validators, parser dispatch, caches and API properties alongside
 contract additions. Reuse generation storage; new properties/edges need review,

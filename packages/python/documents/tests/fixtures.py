@@ -115,6 +115,61 @@ def make_markdown() -> bytes:
     return MARKDOWN.encode()
 
 
+HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Chargeback disputes | Acme Help Center</title>
+  <meta name="author" content="Disputes Team">
+  <meta name="keywords" content="chargebacks, disputes">
+  <script>window.analytics = {track() {}};</script>
+  <style>.banner { color: red }</style>
+</head>
+<body>
+  <header><a href="/">Acme</a><nav><a href="/help">Help</a> <a href="/status">Status</a></nav></header>
+  <aside>Popular articles</aside>
+  <main>
+    <h1>Chargeback disputes</h1>
+    <p>A cardholder can dispute a charge with their bank.<br>Answer every case under <span>ticket</span><span> CB-2210</span>.<!-- draft note --></p>
+    <div hidden>Internal only</div>
+    <h2>Evidence</h2>
+    <div>Gather the evidence <a href="/kb/evidence">listed here</a>
+      <p>Send it before the deadline.
+    </div>
+    <ul>
+      <li>Delivery proof<ul><li>Carrier tracking number</ul>
+      <li>Customer emails
+    </ul>
+    <table>
+      <caption>Reason codes</caption>
+      <thead>
+        <tr><th rowspan="2">Network</th><th colspan="2">Days to respond</th></tr>
+        <tr><th>Domestic</th><th>Cross-border</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Visa</td><td>30</td><td>45</td></tr>
+        <tr><td colspan="2">Mastercard (any region)</td><td>45</td></tr>
+      </tbody>
+    </table>
+    <h3>Submitting</h3>
+    <pre><code class="language-python">
+def submit_evidence(case_id):
+    return disputes.submit(case_id)
+</code></pre>
+    <pre class="mermaid">flowchart LR
+  Opened[Dispute opened] --> Answered[Evidence sent]</pre>
+    <table role="presentation"><tr><td><p>Won cases close automatically.</p></td><td><p>Lost cases can be appealed once.</p></td></tr></table>
+  </main>
+  <footer>Copyright Acme</footer>
+</body>
+</html>
+"""
+
+
+def make_html() -> bytes:
+    return HTML.encode()
+
+
 TEXT = """Incident notes
 ==============
 

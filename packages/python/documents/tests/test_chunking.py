@@ -33,6 +33,7 @@ def doc_of(*elements: Element, title: str = "Doc") -> ParsedDocument:
         "handbook.docx",
         "pricing.xlsx",
         "runbook.md",
+        "help_center.html",
         "incident.txt",
         "people.csv",
         "order_flow.vsdx",
@@ -219,3 +220,76 @@ def test_mermaid_graph_serialization(registry, engine):
     assert "[Valid?] --no--> [Reject order]" in lines
     assert lines.index("[Receive order] --> [Valid?]") < lines.index("[Valid?] --yes--> [Ship order]")
     assert "Lane: Payments" in lines and "[Charge card via Stripe] --> [Refund]" in lines
+
+
+def _item(text: str, level: int, marker: str = "-", **attrs) -> Element:
+    return Element(
+        kind=ElementKind.LIST_ITEM, text=text, level=level, section_path=["Limits"], attrs={"marker": marker, **attrs}
+    )
+
+
+def _limits() -> list[Element]:
+    els = [Element(kind=ElementKind.HEADING, text="Limits", level=2, section_path=["Limits"])]
+    for role in ("Adjusters", "Supervisors", "Managers"):
+        els.append(_item(role, 0))
+        for line in ("Auto claims", "Home claims"):
+            els.append(_item(line, 1))
+            els += [_item(f"{role} {line.lower()} rule {n} applies to every region", 2) for n in range(3)]
+    return els
+
+
+def test_list_split_repeats_parent_items():
+    engine = ChunkEngine(HeuristicTokenizer(), ChunkingConfig(max_tokens=60, min_tokens=10))
+    chunks = engine.chunk(doc_of(*_limits()))
+    assert len(chunks) > 3
+    for c in chunks:
+        assert engine.tokenizer.count(c.text) <= 60
+    # every rule is read under the role and line it belongs to
+    for c in chunks:
+        lines = c.text.splitlines()
+        for i, line in enumerate(lines):
+            if " rule " in line:
+                role, kind = line.strip()[2:].split(" ")[:2]
+                assert f"- {role}" in lines[:i], c.text
+                assert f"  - {kind.capitalize()} claims" in lines[:i], c.text
+    # and each rule exactly once
+    rules = [line for c in chunks for line in c.text.splitlines() if " rule " in line]
+    assert len(rules) == len(set(rules)) == 18
+
+
+def test_list_item_with_its_children_starts_a_chunk_rather_than_being_cut():
+    engine = ChunkEngine(HeuristicTokenizer(), ChunkingConfig(max_tokens=100, min_tokens=10))
+    chunks = engine.chunk(doc_of(*_limits()))
+    for role in ("Adjusters", "Supervisors", "Managers"):
+        holding = [c for c in chunks if f"{role} auto claims rule 0" in c.text]
+        assert len(holding) == 1
+        # the role's auto claims stay together under the role
+        assert all(f"{role} auto claims rule {n}" in holding[0].text for n in range(3))
+
+
+def test_list_markers_continuations_and_long_items_render():
+    long_item = " ".join(f"Sentence {n} says what the reviewer checks next." for n in range(20))
+    engine = ChunkEngine(HeuristicTokenizer(), ChunkingConfig(max_tokens=120, min_tokens=10))
+    chunks = engine.chunk(
+        doc_of(
+            _item("Gather the evidence", 0, "3."),
+            Element(
+                kind=ElementKind.LIST_ITEM,
+                text="Photos and receipts.",
+                level=0,
+                section_path=["Limits"],
+                attrs={"continuation": True},
+            ),
+            _item("Review it", 0, "4."),
+            _item(long_item, 1),
+        )
+    )
+    assert chunks[0].text == "3. Gather the evidence\n  Photos and receipts."
+    # an item too big to keep whole starts a chunk rather than trailing one
+    assert chunks[1].text.startswith("4. Review it\n  - Sentence 0 says")
+    for c in chunks:
+        assert engine.tokenizer.count(c.text) <= 120
+    # a later piece of the long item repeats the items above it, then reads as part of it
+    later = [c for c in chunks if "Sentence 19" in c.text][0]
+    assert later.text.startswith("4. Review it\n  - Sentence 0 says")
+    assert "\n    Sentence" in later.text

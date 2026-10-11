@@ -136,12 +136,23 @@ export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
     method: oneOf(...HTTP_METHODS),
     url: {
       ...text,
-      description: "Where it calls; {name} puts in an argument of that name.",
+      description:
+        "Where it calls: {name} puts in the model's argument of that name, {{ expression }} one of the run's values. A query parameter that's one argument is left out when the model doesn't send it.",
     },
     headers,
+    body: {
+      ...text,
+      description:
+        "Its JSON body (POST, PUT, PATCH), with placeholders as its URL has; one that's a whole value goes in as it is. Empty for none.",
+    },
     parameters: jsonSchema(
-      "A JSON Schema of the arguments the model fills in; {} takes none."
+      "A JSON Schema of the arguments: their types and descriptions. The model is offered those the URL and body name."
     ),
+    credential: {
+      ...text,
+      description:
+        "One of the organization's credentials, by ID: its auth (an API key, a token, OAuth) goes with each call, and only to the URLs it's for. Empty for none.",
+    },
     confirm: {
       ...bool,
       description: "A person confirms each call before it's made.",
@@ -158,7 +169,12 @@ export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
     operations: {
       ...text,
       description:
-        "The operation IDs it may call, comma-separated; empty for all.",
+        "The operations it may call, comma-separated: their tool names (the operationId in snake case) or operation IDs; empty for all.",
+    },
+    credential: {
+      ...text,
+      description:
+        "One of the organization's credentials, by ID: its auth goes with each call, and only to the URLs it's for. Empty for none.",
     },
     confirm: bool,
   },

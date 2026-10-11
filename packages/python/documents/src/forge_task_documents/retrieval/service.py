@@ -33,7 +33,7 @@ class SearchConfig(BaseModel):
     # question (cosine of their vectors), and only for a hit nothing else
     # found: one sharing a word or an identifier with the question is kept.
     # None turns a floor off. 0.2 leaves out what text-embedding-3 vectors
-    # call unrelated; tune it with the eval harness (forge_embeddings.eval).
+    # call unrelated; tune it with the labelled suite (eval/README.md).
     min_similarity: float | None = Field(default=0.2, ge=-1, le=1)
     min_rerank_score: float | None = None
 

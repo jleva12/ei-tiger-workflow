@@ -215,6 +215,25 @@ def test_the_starter_gives_its_run_up(runtime: Runtime) -> None:
     assert "cancel" not in cancelled["links"]
 
 
+def test_a_running_run_is_stopped_by_its_worker_then_given_up(
+    runtime: Runtime,
+) -> None:
+    run = runtime.start().json()
+    assert runtime.call(runtime.runs.claim, run["id"], owner="w1", lease_seconds=60)
+    going = runtime.send("GET", f"/{SHIP}/runs/{run['id']}").json()
+    assert "cancel" in going["links"] and going["cancel_requested_at"] is None
+
+    asked = runtime.send("POST", f"/{SHIP}/runs/{run['id']}/cancel")
+
+    assert asked.status_code == 202, asked.json()
+    stopping = asked.json()
+    assert stopping["status"] == "running" and stopping["cancel_requested_at"]
+    assert "cancel" not in stopping["links"]
+    runtime.call(runtime.runs.abandon_running, run["id"], owner="w1", state={})
+    given_up = runtime.send("GET", f"/{SHIP}/runs/{run['id']}").json()
+    assert given_up["status"] == "abandoned"
+
+
 # ------------------------------------------------------------ not public
 
 

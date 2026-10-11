@@ -1,5 +1,6 @@
 """ApiServer: one class that builds and owns the FastAPI application."""
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
@@ -8,6 +9,7 @@ from importlib.metadata import version
 from fastapi import APIRouter, Depends, FastAPI
 from forge_agent_runtime.a2a import task_store
 from forge_common.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
+from forge_mcp_servers.api_credentials import ApiCredentials
 from forge_mcp_servers.secrets import SecretBox
 from forge_mcp_servers.service import McpServers
 from forge_task_adk_workflows.run_store import RunStore
@@ -31,7 +33,7 @@ from forge_admin.chat_agents.source import create_executor
 from forge_admin.chat_agents.store import ChatAgentStore
 from forge_admin.config import Settings
 from forge_admin.db.session import create_engine, create_sessionmaker
-from forge_admin.knowledge.graph import codegraph_from
+from forge_admin.knowledge.graph import check_codegraph, codegraph_from
 from forge_admin.knowledge.queue import KnowledgeQueue
 from forge_admin.knowledge.search import KnowledgeSearch
 from forge_admin.knowledge.storage import DocumentStore
@@ -128,6 +130,17 @@ class ApiServer:
                 if key
                 else None
             )
+        # Organizations' API credentials, encrypted with the same key; None
+        # without one. Tests set their own.
+        if getattr(app.state, "api_credentials", None) is None:
+            key = self.settings.secrets_key
+            app.state.api_credentials = (
+                ApiCredentials(
+                    SecretBox(key.get_secret_value()), timeout=self.settings.mcp_timeout
+                )
+                if key
+                else None
+            )
         # The MCP servers the web console offers ready-made, checked against
         # the auth methods: a bad file stops the API here. Tests set their own.
         if getattr(app.state, "mcp_server_defaults", None) is None:
@@ -144,10 +157,21 @@ class ApiServer:
             app.state.knowledge_queue = KnowledgeQueue.from_settings(self.settings)
         if getattr(app.state, "knowledge_search", None) is None:
             app.state.knowledge_search = KnowledgeSearch.from_settings(self.settings)
-        # Graph knowledge bases' search and the code graph explorer: the code
-        # graph worker's API; None when not set up. Tests set their own.
+        # System design knowledge bases' search, the code graph explorer and
+        # code links: the code graph in the worker's Spanner database; None
+        # when not set up. Startup doesn't wait for it: a check in the
+        # background logs a database that never answers or was made for
+        # other embeddings. Tests set their own.
+        checking = None
         if getattr(app.state, "codegraph", None) is None:
             app.state.codegraph = codegraph_from(self.settings)
+            if app.state.codegraph is not None:
+                checking = asyncio.create_task(
+                    check_codegraph(
+                        app.state.codegraph,
+                        self.settings.codegraph.spanner.startup_timeout,
+                    )
+                )
         # The assistant's agents, keeping conversations in the same database.
         # Tests set their own (a scripted model, in-memory sessions).
         if getattr(app.state, "agents", None) is None:
@@ -165,6 +189,7 @@ class ApiServer:
                     store=app.state.chat_agents,
                     sessions=app.state.sessionmaker,
                     mcp_servers=app.state.mcp_servers,
+                    api_credentials=app.state.api_credentials,
                     agents=app.state.organization_agents,
                     runs=app.state.adk_runs,
                     queue=app.state.embedding,
@@ -209,8 +234,10 @@ class ApiServer:
                 await app.state.knowledge_queue.aclose()
             if app.state.knowledge_search is not None:
                 await app.state.knowledge_search.aclose()
+            if checking is not None:
+                checking.cancel()
             if app.state.codegraph is not None:
-                await app.state.codegraph.aclose()
+                await app.state.codegraph.close()
             if app.state.documents is not None:
                 app.state.documents.close()
             if app.state.organization_agents is not None:

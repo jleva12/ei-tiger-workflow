@@ -18,6 +18,9 @@ adds.
   one at a time when the body can pause, else up to its concurrency at once.
   It hands on ``{count, results}`` (what each item's body handed back) by its
   Done way. More items than it allows fail the run.
+- ``for_each``: a loop whose body never comes back: each item's way ends where
+  it ends, nothing is collected, and it hands on ``{count}`` by its Done way
+  once every item's has.
 - ``end``: finishes its way with ``{outcome, result}``, its result its
   expression's, else what came in. Neither stops other ways still running:
   a failed one's outcome is the finish's to collect, and the run fails once
@@ -75,9 +78,9 @@ def if_(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
     s = settings_of(node, IfConfig)
     evaluator = ctx.services.evaluator
 
-    def run(adk: Context, node_input: Any) -> Event:
+    async def run(adk: Context, node_input: Any) -> Event:
         try:
-            holds = evaluator.truthy(s.condition, ctx.data(adk, node_input))
+            holds = await evaluator.truthy(s.condition, ctx.data(adk, node_input))
         except StepFailed as error:
             raise failed(node, error) from None
         return Event(output=node_input, route="true" if holds else "false")  # type: ignore[call-arg]  # ADK's shorthand for actions.route
@@ -89,9 +92,9 @@ def switch(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
     s = settings_of(node, SwitchConfig)
     evaluator = ctx.services.evaluator
 
-    def run(adk: Context, node_input: Any) -> Event:
+    async def run(adk: Context, node_input: Any) -> Event:
         try:
-            value = as_text(evaluator.evaluate(s.value, ctx.data(adk, node_input), what="What it switches on"))
+            value = as_text(await evaluator.evaluate(s.value, ctx.data(adk, node_input), what="What it switches on"))
         except StepFailed as error:
             raise failed(node, error) from None
         way = next((case.id for case in s.cases if case.value == value), "default")
@@ -106,13 +109,13 @@ def match(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
 
     every = s.mode == "all"
 
-    def run(adk: Context, node_input: Any) -> Event:
+    async def run(adk: Context, node_input: Any) -> Event:
         data = ctx.data(adk, node_input)
         ways: list[str] = []
         for index, arm in enumerate(s.arms):
             what = f"The condition of {arm.label or f'rule {index + 1}'}"
             try:
-                if evaluator.truthy(arm.condition, data, what=what):
+                if await evaluator.truthy(arm.condition, data, what=what):
                     ways.append(arm.id)
                     if not every:
                         break
@@ -169,6 +172,15 @@ def via(name: str, source: str) -> FunctionNode:
 
 
 def loop(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
+    return _per_item(node, ctx, collect=True)
+
+
+def for_each(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
+    return _per_item(node, ctx, collect=False)
+
+
+def _per_item(node: dict[str, Any], ctx: BuildContext, *, collect: bool) -> FunctionNode:
+    # A loop (collect: each item's result) or a for-each (nothing back).
     s = settings_of(node, LoopConfig)
     services = ctx.services
     body = ctx.bodies.get(node["id"])
@@ -178,7 +190,7 @@ def loop(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
 
     async def run(adk: Context, node_input: Any) -> Event:
         try:
-            found = services.evaluator.evaluate(s.items, ctx.data(adk, node_input), what="Its list")
+            found = await services.evaluator.evaluate(s.items, ctx.data(adk, node_input), what="Its list")
         except StepFailed as error:
             raise failed(node, error) from None
         # JSONata gives one item on its own, not in a list.
@@ -203,7 +215,8 @@ def loop(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
 
         if body is not None:
             await _each(one, len(items), at_once)
-        return Event(output={"count": len(items), "results": results}, route="done")  # type: ignore[call-arg]  # ADK's shorthand for actions.route
+        output = {"count": len(items), "results": results} if collect else {"count": len(items)}
+        return Event(output=output, route="done")  # type: ignore[call-arg]  # ADK's shorthand for actions.route
 
     return FunctionNode(name=_name(node), func=run, rerun_on_resume=True)
 
@@ -243,10 +256,10 @@ def end(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
     # are one step's: a failed one fails the run at once.
     collected = ctx.top and ctx.scope.depth == 0
 
-    def run(adk: Context, node_input: Any) -> dict[str, Any]:
+    async def run(adk: Context, node_input: Any) -> dict[str, Any]:
         if s.result.strip():
             try:
-                result = evaluator.evaluate(s.result, ctx.data(adk, node_input), what="Its result")
+                result = await evaluator.evaluate(s.result, ctx.data(adk, node_input), what="Its result")
             except StepFailed as error:
                 raise failed(node, error) from None
         else:

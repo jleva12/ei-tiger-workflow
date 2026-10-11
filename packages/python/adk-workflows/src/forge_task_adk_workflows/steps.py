@@ -4,7 +4,8 @@ in the run's ADK session, read from the session's events.
 
 One entry per node of the document, in the document's order::
 
-    {"id", "name", "kind", "status", "output", "error", "started_at", "finished_at", "calls"}
+    {"id", "name", "kind", "status", "output", "error", "started_at", "finished_at", "calls",
+     "input", "input_from", "state_changes"}
 
 - ``status``:
   - ``done``: it handed on its output (``error`` too when it took its Error
@@ -25,6 +26,12 @@ One entry per node of the document, in the document's order::
   "response", "at"}``, ``status`` ``done``, ``failed`` (the tool answered an
   error, or a person refused it), ``waiting`` (for a person to confirm it) or
   ``running``; a long response cut short.
+- ``input`` / ``input_from``: what it was handed (its ``previous``) and the
+  step that handed it on: the output of the step before it that handed on last
+  before it started (through a logic step, what that step was handed). None
+  for the start, a step not reached, or a loop body's first step (its item).
+- ``state_changes``: what its events (and those of what runs inside it) set in
+  the session's state, in order: ``{"key", "value", "at"}``.
 - ``started_at`` / ``finished_at``: when a step before it handed on to it (the
   last to, before its first event), else its first event; and the event that
   finished it. ISO 8601 in UTC; None when there's none. ADK records a step only
@@ -51,10 +58,10 @@ from typing import Any
 from google.adk.events import Event
 from google.adk.sessions import Session
 
-from forge_task_adk_workflows.graph.data import INPUT_NODE, StepInfo, _record, as_data
+from forge_task_adk_workflows.graph.data import INPUT_NODE, LOGIC, StepInfo, _record, as_data
 from forge_task_adk_workflows.graph.factories.agents import answer_parser
 from forge_task_adk_workflows.graph.factories.base import config_of, items, text
-from forge_task_adk_workflows.graph.names import adk_name, body_name
+from forge_task_adk_workflows.graph.names import BODY_KINDS, adk_name, body_name
 from forge_task_adk_workflows.graph.pauses import REQUEST_CONFIRMATION, REQUEST_INPUT, pending_pauses
 from forge_task_adk_workflows.support.expressions import as_text
 
@@ -83,6 +90,8 @@ class _Seen:
     calls: dict[str, dict[str, Any]] = field(default_factory=dict)
     #: The calls a person is still to confirm: ADK answers each "it needs confirming" meanwhile.
     confirming: set[str] = field(default_factory=set)
+    #: What it changed in the session's state, in order: ``{"key", "value", "at"}``.
+    changes: list[dict[str, Any]] = field(default_factory=list)
 
     def saw(self, when: float) -> None:
         if self.started is None or when < self.started:
@@ -99,50 +108,52 @@ class _Seen:
         return RUNNING if self.started is not None else NOT_REACHED
 
 
-def run_steps(session: Session | None, document: dict[str, Any]) -> list[dict[str, Any]]:
+def run_steps(
+    session: Session | None, document: dict[str, Any], *, invocation_id: str | None = None
+) -> list[dict[str, Any]]:
     """
     :param session: The run's ADK session, as its session service reads it;
         None before the run has one.
     :param document: The ``forge.agent/v1`` document the run runs.
+    :param invocation_id: The run's ADK invocation: only its events count (a
+        session another run shares holds that run's too). None reads the
+        session's latest invocation.
     :return: Each of its steps, in the document's order, with what it did.
     """
-    nodes = [
-        node for node in items(document.get("nodes")) if isinstance(node, dict) and isinstance(node.get("id"), str)
-    ]
-    infos: dict[str, StepInfo] = {}
-    loops: set[str] = set()
-    for node in nodes:
-        kind = text(node.get("kind"))
-        if kind == "start":
-            infos[INPUT_NODE] = StepInfo(node["id"], kind)
-            continue
-        name = adk_name(text(node.get("name")))
-        if not name:
-            continue
-        parse = answer_parser(config_of(node)) if kind == "llm" else None
-        infos[name] = StepInfo(node["id"], kind, parse)
-        if kind == "loop":
-            loops.add(name)
+    nodes = document_nodes(document)
+    infos, loops = step_infos(nodes)
     by_id = {info.id: info for info in infos.values()}
     seen = {node["id"]: _Seen() for node in nodes}
-    events = _latest_run(session.events) if session is not None else []
-    asked = {pause.interrupt_id for pause in pending_pauses(session)} if session is not None else set()
+    events: list[Event] = []
+    asked: set[str] = set()
+    if session is not None:
+        if invocation_id is None:
+            events = latest_run(session.events)
+        else:
+            events = [event for event in session.events if event.invocation_id == invocation_id]
+        asked = {pause.interrupt_id for pause in pending_pauses(session.model_copy(update={"events": events}))}
 
     for event in events:
         path = event.node_info.path or ""
         when = event.timestamp
-        for step, _ in _steps_on(path, infos, loops):
+        at = steps_on(path, infos, loops)
+        for step, _ in at:
             seen[step].saw(when)
             if event.error_code or event.error_message:
                 seen[step].failed_at = when
                 seen[step].error = {"message": event.error_message or event.error_code, "code": event.error_code}
         for call in event.get_function_calls():
             if call.name in (REQUEST_INPUT, REQUEST_CONFIRMATION) and call.id in asked:
-                for step, _ in _steps_on(path, infos, loops):
+                for step, _ in at:
                     seen[step].waiting = True
-        _calls(event, _steps_on(path, infos, loops), seen, asked)
+        _calls(event, at, seen, asked)
+        delta = event.actions.state_delta if event.actions else None
+        if at and delta:
+            seen[at[-1][0]].changes.extend(
+                {"key": key, "value": as_data(value), "at": _iso(when)} for key, value in delta.items()
+            )
         for target in event.node_info.output_for or [path]:
-            chain = _steps_on(target, infos, loops)
+            chain = steps_on(target, infos, loops)
             if not chain or not chain[-1][1]:
                 continue
             step = chain[-1][0]
@@ -160,6 +171,8 @@ def run_steps(session: Session | None, document: dict[str, Any]) -> list[dict[st
     _infer_silent(nodes, sources, seen)
     _started_when_handed_on(sources, seen)
     _failed_ends(nodes, seen)
+    kinds = {node["id"]: text(node.get("kind")) for node in nodes}
+    handed_in = {node["id"]: _handed_in(node["id"], sources, seen, kinds, set()) or (None, None) for node in nodes}
     return [
         {
             "id": node["id"],
@@ -171,9 +184,68 @@ def run_steps(session: Session | None, document: dict[str, Any]) -> list[dict[st
             "started_at": _iso(seen[node["id"]].started),
             "finished_at": _iso(seen[node["id"]].finished) if seen[node["id"]].handed_on else None,
             "calls": list(seen[node["id"]].calls.values()),
+            "input": handed_in[node["id"]][1],
+            "input_from": handed_in[node["id"]][0],
+            "state_changes": seen[node["id"]].changes,
         }
         for node in nodes
     ]
+
+
+def document_nodes(document: dict[str, Any]) -> list[dict[str, Any]]:
+    """:return: The document's nodes that have an ID, in its order."""
+    return [node for node in items(document.get("nodes")) if isinstance(node, dict) and isinstance(node.get("id"), str)]
+
+
+def step_infos(nodes: list[dict[str, Any]]) -> tuple[dict[str, StepInfo], set[str]]:
+    """
+    :param nodes: The document's nodes.
+    :return: Its steps by ADK name (the start's by its hidden input node's),
+        and the ADK names of its loops (whose bodies run its steps per item).
+    """
+    infos: dict[str, StepInfo] = {}
+    loops: set[str] = set()
+    for node in nodes:
+        kind = text(node.get("kind"))
+        if kind == "start":
+            infos[INPUT_NODE] = StepInfo(node["id"], kind)
+            continue
+        name = adk_name(text(node.get("name")))
+        if not name:
+            continue
+        parse = answer_parser(config_of(node)) if kind == "llm" else None
+        infos[name] = StepInfo(node["id"], kind, parse)
+        if kind in BODY_KINDS:
+            loops.add(name)
+    return infos, loops
+
+
+def _handed_in(
+    step: str,
+    sources: Mapping[str, set[str]],
+    seen: Mapping[str, _Seen],
+    kinds: Mapping[str, str],
+    visiting: set[str],
+) -> tuple[str, Any] | None:
+    # What a step was handed, and by which step: the output of the step before
+    # it that handed on last before it started. A logic step hands on what came
+    # in (it records only the way it took), so what it was handed. None for the
+    # start, a step not reached, or one whose input isn't a step's (a loop's
+    # item); a step in a loop's body shows its last item's.
+    found = seen[step]
+    if step in visiting or found.started is None:
+        return None
+    handed = [
+        (when, source)
+        for source in sources.get(step, ())
+        if (when := seen[source].finished) is not None and when <= found.started and seen[source].handed_on
+    ]
+    if not handed:
+        return None
+    source = max(handed)[1]
+    if kinds.get(source) in LOGIC:
+        return _handed_in(source, sources, seen, kinds, visiting | {step})
+    return source, seen[source].output
 
 
 def _calls(event: Event, chain: list[tuple[str, bool]], seen: Mapping[str, _Seen], asked: set[str]) -> None:
@@ -212,8 +284,9 @@ def _calls(event: Event, chain: list[tuple[str, bool]], seen: Mapping[str, _Seen
 
 
 def _is_error(response: Any) -> bool:
+    # A guarded tool's failure answers {"status": "failed", "reason"} (forge_common.adk.toolset).
     return isinstance(response, dict) and (
-        "error" in response or response.get("status") == "error" or response.get("ok") is False
+        "error" in response or response.get("status") in ("error", "failed") or response.get("ok") is False
     )
 
 
@@ -246,7 +319,7 @@ def _finished(event: Event, info: StepInfo) -> dict[str, Any] | None:
     return {"output": None} if routed or info.kind == "start" else None
 
 
-def _latest_run(events: list[Event]) -> list[Event]:
+def latest_run(events: list[Event]) -> list[Event]:
     # The events of the session's latest run (ADK's invocation): a pause
     # resumes the same one.
     latest = next((event.invocation_id for event in reversed(events) if event.node_info.path), None)
@@ -255,7 +328,7 @@ def _latest_run(events: list[Event]) -> list[Event]:
     return [event for event in events if event.invocation_id == latest]
 
 
-def _steps_on(path: str, infos: Mapping[str, StepInfo], loops: set[str]) -> list[tuple[str, bool]]:
+def steps_on(path: str, infos: Mapping[str, StepInfo], loops: set[str]) -> list[tuple[str, bool]]:
     """
     :param path: An event's node path: ``<graph>@1/<node>@1/...``.
     :return: The document's steps it's at or inside, outermost first, each with

@@ -6,6 +6,7 @@ time the worker runs it again, with its control kept in memory
 models. The worker's own tests run it on the run store.
 """
 
+import asyncio
 import json
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
@@ -15,6 +16,8 @@ from typing import Any
 
 import httpx
 import pytest
+from forge_agent_runtime import http_client
+from forge_codegraph_query import CodeGraph
 from forge_common.adk.models import ModelCall, ProviderModels
 from forge_common.adk.usage import UsageCall, recording
 from forge_common.model_provider import Cost, ModelProviderConfig
@@ -24,10 +27,13 @@ from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
 from google.genai import errors, types
 
+from forge_task_adk_workflows import runs
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
 from forge_task_adk_workflows.graph import RunServices
+from forge_task_adk_workflows.graph.agent_tools import AgentServices
 from forge_task_adk_workflows.models import NOT_SET_UP, NoModels
-from forge_task_adk_workflows.runs import APP_NAME, RunPayload
+from forge_task_adk_workflows.runs import APP_NAME, MAX_NOTES, STATE_KEY, AdkRun, RunPayload
+from forge_task_adk_workflows.steps import run_steps
 from forge_task_adk_workflows.task import (
     NO_SESSIONS,
     SERVICES,
@@ -46,7 +52,7 @@ from forge_tasks.errors import TransientError
 from forge_tasks.settings import load_section
 from forge_tasks.tasks import JobResult, JobStatus, TaskContext, TaskRegistry
 
-from .scripted_llm import ScriptedLlm
+from .scripted_llm import ScriptedLlm, blocked_for_safety
 from .test_graph import (
     START_NODE,
     Clock,
@@ -56,6 +62,7 @@ from .test_graph import (
     llm_config,
     loop_agent,
     node,
+    sub_config,
     transform,
 )
 
@@ -125,8 +132,8 @@ def worker(
     **settings: Any,
 ) -> Worker:
     """The task, with HTTP answered by ``answer`` (200 ``{"ok": true}`` by
-    default), recording each request, and runs' artifacts in ``artifacts``
-    (none by default)."""
+    default) through the worker's kind of client, recording each request, and
+    runs' artifacts in ``artifacts`` (none by default)."""
     clock = Clock()
     sent: list[httpx.Request] = []
 
@@ -137,7 +144,7 @@ def worker(
     options = AdkWorkflowsSettings(http_allowed_hosts=["api.example.com"], **settings)
     services = RunServices.of(
         options,
-        http=httpx.AsyncClient(transport=httpx.MockTransport(handle)),
+        http=http_client(transport=httpx.MockTransport(handle)),
         clock=clock,
         sleep=clock.sleep,
         model=model or NoModels(),
@@ -171,6 +178,32 @@ def line(*steps: dict[str, Any]) -> dict[str, Any]:
 def _way(step_id: str, steps: tuple[dict[str, Any], ...]) -> str:
     kind = next((step["kind"] for step in steps if step["id"] == step_id), "start")
     return "success" if kind == "http" else "next"
+
+
+def starting_over(document: dict[str, Any]) -> dict[str, Any]:
+    """The document, its start set to start a run over in a new session when
+    ADK can't carry it on (``start_over``)."""
+    document["nodes"] = [
+        {**each, "config": {**each["config"], "start_over": True}} if each["kind"] == "start" else each
+        for each in document["nodes"]
+    ]
+    return document
+
+
+def refusing_to_carry_on(carry_on: Callable[..., Any]) -> Callable[..., Any]:
+    """``Runner.run_async``, but ADK refuses to carry an invocation on."""
+
+    def run_async(self: Runner, **options: Any) -> Any:
+        if options.get("invocation_id") and options.get("new_message") is None:
+
+            async def refuse() -> AsyncGenerator[Any]:
+                raise ValueError("that invocation can't be resumed")
+                yield
+
+            return refuse()
+        return carry_on(self, **options)
+
+    return run_async
 
 
 ISSUE = {"issue": {"key": "XMEN-12"}}
@@ -416,6 +449,46 @@ async def test_an_approval_decided_after_its_deadline_is_the_timer_s(sessions: D
     assert result.detail["result"]["decided_by"] == "Forge"
 
 
+async def test_an_approval_decided_in_time_stands_though_its_run_reads_it_after_the_deadline(
+    sessions: DatabaseSessionService,
+) -> None:
+    w = worker(sessions)
+    run = payload(approval_agent(), ISSUE)
+    with pytest.raises(AwaitingDecision):
+        await w.run(run)
+
+    # Decided 6 hours in; its job waited in the queue past the 24-hour deadline.
+    in_time = datetime(2026, 9, 26, 18, 0, tzinfo=UTC)
+    w.clock.advance(hours=25)
+    w.control.decide(REVIEW, Decision(approved=True, actor_id="u-7", actor_name="Lead", decided_at=in_time))
+    result = await w.run(run)
+
+    assert result.detail["result"] == {
+        "approved": True,
+        "decided_by": "Lead",
+        "comment": "",
+        "decided_at": "2026-09-26T18:00:00+00:00",  # when it was decided, not read
+    }
+    assert "Review (review): approved by Lead" in w.control.said()
+    assert "Review (review): no decision in time" not in w.control.said()
+
+
+async def test_an_approval_decided_once_its_deadline_passed_is_the_timer_s_whenever_its_run_reads_it(
+    sessions: DatabaseSessionService,
+) -> None:
+    w = worker(sessions)
+    run = payload(approval_agent(), ISSUE)
+    with pytest.raises(AwaitingDecision):
+        await w.run(run)
+
+    late = datetime(2026, 9, 27, 12, 0, tzinfo=UTC)  # the deadline itself
+    w.control.decide(REVIEW, Decision(approved=True, actor_id="u-7", actor_name="Lead", decided_at=late))
+    result = await w.run(run)  # read at once, its clock still before the deadline
+
+    assert (result.detail["result"]["approved"], result.detail["result"]["decided_by"]) == (False, "Forge")
+    assert "Review (review): no decision in time" in w.control.said()
+
+
 async def test_an_approval_without_a_time_limit_has_no_timeout(sessions: DatabaseSessionService) -> None:
     w = worker(sessions)
     with pytest.raises(AwaitingDecision):
@@ -525,6 +598,27 @@ async def test_a_saved_workflow_runs_from_the_runs_snapshot_and_its_pauses_name_
     assert "Confirm (confirm): approved by Admin" in w.control.said()
     assert "Confirm (confirm) finished" not in w.control.said()
     assert w.control.said().count("Done (done) finished") == 1
+
+
+async def test_a_saved_workflow_started_with_its_inputs_pauses_and_resumes(sessions: DatabaseSessionService) -> None:
+    w = worker(sessions)
+    nesting = line(
+        node("nested", "saved", {"agent": "ag_inner00002", "inputs": {"who": "input.who"}}, name="Ask inside"),
+        end("done", "steps.nested.output"),
+    )
+    run = payload(nesting, {"who": "Ada"}, saved={"ag_inner00002": CONFIRM})
+
+    with pytest.raises(AwaitingDecision) as waiting:
+        await w.run(run)
+    [gate] = w.control.gates
+    assert gate["details"]["step"] == "confirm"
+    w.control.decide(waiting.value.key, Decision(approved=True, actor_id="u-2", actor_name="Admin"))
+    result = await w.run(run)
+
+    assert result.status is JobStatus.OK
+    assert result.detail["result"]["decided_by"] == "Admin"
+    assert "Ask inside (nested) finished" in w.control.said()
+    assert "Confirm (confirm) finished" not in w.control.said()
 
 
 async def test_a_saved_workflow_the_run_has_no_snapshot_of_fails_it(sessions: DatabaseSessionService) -> None:
@@ -731,7 +825,7 @@ async def test_a_hiccup_after_a_decision_carries_on_with_that_decision(sessions:
     assert w.control.said().count("Review (review) finished") == 1
 
 
-async def test_an_interrupted_run_adk_cant_carry_on_starts_over_in_a_new_session(
+async def test_an_interrupted_run_adk_cant_carry_on_fails_to_be_resubmitted(
     sessions: DatabaseSessionService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     llm = ScriptedLlm(turns=[overloaded(), [types.Part(text="Hi!")]])
@@ -740,19 +834,29 @@ async def test_an_interrupted_run_adk_cant_carry_on_starts_over_in_a_new_session
     with pytest.raises(TransientError):
         await w.run(run)
 
-    carry_on = Runner.run_async
+    monkeypatch.setattr(Runner, "run_async", refusing_to_carry_on(Runner.run_async))
+    result = await w.run(run)
 
-    def refusing(self: Runner, **options: Any) -> Any:
-        if options.get("invocation_id") and options.get("new_message") is None:
+    assert result.status is JobStatus.FAILED
+    assert result.error == (
+        "The run can't carry on where it stopped (ValueError: that invocation can't be resumed). "
+        "Resubmit it to run it again from the start"
+    )
+    # Nothing ran again.
+    assert await w.session_ids() == [SESSION]
+    assert len(w.sent) == 1
 
-            async def refuse() -> AsyncGenerator[Any]:
-                raise ValueError("that invocation can't be resumed")
-                yield
 
-            return refuse()
-        return carry_on(self, **options)
+async def test_an_interrupted_run_adk_cant_carry_on_starts_over_in_a_new_session_when_its_workflow_says_so(
+    sessions: DatabaseSessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    llm = ScriptedLlm(turns=[overloaded(), [types.Part(text="Hi!")]])
+    w = worker(sessions, model=llm)
+    run = payload(starting_over(calling_then_asking()), {})
+    with pytest.raises(TransientError):
+        await w.run(run)
 
-    monkeypatch.setattr(Runner, "run_async", refusing)
+    monkeypatch.setattr(Runner, "run_async", refusing_to_carry_on(Runner.run_async))
     result = await w.run(run)
 
     assert result.status is JobStatus.OK
@@ -763,9 +867,36 @@ async def test_an_interrupted_run_adk_cant_carry_on_starts_over_in_a_new_session
     # Starting over repeats what the run did before.
     assert len(w.sent) == 2
     assert w.control.state["adk_workflow"]["session_id"] == started_over
+    assert w.control.state["adk_workflow"]["earlier_sessions"] == [SESSION]
     [(said, attributes)] = [(m, a) for m, a in w.control.notes if "starts over" in m]
     assert said.startswith("The run can't carry on where it stopped (ValueError: that invocation can't be resumed)")
     assert attributes == {"session_id": started_over}
+
+
+@pytest.mark.parametrize("hiccup_first", [True, False])
+async def test_a_step_that_fails_once_the_run_carried_on_fails_it_without_starting_over(
+    sessions: DatabaseSessionService, hiccup_first: bool
+) -> None:
+    # Its model is refused for good (permission denied): no new session, and
+    # the request before it isn't sent again, even in a workflow that starts over.
+    def denied() -> errors.ClientError:
+        return errors.ClientError(403, {"error": {"message": "permission denied"}})
+
+    llm = ScriptedLlm(turns=[overloaded() if hiccup_first else denied(), denied()])
+    w = worker(sessions, model=llm)
+    run = payload(starting_over(calling_then_asking()), {})
+    if hiccup_first:
+        with pytest.raises(TransientError):
+            await w.run(run)
+    else:
+        assert (await w.run(run)).status is JobStatus.FAILED  # and someone retries it
+
+    result = await w.run(run)
+
+    assert result.status is JobStatus.FAILED
+    assert result.error == "The run failed: ClientError: permission denied"
+    assert await w.session_ids() == [SESSION]
+    assert len(w.sent) == 1
 
 
 async def test_a_failed_run_restarted_carries_on_from_the_step_that_failed(sessions: DatabaseSessionService) -> None:
@@ -798,6 +929,77 @@ async def test_a_failed_run_restarted_carries_on_from_the_step_that_failed(sessi
     assert await w.session_ids() == [SESSION]
 
 
+def racing(slow: dict[str, Any]) -> dict[str, Any]:
+    """Two ways from the start: one ends at once, the other through ``slow``."""
+    way = "success" if slow["kind"] == "http" else "next"
+    return agent(
+        [START_NODE, end("fast", '"fast result"'), slow, end("done", '"slow result"')],
+        [("start", "next", "fast"), ("start", "next", slow["id"]), (slow["id"], way, "done")],
+    )
+
+
+#: A racing run's result once both its ways have ended.
+BOTH_ENDED = [
+    {"step": "fast", "name": "Fast", "outcome": "succeeded", "result": "fast result"},
+    {"step": "done", "name": "Done", "outcome": "succeeded", "result": "slow result"},
+]
+
+
+async def test_a_way_with_a_hiccup_is_carried_on_after_another_way_ended(sessions: DatabaseSessionService) -> None:
+    llm = ScriptedLlm(turns=[overloaded(), [types.Part(text="ok")]], delay=0.1)
+    w = worker(sessions, model=llm)
+    run = payload(racing(node("slow", "llm", llm_config())), {})
+    with pytest.raises(TransientError):
+        await w.run(run)
+
+    result = await w.run(run)
+
+    assert result.status is JobStatus.OK
+    assert result.detail["result"] == BOTH_ENDED
+    assert len(llm.requests) == 2
+
+
+async def test_a_failed_way_runs_again_when_its_run_is_retried_after_another_way_ended(
+    sessions: DatabaseSessionService,
+) -> None:
+    down = [True]
+
+    async def answer(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.1)  # the fast way ends first
+        return httpx.Response(404 if down[0] else 200, json={"ok": True})
+
+    w = worker(sessions, answer=answer)
+    run = payload(racing(node("slow", "http", {"method": "POST", "url": "https://api.example.com/b"})), {})
+    failed = await w.run(run)
+    assert failed.status is JobStatus.FAILED and failed.error == "Slow (slow) failed: It answered 404"
+
+    down[0] = False  # fixed, then the run is retried
+    result = await w.run(run)
+
+    assert result.status is JobStatus.OK
+    assert result.detail["result"] == BOTH_ENDED
+    assert len(w.sent) == 2
+
+
+async def test_a_way_cut_off_by_a_stop_is_carried_on_after_another_way_ended(sessions: DatabaseSessionService) -> None:
+    llm = ScriptedLlm(turns=[[types.Part(text="ok")], [types.Part(text="ok")]], delay=0.5)
+    w = worker(sessions, model=llm)
+    run = payload(racing(node("slow", "llm", llm_config())), {})
+    stopping = asyncio.create_task(w.run(run))
+    while not llm.requests:
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.1)  # the fast way has ended; the slow one waits on its model
+    stopping.cancel()  # the worker stops
+    with pytest.raises(asyncio.CancelledError):
+        await stopping
+
+    result = await w.run(run)
+
+    assert result.status is JobStatus.OK
+    assert result.detail["result"] == BOTH_ENDED
+    assert len(llm.requests) == 2
+
+
 async def test_a_resubmitted_run_runs_afresh_as_another_invocation_of_its_session(
     sessions: DatabaseSessionService,
 ) -> None:
@@ -819,6 +1021,25 @@ async def test_a_resubmitted_run_runs_afresh_as_another_invocation_of_its_sessio
     assert session.events[-1].invocation_id != session.events[0].invocation_id
 
 
+async def test_a_runs_steps_are_its_own_in_a_session_another_run_shares(sessions: DatabaseSessionService) -> None:
+    values = iter(["first", "second"])
+    w = worker(sessions, answer=lambda request: httpx.Response(200, json={"value": next(values)}))
+    document = line(
+        node("call", "http", {"method": "GET", "url": "https://api.example.com/state"}),
+        end("done", "steps.call.output.body.value"),
+    )
+    run = payload(document, {})
+    original, resubmitted = Control(instance="original"), Control(instance="resubmitted")
+    for control in (original, resubmitted):  # resubmitted before resubmissions had sessions of their own
+        w.control = control
+        await w.run(run)
+    session = await sessions.get_session(app_name=APP_NAME, user_id=MEMBER, session_id=SESSION)
+
+    own = run_steps(session, document, invocation_id=original.state["adk_workflow"]["invocation_id"])
+    assert own[-1]["output"] == {"outcome": "succeeded", "result": "first"}
+    assert run_steps(session, document)[-1]["output"] == {"outcome": "succeeded", "result": "second"}  # the latest
+
+
 async def test_a_run_resubmitted_while_its_last_task_waited_asks_its_own_questions(
     sessions: DatabaseSessionService,
 ) -> None:
@@ -837,6 +1058,63 @@ async def test_a_run_resubmitted_while_its_last_task_waited_asks_its_own_questio
     assert result.detail["result"]["approved"] is True
     assert len(w.control.gates) == 2
     assert len(w.sent) == 2
+
+
+def deploy_approval() -> dict[str, Any]:
+    return agent(
+        [
+            START_NODE,
+            node("review", "approval", {"message": "Deploy?", "timeout_hours": 0}),
+            end("yes", '"approved"'),
+            end("no", '"rejected"'),
+        ],
+        [("start", "next", "review"), ("review", "approved", "yes"), ("review", "rejected", "no")],
+    )
+
+
+@pytest.mark.parametrize("older_approves", [True, False])
+async def test_a_decision_never_reaches_another_run_of_the_session_waiting_at_the_same_step(
+    sessions: DatabaseSessionService, older_approves: bool
+) -> None:
+    # Two resubmissions of one run wait at the same approval, and are decided
+    # each its own way. ADK would hand the older one's answer to the newer.
+    w = worker(sessions)
+    run = payload(deploy_approval(), {})
+    older, newer = Control(instance="task-1"), Control(instance="task-2")
+    for control, approved in ((older, older_approves), (newer, not older_approves)):
+        w.control = control
+        with pytest.raises(AwaitingDecision) as waiting:
+            await w.run(run)
+        control.decide(waiting.value.key, Decision(approved=approved, actor_id="u-7", actor_name="Lead"))
+
+    w.control = older
+    failed = await w.run(run)
+
+    assert failed.status is JobStatus.FAILED
+    assert str(failed.error).startswith("Review (review): another run of this session waits at the same step")
+    w.control = newer
+    result = await w.run(run)
+    assert result.status is JobStatus.OK
+    assert result.detail["result"] == ("rejected" if older_approves else "approved")  # its own decision
+
+
+async def test_an_answer_that_doesnt_reach_the_run_fails_it_instead_of_being_sent_again(
+    sessions: DatabaseSessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = worker(sessions)
+    run = payload(approval_agent(), ISSUE)
+    with pytest.raises(AwaitingDecision) as waiting:
+        await w.run(run)
+    w.control.decide(waiting.value.key, Decision(approved=True, actor_id="u-7", actor_name="Lead"))
+
+    async def lost(self: AdkRun, message: Any) -> None:
+        return None  # the answer goes nowhere
+
+    monkeypatch.setattr(AdkRun, "_drive", lost)
+    result = await w.run(run)
+
+    assert result.status is JobStatus.FAILED
+    assert "its answer didn't reach the run, so the run stopped instead of answering again" in str(result.error)
 
 
 async def test_a_database_hiccup_is_retried(sessions: DatabaseSessionService) -> None:
@@ -976,6 +1254,57 @@ async def test_an_llm_node_on_a_worker_without_models_fails_the_run_saying_so(
     assert result.error == NOT_SET_UP
 
 
+async def test_a_model_that_answers_with_an_error_fails_its_step_and_nothing_after_it_runs(
+    sessions: DatabaseSessionService,
+) -> None:
+    w = worker(sessions, model=ScriptedLlm(turns=[blocked_for_safety()]))
+    document = line(
+        node("triage", "llm", llm_config(instruction="Triage it")),
+        node("call", "http", {"method": "POST", "url": "https://api.example.com/x"}),
+        end("done", "steps.triage.output"),
+    )
+
+    result = await w.run(payload(document, {}))
+
+    assert result.status is JobStatus.FAILED
+    assert result.error == "Triage (triage) failed: its model answered with an error (SAFETY): Blocked for safety"
+    assert result.detail["step"] == "triage"
+    assert w.sent == []  # the step after it never ran
+
+
+async def test_a_sub_agent_whose_model_answers_with_an_error_fails_its_team(sessions: DatabaseSessionService) -> None:
+    w = worker(sessions, model=ScriptedLlm(turns=[blocked_for_safety()]))
+    team = {"description": "", "sub_agents": [{"id": "first", "kind": "llm", "name": "First", "config": sub_config()}]}
+    document = line(node("team", "sequential", team), end("done"))
+
+    result = await w.run(payload(document, {}))
+
+    assert result.status is JobStatus.FAILED
+    assert result.error == (
+        "Team (team), sub-agent First (first) failed: its model answered with an error (SAFETY): Blocked for safety"
+    )
+
+
+# ------------------------------------------------------------------ closing what a run opened
+
+
+async def test_a_runner_that_never_finishes_closing_doesnt_hold_the_run(
+    sessions: DatabaseSessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runs, "CLOSE_SECONDS", 0.05)
+
+    async def never(self: Runner) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(Runner, "close", never)
+    w = worker(sessions)
+
+    result = await asyncio.wait_for(w.run(payload(line(end("done", '"shipped"')), {})), 5)
+
+    assert result.status is JobStatus.OK
+    assert result.detail["result"] == "shipped"
+
+
 # ------------------------------------------------------------------ the factory
 
 
@@ -1011,6 +1340,13 @@ def test_its_settings_are_read_from_hybrid_adk_workflows(monkeypatch: pytest.Mon
     assert (made.allowed_hosts, made.inline_delay_seconds) == (("intranet",), 5)
 
 
+def test_an_attempt_may_take_twice_the_run_timeout_unless_set() -> None:
+    assert AdkWorkflowsSettings().attempt_seconds == 7200
+    assert AdkWorkflowsSettings(run_timeout=600).attempt_seconds == 1200
+    assert AdkWorkflowsSettings(run_timeout=600, attempt_timeout=900).attempt_seconds == 900
+    assert AdkWorkflowsSettings(attempt_timeout="").attempt_timeout is None  # type: ignore[arg-type]
+
+
 async def test_a_worker_without_a_session_database_fails_runs_saying_so(tmp_path: Path) -> None:
     task = AdkWorkflowsTaskFactory().build(TaskContext(settings=None, options=AdkWorkflowsSettings()))  # type: ignore[arg-type]
     try:
@@ -1022,6 +1358,52 @@ async def test_a_worker_without_a_session_database_fails_runs_saying_so(tmp_path
 
     assert result.status is JobStatus.FAILED
     assert result.error == NO_SESSIONS
+
+
+async def test_the_workers_one_http_client_keeps_no_cookies() -> None:
+    # One client serves every organization's runs: their HTTP steps and their agents' HTTP tools.
+    task = AdkWorkflowsTaskFactory().build(TaskContext(settings=None, options=AdkWorkflowsSettings()))  # type: ignore[arg-type]
+    try:
+        http = task.services.http
+        assert http is not None and task.services.agents is not None and task.services.agents.http is http
+        login = http.build_request("GET", "https://api.example.com/login")
+        http.cookies.extract_cookies(
+            httpx.Response(200, headers={"Set-Cookie": "session=org-a; Path=/; Secure"}, request=login)
+        )
+        assert "cookie" not in http.build_request("GET", "https://api.example.com/orders").headers
+    finally:
+        await task.close()
+
+
+async def test_a_cookie_set_in_one_organizations_run_never_goes_out_with_anothers(
+    sessions: DatabaseSessionService,
+) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True}, headers={"Set-Cookie": "session=org-a; Path=/; Secure"})
+
+    w = worker(sessions, answer=answer)
+    calling = line(node("call", "http", {"method": "GET", "url": "https://api.example.com/x"}), end("done"))
+    await w.run(payload(calling, {}).model_copy(update={"tenant_id": "org-a", "session_id": "org-a-run"}))
+    w.control = Control(instance="org-b-task")
+    await w.run(payload(calling, {}).model_copy(update={"tenant_id": "org-b", "session_id": "org-b-run"}))
+
+    assert [request.headers.get("cookie") for request in w.sent] == [None, None]
+
+
+async def test_closing_the_task_closes_its_code_graph() -> None:
+    # A real CodeGraph, so a renamed close method fails here, not on a worker's shutdown.
+    closed: list[bool] = []
+
+    async def on_close() -> None:
+        closed.append(True)
+
+    code = CodeGraph(store=None, on_close=on_close)  # type: ignore[arg-type]
+    services = RunServices(model=NoModels(), agents=AgentServices(models=NoModels(), code=code))
+    task = AdkWorkflowsTask(AdkWorkflowsSettings(), services, None)
+
+    await task.close()
+
+    assert closed == [True]
 
 
 async def test_the_factory_keeps_one_session_service_per_process(tmp_path: Path) -> None:
@@ -1047,3 +1429,46 @@ async def test_the_factory_takes_its_services_and_sessions_from_the_context(
     )
     assert task.services is services
     assert task.sessions is sessions
+
+
+# ------------------------------------------------------------------ the activity
+
+
+async def test_a_run_notes_so_many_lines_then_one_that_says_the_rest_arent_noted(
+    sessions: DatabaseSessionService,
+) -> None:
+    w = worker(sessions)
+    run = AdkRun(
+        payload(line(transform("shape", "1"))),
+        control=w.control,
+        services=w.task.services,
+        sessions=sessions,
+        settings=w.task.settings,
+    )
+
+    for index in range(MAX_NOTES + 5):
+        await run._note(f"step {index} finished", step=index)
+
+    said = w.control.said()
+    assert len(said) == MAX_NOTES + 1 and said[MAX_NOTES - 1] == f"step {MAX_NOTES - 1} finished"
+    assert said[-1] == f"{MAX_NOTES} notes so far: what the run does next isn't noted"
+    assert w.control.notes[-1][1] == {}
+    assert (run.state["notes"], run.state["notes_lost"]) == (MAX_NOTES + 1, 0)
+
+
+async def test_a_note_that_cant_be_written_is_counted_with_what_the_run_keeps(
+    sessions: DatabaseSessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w, tried = worker(sessions), []
+
+    async def unwritable(message: str, **attributes: Any) -> None:
+        tried.append(message)
+        raise ConnectionError("the database is gone")
+
+    monkeypatch.setattr(w.control, "note", unwritable)
+
+    result = await w.run(payload(line(transform("shape", "1"))))
+
+    assert result.detail["outcome"] == "succeeded" and len(tried) >= 2
+    # Its last note too, after its last checkpoint: what the run keeps as it ends has it.
+    assert w.control.load(STATE_KEY)["notes_lost"] == len(tried)

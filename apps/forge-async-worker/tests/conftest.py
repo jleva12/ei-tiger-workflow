@@ -1,10 +1,11 @@
 """The worker on a SQLite run store, with a clock the tests move, a fake SAQ
-queue and job, and the stand-in ADK workflows task of toy_tasks.py."""
+queue and job, the stand-in ADK workflows task of toy_tasks.py, and a
+watchdog that records when it would end the process instead of ending it."""
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -16,6 +17,7 @@ from forge_async_worker import saq_worker
 from forge_async_worker.config import WorkerSettings
 from forge_async_worker.queue import RunQueue
 from forge_async_worker.saq_worker import WorkerState, start_state
+from forge_async_worker.watchdog import Watchdog
 from forge_task_adk_workflows.run_store import Actor, RunStore, metadata
 
 from .toy_tasks import ScriptedTask, toy_registry
@@ -42,11 +44,12 @@ class Clock:
 class FakeSaqQueue:
     """The parts of saq.Queue the worker uses; ``down`` makes Redis unreachable."""
 
-    name = "adk_workflows"
-
-    def __init__(self) -> None:
+    def __init__(self, name: str = "adk_workflows") -> None:
+        self.name = name
         self.sent: list[tuple[str, dict[str, Any]]] = []
         self.down = False
+        self.disconnected = 0
+        self.redis = FakeRedis(self)
 
     async def enqueue(self, function: str, **kwargs: Any) -> object:
         if self.down:
@@ -55,7 +58,32 @@ class FakeSaqQueue:
         return object()
 
     async def disconnect(self) -> None:
-        return None
+        self.disconnected += 1
+
+
+class FakeRedis:
+    """The parts of redis.asyncio.Redis the worker uses, down with its queue."""
+
+    def __init__(self, queue: FakeSaqQueue) -> None:
+        self.queue = queue
+        self.values: dict[str, Any] = {}
+        self.expiries: dict[str, int | None] = {}
+
+    def _reach(self) -> None:
+        if self.queue.down:
+            raise ConnectionError("Redis is down")
+
+    async def set(self, key: str, value: Any, *, ex: int | None = None) -> None:
+        self._reach()
+        self.values[key], self.expiries[key] = value, ex
+
+    async def get(self, key: str) -> Any:
+        self._reach()
+        return self.values.get(key)
+
+    async def delete(self, key: str) -> None:
+        self._reach()
+        self.values.pop(key, None)
 
 
 class FakeJob:
@@ -116,6 +144,8 @@ class Worker:
     state: WorkerState
     saq: FakeSaqQueue
     clock: Clock
+    #: Why the watchdog would have ended the process, each time it would have.
+    halts: list[str] = field(default_factory=list)
 
     @property
     def store(self) -> RunStore:
@@ -162,5 +192,9 @@ async def worker(store: RunStore, clock: Clock) -> AsyncIterator[Worker]:
     state = await start_state(
         worker_settings(), registry=toy_registry(), store=store, queue=RunQueue(saq), redis_url=None
     )
-    yield Worker(state, saq, clock)
+    worker = Worker(state, saq, clock)
+    assert state.jobs is not None
+    state.jobs.watchdog = Watchdog(halt=worker.halts.append)
+    yield worker
     await saq_worker.close_state(state)
+    assert worker.halts == [], "the watchdog would have ended the process"

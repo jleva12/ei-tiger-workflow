@@ -39,11 +39,14 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { startInputOf } from "@/features/adk-workflows/lib/document"
 import {
   agentExpressionSetting,
   agentInput,
+  agentInputType,
   subAgentInstruction,
 } from "@/features/adk-workflows/lib/fields"
+import { sayType } from "@/features/steps/lib/types"
 import {
   LLM_TOOL_KINDS,
   newTool,
@@ -195,11 +198,21 @@ function Setting({
 }) {
   const scopeOf = useAgentBuilder((s) => s.scopeOf)
   const step = useAgentBuilder((s) => s.nodes.find((n) => n.id === id)?.data)
+  const chatAgents = useAgentBuilder((s) => s.lookups.chatAgents)
+  const workflows = useAgentBuilder((s) => s.context.agents)
   const scope = React.useMemo(() => scopeOf(id), [scopeOf, id])
   const spec = React.useMemo(
     () =>
-      (step ? agentExpressionSetting(step, setting) : undefined) ?? fallback,
-    [step, setting, fallback]
+      (step
+        ? agentExpressionSetting(step, setting, {
+            agentInput: (agent) => chatAgents[agent]?.input,
+            workflowInput: (workflow) => {
+              const document = workflows?.get(workflow)?.document
+              return document && startInputOf(document)
+            },
+          })
+        : undefined) ?? fallback,
+    [step, setting, fallback, chatAgents, workflows]
   )
   // Its issues, but for its expression's: it checks those itself.
   const { issues, key } = useFieldIssues(setting, { whole: true })
@@ -786,6 +799,7 @@ function useToolLookups(): ToolLookups {
       workflowVersions: lookups.workflowVersions,
       knowledgeBases: lookups.knowledgeBases,
       mcpServers: lookups.mcpServers,
+      credentials: lookups.credentials,
     }),
     [lookups]
   )
@@ -946,6 +960,9 @@ function ToolSettings({
 }) {
   const updateStep = useAgentBuilder((s) => s.updateStep)
   const self = useAgentBuilder((s) => s.meta.id)
+  const organizationId = useAgentBuilder((s) => s.meta.organization_id)
+  const scopeOf = useAgentBuilder((s) => s.scopeOf)
+  const scope = React.useMemo(() => scopeOf(id), [scopeOf, id])
   const lookups = useToolLookups()
   const nameId = React.useId()
   const at = `${path.join("/")}:tools/${tool.id}`
@@ -1007,8 +1024,16 @@ function ToolSettings({
         kind={tool.kind}
         bind={bind}
         lookups={lookups}
+        organizationId={organizationId}
         self={self}
         confirmAbout={CONFIRM_IN_RUNS}
+        scope={scope}
+        valuesAbout={
+          <>
+            the workflow&apos;s data, as the agent&apos;s instruction reads it
+            ({code("{{ input.… }}")}, {code("{{ steps.… }}")})
+          </>
+        }
       />
     </FieldIssuesPrefix>
   )
@@ -1018,9 +1043,61 @@ function ToolSettings({
 /* An agent from the Agents page                                              */
 /* -------------------------------------------------------------------------- */
 
-const INPUT_EXPRESSION: Pick<ExpressionSetting, "mode" | "check"> = {
-  mode: "expression",
-  check: {},
+
+/**
+ * One of the input fields of an agent from the Agents page: a JSONata
+ * expression over the run's data, held to the type the agent's input
+ * declares for it.
+ */
+function AgentInputSetting({
+  id,
+  field,
+  schema,
+  required,
+  value,
+  about,
+  onChange,
+}: {
+  id: string
+  field: string
+  /** The agent's input, as a JSON Schema. */
+  schema: Record<string, unknown> | undefined
+  required: boolean
+  value: string
+  /** What the agent says the field is. */
+  about?: string
+  onChange: (value: string) => void
+}) {
+  const want = React.useMemo(
+    () => agentInputType(schema, field),
+    [schema, field]
+  )
+  // How it's written while the node holds nothing for it yet.
+  const fallback = React.useMemo(
+    (): Pick<ExpressionSetting, "mode" | "check"> => ({
+      mode: "expression",
+      check: want ? { want } : {},
+    }),
+    [want]
+  )
+  return (
+    <Setting
+      id={id}
+      setting={agentInput(field)}
+      fallback={fallback}
+      label={`${field}${required ? "" : " (optional)"}`}
+      value={value}
+      placeholder="input.customer_tier"
+      onChange={onChange}
+      description={
+        <>
+          {about ||
+            "One of its input fields: a JSONata expression over the run's data."}
+          {want && want.kind !== "unknown" && <> It takes {sayType(want)}.</>}
+        </>
+      }
+    />
+  )
 }
 
 /**
@@ -1096,23 +1173,19 @@ function AgentSourceFields({
         }
       />
       {Object.entries(properties).map(([field, schema]) => (
-        <Setting
+        <AgentInputSetting
           key={field}
           id={id}
-          setting={agentInput(field)}
-          fallback={INPUT_EXPRESSION}
-          label={`${field}${required.has(field) ? "" : " (optional)"}`}
+          field={field}
+          schema={chosen?.input}
+          required={required.has(field)}
           value={config.inputs[field] ?? ""}
-          placeholder="input.customer_tier"
+          about={schema.description}
           onChange={(value) =>
             patch(
               { inputs: { ...config.inputs, [field]: value } },
               agentInput(field)
             )
-          }
-          description={
-            schema.description ||
-            "One of its input fields: a JSONata expression over the run's data."
           }
         />
       ))}
@@ -1460,6 +1533,13 @@ function StartFields({ id, config }: Props<"start">) {
           }
         />
       )}
+      <SwitchField
+        issue="start_over"
+        label="Start over when a run can't carry on"
+        checked={config.start_over}
+        onChange={(on) => set("start_over", on)}
+        description="If a run stops partway and can't continue where it stopped, it runs again from the start in a new session, repeating every step. Turn this on only when repeating the steps is safe. Off, the run fails, and you can resubmit it."
+      />
     </>
   )
 }
@@ -1469,8 +1549,24 @@ function SavedFields({ id, config }: Props<"saved">) {
   const self = useAgentBuilder((s) => s.meta.id)
   const agents = useAgentBuilder((s) => s.lookups.agents)
   const versions = useAgentBuilder((s) => s.lookups.workflowVersions)
+  const document = useAgentBuilder((s) =>
+    config.agent ? s.context.agents?.get(config.agent)?.document : undefined
+  )
   const others = Object.entries(agents).filter(([agentId]) => agentId !== self)
   const chosen = config.agent ? versions[config.agent] : undefined
+  // What it starts with: its start's input fields, the required ones first.
+  const input = document ? startInputOf(document) : undefined
+  const declared = input?.properties
+  const properties =
+    declared && typeof declared === "object"
+      ? (declared as Record<string, { description?: string }>)
+      : {}
+  const required = new Set(
+    Array.isArray(input?.required) ? (input.required as string[]) : []
+  )
+  const fields = Object.keys(properties).sort(
+    (a, b) => Number(required.has(b)) - Number(required.has(a))
+  )
   return (
     <>
       <ChoiceField
@@ -1479,8 +1575,16 @@ function SavedFields({ id, config }: Props<"saved">) {
         value={config.agent}
         placeholder={others.length ? "Pick a workflow" : "No other workflows yet"}
         options={others.map(([value, label]) => ({ value, label }))}
-        onChange={(value) => patch({ agent: value, version: null }, "agent")}
-        description="It runs here whole: what comes in is its input, and what it hands on is this node's."
+        onChange={(value) =>
+          patch({ agent: value, version: null, inputs: {} }, "agent")
+        }
+        description={
+          !input
+            ? "It runs here whole: what it hands back is what this node hands on."
+            : fields.length
+              ? "It runs here whole, started with the inputs below; with them all empty, what comes in is its input. What it hands back is what this node hands on."
+              : "It runs here whole. Its start declares no input fields, so what comes in is its input; what it hands back is what this node hands on."
+        }
       />
       {chosen && (
         <VersionField
@@ -1490,6 +1594,23 @@ function SavedFields({ id, config }: Props<"saved">) {
           onChange={(value) => set("version", value)}
         />
       )}
+      {fields.map((field) => (
+        <AgentInputSetting
+          key={field}
+          id={id}
+          field={field}
+          schema={input}
+          required={required.has(field)}
+          value={config.inputs[field] ?? ""}
+          about={properties[field]?.description}
+          onChange={(value) =>
+            patch(
+              { inputs: { ...config.inputs, [field]: value } },
+              agentInput(field)
+            )
+          }
+        />
+      ))}
     </>
   )
 }

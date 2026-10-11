@@ -111,6 +111,11 @@ const CONFIGS: Record<AgentKind, Record<string, unknown>> = {
       description:
         "The types of files it takes, by their extension; none takes any type.",
     },
+    start_over: {
+      type: "boolean",
+      description:
+        "When a run stops mid-way (its worker went, a hiccup) and ADK can't carry it on where it stopped, whether it starts over in a new session, every step running again. Off, the run fails and can be resubmitted. A step that fails once the run carried on fails it either way.",
+    },
   },
   llm: {
     ...LLM_SETTINGS,
@@ -168,6 +173,12 @@ const CONFIGS: Record<AgentKind, Record<string, unknown>> = {
       description:
         "Which of its versions runs: a published one, its draft, or null for its latest published (as each run starts).",
     },
+    inputs: {
+      type: "object",
+      additionalProperties: text,
+      description:
+        "The fields of its start's input_schema, each a JSONata expression over the run's data. With any filled in, they're its input (an expression that finds nothing leaves its field out); with none, what comes in is.",
+    },
   },
   // Forge's workflow steps: as a forge.workflow/v1 workflow's.
   ...(Object.fromEntries(
@@ -182,6 +193,43 @@ const CONFIGS: Record<AgentKind, Record<string, unknown>> = {
       "A JSON Schema of their answer; {} takes anything."
     ),
   },
+}
+
+/**
+ * What each kind of node hands on: what the next node reads as `previous`,
+ * and later ones as `steps.<id>.output`. A run hands these on
+ * (packages/python/adk-workflows); the builder types expressions by them.
+ */
+const HANDS_ON: Record<AgentKind, string> = {
+  start:
+    "Every node reads the run's input, held to input_schema, as input (steps.<start id>.output too).",
+  llm: "Hands on its answer: JSON held to output_schema when it declares one, else text.",
+  sequential: "Hands on its last sub-agent's answer.",
+  parallel:
+    "Hands on each sub-agent's answer, by the sub-agent's ID: {<id>: answer}.",
+  loop_agent: "Hands on the answer of the sub-agent that answered last.",
+  saved:
+    "Its inputs, when any is filled in, else what comes in, are the other workflow's input (held to its start's input_schema); it hands on that workflow's result: its End's result.",
+  human_input: "Hands on the person's answer, held to response_schema.",
+  approval:
+    "Hands on {approved, decided_by, comment, decided_at} by its approved or rejected way.",
+  http: "Hands on {status, headers, body} by its success way, body held to output_schema when it declares one. Its error way hands on nothing; steps.<id>.error is {message, status?, body?, expression?}.",
+  transform:
+    "Hands on what its expression makes, held to output_schema when it declares one.",
+  filter:
+    "Hands on {count, results}: the items its condition is true for, in order.",
+  delay: "Hands on {resumed_at}.",
+  if: "Hands on what came into it; steps.<id>.output records the way it took: {branch}.",
+  switch:
+    "Hands on what came into it; steps.<id>.output records the way it took: {branch}.",
+  match:
+    "Hands on what came into it; steps.<id>.output records the way it took: {branch}, or {branches} in mode all.",
+  loop: "Its body (what its each way reaches before coming back to it) runs per item, reading the item as item_name and its place as index; by its done way it hands on {count, results}, results what each item's body handed back.",
+  for_each:
+    "Its body (what its each way reaches; nothing leads back) runs per item, reading the item as item_name and its place as index; by its done way it hands on {count}.",
+  merge:
+    "Hands on what each way into it handed on, by the step it came from: {<step id>: ...}.",
+  end: "Finishes its way with its result: its expression's, or what came in when it has none.",
 }
 
 /** Each kind of sub-agent's settings. */
@@ -209,7 +257,7 @@ export const AGENT_JSON_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   title: "Forge agent",
   description:
-    "An organization's agent: a Google ADK graph workflow of nodes (ADK agents and other agents, and Forge's workflow steps: approvals, HTTP requests, transforms, delays, If / Switch / Match, loops, merges, ends) joined by edges, run from its start.",
+    "An organization's agent: a Google ADK graph workflow of nodes (ADK agents and other agents, and Forge's workflow steps: approvals, HTTP requests, transforms, filters, delays, If / Switch / Match, loops, for-eachs, merges, ends) joined by edges, run from its start. Every expression (JSONata; in text, inside {{ }}) reads input (the run's), previous (what the node before handed on), steps.<id>.output and .error (the nodes that ran before it), state (the session's) and, in a loop's or for-each's body, its item and index. What each kind hands on is in its config's description.",
   type: "object",
   required: ["format", "id", "name", "nodes", "edges"],
   properties: {
@@ -333,7 +381,10 @@ export const AGENT_JSON_SCHEMA = {
     ...Object.fromEntries(
       kinds.map((kind) => [
         `config_${kind}`,
-        settings(CONFIGS[kind], AGENT_KINDS[kind].summary),
+        settings(
+          CONFIGS[kind],
+          `${AGENT_KINDS[kind].summary} ${HANDS_ON[kind]}`
+        ),
       ])
     ),
     ...Object.fromEntries(

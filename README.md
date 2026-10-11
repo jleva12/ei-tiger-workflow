@@ -49,8 +49,9 @@ the **assistant** (the AI helper on every page).
 | The run store (runs, their status and activity) | `packages/python/adk-workflows/src/forge_task_adk_workflows/run_store.py` |
 | An organization's code repositories and their ingestions: the page, the routes, the queue table the worker claims from | `apps/forge-web/src/features/code-repositories/`, `apps/forge-admin-api/src/forge_admin/api/routes/code_repositories.py`, `models/code_repositories.py`, `apps/forge-codegraph-worker/internal/jobqueue/` |
 | How a GitHub repository is ingested into the code graph (fetch, parse, resolve, load, embed) | `apps/forge-codegraph-worker/` (`internal/ingestion/`, `internal/languages/`, `internal/resolve/`) |
-| The code graph's MCP tools, and the queries behind them | `apps/forge-codegraph-mcp/src/forge_codegraph_mcp/` (`tools/graph.py`, `graph/query/`, `graph/spanner.py`) |
-| The code graph's storage, schema, search and the queries agents ask of it | `packages/go/code-graph/` (`storage/`, `agentquery/`) |
+| The code graph's MCP tools | `apps/forge-codegraph-mcp/src/forge_codegraph_mcp/tools/graph.py` |
+| Every read of the code graph: search, the explorer, the agents' queries, the ingestion audit, cross-repository links (admin API, ADK workflows, MCP server alike) | `packages/python/codegraph-query/` (`service.py`, `spanner.py`, `query/`) |
+| The code graph's storage and schema, as the worker writes them | `packages/go/code-graph/` (`storage/`, `domain/`) |
 | Settings, ports and the Compose stack | `.env.common`, each app's `.env`, `compose.yaml`, `Makefile` |
 
 ## What it does
@@ -145,7 +146,7 @@ the **assistant** (the AI helper on every page).
 | `web` | `apps/forge-web` | 5190 (dev), 18190 (Compose) | React web console on the Forge UI design system: the ADK workflow builder and its runs, the agent builder, administration of organizations, users, roles and permissions, and the assistant panel |
 | `admin` | `apps/forge-admin-api` | 8101 (native), 18201 (Compose) | FastAPI API (`/api/v1`, docs at `/docs`): organizations, users, Casbin roles and permissions, ADK workflows (MongoDB), ADK workflow runs (starting, listing, deciding, retrying, from the run store), runs' steps from their ADK sessions, and the assistant |
 | `admin-mysql` | `apps/forge-admin-api` | 13326 | MySQL 8.4 for the admin API (Alembic migrations), ADK workflow runs (the run store) and their sessions, with a persistent volume |
-| `worker` | `apps/forge-codegraph-worker` | 8090 (native), 18090 (Compose) | Go code graph ingestion worker: claims ingestion jobs from the admin MySQL's `code_ingestion_jobs` and loads one graph generation per job into Spanner; health probes and its graph API on the same port |
+| `worker` | `apps/forge-codegraph-worker` | 8090 (native), 18090 (Compose) | Go code graph ingestion worker: claims ingestion jobs from the admin MySQL's `code_ingestion_jobs` and loads one graph generation per job into Spanner; serves only its health probes (every reader reads Spanner itself, with `packages/python/codegraph-query`) |
 | `codegraph-mcp` | `apps/forge-codegraph-mcp` | 8103 (native), 18203 (Compose) | Python MCP server (FastMCP, streamable HTTP at `/mcp`) over the worker's code graph: explore, search, callers and callees, impact, changes, path, hubs and source; reads the worker's Spanner database |
 | `worker-spanner` | `apps/forge-codegraph-worker` | 19030 (gRPC), 19040 (REST) | Cloud Spanner emulator the worker writes the code graph to; in memory, so `make down` loses it (`SPANNER=cloud` uses managed Spanner instead) |
 | `async-worker-adk-workflows` | `apps/forge-async-worker` | none (SAQ worker) | Async worker (`forge-async-worker`) serving the `adk_workflows` queue: runs organizations' ADK workflows on Google ADK, the runs and their sessions in the admin MySQL, pausing for approvals, questions and waits |
@@ -299,7 +300,7 @@ apps/
     pyproject.toml        The app's dependencies (the ADK workflows task among them) and tool settings (a workspace member)
   forge-codegraph-worker/ Go code ingestion engine: GitHub repositories into a code graph in Spanner (see its README)
     cmd/                  codegraph-worker (the process) and codegraph-schema (the Spanner DDL)
-    internal/             workerapp/ (config, job loop, health, admission and graph API), ingestion/ (the pipeline),
+    internal/             workerapp/ (config, job loop, health probes), ingestion/ (the pipeline),
                           languages/, parser/, resolve/ (Java, TypeScript, Python), buildcontext/, discovery/,
                           graphanalysis/, localindex/, repository/github/
     python-analyzer/, typescript-analyzer/  The Pyright and TypeScript compiler bridges it runs under Node
@@ -309,8 +310,8 @@ apps/
     .env.example          Worker settings template
     go.mod, go.sum        The module and its dependencies; replaces point at packages/go/code-graph
   forge-codegraph-mcp/    Python MCP server over the code graph, on the template-mcp design (see its README)
-    src/forge_codegraph_mcp/  server.py (ServerBuilder), core/ (settings, auth, FastMCP factory), routes/, tools/,
-                          graph/ (the Spanner reader and the graph queries, ported from packages/go/code-graph)
+    src/forge_codegraph_mcp/  server.py (ServerBuilder), core/ (settings, auth, FastMCP factory), routes/, tools/
+                          (the graph itself is read with packages/python/codegraph-query)
     tests/                Pytest suite on an in-memory graph; no Spanner needed
     Dockerfile            uv workspace build, from the repository root
     compose.yaml          codegraph-mcp, reading the worker's database
@@ -323,7 +324,10 @@ packages/                 Shared Python and Go libraries and the Forge UI design
   python/task-sdk/        forge-tasks: the contract between the async worker and a task package
   python/adk-workflows/   forge-task-adk-workflows: the ADK workflows task, which builds and runs ADK workflows,
                           and the run store their runs are kept in
-  go/code-graph/          The Go modules the code graph worker links: domain, storage (Spanner), agentquery,
+  python/codegraph-query/ forge-codegraph-query: every read of the code graph (Spanner store, search, explorer,
+                          the agents' queries, the ingestion audit) and cross-link writes, for every reader
+  python/codegraph/       forge-codegraph: system design knowledge bases' code as cited passages, and their designs
+  go/code-graph/          The Go modules the code graph worker links: domain, storage (Spanner, its schema),
                           serviceconfig, authorization and the audited tree-sitter-java grammar
 tests/infrastructure/     Validates the rendered Compose stack (make infrastructure-check)
 .claude/                  Agent skills for the Forge UI, data and state conventions; dev-server launch config

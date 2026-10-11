@@ -5,8 +5,16 @@ import {
   type JsonataNode,
 } from "./jsonata"
 import { normalizeReferences } from "./references"
-import type { Scope, StepInfo, StepMark } from "./scope"
-import { fieldNames, isScalar, t, typeLabel, type DataType } from "./types"
+import type { Root, Scope, StepInfo, StepMark } from "./scope"
+import {
+  fieldNames,
+  isScalar,
+  misfit,
+  sayType,
+  t,
+  typeLabel,
+  type DataType,
+} from "./types"
 
 /*
  * Reading the JSONata a workflow's settings hold, against the scope of the
@@ -35,7 +43,10 @@ export type Diagnostic = {
 }
 
 export type Completion = {
+  /** What's matched as it's typed, and inserted unless `apply` says otherwise. */
   label: string
+  /** What the list shows instead of the label (a step's name for its ID). */
+  display?: string
   /** What's inserted, when it isn't the label. */
   apply?: string
   /** The type, or what it is. */
@@ -52,17 +63,26 @@ export type Completion = {
   step?: StepMark
   /** Words beside the label (a step's name), in the UI face. */
   note?: string
+  /** The group it's listed under, in the list's order (rank, lowest first). */
+  section?: { name: string; rank: number }
 }
 
 export type CompletionResult = {
   from: number
   to: number
   options: Completion[]
+  /** Already matched to what's typed (steps, by ID or name): don't match again. */
+  filtered?: boolean
 }
 
 export type FieldCheck = {
-  /** What the whole expression must be. */
-  expect?: "list" | "value"
+  /**
+   * What the whole expression must be: a list to go through, a value a
+   * case can equal, or a condition (only true holds).
+   */
+  expect?: "list" | "value" | "condition"
+  /** What it's held to where it goes (an agent's input field): it should fit. */
+  want?: DataType
   /** Text a template writes: an object there reads as JSON. */
   textual?: boolean
 }
@@ -276,8 +296,18 @@ function staged(
   env: Env,
   path: string
 ): DataType {
+  return filtered(type, node.stages ?? [], env, path)
+}
+
+/** What filters (`[0]`, `[condition]`) leave of a value: an item, or the items they hold for. */
+function filtered(
+  type: DataType,
+  stages: JsonataNode[],
+  env: Env,
+  path: string
+): DataType {
   let current = type
-  for (const stage of node.stages ?? []) {
+  for (const stage of stages) {
     if (stage.type !== "filter") {
       visit(stage, env)
       continue
@@ -321,7 +351,11 @@ function pathType(node: JsonataNode, env: Env): DataType {
         env.hovers.push({ ...nameRange(first, env), type })
     }
   } else {
-    path = "It"
+    // A variable says its name: a function's parameter, $ for the item.
+    path =
+      first.type === "variable" && typeof first.value === "string"
+        ? `$${first.value}`
+        : "It"
     type = typeOf(first, env)
   }
   type = staged(type, first, env, path)
@@ -343,9 +377,11 @@ function pathType(node: JsonataNode, env: Env): DataType {
           env.diagnostics.push({
             ...nameRange(step, env),
             severity: "error",
-            message: other
-              ? `${other.name} (${name}) doesn't run before this step, so its output isn't there yet.`
-              : `There's no step ${name}.${suggest(name, [...env.scope.steps.keys()])}`,
+            message: env.scope.enclosing?.has(name)
+              ? `${other?.name ?? name} (${name}) hands on once every item has run, and this step runs for each item: its output isn't there yet. Read the item instead.`
+              : other
+                ? `${other.name} (${name}) doesn't run before this step, so its output isn't there yet.`
+                : `There's no step ${name}.${suggest(name, [...env.scope.steps.keys()])}`,
           })
           type = t.unknown()
         } else {
@@ -475,9 +511,36 @@ function unaryType(node: JsonataNode, env: Env): DataType {
   }
 }
 
-function callType(node: JsonataNode, env: Env): DataType {
-  for (const argument of node.arguments ?? []) typeOf(argument, env)
+/** What a function written in place makes, its parameters typed as it's handed them. */
+function lambdaType(node: JsonataNode, env: Env, params: DataType[]): DataType {
+  const inner = { ...env, vars: new Map(env.vars) }
+  ;(node.arguments ?? []).forEach((argument, index) => {
+    if (typeof argument.value === "string")
+      inner.vars.set(argument.value, params[index] ?? t.unknown())
+  })
+  return typeOf(node.body, inner)
+}
+
+/**
+ * A function's call: what it gives, from its arguments. `piped` is what
+ * `~>` hands it as its first argument. A function written in place as an
+ * argument ($map's) is handed what the function hands it: an item of the
+ * list, so its fields are typed and checked.
+ */
+function callType(node: JsonataNode, env: Env, piped?: DataType): DataType {
   const procedure = node.procedure
+  const named =
+    procedure?.type === "variable" && !env.vars.has(String(procedure.value))
+      ? JSONATA_FUNCTIONS[String(procedure.value)]
+      : undefined
+  const args: DataType[] = piped ? [piped] : []
+  let made: DataType | undefined
+  for (const argument of node.arguments ?? []) {
+    if (argument.type === "lambda" && named?.hands && args.length) {
+      made = lambdaType(argument, env, named.hands(args))
+      args.push(t.unknown())
+    } else args.push(typeOf(argument, env))
+  }
   if (procedure?.type !== "variable") {
     typeOf(procedure, env)
     return t.unknown()
@@ -493,7 +556,7 @@ function callType(node: JsonataNode, env: Env): DataType {
     })
     return t.unknown()
   }
-  return fn.returns()
+  return fn.returns(args, made)
 }
 
 function variableType(node: JsonataNode, env: Env): DataType {
@@ -503,8 +566,18 @@ function variableType(node: JsonataNode, env: Env): DataType {
   return env.vars.get(name) ?? t.unknown()
 }
 
-/** The type of a node, noting what's wrong in it on the way. */
+/**
+ * The type of a node, noting what's wrong in it on the way. A filter on
+ * what isn't a path's name (`$filter(…)[0]`, `(…)[0]`) is its predicate.
+ */
 function typeOf(node: JsonataNode | undefined, env: Env): DataType {
+  const type = nodeType(node, env)
+  return node?.predicate?.length
+    ? filtered(type, node.predicate, env, "It")
+    : type
+}
+
+function nodeType(node: JsonataNode | undefined, env: Env): DataType {
   if (!node) return t.unknown()
   switch (node.type) {
     case "string":
@@ -530,6 +603,14 @@ function typeOf(node: JsonataNode | undefined, env: Env): DataType {
     case "function":
     case "partial":
       return callType(node, env)
+    case "apply": {
+      // `list ~> $f(…)`: the list is $f's first argument.
+      const piped = typeOf(node.lhs as JsonataNode | undefined, env)
+      if (node.rhs?.type === "function" || node.rhs?.type === "partial")
+        return callType(node.rhs, env, piped)
+      typeOf(node.rhs, env)
+      return t.unknown()
+    }
     case "condition": {
       typeOf(node.condition, env)
       const then = typeOf(node.then, env)
@@ -759,7 +840,7 @@ export function checkField(
           from: 0,
           to: text.length,
           severity: "error",
-          message: `A loop goes through a list; this is ${typeLabel(type)}.`,
+          message: `It goes through a list; this is ${typeLabel(type)}.`,
         })
       }
       if (
@@ -774,9 +855,41 @@ export function checkField(
           message: `This is ${typeLabel(type)}; a case can only equal text, a number or true/false.`,
         })
       }
+      // A run takes only true as holding: anything else never does.
+      if (
+        type &&
+        options.expect === "condition" &&
+        type.kind !== "boolean" &&
+        type.kind !== "unknown"
+      ) {
+        diagnostics.push({
+          from: 0,
+          to: text.length,
+          severity: "warning",
+          message: `This is ${sayType(type)}, never true, so it never holds. Compare it (${COMPARE[type.kind] ?? "= …"}), or test it with $exists(…).`,
+        })
+      }
+      const wrong = type && options.want && misfit(type, options.want)
+      if (wrong) {
+        diagnostics.push({
+          from: 0,
+          to: text.length,
+          severity: "warning",
+          message: `This doesn't fit what it's for: ${wrong}.`,
+        })
+      }
       return diagnostics
     }
   }
+}
+
+// How a condition compares a value of each kind, as a hint.
+const COMPARE: Partial<Record<DataType["kind"], string>> = {
+  string: '= "…"',
+  number: "> 0",
+  array: "$count(…) > 0",
+  object: "a field = …",
+  null: "!= null",
 }
 
 /* -------------------------------------------------------------------------- */
@@ -955,6 +1068,9 @@ function propertyOptions(type: DataType): Completion[] {
   }
 }
 
+const rootBoost = (root: Root) =>
+  root.boost ?? (root.name === "previous" ? 3 : root.name === "steps" ? 2 : 1)
+
 function rootOptions(scope: Scope): Completion[] {
   return [...scope.roots.values()].map((root) => ({
     label: root.name,
@@ -965,26 +1081,194 @@ function rootOptions(scope: Scope): Completion[] {
         ? root.type.description
         : undefined,
     kind: "variable",
-    boost: root.name === "previous" ? 3 : root.name === "steps" ? 2 : 1,
+    boost: rootBoost(root),
   }))
 }
 
-function stepOptions(scope: Scope): Completion[] {
-  return [...scope.steps.values()].map((step) => ({
-    label: step.id,
-    detail: typeLabel(step.output),
-    note: step.name,
-    info: step.output.description ?? `${step.mark.label}: what it handed on.`,
+/** A field somewhere in the scope, by the whole path that reads it. */
+type FoundField = {
+  /** As it's written: `steps.fetch.output.body.items`. */
+  path: string
+  type: DataType
+  /** The step it's in, when it's under steps.<id>. */
+  step?: StepInfo
+  /** The names along it past its root (past `steps.<id>` for a step's): what's typed matches them. */
+  names: string[]
+}
+
+const FIELDS_SEEN = 600
+const FIELDS_DEEP = 6
+
+/**
+ * Every field the scope holds, at any depth, each by its whole path: the
+ * roots' fields, and each earlier step's output and its fields. Lists'
+ * items aren't gone into: a path through one reads every item's field.
+ */
+export function fieldsIn(scope: Scope): FoundField[] {
+  const found: FoundField[] = []
+  const walk = (
+    type: DataType,
+    path: string,
+    names: string[],
+    step: StepInfo | undefined
+  ) => {
+    if (type.kind !== "object" || names.length >= FIELDS_DEEP) return
+    for (const [name, field] of Object.entries(type.properties)) {
+      if (found.length >= FIELDS_SEEN) return
+      if (!name.trim()) continue
+      const written = /^[A-Za-z_]\w*$/.test(name) ? name : `\`${name}\``
+      const next = {
+        path: `${path}.${written}`,
+        type: field,
+        step,
+        names: [...names, name],
+      }
+      found.push(next)
+      walk(field, next.path, next.names, step)
+    }
+  }
+  for (const root of scope.roots.values()) {
+    if (root.name === "steps") continue
+    found.push({ path: root.name, type: root.type, names: [] })
+    // The state keeps the run's input too: it's read as input.
+    const type =
+      root.name === "state" && root.type.kind === "object"
+        ? {
+            ...root.type,
+            properties: Object.fromEntries(
+              Object.entries(root.type.properties).filter(
+                ([name]) => name !== "input"
+              )
+            ),
+          }
+        : root.type
+    walk(type, root.name, [], undefined)
+  }
+  for (const step of scope.steps.values()) {
+    // The start hands on the input: it's read as input.
+    if (step.kind === "start") continue
+    const path = `steps.${step.id}.output`
+    found.push({ path, type: step.output, step, names: ["output"] })
+    walk(step.output, path, ["output"], step)
+  }
+  return found
+}
+
+/** How well what's typed matches a field: its last name, any name, its step's name, anywhere. */
+function fieldScore(field: FoundField, want: string) {
+  const names = field.names.map((n) => n.toLowerCase())
+  if (names.at(-1)?.startsWith(want)) return 3
+  const words = [
+    ...names,
+    ...(field.step?.name.toLowerCase().split(/[^a-z0-9]+/) ?? []),
+  ]
+  if (words.some((word) => word.startsWith(want))) return 2
+  return field.path.toLowerCase().includes(want) ? 1 : 0
+}
+
+const LISTS = { name: "Lists to go through", rank: 0 }
+const MATCHES = { name: "Fields", rank: 1 }
+const ROOTS = { name: "Start from", rank: 2 }
+const MOST_MATCHES = 40
+
+/** A field found by its path, as a completion: a step's shows the step, then the rest. */
+function fieldOption(
+  field: FoundField,
+  section: Completion["section"]
+): Completion {
+  return {
+    label: field.path,
+    display: field.step
+      ? `${field.step.name.trim() || field.step.id} › ${field.names.join(".")}`
+      : field.path,
+    detail: typeLabel(field.type),
+    info: field.type.description,
     kind: "property",
-    step: step.mark,
-  }))
+    step: field.step?.mark,
+    section,
+  }
+}
+
+/**
+ * What can start a path where nothing's typed yet, or a word: the roots,
+ * and the fields anywhere in the scope whose names match what's typed
+ * (`count` finds steps.fetch.output.body.data.count), each written whole.
+ * Where a list is wanted (a loop's, a filter's), every list it can go
+ * through comes first.
+ */
+function startOptions(
+  scope: Scope,
+  typed: string,
+  check: FieldCheck
+): Completion[] {
+  const want = typed.toLowerCase()
+  const roots = rootOptions(scope)
+    .filter((root) => !want || root.label.toLowerCase().includes(want))
+    .sort(
+      (a, b) =>
+        Number(b.label.toLowerCase().startsWith(want)) -
+          Number(a.label.toLowerCase().startsWith(want)) ||
+        (b.boost ?? 0) - (a.boost ?? 0)
+    )
+    .map((root) => ({ ...root, section: ROOTS }))
+  const lists = check.expect === "list"
+  if (!want && !lists) return roots
+  const fields = fieldsIn(scope)
+    .filter((field) =>
+      lists ? field.type.kind === "array" : field.names.length > 0
+    )
+    .map((field, order) => ({
+      field,
+      order,
+      score: want ? fieldScore(field, want) : 1,
+    }))
+    .filter((found) => found.score > 0)
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        a.field.names.length - b.field.names.length ||
+        a.order - b.order
+    )
+    .slice(0, MOST_MATCHES)
+    .map(({ field }) => fieldOption(field, lists ? LISTS : MATCHES))
+  return [...fields, ...roots]
+}
+
+/**
+ * The steps it can read, by name: what's typed matches a step's ID or any
+ * word of its name (`email` finds Email each contact), the closest first.
+ * Picking one writes its ID, which is what a run reads.
+ */
+function stepOptions(scope: Scope, typed: string): Completion[] {
+  const want = typed.toLowerCase()
+  const score = (step: StepInfo) => {
+    if (!want) return 1
+    const id = step.id.toLowerCase()
+    const name = step.name.toLowerCase()
+    if (id.startsWith(want) || name.startsWith(want)) return 3
+    if (name.split(/[^a-z0-9]+/).some((word) => word.startsWith(want))) return 2
+    return id.includes(want) || name.includes(want) ? 1 : 0
+  }
+  return [...scope.steps.values()]
+    .map((step) => ({ step, score: score(step) }))
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(({ step }) => ({
+      label: step.id,
+      display: step.name.trim() || step.id,
+      detail: typeLabel(step.output),
+      note: step.id,
+      info: step.output.description ?? `${step.mark.label}: what it handed on.`,
+      kind: "property",
+      step: step.mark,
+    }))
 }
 
 function functionOptions(): Completion[] {
   return Object.entries(JSONATA_FUNCTIONS).map(([name, fn]) => ({
     label: `$${name}`,
     apply: `$${name}(`,
-    detail: typeLabel(fn.returns()),
+    detail: typeLabel(fn.returns([])),
     note: fn.signature.slice(name.length + 1),
     info: fn.description,
     kind: "method",
@@ -1021,7 +1305,8 @@ function valueOptions(
 function expressionCompletions(
   text: string,
   pos: number,
-  scope: Scope
+  scope: Scope,
+  check: FieldCheck = {}
 ): CompletionResult | null {
   const { inside } = openAt(text, pos)
   if (inside?.kind === "quote") return valueOptions(text, pos, scope, inside.at)
@@ -1033,15 +1318,24 @@ function expressionCompletions(
   if (!path) return null
   const base = baseAt(text, path.from, scope)
   if (!path.isProperty) {
-    // A new name: the roots, or the item's fields inside a filter.
+    // A new name: the roots and the fields that match it, or the item's
+    // fields inside a filter.
+    return base.top
+      ? {
+          from: path.from,
+          to: pos,
+          options: startOptions(scope, path.partial, check),
+          filtered: true,
+        }
+      : { from: path.from, to: pos, options: propertyOptions(base.type) }
+  }
+  if (base.top && path.parts.length === 1 && path.parts[0] === "steps") {
     return {
       from: path.from,
       to: pos,
-      options: base.top ? rootOptions(scope) : propertyOptions(base.type),
+      options: stepOptions(scope, path.partial),
+      filtered: true,
     }
-  }
-  if (base.top && path.parts.length === 1 && path.parts[0] === "steps") {
-    return { from: path.from, to: pos, options: stepOptions(scope) }
   }
   if (base.top && path.parts.length === 2 && path.parts[0] === "steps") {
     const step = scope.steps.get(path.parts[1])
@@ -1089,16 +1383,18 @@ export function completeField(
   text: string,
   pos: number,
   mode: FieldMode,
-  scope: Scope
+  scope: Scope,
+  check: FieldCheck = {}
 ): CompletionResult | null {
   if (mode !== "template") text = normalizeReferences(text, false)
-  if (mode === "expression") return expressionCompletions(text, pos, scope)
+  if (mode === "expression")
+    return expressionCompletions(text, pos, scope, check)
   // Templates: only inside an open {{.
   const open = text.lastIndexOf("{{", pos - 1)
   const close = text.lastIndexOf("}}", pos - 1)
   if (open === -1 || open < close) return null
   const inner = text.slice(open + 2, pos)
-  const result = expressionCompletions(inner, inner.length, scope)
+  const result = expressionCompletions(inner, inner.length, scope, check)
   return (
     result && {
       ...result,
@@ -1135,8 +1431,50 @@ export function typeAt(
       label: hit.step
         ? `${hit.step.name} · output ${typeLabel(hit.step.output)}`
         : typeLabel(hit.type),
-      description: hit.step ? undefined : hit.type.description,
+      description: hit.step
+        ? `Saved as steps.${hit.step.id}.`
+        : hit.type.description,
     }
   }
   return null
+}
+
+/* -------------------------------------------------------------------------- */
+/* Steps named                                                                */
+/* -------------------------------------------------------------------------- */
+
+// A string or a comment: what's in one names nothing.
+const LITERAL =
+  /\/\*[\s\S]*?(?:\*\/|$)|"(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*(?:'|$)/g
+
+/**
+ * Where the text names a step it can read, `steps.<id>`: the ID's span and
+ * the step, so a field can show the step's name over its ID (the text, and
+ * what's saved and run, keeps the ID). Outside strings and comments; in a
+ * template, inside its `{{ }}` parts. A step it can't read isn't one: the
+ * checks say why.
+ */
+export function stepReferences(
+  text: string,
+  mode: FieldMode,
+  scope: Scope
+): { from: number; to: number; step: StepInfo }[] {
+  const regions =
+    mode === "template"
+      ? templateParts(text).parts.map((p) => ({
+          text: p.inner,
+          at: p.innerFrom,
+        }))
+      : [{ text, at: 0 }]
+  const found: { from: number; to: number; step: StepInfo }[] = []
+  for (const region of regions) {
+    const code = region.text.replace(LITERAL, (m) => " ".repeat(m.length))
+    for (const m of code.matchAll(/(?<![\w$.`])steps\s*\.\s*([A-Za-z_]\w*)/g)) {
+      const step = scope.steps.get(m[1])
+      if (!step) continue
+      const to = region.at + m.index + m[0].length
+      found.push({ from: to - m[1].length, to, step })
+    }
+  }
+  return found
 }

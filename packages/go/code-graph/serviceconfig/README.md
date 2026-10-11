@@ -5,8 +5,10 @@ codegraph process shares and the code that turns them into a working store:
 
 - `Config` with `Spanner` (database, scope, cursor signing key, emulator
   auto-provisioning), `Embedding` (provider, model, dimensions, concurrency),
-  `Search` (query enhancement) and the `Queue` a worker claims ingestion
-  jobs from (in the Forge admin API's MySQL).
+  `Log` and the `Queue` a worker claims ingestion jobs from (in the Forge
+  admin API's MySQL). The cursor signing key signs the store's pagination
+  cursors, which the embedding pass and the ingestion's baseline reads page
+  with.
 - `Load`, the Viper loader: it derives every key from the configuration
   struct's `mapstructure` tags (or snake_case field names), then reads
   defaults, `codegraph.yaml` (or the file named by `CODEGRAPH_CONFIG_FILE`),
@@ -14,9 +16,10 @@ codegraph process shares and the code that turns them into a working store:
   (`.env` by default), and optional command-line flags, in that order of
   precedence. Standard environment names are `CODEGRAPH_` plus the key path;
   `env` tags and `Options.Aliases` keep historical names. Unknown `CODEGRAPH_`
-  keys in either file are rejected. Each application embeds `Config` with a
-  `mapstructure:",squash"` tag and adds a section of its own: the worker its
-  ingestion settings, the admin API, the query API and the MCP server theirs.
+  keys in either file are rejected, except the names in `Options.Retired`,
+  removed settings an old file may still set, which are ignored. The worker
+  embeds `Config` with a `mapstructure:",squash"` tag and adds its ingestion
+  settings.
 - `Open`, which provisions the emulator when asked, opens the store with the
   configured vector length, verifies it against the database, and builds the
   embedding provider.

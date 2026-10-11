@@ -129,7 +129,11 @@ page is embedded. A type's document also lists the members it declares
 ("Members:" lines of kind and name, bounded), so a question about a concept
 finds the class that groups its methods, not only the methods.
 
-Search reads the query first (`codesearch.ParseQuery`). An identifier or a
+Search itself runs in the readers, the Python package
+`forge_codegraph_query` (`packages/python/codegraph-query`), which reads these
+tables directly and hashes documents exactly as `codesearch.FromNode` does
+(`packages/go/code-graph/domain/codesearch/testdata/reader_contract.json` is
+the fixture both sides test against). It reads the query first. An identifier or a
 partial identifier is used as written. A sentence of three or more words is
 a question: its function words and generic code words ("who calls the
 method that") are dropped from the lexical terms, identifier-shaped words
@@ -157,8 +161,8 @@ candidates, so a generation still loading never shows through, and the
 sweep restores documents an abandoned generation rewrote. Hits carry the
 signature, a snippet around the first matched term, the matched terms, the
 exact-match and name-match flags and caller and callee counts, so an agent
-can pick which hits to expand. `/v1/repos/{repo}/symbols` resolves a name or
-qualified name directly through the same index.
+can pick which hits to expand. An exact-name lookup goes straight through
+`CGSearchDocumentsByName`.
 
 The vector branch always runs on a Spanner vector index. `CGSearchEmbeddings`
 stores each document's embedding in an `ARRAY<FLOAT32>` column whose
@@ -177,14 +181,13 @@ supports the same DDL and query.
 
 ## Exploration
 
-`packages/go/code-graph/agentquery` composes the store's reads into the operations an
-agent uses to explore, and both `codegraph-api` (HTTP, in `apps/api`) and
-`codegraph-mcp` (Model Context Protocol tools, in `apps/forge-codegraph-mcp`) build on it, so
-an endpoint and a tool answer identically; ingestion administration is
-`codegraph-admin` in `apps/admin` and the worker is `apps/forge-codegraph-worker`. The Spanner store itself lives in
-`packages/go/code-graph/storage` and the shared process configuration in
-`packages/go/code-graph/serviceconfig`, so the worker, the admin API, the query API and the
-MCP server open the same database the same way. `Explore` turns a question into a context pack: the search
+`forge_codegraph_query` composes the tables' reads into the operations an
+agent uses to explore, and the admin API, the workflows worker and the code
+graph MCP server (`apps/forge-codegraph-mcp`) build on it, so an endpoint and
+a tool answer identically. The worker (`apps/forge-codegraph-worker`) only
+writes: it serves its health probes and nothing else. The Spanner store it
+writes through lives in `packages/go/code-graph/storage` and its process
+configuration in `packages/go/code-graph/serviceconfig`. `Explore` turns a question into a context pack: the search
 hits become seeds with file, lines, byte span, content hash, signature,
 snippet and a bounded docstring; the strongest seeds (exact matches first)
 are expanded one hop in both directions over the semantic edge kinds
@@ -198,7 +201,7 @@ implements, so callers of a base method are impacted by a change to its
 override. `NodeSource` cuts a node's span from the retained file, verified
 against its content hash, with optional whole lines of context.
 
-`codegraph-mcp` serves these as read-only tools over streamable HTTP
+The MCP server serves these as read-only tools over streamable HTTP
 (`/mcp`, stateless, JSON responses) or stdio: `explore_code`, `search_code`,
 `find_symbol`, `get_node`, `neighbors`, `callers`, `callees`, `impact`,
 `history`, `read_source`, `read_file` and `repository_state`. The server's

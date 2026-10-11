@@ -10,14 +10,18 @@ and the code repositories of its organization, and needs
 ``mcp.auth.cache_seconds``, so a key deleted, a member removed or a
 repository added shows within that long.
 
-Each tool then reads only those repositories (:class:`RepositoryScope`): the
+Each tool then reads only those repositories (``forge_codegraph``'s
+:class:`RepositoryScope`, which the admin API's assistant uses too): the
 graph has one repository per GitHub URL, whose ID follows from the URL, so an
 organization reads the graphs of its repositories' URLs and nothing else,
 cross-repository links included. The same answer carries how the
 organization's repositories connect, as people drew them on its system
-design knowledge bases' maps (``repository_connections``), and who keeps its
-cross-repository links in the graph (``kb:<id>``): a graph shared with
-another organization holds that one's links too, which are left out.
+design knowledge bases' maps (``repository_connections``), each of those
+knowledge bases' whole design, with the databases, queues and external
+systems the repositories use and the groups they're in (``system_design``),
+and who keeps its cross-repository links in the graph (``kb:<id>``): a graph
+shared with another organization holds that one's links too, which are left
+out.
 
 - A credential the admin API refuses: 401, as for a missing one.
 - One that names no organization, or lacks ``repositories:read`` in it: 403
@@ -29,13 +33,14 @@ import asyncio
 import hashlib
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 from fastmcp.server.auth import TokenVerifier
 from fastmcp.server.auth.auth import AccessToken
 from fastmcp.server.dependencies import get_access_token
+from forge_codegraph import READ, RepositoryScope, repository_id
 from forge_common.logging import get_logger
 from mcp.server.auth.middleware.auth_context import AuthContextMiddleware
 from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend
@@ -46,77 +51,12 @@ from starlette.requests import HTTPConnection
 from starlette.responses import JSONResponse, Response
 
 from forge_codegraph_mcp.core.settings import McpAuthSettings
-from forge_codegraph_mcp.graph.errors import NotFound
-from forge_codegraph_mcp.graph.model import graph_id
 
 log = get_logger(__name__)
 
-#: What every caller needs: reading its organization's repositories.
-READ = "repositories:read"
+__all__ = ["READ", "ForgeAccessVerifier", "RepositoryScope", "current_scope", "repository_id"]
+
 ACCESS_PATH = "/code-graph/access"
-
-
-def repository_id(url: str) -> str:
-    """The graph's ID of the repository at a GitHub URL, as the worker names
-    it (``https://github.com/<owner>/<name>``, lowercase)."""
-    return graph_id("repo", url)
-
-
-@dataclass(frozen=True)
-class RepositoryScope:
-    """
-    The repositories a caller reads: its organization's.
-
-    :ivar subject: Who's calling, as the admin API names them (a user's ID,
-        or ``apikey:<id>``).
-    :ivar organization_id: Their organization.
-    :ivar repository_ids: The graph's IDs of the organization's repositories.
-    :ivar link_owners: Who keeps the organization's cross-repository links
-        (``kb:<id>``); None follows every link, as before the admin API said.
-    :ivar connections: How its repositories connect, as drawn on its system
-        maps: each ``{id, knowledge_base_id, knowledge_base, kind,
-        description, source, target, code_links}``, the ends with their
-        graph ``repository_id``.
-    """
-
-    subject: str
-    organization_id: str
-    repository_ids: frozenset[str]
-    link_owners: frozenset[str] | None = field(default=None, compare=False)
-    connections: tuple[dict[str, Any], ...] = field(default=(), compare=False)
-
-    @classmethod
-    def of(cls, token: AccessToken) -> "RepositoryScope":
-        """The scope :class:`ForgeAccessVerifier` put in a token's claims."""
-        claims = token.claims or {}
-        owners = claims.get("link_owners")
-        return cls(
-            subject=str(token.subject or token.client_id),
-            organization_id=str(claims.get("org_id") or ""),
-            repository_ids=frozenset(claims.get("repository_ids") or ()),
-            link_owners=frozenset(owners) if owners is not None else None,
-            connections=tuple(claims.get("connections") or ()),
-        )
-
-    def owns(self, owner: str) -> bool:
-        """Whether a cross-repository link is the organization's: drawn on
-        one of its system maps."""
-        return self.link_owners is None or owner in self.link_owners
-
-    def readable(self, repository: str) -> bool:
-        """Whether the caller reads a repository; for following links out of
-        the one asked about."""
-        return repository in self.repository_ids
-
-    def check(self, *repositories: str) -> None:
-        """
-        :raises NotFound: The caller doesn't read one of them; worded as the
-            graph words a repository that isn't there, so it tells nothing
-            about other organizations' repositories.
-        """
-        for repository in repositories:
-            if repository not in self.repository_ids:
-                raise NotFound(f"repository {repository}")
 
 
 def current_scope() -> RepositoryScope:
@@ -129,7 +69,7 @@ def current_scope() -> RepositoryScope:
     token = get_access_token()
     if token is None or READ not in token.scopes:
         raise PermissionError("no verified Forge credential")
-    return RepositoryScope.of(token)
+    return RepositoryScope.from_claims(token.claims or {}, str(token.subject or token.client_id))
 
 
 class AdminUnavailable(AuthenticationError):
@@ -223,20 +163,13 @@ class ForgeAccessVerifier(TokenVerifier):
         return access
 
     def _granted(self, token: str, body: dict[str, Any]) -> AccessToken:
-        urls = [str(repository["url"]) for repository in body.get("repositories") or ()]
-        subject = str(body["subject"])
-        claims: dict[str, Any] = {
-            "sub": subject,
-            "org_id": str(body["organization_id"]),
-            "repository_ids": sorted(repository_id(url) for url in urls),
-            "connections": [_connection(c) for c in body.get("connections") or ()],
-        }
-        # An admin API from before system maps doesn't say; then every link
-        # is followed, as it was.
-        if "link_owners" in body:
-            claims["link_owners"] = sorted(str(o) for o in body["link_owners"] or ())
+        scope = RepositoryScope.from_access(body)
         return AccessToken(
-            token=token, client_id=subject, subject=subject, scopes=[READ], claims=claims
+            token=token,
+            client_id=scope.subject,
+            subject=scope.subject,
+            scopes=[READ],
+            claims=scope.claims(),
         )
 
     def _keep(self, key: str, access: AccessToken) -> None:
@@ -262,36 +195,6 @@ class ForgeAccessVerifier(TokenVerifier):
 
     async def aclose(self) -> None:
         await self._http.aclose()
-
-
-def _connection(found: dict[str, Any]) -> dict[str, Any]:
-    """A connection as the admin API answered it, each application with its
-    graph's repository ID."""
-
-    def end(application: dict[str, Any]) -> dict[str, str]:
-        url = str(application["url"])
-        return {
-            "repository_id": repository_id(url),
-            "name": f"{application.get('owner', '')}/{application.get('name', '')}",
-        }
-
-    return {
-        "id": str(found["id"]),
-        "knowledge_base_id": str(found.get("knowledge_base_id") or ""),
-        "knowledge_base": str(found.get("knowledge_base") or ""),
-        "kind": str(found["kind"]),
-        "description": str(found.get("description") or ""),
-        "source": end(found["source"]),
-        "target": end(found["target"]),
-        "code_links": [
-            {
-                "label": str(link.get("label") or ""),
-                "source": dict(link["source"]),
-                "target": dict(link["target"]),
-            }
-            for link in found.get("code_links") or ()
-        ],
-    }
 
 
 def _detail(response: httpx.Response) -> str:

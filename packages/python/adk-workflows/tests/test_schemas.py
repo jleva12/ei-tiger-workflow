@@ -1,9 +1,11 @@
 """JSON Schemas as Pydantic models: what the web's schema builder writes, and
 what stored documents may hold, held to and coerced as ADK would."""
 
+import time
 from typing import Any
 
 import pytest
+from forge_common import patterns
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from forge_task_adk_workflows.graph.schemas import held_to, is_model, problems, to_model
@@ -265,3 +267,15 @@ def test_models_are_cached_per_schema() -> None:
         "contacts": ["a@x.com"],
     }
     assert issubclass(first, BaseModel)
+
+
+def test_a_pattern_rusts_regex_cant_read_is_held_to_its_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(patterns, "SCHEMA_SECONDS", 0.05)
+    # A lookahead (so Python's side, not Rust's) that backtracks for ever on a long enough value.
+    slow = obj({"code": {"type": "string", "pattern": "^(?=a)(a|aa)+$"}})
+
+    began = time.perf_counter()
+    said = refuses(slow, {"code": "a" * 60 + "b"})
+
+    assert "took longer than 50 ms" in said and time.perf_counter() - began < 1.0
+    assert holds(slow, {"code": "aaaa"}) == {"code": "aaaa"}

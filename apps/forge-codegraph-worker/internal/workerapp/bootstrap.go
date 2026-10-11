@@ -9,7 +9,6 @@ import (
 	"sort"
 
 	"ei-aitiger-codegraph/pkg/buildcontext"
-	"ei-aitiger-codegraph/pkg/codesearch"
 	"ei-aitiger-codegraph/pkg/parser"
 	"ei-aitiger-codegraph/pkg/semantic"
 	"ei-aitiger-codegraph/serviceconfig"
@@ -84,7 +83,6 @@ type Runtime struct {
 	Pipeline *ingestion.Pipeline
 	Cache    *localindex.SyntaxCache
 	Source   *github.Service
-	Embedder codesearch.Provider
 }
 
 func NewRuntime(c Config, deps Dependencies, storage *Storage, owner string, logger *slog.Logger) (_ *Runtime, err error) {
@@ -113,11 +111,10 @@ func NewRuntime(c Config, deps Dependencies, storage *Storage, owner string, log
 	if err != nil {
 		return nil, err
 	}
-	embedder := storage.Embedder
 	pipeline, err := ingestion.New(ingestion.Config{
 		Dispatcher: deps.Dispatcher, Provider: deps.BuildContext, Resolvers: deps.Resolvers,
 		Matcher: graphanalysis.Matcher{}, Projector: graphanalysis.Projector{},
-		Store: storage.Store, Source: source, SyntaxCache: cache, Embedder: embedder,
+		Store: storage.Store, Source: source, SyntaxCache: cache, Embedder: storage.Embedder,
 		WorkDir: root, OwnerID: owner,
 		ParserLimits: c.ParserLimits, BuildLimits: c.BuildLimits, DiscoveryLimits: c.DiscoveryLimits,
 		Workers:          admittedWorkers(c, deps.Dispatcher),
@@ -127,7 +124,7 @@ func NewRuntime(c Config, deps Dependencies, storage *Storage, owner string, log
 	if err != nil {
 		return nil, err
 	}
-	return &Runtime{Pipeline: pipeline, Cache: cache, Source: source, Embedder: embedder}, nil
+	return &Runtime{Pipeline: pipeline, Cache: cache, Source: source}, nil
 }
 
 func (r *Runtime) Close() error {

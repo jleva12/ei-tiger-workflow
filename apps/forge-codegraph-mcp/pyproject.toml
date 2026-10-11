@@ -8,14 +8,14 @@ dependencies = [
     "fastapi>=0.141.1",
     # The MCP endpoint, its auth providers and its middleware.
     "fastmcp>=4.0.10,<5",
+    # System design knowledge bases' designs as agents read them (system_design).
+    "forge-codegraph",
+    # The graph, read from the worker's Spanner database as every app reads it.
+    "forge-codegraph-query",
     # Structured logging with request ids (forge_common.logging).
     "forge-common[logging]",
-    # The graph, read from the worker's Spanner database.
-    "google-cloud-spanner>=3.70,<4",
     # Callers' credentials, checked with the admin API (access.py).
     "httpx>=0.28",
-    # Questions embedded with the worker's model, for the semantic branch.
-    "openai>=1.40",
     "pydantic-settings>=2.15.0",
     "python-dotenv>=1.0",
     "uvicorn[standard]>=0.53.0",
@@ -57,7 +57,7 @@ extend-immutable-calls = [
     "fastmcp.dependencies.CurrentAccessToken",
     "fastmcp.dependencies.CurrentContext",
     # dataclasses.field with the result's JSON rendering.
-    "forge_codegraph_mcp.graph.model.jfield",
+    "forge_codegraph_query.model.jfield",
 ]
 
 [tool.mypy]

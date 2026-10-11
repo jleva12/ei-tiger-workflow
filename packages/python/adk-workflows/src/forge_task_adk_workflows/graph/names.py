@@ -9,6 +9,18 @@ GRAPH_NAME = "agent"
 RESERVED_NAMES = frozenset({"user"})
 # The longest ADK name, as the builder cuts them.
 MAX_NAME = 48
+#: Steps that run a body per item, its graph named by ``body_name``: a loop
+#: (its body comes back with each item's result) and a for-each (it doesn't).
+BODY_KINDS = frozenset({"loop", "for_each"})
+#: What every step reads by name (``graph.data``): a loop's, a for-each's or a
+#: filter's item called one of these would hide it from the steps reading it.
+READ_NAMES = {
+    "input": "the run's input",
+    "previous": "what the step before handed on",
+    "steps": "the earlier steps",
+    "state": "the session's state",
+    "index": "the item's place in the list",
+}
 
 # The hidden nodes. An ADK name never starts with "_" nor has "__" in it, so
 # these are never a node's.
@@ -36,7 +48,7 @@ def adk_name(name: str) -> str:
 
 
 def body_name(loop: str) -> str:
-    """:return: The ADK name of a loop's body graph."""
+    """:return: The ADK name of a loop's (or a for-each's) body graph."""
     return f"{loop}__each"
 
 

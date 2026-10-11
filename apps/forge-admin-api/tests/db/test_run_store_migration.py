@@ -59,7 +59,8 @@ def test_on_mysql_it_makes_the_run_stores_tables() -> None:
             made_then = re.sub(rf"\n\t{column} [^\n]*", "", made_then)
         expected |= statements(made_then)
         for index in table.indexes:
-            expected |= statements(str(CreateIndex(index).compile(dialect=dialect)))
+            if index.name not in LATER_INDEXES:
+                expected |= statements(str(CreateIndex(index).compile(dialect=dialect)))
     made = statements(output.getvalue())
     assert made == expected
     # DATETIME(6), JSON and the cascade, as the run store relies on them.
@@ -68,8 +69,17 @@ def test_on_mysql_it_makes_the_run_stores_tables() -> None:
     assert any("ON DELETE CASCADE" in line for line in made)
 
 
-#: The run store's columns later migrations added (0012adk_run_versions).
-LATER = ("version",)
+#: The run store's columns and indexes later migrations added
+#: (0012adk_run_versions, 0020adk_run_control, 0021adk_run_children,
+#: 0022adk_run_backoff).
+LATER = (
+    "version",
+    "lease_epoch",
+    "cancel_requested_at",
+    "parent_run_id",
+    "next_attempt_at",
+)
+LATER_INDEXES = ("ix_adk_runs_parent",)
 
 
 # ------------------------------------------------------------------ SQLite
@@ -171,6 +181,7 @@ def test_on_sqlite_it_round_trips(connection: sa.Connection) -> None:
         } == {
             (index.name, tuple(c.name for c in index.columns))
             for index in table.indexes
+            if index.name not in LATER_INDEXES
         }
     [foreign_key] = inspector.get_foreign_keys("adk_run_events")
     assert (foreign_key["constrained_columns"], foreign_key["referred_table"]) == (

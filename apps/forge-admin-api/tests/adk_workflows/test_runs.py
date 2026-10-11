@@ -5,6 +5,7 @@ questions."""
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -263,6 +264,64 @@ def test_an_answer_must_fit_what_the_question_asks() -> None:
     # A question without a schema takes any answer.
     assert checked_answer({"kind": "human_input"}, "fine") == '"fine"'
     assert checked_answer({**QUESTION, "response_schema": {}}, None) == "null"
+
+
+RUNAWAY = "^(a|aa)+$"
+LONG = "a" * 60 + "b"  # ^(a|aa)+$ backtracks on it for ages
+
+
+@pytest.mark.timeout(10)
+def test_a_pattern_that_runs_away_refuses_the_input_or_answer_in_time() -> None:
+    document = agent("ag_codes000001")
+    document["nodes"][0]["config"]["input_schema"] = {
+        "type": "object",
+        "properties": {"code": {"type": "string", "pattern": RUNAWAY}},
+    }
+    question = {"kind": "human_input", "response_schema": {"pattern": RUNAWAY}}
+    took = (
+        "its regular expression /^(a|aa)+$/ took longer than the 500 ms "
+        "a value's regular expressions get"
+    )
+
+    began = time.perf_counter()
+    with pytest.raises(AdkRunError) as refused:
+        check_input(document, {"code": LONG})
+    assert str(refused.value) == f"The input doesn't fit the start: code: {took}"
+    with pytest.raises(AdkRunError) as refused:
+        checked_answer(question, LONG)
+    assert str(refused.value) == (
+        f"The answer doesn't fit what the question asks: answer: {took}"
+    )
+    assert time.perf_counter() - began < 3
+
+    check_input(document, {"code": "aaaa"})
+    assert checked_answer(question, "aa") == '"aa"'
+
+
+@pytest.mark.timeout(10)
+def test_a_reference_that_cant_be_resolved_refuses_the_input_or_answer() -> None:
+    document = agent("ag_refs0000001")
+    document["nodes"][0]["config"]["input_schema"] = {
+        "type": "object",
+        "properties": {"code": {"$ref": "#/$defs/code"}},
+    }
+    # Never fetched: only references within the schema are read.
+    elsewhere = "http://127.0.0.1:9/answer.json"
+    question = {"kind": "human_input", "response_schema": {"$ref": elsewhere}}
+    unread = "can't be resolved: only references within the schema are read"
+
+    with pytest.raises(AdkRunError) as refused:
+        check_input(document, {"code": "x"})
+    assert str(refused.value) == (
+        f"The input doesn't fit the start: code: its $ref '#/$defs/code' {unread}"
+    )
+    with pytest.raises(AdkRunError) as refused:
+        checked_answer(question, "yes")
+    assert str(refused.value) == (
+        "The answer doesn't fit what the question asks: answer: "
+        f"its $ref {elsewhere!r} {unread}"
+    )
+    check_input(document, {})  # nothing needs it
 
 
 def test_an_answer_fits_a_decisions_comment() -> None:

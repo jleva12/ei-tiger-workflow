@@ -1,4 +1,14 @@
+import {
+  parseBody,
+  takesBody,
+  unusedParameters,
+} from "@/features/agents/lib/http-template"
 import { adkName, RESERVED_NAMES } from "@/features/adk-workflows/lib/model"
+import {
+  mayGo,
+  sentToLabel,
+  type CredentialLookup,
+} from "@/features/credentials/lib/display"
 import type { BuilderIssue, IssueLevel } from "@/features/builder/lib/types"
 import { checkField } from "@/features/steps/lib/expressions"
 import { stronglyConnected } from "@/features/steps/lib/validate"
@@ -42,6 +52,12 @@ export type ChatAgentValidationContext = {
     string,
     { name: string; kind: "rag" | "system"; ready: number }
   >
+  /**
+   * The organization's API credentials, by ID, for the HTTP and OpenAPI
+   * tools (and a workflow's HTTP steps): where each may go, and whether one
+   * a person signs in with is signed in.
+   */
+  credentials?: Map<string, CredentialLookup>
 }
 
 type Found = [code: string, level: IssueLevel, message: string, field?: string]
@@ -156,8 +172,10 @@ function settingsIssues(
           "name",
         ])
       }
-      if (!c.url.trim()) out.push(["url", "error", "Give it a URL.", "url"])
-      else if (!URLISH.test(c.url.trim())) {
+      const url = c.url.trim()
+      if (!url) out.push(["url", "error", "Give it a URL.", "url"])
+      // One that starts with a run's value or a setting is a URL once it's filled in.
+      else if (!/^(\{\{|\$\{)/.test(url) && !URLISH.test(url)) {
         out.push([
           "url",
           "error",
@@ -176,6 +194,26 @@ function settingsIssues(
       if (!c.headers.every((h) => h.name.trim())) {
         out.push(["headers", "error", "Every header needs a name.", "headers"])
       }
+      for (const name of unusedParameters(c)) {
+        out.push([
+          `unused-${name}`,
+          "warning",
+          `${name} isn't in its URL or body: the model isn't offered it. Put {${name}} where it goes, or take it out.`,
+          "parameters",
+        ])
+      }
+      if (takesBody(c.method) && c.body.trim()) {
+        const body = parseBody(c.body)
+        if (!body.ok) {
+          out.push([
+            "body",
+            "error",
+            `Its body isn't JSON: ${body.error}`,
+            "body",
+          ])
+        }
+      }
+      out.push(...credentialIssues(c.credential, c.url, context))
       break
     }
     case "openapi": {
@@ -210,6 +248,8 @@ function settingsIssues(
           ])
         }
       }
+      // Where its calls go is the spec's servers': only whether it's there.
+      out.push(...credentialIssues(c.credential, undefined, context))
       break
     }
     case "knowledge_base": {
@@ -295,6 +335,47 @@ export function toolIssues(
   context: ChatAgentValidationContext
 ): [code: string, level: IssueLevel, message: string, field?: string][] {
   return settingsIssues(tool as ChatStep, context)
+}
+
+/**
+ * What's wrong with the credential a step or tool signs its requests with:
+ * gone, nobody signed in with it, or not sent to where it calls (`url`, as
+ * far as it tells before it runs). None while the credentials load.
+ */
+export function credentialIssues(
+  credential: string,
+  url: string | undefined,
+  context: Pick<ChatAgentValidationContext, "credentials">
+): Found[] {
+  if (!credential || !context.credentials) return []
+  const found = context.credentials.get(credential)
+  if (!found)
+    return [
+      [
+        "credential",
+        "error",
+        "That credential was deleted; pick another.",
+        "credential",
+      ],
+    ]
+  const out: Found[] = []
+  if (!found.connected) {
+    out.push([
+      "credential-sign-in",
+      "warning",
+      `Nobody has signed in with ${found.name} yet: open it (Edit credential) and sign in.`,
+      "credential",
+    ])
+  }
+  if (url?.trim() && mayGo(url, found.urls) === false) {
+    out.push([
+      "credential-url",
+      "error",
+      `${found.name} is sent only to ${sentToLabel(found.urls)}, and this calls elsewhere: its requests would be refused. Pick another, or add this address to it.`,
+      "credential",
+    ])
+  }
+  return out
 }
 
 /** An MCP tool's issues with the organization's server it picks. */

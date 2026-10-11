@@ -6,12 +6,15 @@ person confirms each call (``config.confirm``). :func:`mcp_toolset` makes
 that an ``McpToolset`` whose headers are worked out before each connection,
 from the server as it's kept then (:class:`ServerStore`): a token is
 refreshed as it runs out, and the renewed grant kept, under a lock on its
-row, so two processes never spend one refresh token.
+row, so two processes never spend one refresh token. Its tools' results are
+checked against their output schemas on the bounded engine
+(``forge_common.mcp``): the client's own check can freeze the process.
 """
 
 from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol
 
+from forge_common.mcp import bound_tool_results
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.tools.mcp_tool import McpToolset, StreamableHTTPConnectionParams
 
@@ -67,6 +70,7 @@ async def mcp_toolset(
                 raise McpServerGone(f"The MCP server {server_id!r} was deleted")
             return await servers.headers(current)
 
+    bound_tool_results()
     return McpToolset(
         connection_params=StreamableHTTPConnectionParams(url=url, timeout=timeout),
         tool_filter=tool_names(str(config.get("tools") or "")),

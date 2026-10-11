@@ -20,12 +20,17 @@ var aliases = map[string][]string{
 	"discovery.max_hash_bytes": {"CODEGRAPH_MAX_HASH_BYTES"},
 }
 
+// retired are the settings of the worker's removed HTTP API (its token and
+// search tuning); queries moved to the Python package forge_codegraph_query.
+// An env file that still sets them loads.
+var retired = []string{"CODEGRAPH_ADMISSION_TOKEN", "CODEGRAPH_SEARCH_ENHANCE_QUERY"}
+
 // LoadConfig reads the shared and worker settings through serviceconfig.Load:
 // defaults, then codegraph.yaml when present, then the environment (with the
 // dotenv file selected by CODEGRAPH_ENV_FILE, or .env), then validates.
 func LoadConfig() (Config, error) {
 	c := DefaultConfig()
-	if err := serviceconfig.Load(&c, serviceconfig.Options{Aliases: aliases, Hooks: []mapstructure.DecodeHookFunc{rootsHook, languageSettingsHook}}); err != nil {
+	if err := serviceconfig.Load(&c, serviceconfig.Options{Aliases: aliases, Retired: retired, Hooks: []mapstructure.DecodeHookFunc{rootsHook, languageSettingsHook}}); err != nil {
 		return Config{}, err
 	}
 	if err := c.Validate(); err != nil {

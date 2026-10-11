@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"ei-aitiger-codegraph/pkg/graph"
 )
@@ -53,32 +52,6 @@ func FromNode(n graph.Node) (Document, bool) {
 	text := b.String()
 	h := sha256.Sum256([]byte(fmt.Sprintf("code-document-v%d\n%s", DocumentVersion, text)))
 	return Document{NodeID: n.ID, Text: text, Hash: hex.EncodeToString(h[:]), Version: DocumentVersion}, true
-}
-
-// Terms splits query or document text into lower-case lexical terms: runs of
-// letters, digits and underscores of at least two characters, deduplicated,
-// at most 24. It is the shared tokenizer of the lexical branch, the matched-
-// term report and the snippet chooser.
-func Terms(text string) []string { return collectTerms(text, nil) }
-
-const maxTerms = 24
-
-// collectTerms tokenizes like Terms and keeps only terms the filter accepts,
-// so the cap applies to the terms that will be used, not to the raw text.
-func collectTerms(text string, keep func(string) bool) []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, term := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '_' }) {
-		if len(term) < 2 || seen[term] || (keep != nil && !keep(term)) {
-			continue
-		}
-		seen[term] = true
-		out = append(out, term)
-		if len(out) == maxTerms {
-			break
-		}
-	}
-	return out
 }
 
 // IdentifierTerms renders the lexical forms of a symbol name for indexing:
@@ -155,44 +128,4 @@ func SplitIdentifier(identifier string) []string {
 		}
 	}
 	return out
-}
-
-// Snippet returns a bounded window of text around the first occurrence of any
-// term, on whole lines where possible, for showing an agent why a hit matched.
-func Snippet(text string, terms []string, maxBytes int) string {
-	if maxBytes <= 0 || text == "" {
-		return ""
-	}
-	lower := strings.ToLower(text)
-	at := -1
-	for _, term := range terms {
-		if i := strings.Index(lower, term); i >= 0 && (at < 0 || i < at) {
-			at = i
-		}
-	}
-	if at < 0 {
-		at = 0
-	}
-	start := at - maxBytes/3
-	if start < 0 {
-		start = 0
-	}
-	if i := strings.LastIndexByte(text[:at], '\n'); i >= 0 && i >= start {
-		start = i + 1
-	}
-	end := start + maxBytes
-	if end >= len(text) {
-		end = len(text)
-	} else {
-		if i := strings.IndexByte(text[end:], '\n'); i >= 0 && i < maxBytes/4 {
-			end += i
-		}
-		for end > start && !utf8.RuneStart(text[end]) {
-			end--
-		}
-	}
-	for start < end && !utf8.RuneStart(text[start]) {
-		start++
-	}
-	return strings.TrimSpace(text[start:end])
 }

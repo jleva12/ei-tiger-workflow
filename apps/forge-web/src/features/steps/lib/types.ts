@@ -169,6 +169,48 @@ export function mergeObjects(types: DataType[]): DataType {
 
 const sameKind = (a: DataType, b: DataType) => a.kind === b.kind
 
+/**
+ * A value that may be any of these: their type when they're of one kind
+ * (objects merged, as `mergeObjects` does), `unknown` when they aren't.
+ * A null among them is left out: it's read as the rest.
+ */
+export function unionOf(types: DataType[]): DataType {
+  const known = types.filter((type) => type.kind !== "null")
+  if (!known.length || known.some((type) => type.kind === "unknown"))
+    return t.unknown()
+  if (known.length === 1) return known[0]
+  if (!known.every((type) => sameKind(type, known[0]))) return t.unknown()
+  switch (known[0].kind) {
+    case "object":
+      return mergeObjects(known)
+    case "array":
+      return t.array(
+        unionOf(
+          known.map((type) =>
+            type.kind === "array" ? type.items : t.unknown()
+          )
+        )
+      )
+    case "string": {
+      const values = known.map((type) =>
+        type.kind === "string" ? type.enum : undefined
+      )
+      return values.every((v) => v?.length)
+        ? t.string(undefined, {
+            enum: [...new Set(values.flatMap((v) => v ?? []))],
+          })
+        : t.string()
+    }
+    case "number":
+      return t.number(
+        undefined,
+        known.every((type) => type.kind === "number" && type.integer)
+      )
+    default:
+      return known[0]
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Reading                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -223,6 +265,59 @@ export const isScalar = (type: DataType) =>
   type.kind === "boolean" ||
   type.kind === "null" ||
   type.kind === "unknown"
+
+/** A type in a sentence: `text`, `a number`, `a list (array<string>)`, `text ("bug" | "task")`. */
+export function sayType(type: DataType): string {
+  switch (type.kind) {
+    case "string":
+      return type.enum?.length ? `text (${typeLabel(type)})` : "text"
+    case "number":
+      return type.integer ? "a whole number" : "a number"
+    case "boolean":
+      return "true or false"
+    case "array":
+      return `a list (${typeLabel(type)})`
+    case "object":
+      return "an object"
+    case "null":
+      return "nothing (null)"
+    case "unknown":
+      return "anything"
+  }
+}
+
+/**
+ * Why a value of `type` wouldn't fit where a `wanted` one goes, at the
+ * first place it doesn't (`count is text, not a number`), or undefined
+ * when it would, as far as both say. Fields `type` may have but doesn't
+ * declare aren't known to be missing; a run coerces what it can.
+ */
+export function misfit(
+  type: DataType,
+  wanted: DataType,
+  path = "",
+  depth = 0
+): string | undefined {
+  const at = path || "it"
+  if (depth > 4 || type.kind === "unknown" || wanted.kind === "unknown")
+    return undefined
+  if (!fits(type, wanted))
+    return `${at} is ${sayType(type)}, not ${sayType(wanted)}`
+  if (type.kind === "array" && wanted.kind === "array")
+    return misfit(type.items, wanted.items, `${at}'s items`, depth + 1)
+  if (type.kind !== "object" || wanted.kind !== "object") return undefined
+  for (const name of wanted.required ?? []) {
+    if (!type.properties[name] && !type.open)
+      return `${path || "it"} has no ${name}, which is required`
+  }
+  for (const [name, field] of Object.entries(wanted.properties)) {
+    const own = type.properties[name]
+    if (!own) continue
+    const found = misfit(own, field, path ? `${path}.${name}` : name, depth + 1)
+    if (found) return found
+  }
+  return undefined
+}
 
 /** Whether a value of `type` fits where a `wanted` one goes (unknown on either side fits). */
 export function fits(type: DataType, wanted: DataType): boolean {

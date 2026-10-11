@@ -134,6 +134,8 @@ def sniff_extension(data: bytes) -> str | None:
     sample = data[:4096]
     if b"\x00" in sample:
         return None
+    if sample.removeprefix(b"\xef\xbb\xbf").lstrip()[:14].lower().startswith((b"<!doctype html", b"<html")):
+        return "html"
     try:
         sample.decode("utf-8")
     except UnicodeDecodeError:

@@ -4,6 +4,7 @@ import {
   type BuilderGraph,
   type Point,
 } from "@/features/builder/lib/types"
+import { upgradedHttpTool } from "@/features/agents/lib/http-template"
 import { readList } from "@/features/steps/lib/document"
 import { HTTP_METHODS, THINKING_LEVELS } from "@/features/steps/lib/model"
 import {
@@ -222,10 +223,12 @@ export function readSettings(
     notes.push(`${at} isn't an object; it has its defaults.`)
     return defaults
   }
+  // One from before it had a body sends what it did: its arguments written in.
+  const given = kind === "http_tool" ? upgradedHttpTool(raw) : raw
   const enums = { ...ENUMS, ...KIND_ENUMS[kind] }
   const config: Record<string, unknown> = {}
   for (const [key, fallback] of Object.entries(defaults)) {
-    const value = raw[key]
+    const value = given[key]
     const path = `${at}.${key}`
     config[key] = fallback
     if (value === undefined) continue
@@ -269,7 +272,7 @@ export function readSettings(
       notes.push(`${path} should be a ${typeof fallback}.`)
     }
   }
-  for (const key of Object.keys(raw)) {
+  for (const key of Object.keys(given)) {
     if (!(key in defaults)) notes.push(`${at}.${key} isn't a setting; dropped.`)
   }
   return config

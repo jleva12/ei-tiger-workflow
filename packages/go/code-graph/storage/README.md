@@ -1,11 +1,15 @@
 # Spanner store
 
 Module `ei-aitiger-codegraph/storage`, package `spanner` (imported as
-`spannerstore`). It is the durable backend every process shares: repositories,
-runs and leases, the versioned graph with its generations, per-file
-identity maps, retained source, search documents and embeddings, the
-two-level hybrid search over them, and the worker registry (`CGWorkers`),
-where live workers record their analysis configuration. The queue of
+`spannerstore`). It is how the ingestion worker writes and reads its
+durable state: repositories, runs and leases, the versioned graph with its
+generations, per-file identity maps, retained source, search documents and
+embeddings, and the worker registry (`CGWorkers`), where live workers record
+their analysis configuration. Its reads are the ones ingestion needs (the
+baseline generation, the documents to embed); everything else that reads
+these tables, search and cross-repository links (`CGCrossLinks`) included,
+is the Python package `forge_codegraph_query`, which reads Spanner directly.
+The schema still declares every table and index those readers use. The queue of
 ingestion jobs is not here: the Forge admin API keeps it in its MySQL, where
 the worker claims from it. The schema under `spanner/schema/` is
 embedded and applied by `ProvisionEmulator` for local development; managed
@@ -21,6 +25,6 @@ GOTOOLCHAIN=auto go test ./packages/go/code-graph/storage/...
 SPANNER_EMULATOR_HOST=127.0.0.1:19030 GOTOOLCHAIN=auto go -C packages/go/code-graph/storage test -tags=integration ./spanner
 ```
 
-The root `make test-spanner-local` starts the emulator and runs the
-integration tests here, the admin API test in `apps/forge-admin-api` and the ingestion
-pipeline test in `apps/forge-codegraph-worker`.
+The root `make worker-test-spanner` starts the emulator and runs the
+integration tests here and the ingestion pipeline tests in
+`apps/forge-codegraph-worker`.

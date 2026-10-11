@@ -74,7 +74,7 @@ def bundled(settings: Settings) -> Screens:
 def test_the_bundled_screens_name_only_what_exists(settings: Settings) -> None:
     # Loading checks every toolset and tool it names against the real ones.
     screens = bundled(settings)
-    assert set(screens.toolsets) == {"access", "administration", "knowledge"}
+    assert set(screens.toolsets) == {"access", "administration", "knowledge", "code"}
     names = [screen.name for screen in screens.config.screens]
     # The catch-all organization screen comes after every other organization screen.
     organization = names.index("organization")
@@ -104,7 +104,7 @@ def test_the_bundled_screens_match_the_organization_workspace(
     assert ("all" if resolved.toolsets["access"] is None else "some") == access
     # Asking what the documents say works everywhere; retrying and
     # re-indexing them only on the knowledge base pages.
-    assert set(resolved.toolsets) == {"access", "knowledge"}
+    assert set(resolved.toolsets) == {"access", "knowledge", "code"}
     assert resolved.toolsets["knowledge"] == set(knowledge_tools.READ_TOOLS)
     assert len(resolved.prompts) <= 6
 

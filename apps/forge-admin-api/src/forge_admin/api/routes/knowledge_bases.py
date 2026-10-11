@@ -15,7 +15,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Request, status
-from forge_codegraph import WorkerError
+from forge_codegraph_query import GraphError
 from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import ColumnElement, case, false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,6 +57,7 @@ from forge_admin.knowledge.search import (
 from forge_admin.knowledge.storage import DocumentStore, StorageError
 from forge_admin.models import (
     KnowledgeBase,
+    KnowledgeBaseComponent,
     KnowledgeBaseConnection,
     KnowledgeDocument,
 )
@@ -96,8 +97,10 @@ class KnowledgeBaseRead(Audited):
     # ingestion of succeeded: those its searches find code in.
     repositories: int = 0
     ingested: int = 0
-    # A system design knowledge base's connections between its applications.
+    # A system design knowledge base's connections between its applications
+    # and components, and its components (databases, queues…).
     connections: int = 0
+    components: int = 0
     # A RAG knowledge base's documents: how many, how many are searchable
     # (SUCCEEDED) and how many FAILED, their chunks and their bytes.
     documents: int = 0
@@ -199,7 +202,12 @@ NO_DOCUMENTS = {
     "stale": 0,
 }
 # The counts of a knowledge base without repositories.
-NO_REPOSITORIES = {"repositories": 0, "ingested": 0, "connections": 0}
+NO_REPOSITORIES = {
+    "repositories": 0,
+    "ingested": 0,
+    "connections": 0,
+    "components": 0,
+}
 
 
 def _search_model(request: Request) -> str | None:
@@ -254,7 +262,7 @@ async def _repository_counts(
     session: AsyncSession, knowledge_base_ids: list[str]
 ) -> dict[str, dict[str, int]]:
     """:return: Each system design knowledge base's repositories, how many
-    have a graph, and its connections, by its ID."""
+    have a graph, its connections and its components, by its ID."""
     if not knowledge_base_ids:
         return {}
     repositories = await linked(session, knowledge_base_ids)
@@ -267,11 +275,18 @@ async def _repository_counts(
         .group_by(KnowledgeBaseConnection.knowledge_base_id)
     )
     connections = {kb_id: count for kb_id, count in rows}
+    rows = await session.execute(
+        select(KnowledgeBaseComponent.knowledge_base_id, func.count())
+        .where(KnowledgeBaseComponent.knowledge_base_id.in_(knowledge_base_ids))
+        .group_by(KnowledgeBaseComponent.knowledge_base_id)
+    )
+    components = {kb_id: count for kb_id, count in rows}
     return {
         kb_id: {
             "repositories": len(rs),
             "ingested": sum(1 for r in rs if r.id in graphs),
             "connections": connections.get(kb_id, 0),
+            "components": components.get(kb_id, 0),
         }
         for kb_id, rs in repositories.items()
     }
@@ -565,8 +580,9 @@ async def search_knowledge_base(
     \f
     :raises HTTPException: 403 without organizations:read in the
         organization; 404 for another organization's knowledge base, or none;
-        502 when the code graph worker refuses; 503 when searching isn't set
-        up, or MongoDB, the embedding model or the code graph is unavailable.
+        400 when the code graph refuses the query; 503 when searching isn't
+        set up, or MongoDB, the embedding model or the code graph is
+        unavailable.
     """
     knowledge_base = await knowledge_base_of(
         session, enforcer, user, organization_id, knowledge_base_id, kind=None
@@ -620,7 +636,7 @@ async def _search_code(
         passages = await search_code(
             graph, [(knowledge_base, repositories)], body.query, limit=body.limit
         )
-    except WorkerError as error:
+    except GraphError as error:
         raise unavailable(error) from None
     return SearchResults(
         hits=[

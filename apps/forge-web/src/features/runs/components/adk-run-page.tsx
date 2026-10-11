@@ -35,6 +35,9 @@ import {
   ApprovalPanel,
   HumanInputPanel,
 } from "@/features/runs/components/pause-panels"
+import { AdkRunTraceTab } from "@/features/runs/components/run-trace"
+import { preview } from "@/features/runs/lib/trace"
+import { ValueTree } from "@/features/json/components/value-tree"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -55,7 +58,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { MyOrganization } from "@/lib/access"
-import { organizationAgents } from "@/features/adk-workflows/lib/api"
 import type { AgentDocument } from "@/features/adk-workflows/lib/document"
 import { AGENT_KINDS } from "@/features/adk-workflows/lib/model"
 import {
@@ -68,7 +70,6 @@ import {
   isFailureEvent,
   pauseKindOf,
   responseSchemaOf,
-  runDocumentOf,
   shortId,
   stepErrorOf,
   stepKindOf,
@@ -79,17 +80,22 @@ import {
   useAbandonAdkRun,
   downloadAdkRunFile,
   useAdkRun,
+  useAdkRunSessionFiles,
   useAdkRunSteps,
   useAnswerAdkRun,
   useDecideAdkRun,
   useResubmitAdkRun,
   useRetryAdkRun,
+  useRunDocument,
   versionLabel,
   type AdkRunDetail,
   type AdkRunFile,
+  type AdkRunFileVersion,
+  type AdkRunSessionFile,
   type AdkRunPause,
   type AdkRunStep,
   type AdkRunTab,
+  type AdkStateChange,
   type AdkToolCall,
 } from "@/features/runs/lib/runs"
 import type { ChipTone } from "@/components/forge/variants"
@@ -103,11 +109,20 @@ import {
 import { downloadBlob } from "@/features/builder/components/utils"
 import { WORKSPACE_VIEWS } from "@/features/organizations/lib/organization-workspace"
 import { usePageContext } from "@/features/assistant/lib/page-context"
-import { isLiveRun, runStatusDisplay } from "@/features/runs/lib/display"
+import {
+  isA2aTask,
+  isLiveRun,
+  isOpenRun,
+  runStatusDisplay,
+} from "@/features/runs/lib/display"
 
 // A tab's body, on the same gutters as the header and tabs above it.
 const BODY =
   "w-full max-w-[1100px] px-[30px] pt-7 pb-[60px] @max-[900px]/shell:px-5 @max-[900px]/shell:py-6 @max-[600px]/shell:px-[15px] @max-[600px]/shell:py-5"
+
+// The Trace tab's body: wider, for its events beside their inspector.
+const TRACE_BODY =
+  "w-full max-w-[1500px] px-[30px] pt-7 pb-[60px] @max-[900px]/shell:px-5 @max-[900px]/shell:py-6 @max-[600px]/shell:px-[15px] @max-[600px]/shell:py-5"
 
 /**
  * The shell wraps pages in its padded, scrolling `PageContent`; a run's page
@@ -178,7 +193,8 @@ function AdkPausePanel(props: Pause) {
 
 /**
  * Where the run stands, when that needs saying: what it waits for (a
- * person, a time, a worker), the hiccup it's retried after, or why it failed.
+ * person, a time, a worker), its being stopped, the hiccup it's retried
+ * after, or why it failed.
  */
 function StatusNotice({
   organizationId,
@@ -207,6 +223,15 @@ function StatusNotice({
       </WaitingNotice>
     )
   }
+  if (run.status === "running" && run.cancel_requested_at) {
+    return (
+      <WaitingNotice icon="stop" title="Stopping" state="Abandoning">
+        Abandoned {formatRelative(run.cancel_requested_at)} while it ran. Its
+        worker stops it at its next step, or within a minute, and it&apos;s
+        abandoned then.
+      </WaitingNotice>
+    )
+  }
   const error = run.error
   if (error && isLiveRun(run)) {
     const category = failureCategory(error.category)
@@ -217,6 +242,9 @@ function StatusNotice({
         state={category.label}
       >
         The last one: {sentence(error.message)}. {category.description}
+        {run.status === "queued" && run.next_attempt_at
+          ? ` Next attempt: ${formatDateTime(run.next_attempt_at)}.`
+          : ""}
       </WaitingNotice>
     )
   }
@@ -227,6 +255,13 @@ function StatusNotice({
       </WaitingNotice>
     )
   }
+  // An A2A task's run isn't retried here: its task ended for good when it failed.
+  const a2a = run.status === "failed" && isA2aTask(run) && (
+    <span>
+      Started over A2A, it isn&apos;t retried here: its A2A task ended for good
+      when it failed. Resubmit it to run it again.
+    </span>
+  )
   if (error && (run.status === "failed" || run.status === "abandoned")) {
     const category = failureCategory(error.category)
     return (
@@ -244,6 +279,7 @@ function StatusNotice({
             <strong className="font-medium">{category.label}.</strong>{" "}
             {category.description}
           </span>
+          {a2a}
         </span>
       </ErrorCallout>
     )
@@ -251,7 +287,10 @@ function StatusNotice({
   if (run.status === "failed") {
     return (
       <ErrorCallout title="The run failed" className="mb-[34px]">
-        No reason was recorded.
+        <span className="flex flex-col gap-1">
+          <span>No reason was recorded.</span>
+          {a2a}
+        </span>
       </ErrorCallout>
     )
   }
@@ -323,6 +362,119 @@ function Endings({ endings }: { endings: Ending[] }) {
   )
 }
 
+/**
+ * The files a run's agents saved (`save_file`), each with who saved it and
+ * when; its latest version downloads, and its earlier ones beneath it.
+ */
+function SavedFiles({
+  organizationId,
+  runId,
+  files,
+  doc,
+}: {
+  organizationId: string
+  runId: string
+  files: AdkRunSessionFile[]
+  doc: AgentDocument | undefined
+}) {
+  const [fetching, setFetching] = React.useState<string>()
+  const download = async (name: string, version: number) => {
+    const key = `${name}@${version}`
+    setFetching(key)
+    try {
+      const blob = await downloadAdkRunFile(
+        organizationId,
+        runId,
+        name,
+        version
+      )
+      downloadBlob(blob, name)
+    } catch (error) {
+      toast.add({
+        title: `Couldn't download ${name}`,
+        description: toApiError(error).message,
+        type: "error",
+      })
+    } finally {
+      setFetching(undefined)
+    }
+  }
+  const describe = (version: AdkRunFileVersion) =>
+    [
+      version.size_bytes === null ? null : formatBytes(version.size_bytes),
+      version.step
+        ? `by ${stepNameOf({ id: version.step, name: "", kind: "" }, doc)}`
+        : version.saved_by && `by ${version.saved_by}`,
+      version.saved_at && formatDateTime(version.saved_at),
+    ]
+      .filter(Boolean)
+      .join(" · ")
+  const button = (name: string, version: number) => (
+    <Button
+      variant="ghost"
+      size="icon-xs"
+      aria-label={`Download ${name}, version ${version + 1}`}
+      disabled={fetching === `${name}@${version}`}
+      onClick={() => void download(name, version)}
+    >
+      {fetching === `${name}@${version}` ? (
+        <Spinner />
+      ) : (
+        <Icon icon="download" />
+      )}
+    </Button>
+  )
+  return (
+    <ul className="flex flex-col divide-y divide-border rounded-(--radius-control) border">
+      {files.map((file) => {
+        const latest = file.versions.at(-1)
+        const earlier = file.versions.slice(0, -1).reverse()
+        return (
+          <li key={file.name} className="flex flex-col gap-1 px-3 py-2">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <Icon icon="file" className="shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                {file.name}
+              </span>
+              {file.versions.length > 1 && (
+                <Chip tone="outline" className="shrink-0">
+                  {file.versions.length} versions
+                </Chip>
+              )}
+              <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                {[file.media_type, latest && describe(latest)]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+              {latest && button(file.name, latest.version)}
+            </div>
+            {earlier.length > 0 && (
+              <Disclosure summary="Earlier versions" className="pl-7 text-xs">
+                <ul className="flex flex-col gap-1">
+                  {earlier.map((version) => (
+                    <li
+                      key={version.version}
+                      className="flex items-center gap-2 text-xs text-muted-foreground"
+                    >
+                      <span className="text-foreground">
+                        Version {version.version + 1}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">
+                        {describe(version)}
+                      </span>
+                      {button(file.name, version.version)}
+                    </li>
+                  ))}
+                </ul>
+              </Disclosure>
+            )}
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
 /** The files a run started with, each downloadable as it was sent. */
 function RunFiles({
   organizationId,
@@ -386,12 +538,17 @@ function RunFiles({
 function AdkRunOverview({
   organizationId,
   run,
+  doc,
   onOpenRun,
 }: {
   organizationId: string
   run: AdkRunDetail
+  doc: AgentDocument | undefined
   onOpenRun: (runId: string) => void
 }) {
+  const sessionFiles = useAdkRunSessionFiles(organizationId, run)
+  const saved =
+    sessionFiles.data?.files.filter((file) => file.origin === "run") ?? []
   const ended = run.finished_at !== null
   const hasResult = run.result !== null && run.result !== undefined
   const endings = endingsOf(run.result)
@@ -439,6 +596,19 @@ function AdkRunOverview({
           />
         </PageSection>
       ) : null}
+      {saved.length > 0 && (
+        <PageSection
+          title="Files it saved"
+          description="What its agents saved with save_file, in its session: later steps read them with load_artifacts."
+        >
+          <SavedFiles
+            organizationId={organizationId}
+            runId={run.id}
+            files={saved}
+            doc={doc}
+          />
+        </PageSection>
+      )}
       {(hasResult || (ended && run.status === "succeeded")) && (
         <PageSection
           title="What it handed on"
@@ -468,6 +638,41 @@ function AdkRunOverview({
           )}
         </PageSection>
       )}
+      {run.children?.length ? (
+        <PageSection
+          title="Runs it started"
+          description="Workflows its LLM agents called as tools, each a run of its own. Abandoning this run abandons those still going."
+        >
+          <RecordList>
+            {run.children.map((child) => {
+              const shown = runStatusDisplay(child)
+              return (
+                <RecordRow
+                  key={child.id}
+                  label={child.agent_name || child.agent_id}
+                >
+                  <span className="flex flex-wrap items-center gap-2">
+                    <StatusBadge status={shown.status}>
+                      {shown.label}
+                    </StatusBadge>
+                    <Button
+                      variant="link"
+                      size="xs"
+                      className="h-auto p-0 font-mono"
+                      onClick={() => onOpenRun(child.id)}
+                    >
+                      {shortId(child.id)}
+                    </Button>
+                    <span className="text-muted-foreground">
+                      {formatDateTime(child.created_at)}
+                    </span>
+                  </span>
+                </RecordRow>
+              )
+            })}
+          </RecordList>
+        </PageSection>
+      ) : null}
       <PageSection title="Record">
         <RecordList>
           <RecordRow label="Run ID">
@@ -478,8 +683,24 @@ function AdkRunOverview({
           </RecordRow>
           <RecordRow label="Run by">
             {run.requested_by.name || run.requested_by.id || "Unknown"}
-            {triggerLabel(run.trigger) ? ` · ${triggerLabel(run.trigger)}` : ""}
+            {run.resubmit_of
+              ? " · Resubmitted"
+              : triggerLabel(run.trigger)
+                ? ` · ${triggerLabel(run.trigger)}`
+                : ""}
           </RecordRow>
+          {run.parent_run_id && (
+            <RecordRow label="Started by run">
+              <Button
+                variant="link"
+                size="xs"
+                className="h-auto p-0 font-mono"
+                onClick={() => onOpenRun(run.parent_run_id!)}
+              >
+                {shortId(run.parent_run_id)}
+              </Button>
+            </RecordRow>
+          )}
           {run.resubmit_of && (
             <RecordRow label="Resubmitted from">
               <Button
@@ -531,15 +752,20 @@ function Step({
   step,
   index,
   doc,
+  onTrace,
 }: {
   step: AdkRunStep
   index: number
   doc: AgentDocument | undefined
+  /** Open the Trace tab on this step's events; absent for those who can't. */
+  onTrace?: (stepId: string) => void
 }) {
   const kind = stepKindOf(step, doc)
   const info = kind && AGENT_KINDS[kind]
   const shown = stepStatusOf(step.status)
   const hasOutput = step.output !== null && step.output !== undefined
+  const hasInput = step.input !== null && step.input !== undefined
+  const changes = step.state_changes ?? []
   const error = stepErrorOf(step.error)
   // A step that took its Error way is done, and hands on its error.
   const failed = step.status === "failed"
@@ -591,6 +817,16 @@ function Step({
       {error?.more !== undefined && error.more !== null && (
         <StepValue summary="Error details" value={error.more} />
       )}
+      {hasInput && (
+        <StepValue
+          summary={
+            step.input_from
+              ? `Input, from ${stepNameOf({ id: step.input_from, name: "", kind: "" }, doc)}`
+              : "Input"
+          }
+          value={step.input}
+        />
+      )}
       {step.calls && step.calls.length > 0 && <ToolCalls calls={step.calls} />}
       {hasOutput && (
         <StepValue
@@ -600,7 +836,49 @@ function Step({
           defaultOpen={kind === "end"}
         />
       )}
+      {changes.length > 0 && <StateChanges changes={changes} />}
+      {onTrace && step.status !== "not_reached" && (
+        <Button
+          variant="link"
+          size="xs"
+          className="mt-1.5 h-auto p-0"
+          onClick={() => onTrace(step.id)}
+        >
+          <Icon icon="view" data-icon="inline-start" />
+          Every event of this step
+        </Button>
+      )}
     </ExecutionStep>
+  )
+}
+
+/** What a step set in the session's state: each key, in order, with its value. */
+function StateChanges({ changes }: { changes: AdkStateChange[] }) {
+  const keys = new Set(changes.map((change) => change.key))
+  return (
+    <Disclosure
+      summary={`Changed the state: ${[...keys].join(", ")}`}
+      className="mt-1"
+    >
+      <div className="flex flex-col gap-2.5">
+        {changes.map((change, index) => (
+          <div key={`${change.key}-${index}`} className="flex flex-col gap-1">
+            <span className="flex items-center gap-2 text-xs">
+              <code className="text-foreground">{change.key}</code>
+              {change.at && (
+                <span className="text-muted-foreground">
+                  {formatDateTime(change.at)}
+                </span>
+              )}
+            </span>
+            <ValueTree
+              value={change.value}
+              className="max-h-60 bg-background"
+            />
+          </div>
+        ))}
+      </div>
+    </Disclosure>
   )
 }
 
@@ -667,16 +945,15 @@ function ToolCalls({ calls }: { calls: AdkToolCall[] }) {
 function AdkRunSteps({
   organizationId,
   run,
+  doc,
+  onTrace,
 }: {
   organizationId: string
   run: AdkRunDetail
+  doc: AgentDocument | undefined
+  onTrace?: (stepId: string) => void
 }) {
   const steps = useAdkRunSteps(organizationId, run)
-  const snapshot = runDocumentOf(run.document)
-  const saved = organizationAgents
-    .scope({ organizationId })
-    .useDetail(snapshot ? undefined : run.agent_id || undefined)
-  const doc = snapshot ?? saved.data?.document
   const list = steps.data?.steps
 
   let body: React.ReactNode
@@ -716,8 +993,9 @@ function AdkRunSteps({
       <>
         <p className="mb-2 max-w-[75ch] text-[0.8125rem] text-muted-foreground">
           Every node of the workflow, in order, and how far the run got with
-          each: what it handed on (in a loop, its last item&apos;s), or why it
-          failed. What runs inside a node, a team&apos;s sub-agents or a saved
+          each: what it was handed, what it handed on (in a loop, its last
+          item&apos;s) or why it failed, and what it changed in the run&apos;s
+          state. What runs inside a node, a team&apos;s sub-agents or a saved
           workflow&apos;s steps, counts as that node.
         </p>
         <ExecutionPlan aria-label="Steps" className="max-w-[75ch]">
@@ -727,6 +1005,7 @@ function AdkRunSteps({
               step={step}
               index={index}
               doc={doc}
+              onTrace={onTrace}
             />
           ))}
         </ExecutionPlan>
@@ -770,6 +1049,21 @@ function AdkRunActivity({ run }: { run: AdkRunDetail }) {
           <p className="mb-6 text-[0.8125rem] text-muted-foreground">
             Everything recorded about this run, newest first.
           </p>
+          {run.activity_incomplete && (
+            <p
+              role="note"
+              className="mb-6 flex max-w-[75ch] items-center gap-3 rounded-(--radius-card) border bg-notice-surface px-3 py-2 text-xs text-notice-foreground"
+            >
+              <Icon
+                icon="info"
+                size={14}
+                className="shrink-0 text-notice-accent"
+              />
+              Some of its progress isn&apos;t listed: it noted as many steps as
+              a run may, or some notes couldn&apos;t be saved. Its status,
+              result and steps are complete.
+            </p>
+          )}
           <EventList aria-label="Activity" className="max-w-[75ch]">
             {events.map((event) => (
               <EventItem
@@ -781,6 +1075,14 @@ function AdkRunActivity({ run }: { run: AdkRunDetail }) {
                 {[event.message, event.actor?.name && `by ${event.actor.name}`]
                   .filter(Boolean)
                   .join(" · ") || undefined}
+                {event.attributes &&
+                  Object.keys(event.attributes).length > 0 && (
+                    <span className="mt-1 block font-mono text-3xs wrap-anywhere text-subtle">
+                      {Object.entries(event.attributes)
+                        .map(([key, value]) => `${key}: ${preview(value, 120)}`)
+                        .join(" · ")}
+                    </span>
+                  )}
               </EventItem>
             ))}
           </EventList>
@@ -794,17 +1096,22 @@ function AdkRunActivity({ run }: { run: AdkRunDetail }) {
 /* Header                                                                     */
 /* -------------------------------------------------------------------------- */
 
-/** Confirms giving up on the run; shows why if it can't. */
+/** Confirms giving up on the run (a running one stops first); shows why if it can't. */
 function AbandonDialog({
   open,
   onOpenChange,
   organizationId,
   runId,
+  running,
+  openChildren,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   organizationId: string
   runId: string
+  running: boolean
+  /** How many runs it started are still going: they're abandoned with it. */
+  openChildren: number
 }) {
   // The dialog shows the failure itself.
   const abandon = useAbandonAdkRun(organizationId, runId, {
@@ -823,8 +1130,13 @@ function AbandonDialog({
         <DialogHeader>
           <DialogTitle>Abandon this run?</DialogTitle>
           <DialogDescription>
-            It stops for good: it never carries on, and nobody can retry it. You
-            can still resubmit it, which runs it again as a new run.
+            {running
+              ? "Its worker stops it at its next step, or within a minute, cutting short the step it's on. Then it's abandoned: it never carries on, and nobody can retry it. You can still resubmit it, which runs it again as a new run."
+              : "It stops for good: it never carries on, and nobody can retry it. You can still resubmit it, which runs it again as a new run."}
+            {openChildren > 0 &&
+              (openChildren === 1
+                ? " The run it started that's still going is abandoned too."
+                : ` The ${openChildren} runs it started that are still going are abandoned too.`)}
           </DialogDescription>
         </DialogHeader>
         {abandon.error && (
@@ -953,6 +1265,8 @@ function RunActions({
           onOpenChange={setAbandoning}
           organizationId={organizationId}
           runId={run.id}
+          running={run.status === "running"}
+          openChildren={run.children?.filter(isOpenRun).length ?? 0}
         />
       )}
     </>
@@ -979,7 +1293,9 @@ function HeaderSkeleton() {
  * those who manage the organization's runs (`agents:manage_runs`), Retry,
  * Resubmit and Abandon as its status allows; then Overview (what it waits
  * for, its input, result and record), Steps (each node, as the run went
- * through it) and Activity. What it waits for is decided or answered in
+ * through it: its input, output and state changes), Activity, and for
+ * those who manage runs Trace (every event of its ADK session, and its
+ * state at each). What it waits for is decided or answered in
  * Overview and Steps. It follows a run in progress every few seconds.
  */
 export function AdkRunPage({
@@ -1003,6 +1319,9 @@ export function AdkRunPage({
 }) {
   const detail = useAdkRun(organization.id, runId)
   const run = detail.data
+  const doc = useRunDocument(organization.id, run)
+  // The step the Trace tab's timeline is narrowed to.
+  const [traceStep, setTraceStep] = React.useState<string>()
   const reference = shortId(runId)
   const section = WORKSPACE_VIEWS.agents
   const shown = run && runStatusDisplay(run)
@@ -1135,6 +1454,11 @@ export function AdkRunPage({
               <TaskTabsTrigger value="activity" icon="activity">
                 Activity
               </TaskTabsTrigger>
+              {canManage && (
+                <TaskTabsTrigger value="trace" icon="code" live={live}>
+                  Trace
+                </TaskTabsTrigger>
+              )}
             </TaskTabsList>
             {live && <LiveLabel>Live</LiveLabel>}
           </TaskTabBar>
@@ -1142,14 +1466,45 @@ export function AdkRunPage({
             <AdkRunOverview
               organizationId={organization.id}
               run={run}
+              doc={doc}
               onOpenRun={onOpenRun}
             />
           </TabsContent>
           <TabsContent value="steps">
-            <AdkRunSteps organizationId={organization.id} run={run} />
+            <AdkRunSteps
+              organizationId={organization.id}
+              run={run}
+              doc={doc}
+              onTrace={
+                canManage
+                  ? (stepId) => {
+                      setTraceStep(stepId)
+                      onTabChange("trace")
+                    }
+                  : undefined
+              }
+            />
           </TabsContent>
           <TabsContent value="activity">
             <AdkRunActivity run={run} />
+          </TabsContent>
+          <TabsContent value="trace">
+            <div className={TRACE_BODY}>
+              {canManage ? (
+                <AdkRunTraceTab
+                  organizationId={organization.id}
+                  run={run}
+                  doc={doc}
+                  step={traceStep}
+                  onStepChange={setTraceStep}
+                />
+              ) : (
+                <PanelEmpty illustration="locked">
+                  Only those who manage the organization&apos;s runs see their
+                  trace.
+                </PanelEmpty>
+              )}
+            </div>
           </TabsContent>
         </Tabs>
       </TaskPage>

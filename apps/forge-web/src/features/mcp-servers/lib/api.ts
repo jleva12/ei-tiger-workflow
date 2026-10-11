@@ -29,6 +29,8 @@ export type AuthField = {
   required: boolean
   default: string
   placeholder: string
+  /** The only values it takes, for a field with a few (a select); empty for free text. */
+  choices?: string[]
 }
 
 export type AuthMethodInfo = {

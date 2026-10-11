@@ -19,6 +19,7 @@ import { Route as AdminRolesRouteImport } from './routes/admin/roles'
 import { Route as AdminUsersRouteImport } from './routes/admin/users'
 import { Route as OrganizationsOrganizationIdRouteImport } from './routes/organizations/$organizationId'
 import { Route as AdminOrganizationsIndexRouteImport } from './routes/admin/organizations/index'
+import { Route as OauthCredentialsCallbackRouteImport } from './routes/oauth/credentials/callback'
 import { Route as OauthMcpCallbackRouteImport } from './routes/oauth/mcp/callback'
 import { Route as AdminOrganizationsOrganizationIdIndexRouteImport } from './routes/admin/organizations/$organizationId/index'
 import { Route as OrganizationsOrganizationIdAgentsAgentIdRouteImport } from './routes/organizations/$organizationId_.agents.$agentId'
@@ -76,6 +77,12 @@ const AdminOrganizationsIndexRoute = AdminOrganizationsIndexRouteImport.update({
   path: '/organizations/',
   getParentRoute: () => AdminRouteRoute,
 } as any)
+const OauthCredentialsCallbackRoute =
+  OauthCredentialsCallbackRouteImport.update({
+    id: '/oauth/credentials/callback',
+    path: '/oauth/credentials/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const OauthMcpCallbackRoute = OauthMcpCallbackRouteImport.update({
   id: '/oauth/mcp/callback',
   path: '/oauth/mcp/callback',
@@ -116,6 +123,7 @@ export interface FileRoutesByFullPath {
   '/admin/users': typeof AdminUsersRoute
   '/organizations/$organizationId': typeof OrganizationsOrganizationIdRoute
   '/admin/': typeof AdminIndexRoute
+  '/oauth/credentials/callback': typeof OauthCredentialsCallbackRoute
   '/oauth/mcp/callback': typeof OauthMcpCallbackRoute
   '/admin/organizations/': typeof AdminOrganizationsIndexRoute
   '/organizations/$organizationId/agents/$agentId': typeof OrganizationsOrganizationIdAgentsAgentIdRoute
@@ -132,6 +140,7 @@ export interface FileRoutesByTo {
   '/admin/users': typeof AdminUsersRoute
   '/organizations/$organizationId': typeof OrganizationsOrganizationIdRoute
   '/admin': typeof AdminIndexRoute
+  '/oauth/credentials/callback': typeof OauthCredentialsCallbackRoute
   '/oauth/mcp/callback': typeof OauthMcpCallbackRoute
   '/admin/organizations': typeof AdminOrganizationsIndexRoute
   '/organizations/$organizationId/agents/$agentId': typeof OrganizationsOrganizationIdAgentsAgentIdRoute
@@ -150,6 +159,7 @@ export interface FileRoutesById {
   '/admin/users': typeof AdminUsersRoute
   '/organizations/$organizationId': typeof OrganizationsOrganizationIdRoute
   '/admin/': typeof AdminIndexRoute
+  '/oauth/credentials/callback': typeof OauthCredentialsCallbackRoute
   '/oauth/mcp/callback': typeof OauthMcpCallbackRoute
   '/admin/organizations/': typeof AdminOrganizationsIndexRoute
   '/organizations/$organizationId_/agents/$agentId': typeof OrganizationsOrganizationIdAgentsAgentIdRoute
@@ -169,6 +179,7 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/organizations/$organizationId'
     | '/admin/'
+    | '/oauth/credentials/callback'
     | '/oauth/mcp/callback'
     | '/admin/organizations/'
     | '/organizations/$organizationId/agents/$agentId'
@@ -185,6 +196,7 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/organizations/$organizationId'
     | '/admin'
+    | '/oauth/credentials/callback'
     | '/oauth/mcp/callback'
     | '/admin/organizations'
     | '/organizations/$organizationId/agents/$agentId'
@@ -202,6 +214,7 @@ export interface FileRouteTypes {
     | '/admin/users'
     | '/organizations/$organizationId'
     | '/admin/'
+    | '/oauth/credentials/callback'
     | '/oauth/mcp/callback'
     | '/admin/organizations/'
     | '/organizations/$organizationId_/agents/$agentId'
@@ -216,6 +229,7 @@ export interface RootRouteChildren {
   AssistantRoute: typeof AssistantRoute
   SettingsRoute: typeof SettingsRoute
   OrganizationsOrganizationIdRoute: typeof OrganizationsOrganizationIdRoute
+  OauthCredentialsCallbackRoute: typeof OauthCredentialsCallbackRoute
   OauthMcpCallbackRoute: typeof OauthMcpCallbackRoute
   OrganizationsOrganizationIdAgentsAgentIdRoute: typeof OrganizationsOrganizationIdAgentsAgentIdRoute
   OrganizationsOrganizationIdChatAgentsChatAgentIdRoute: typeof OrganizationsOrganizationIdChatAgentsChatAgentIdRoute
@@ -294,6 +308,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminOrganizationsIndexRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/oauth/credentials/callback': {
+      id: '/oauth/credentials/callback'
+      path: '/oauth/credentials/callback'
+      fullPath: '/oauth/credentials/callback'
+      preLoaderRoute: typeof OauthCredentialsCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/oauth/mcp/callback': {
       id: '/oauth/mcp/callback'
       path: '/oauth/mcp/callback'
@@ -361,6 +382,7 @@ const rootRouteChildren: RootRouteChildren = {
   AssistantRoute: AssistantRoute,
   SettingsRoute: SettingsRoute,
   OrganizationsOrganizationIdRoute: OrganizationsOrganizationIdRoute,
+  OauthCredentialsCallbackRoute: OauthCredentialsCallbackRoute,
   OauthMcpCallbackRoute: OauthMcpCallbackRoute,
   OrganizationsOrganizationIdAgentsAgentIdRoute:
     OrganizationsOrganizationIdAgentsAgentIdRoute,

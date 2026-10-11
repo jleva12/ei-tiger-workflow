@@ -1,18 +1,24 @@
 import {
+  credentialIssues,
   toolIssues,
   type ChatAgentValidationContext,
 } from "@/features/agents/lib/validate"
 import type { BuilderIssue, IssueLevel } from "@/features/builder/lib/types"
-import { checkField } from "@/features/steps/lib/expressions"
-import type { StepData } from "@/features/steps/lib/model"
-import type { Scope } from "@/features/steps/lib/scope"
+import { checkField, resolveExpression } from "@/features/steps/lib/expressions"
+import { settingScope } from "@/features/steps/lib/fields"
+import {
+  BODY_KINDS,
+  type EachConfig,
+  type StepData,
+} from "@/features/steps/lib/model"
+import { fromJsonSchema, misfit } from "@/features/steps/lib/types"
 import {
   fieldOfCode as stepFieldOf,
   settingsIssues as stepIssues,
   stronglyConnected,
   switchIssues,
 } from "@/features/steps/lib/validate"
-import type { AgentGraph } from "./document"
+import { startInputOf, type AgentDocument, type AgentGraph } from "./document"
 import { agentExpressionSettings } from "./fields"
 import {
   adkName,
@@ -28,7 +34,7 @@ import {
   type LlmTool,
   type SubAgent,
 } from "./model"
-import { agentScopesOf } from "./scope"
+import { agentTypes, type TypeContext } from "./scope"
 
 /*
  * What stands between an agent and ADK building and running it: errors
@@ -42,10 +48,14 @@ export type AgentValidationContext = {
   /** This agent's ID: a saved-agent node can't run it. */
   selfId?: string
   /**
-   * The organization's agents: their names, and the agents each runs as
-   * saved-agent nodes, to find ones that would run themselves.
+   * The organization's agents: their names, the agents each runs as
+   * saved-agent nodes (to find ones that would run themselves), and their
+   * documents, for what a saved-workflow node takes and hands back.
    */
-  agents?: Map<string, { name: string; uses: string[] }>
+  agents?: Map<
+    string,
+    { name: string; uses: string[]; document?: AgentDocument }
+  >
   /**
    * The organization's agents from the Agents page, for LLM agents that are
    * one or call one: their names, versions, and the input their latest
@@ -55,6 +65,8 @@ export type AgentValidationContext = {
   /** The organization's MCP servers and knowledge bases, for the tools. */
   mcpServers?: ChatAgentValidationContext["mcpServers"]
   knowledgeBases?: ChatAgentValidationContext["knowledgeBases"]
+  /** The organization's API credentials, for HTTP steps and tools. */
+  credentials?: ChatAgentValidationContext["credentials"]
 }
 
 /** An agent from the Agents page, as a workflow's checks see it. */
@@ -148,6 +160,7 @@ function toolsIssues(
     selfId: context.selfId,
     mcpServers: context.mcpServers,
     knowledgeBases: context.knowledgeBases,
+    credentials: context.credentials,
   } satisfies ChatAgentValidationContext
   const named = new Map<string, string[]>()
   for (const each of tools) {
@@ -271,38 +284,61 @@ function agentSourceIssues(
       "version",
     ])
   }
-  const declared = found.input.properties
+  out.push(...inputIssues(found.name, found.input, config.inputs))
+  return out
+}
+
+/**
+ * A node's input fields against the input what it runs declares (a JSON
+ * Schema): the required ones it leaves empty, and ones it no longer takes.
+ */
+function inputIssues(
+  name: string,
+  input: Record<string, unknown>,
+  inputs: Record<string, string>
+): Found[] {
+  const out: Found[] = []
+  const declared = input.properties
   const fields =
     declared && typeof declared === "object" ? Object.keys(declared) : []
-  const required = Array.isArray(found.input.required)
-    ? (found.input.required as string[])
+  const required = Array.isArray(input.required)
+    ? (input.required as string[])
     : []
   for (const field of required) {
-    if (!config.inputs[field]?.trim())
+    if (!inputs[field]?.trim())
       out.push([
         `input-${field}`,
         "error",
-        `${found.name} needs its input ${field}: say what it is.`,
+        `${name} needs its input ${field}: say what it is.`,
         `inputs.${field}`,
       ])
   }
-  for (const field of Object.keys(config.inputs)) {
-    if (!fields.includes(field) && config.inputs[field].trim())
+  for (const field of Object.keys(inputs)) {
+    if (!fields.includes(field) && inputs[field].trim())
       out.push([
         `input-${field}`,
         "warning",
-        `${found.name} doesn't take an input ${field} any more.`,
+        `${name} doesn't take an input ${field} any more.`,
         `inputs.${field}`,
       ])
   }
   return out
 }
 
+/** Whether a saved-workflow node is started with its inputs, not what comes in. */
+export const startsWithInputs = (config: AgentConfigs["saved"]) =>
+  Object.values(config.inputs).some((text) => text.trim())
+
 /** What's missing or wrong in one node's own settings. */
 function settingsIssues(
   step: AgentStep,
   context: AgentValidationContext
 ): Found[] {
+  if (step.kind === "http")
+    return [
+      ...stepIssues(step as StepData),
+      ...credentialIssues(step.config.credential, step.config.url, context),
+    ]
   if (isForgeKind(step.kind)) return stepIssues(step as StepData)
   const out: Found[] = []
   switch (step.kind) {
@@ -342,6 +378,11 @@ function settingsIssues(
           `${name} runs this workflow, so they'd run each other forever.`,
         ])
       }
+      // Started with its inputs: each it requires must be said.
+      const other = target ? context.agents?.get(target) : undefined
+      const input = other?.document && startInputOf(other.document)
+      if (other && input && startsWithInputs(step.config))
+        out.push(...inputIssues(other.name, input, step.config.inputs))
       break
     }
     case "human_input":
@@ -380,7 +421,7 @@ function exclusiveWays(
   )
   for (const [id, step] of byId) {
     // A loop's ways (each item, then done) both come in a run.
-    if (step.data.kind === "loop") continue
+    if (BODY_KINDS.has(step.data.kind)) continue
     const ways = outputsOf(step.data).filter((o) => o.branch)
     if (ways.length < 2) continue
     for (const way of ways) {
@@ -431,12 +472,80 @@ function reaches(
   return false
 }
 
+/** What typing a graph looks up in its checks' context: the organization's other workflows. */
+export const typeContextOf = (
+  context: AgentValidationContext
+): TypeContext => ({
+  workflow: (id) => context.agents?.get(id)?.document,
+  within: context.selfId ? [context.selfId] : [],
+})
+
+/**
+ * What a node is handed or makes that won't fit what it's held to: a saved
+ * workflow's input, a transform's declared output.
+ */
+function fitIssues(
+  step: AgentStep,
+  id: string,
+  types: ReturnType<typeof agentTypes>
+): Found[] {
+  if (
+    step.kind === "saved" &&
+    step.config.agent &&
+    !startsWithInputs(step.config)
+  ) {
+    const other = types.savedTypes(step.config.agent)
+    const previous = types.previousOf(id)
+    const wrong =
+      other && previous && misfit(previous, other.input, "what comes in")
+    if (wrong)
+      return [
+        [
+          "input-fit",
+          "warning",
+          `${other.name} starts with what comes in, which may not fit its input: ${wrong}. Fill in its inputs here, or shape it with a Transform before this node.`,
+          "agent",
+        ],
+      ]
+  }
+  if (
+    step.kind === "transform" &&
+    Object.keys(step.config.output_schema).length &&
+    step.config.expression.trim()
+  ) {
+    const made = resolveExpression(step.config.expression, types.scopeOf(id))
+    const wrong =
+      made && misfit(made, fromJsonSchema(step.config.output_schema))
+    if (wrong)
+      return [
+        [
+          "output-fit",
+          "warning",
+          `What its expression makes may not fit what it declares: ${wrong}. A run fails when it doesn't.`,
+          "expression",
+        ],
+      ]
+  }
+  return []
+}
+
 /** Every issue, errors first, in the order of the nodes. */
 export function validateAgent(
   graph: AgentGraph,
   context: AgentValidationContext = {},
-  scopeOf: (id: string) => Scope = agentScopesOf(graph)
+  types: ReturnType<typeof agentTypes> = agentTypes(
+    graph,
+    typeContextOf(context)
+  )
 ): BuilderIssue[] {
+  const { scopeOf } = types
+  const lookups = {
+    agentInput: (agent: string) => context.chatAgents?.get(agent)?.input,
+    workflowInput: (workflow: string) => {
+      const document = context.agents?.get(workflow)?.document
+      return document && startInputOf(document)
+    },
+  }
   const issues: BuilderIssue[] = []
   const add = (
     level: IssueLevel,
@@ -624,16 +733,17 @@ export function validateAgent(
       ...(step.data.kind === "switch"
         ? switchIssues(step.data as StepData, scopeOf(step.id))
         : []),
+      ...fitIssues(step.data, step.id, types),
     ] as Found[]) {
       add(level, step.id, code, message, field ?? fieldOf(code))
     }
     // What its expressions read: paths that lead nowhere, wrong types.
-    for (const setting of agentExpressionSettings(step.data)) {
+    for (const setting of agentExpressionSettings(step.data, lookups)) {
       if (!setting.text.trim()) continue
       const found = checkField(
         setting.text,
         setting.mode,
-        scopeOf(step.id),
+        settingScope(setting, scopeOf(step.id)),
         setting.check
       ).filter((d) => !d.local)
       found
@@ -669,9 +779,73 @@ export function validateAgent(
         step.id,
         `open-${output.id}`,
         output.body
-          ? "The loop's body is empty: connect Each item to the steps to repeat."
+          ? step.data.kind === "for_each"
+            ? "Nothing runs for each item: connect Each item to the steps to run."
+            : "The loop's body is empty: connect Each item to the steps to repeat."
           : `The ${output.label} way goes nowhere; a run that takes it ends here.`
       )
+    }
+    if (BODY_KINDS.has(step.data.kind)) {
+      // Its body: what Each item reaches before coming back to it. It runs
+      // per item, so only Each item leads into it.
+      const body = new Set<string>()
+      const queue = links
+        .filter((l) => l.output === "each")
+        .map((l) => l.target)
+      while (queue.length) {
+        const at = queue.shift()!
+        if (at === step.id || body.has(at)) continue
+        body.add(at)
+        for (const l of outgoing.get(at) ?? []) queue.push(l.target)
+      }
+      // A loop, for-each or filter in it calling its item by the same
+      // name hides this one's item from what it runs.
+      const name = (step.data.config as EachConfig).item_name || "item"
+      for (const inner of body) {
+        const data = byId.get(inner)?.data
+        if (!data || (!BODY_KINDS.has(data.kind) && data.kind !== "filter"))
+          continue
+        const own = (data.config as { item_name: string }).item_name || "item"
+        if (own !== name) continue
+        add(
+          "warning",
+          inner,
+          `item-shadows-${step.id}`,
+          `${step.data.name}, around it, calls its item ${name} too: here, ${name} is this one's, and ${step.data.name}'s can't be read. Call one of them something else.`,
+          "item_name"
+        )
+      }
+      for (const c of graph.connections) {
+        if (!body.has(c.target) || body.has(c.source)) continue
+        if (c.source === step.id && c.output === "each") continue
+        const from = byId.get(c.source)?.data.name ?? c.source
+        add(
+          "error",
+          c.target,
+          `body-${step.id}-${c.source}`,
+          `It runs for each item of ${step.data.name}, and ${from}, outside it, leads into it; only ${step.data.name}'s Each item way may.`
+        )
+      }
+      // A for-each's body never comes back to it: each item's way ends
+      // where it ends.
+      if (step.data.kind === "for_each") {
+        for (const c of incoming.get(step.id) ?? []) {
+          if (!body.has(c)) continue
+          add(
+            "error",
+            c,
+            `for-each-back-${step.id}`,
+            `It leads back to ${step.data.name}, a for-each, which takes nothing back: use a Loop to collect each item's result.`
+          )
+        }
+        if (links.some((l) => l.output === "each" && l.target === step.id))
+          add(
+            "error",
+            step.id,
+            "for-each-back",
+            "Each item leads straight back to it, and a for-each takes nothing back: connect Each item to the steps to run."
+          )
+      }
     }
     if (step.data.kind === "merge") {
       const ways = new Set(incoming.get(step.id) ?? []).size

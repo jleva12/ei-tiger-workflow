@@ -46,7 +46,7 @@ func TestDocumentRetainsCodeAndDocsButIgnoresLocationOnlyChanges(t *testing.T) {
 	}
 }
 
-func TestSplitIdentifierAndTerms(t *testing.T) {
+func TestSplitIdentifierAndIdentifierTerms(t *testing.T) {
 	cases := map[string][]string{
 		"runAsyncImpl": {"run", "Async", "Impl"},
 		"HTTPServer2":  {"HTTP", "Server", "2"},
@@ -70,22 +70,5 @@ func TestSplitIdentifierAndTerms(t *testing.T) {
 	}
 	if strings.Count(terms, " run ") != 1 {
 		t.Errorf("identifier terms must be deduplicated: %s", terms)
-	}
-	if got := Terms("LlmAgent.runAsync(ctx) OR flow"); strings.Join(got, ",") != "llmagent,runasync,ctx,or,flow" {
-		t.Errorf("Terms: %v", got)
-	}
-}
-
-func TestSnippet(t *testing.T) {
-	text := "line one\nprotected Flowable<Event> runAsyncImpl(InvocationContext ctx) {\n    return llmFlow.run(ctx);\n}\n"
-	got := Snippet(text, []string{"llmflow"}, 40)
-	if !strings.Contains(got, "llmFlow.run") || len(got) > 40 {
-		t.Errorf("snippet around the match: %q", got)
-	}
-	if got = Snippet(text, []string{"absent"}, 20); !strings.HasPrefix(got, "line one") {
-		t.Errorf("snippet without a match starts at the top: %q", got)
-	}
-	if Snippet("", []string{"x"}, 10) != "" || Snippet("abc", nil, 0) != "" {
-		t.Error("empty inputs give an empty snippet")
 	}
 }

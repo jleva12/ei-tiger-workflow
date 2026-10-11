@@ -41,6 +41,7 @@ from forge_tasks.settings import load_section
 from forge_tasks.tasks import JobResult, JobStatus, Schedule, TaskContext
 
 if TYPE_CHECKING:
+    from forge_embeddings.clients import ModelClients
     from forge_embeddings.protocols import Embedder
     from forge_task_documents.protocols import Enricher, StorageBackend
     from forge_tasks.protocols import Job
@@ -243,6 +244,40 @@ def _search_service(
     )
 
 
+def open_task_storage(ctx: TaskContext, s: DocumentsSettings) -> StorageBackend:
+    """The storage backend ``s.storage_backend`` names, opened on the context's clients."""
+    backend = selected_backend(s.storage_backend)
+    if backend not in _STORAGE:
+        raise ValueError(f"unknown documents storage {backend!r}; registered: {sorted(_STORAGE)}")
+    return _STORAGE[backend](ctx, s)
+
+
+def build_pipeline(
+    s: DocumentsSettings,
+    models: ModelClients,
+    storage: StorageBackend,
+    *,
+    embedder: Embedder | None = None,
+    extractor: IdentifierExtractor | None = None,
+) -> IngestionPipeline:
+    """The ingest pipeline the worker runs: these settings' parsers, chunker
+    and enrichers, embedding with ``embedder`` (the settings' profile by
+    default) into ``storage``. The evaluation harness builds its runs with it too."""
+    extractor = extractor or IdentifierExtractor()
+    enrichers: list[Enricher] = []
+    if s.context.enabled:
+        enrichers.append(LLMContextEnricher(models.require_llm(), concurrency=s.context.concurrency))
+    enrichers += [BreadcrumbEnricher(), IdentifierEnricher(extractor)]
+    return IngestionPipeline(
+        registry=DocumentsTaskFactory._registry(s),
+        chunker=ChunkEngine(models.tokenizer, s.chunking),
+        enricher=CompositeEnricher(enrichers),
+        embedder=embedder or models.embedder(s.embedding_profile),
+        storage=storage,
+        config=s.pipeline,
+    )
+
+
 def build_knowledge_search(ctx: TaskContext, settings: DocumentsSettings | None = None) -> KnowledgeBaseSearch:
     """The knowledge bases' search on its own, over the same storage and
     models as the documents task (``HYBRID_DOCUMENTS__*``): what another task
@@ -281,24 +316,10 @@ class DocumentsTaskFactory:
     def build(self, ctx: TaskContext) -> DocumentsTask:
         s: DocumentsSettings = ctx.options or DocumentsSettings()
         models = model_clients(ctx)
-        backend = selected_backend(s.storage_backend)
-        if backend not in _STORAGE:
-            raise ValueError(f"unknown documents storage {backend!r}; registered: {sorted(_STORAGE)}")
-        storage = ctx.extras.get("documents.storage") or _STORAGE[backend](ctx, s)
+        storage = ctx.extras.get("documents.storage") or open_task_storage(ctx, s)
         embedder = models.embedder(s.embedding_profile)
         extractor = IdentifierExtractor()
-        enrichers: list[Enricher] = []
-        if s.context.enabled:
-            enrichers.append(LLMContextEnricher(models.require_llm(), concurrency=s.context.concurrency))
-        enrichers += [BreadcrumbEnricher(), IdentifierEnricher(extractor)]
-        pipeline = IngestionPipeline(
-            registry=self._registry(s),
-            chunker=ChunkEngine(models.tokenizer, s.chunking),
-            enricher=CompositeEnricher(enrichers),
-            embedder=embedder,
-            storage=storage,
-            config=s.pipeline,
-        )
+        pipeline = build_pipeline(s, models, storage, embedder=embedder, extractor=extractor)
         search = _search_service(storage, embedder, models.reranker, extractor, s)
         loaders: list[Any] = [LocalFileLoader(max_bytes=s.max_file_bytes)]
         try:

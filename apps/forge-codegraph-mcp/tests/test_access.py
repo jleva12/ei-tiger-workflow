@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 import pytest
 from conftest import REPO, SHOP_URL, make_settings
+from forge_codegraph_query.errors import NotFound
 
 from forge_codegraph_mcp.access import (
     READ,
@@ -16,7 +17,6 @@ from forge_codegraph_mcp.access import (
     current_scope,
     repository_id,
 )
-from forge_codegraph_mcp.graph.errors import NotFound
 
 ORG = "3f6c0000-0000-4000-8000-000000000001"
 
@@ -48,7 +48,7 @@ async def test_a_granted_credential_reads_its_organizations_repositories() -> No
     check = verifier(lambda _: httpx.Response(200, json=granted(SHOP_URL)))
     access = await check.verify_token("fk_x")
     assert access is not None and access.scopes == [READ]
-    scope = RepositoryScope.of(access)
+    scope = RepositoryScope.from_claims(access.claims or {}, str(access.subject))
     assert scope == RepositoryScope("apikey:k1", ORG, frozenset({REPO}))
     assert scope.readable(REPO) and not scope.readable(repository_id("https://github.com/x/y"))
     scope.check(REPO)
@@ -178,15 +178,35 @@ async def test_the_scope_carries_the_organizations_system_maps() -> None:
     }
     access = await verifier(lambda _: httpx.Response(200, json=answer)).verify_token("fk_x")
     assert access is not None
-    scope = RepositoryScope.of(access)
+    scope = RepositoryScope.from_claims(access.claims or {}, str(access.subject))
     assert scope.link_owners == frozenset({"kb:1"})
     assert scope.owns("kb:1") and not scope.owns("kb:2")
     [connection] = scope.connections
     assert connection["source"] == {"repository_id": REPO, "name": "acme/shop"}
     assert connection["target"]["repository_id"] == repository_id(other)
     assert connection["code_links"][0]["label"] == "POST /charges"
+    # Each system design knowledge base's design, its applications with their graph ids.
+    designed = granted(SHOP_URL) | {
+        "systems": [
+            {
+                "id": "1",
+                "name": "Checkout",
+                "description": "",
+                "groups": [],
+                "applications": [{"name": "acme/shop", "url": SHOP_URL, "group": ""}],
+                "components": [{"name": "db", "kind": "database"}],
+                "connections": [],
+            }
+        ]
+    }
+    access = await verifier(lambda _: httpx.Response(200, json=designed)).verify_token("fk_z")
+    assert access is not None
+    [system] = RepositoryScope.from_claims(access.claims or {}, str(access.subject)).systems
+    assert system["applications"][0]["repository_id"] == REPO
+    assert system["components"] == [{"name": "db", "kind": "database"}]
     # An admin API from before system maps names no owners: every link is followed.
     old = await verifier(lambda _: httpx.Response(200, json=granted(SHOP_URL))).verify_token("fk_y")
     assert old is not None
-    scope = RepositoryScope.of(old)
+    scope = RepositoryScope.from_claims(old.claims or {}, str(old.subject))
     assert scope.link_owners is None and scope.owns("kb:2") and scope.connections == ()
+    assert scope.systems == ()

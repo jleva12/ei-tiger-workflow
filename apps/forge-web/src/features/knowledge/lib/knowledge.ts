@@ -81,9 +81,19 @@ export const KINDS: Record<KindKey, Kind> = {
     extensions: ["xlsx", "xlsm", "xls", "xlt", "ods", "csv", "tsv"],
   },
   text: {
-    label: "Markdown & text",
+    label: "Markdown, HTML & text",
     icon: Txt01Icon,
-    extensions: ["md", "markdown", "mdx", "txt", "text", "log"],
+    extensions: [
+      "md",
+      "markdown",
+      "mdx",
+      "html",
+      "htm",
+      "xhtml",
+      "txt",
+      "text",
+      "log",
+    ],
   },
   // Visio drawings, and Mermaid diagrams (e.g. those the assistant writes).
   diagrams: {

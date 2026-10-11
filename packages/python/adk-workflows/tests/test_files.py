@@ -3,6 +3,8 @@ Files a run starts with: how a start's rule takes them (their names, types
 and media types), and a run reading them as ADK artifacts of its session:
 its start lists them in ``state.files``, its LLM agents load them with ADK's
 ``load_artifacts`` tool, and starting over in a new session takes them along.
+Wherever the worker keeps artifacts, its LLM agents also save files of their
+own (``save_file``).
 """
 
 from collections.abc import AsyncGenerator
@@ -15,6 +17,8 @@ from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService
 from google.genai import types
 
+from forge_task_adk_workflows import files as files_module
+from forge_task_adk_workflows import runs
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
 from forge_task_adk_workflows.files import (
     FILE_TYPES,
@@ -35,7 +39,16 @@ from forge_tasks.tasks import JobStatus
 
 from .scripted_llm import ScriptedLlm
 from .test_graph import end, llm_config, node, transform
-from .test_task import MEMBER, SESSION, line, overloaded, payload, worker
+from .test_task import (
+    MEMBER,
+    SESSION,
+    line,
+    overloaded,
+    payload,
+    refusing_to_carry_on,
+    starting_over,
+    worker,
+)
 
 FILES_START = node("start", "start", {"input_schema": {}, "allow_files": True, "file_types": ["text", "pdf"]})
 
@@ -176,7 +189,11 @@ async def test_a_run_lists_its_files_in_the_state_and_its_nodes_read_them(
     files = await saved(artifacts, ("notes.txt", b"The answer is 42."))
     llm = ScriptedLlm(
         turns=[
-            [types.Part(function_call=types.FunctionCall(name="load_artifacts", args={"artifact_names": ["notes.txt"]}))],
+            [
+                types.Part(
+                    function_call=types.FunctionCall(name="load_artifacts", args={"artifact_names": ["notes.txt"]})
+                )
+            ],
             [types.Part(text="42")],
         ]
     )
@@ -213,8 +230,9 @@ async def test_a_start_that_allows_files_lists_none_when_the_run_has_none(sessio
     result = await w.run(payload(document, {}))
 
     assert result.detail["result"] == []
-    # Without files, no agent loads any.
+    # On a worker that keeps no artifacts, no agent loads or saves any.
     assert "load_artifacts" not in llm.requests[0].tools_dict
+    assert "save_file" not in llm.requests[0].tools_dict
 
 
 async def test_a_run_with_files_fails_on_a_worker_that_keeps_no_artifacts(sessions: DatabaseSessionService) -> None:
@@ -237,9 +255,11 @@ async def test_a_run_that_starts_over_takes_its_files_to_its_new_session(
     llm = ScriptedLlm(turns=[overloaded(), [types.Part(text="Hi!")]])
     w = worker(sessions, model=llm, artifacts=artifacts)
     run = payload(
-        files_line(
-            node("triage", "llm", llm_config(instruction="Say hi")),
-            end("done", "state.files.name"),
+        starting_over(
+            files_line(
+                node("triage", "llm", llm_config(instruction="Say hi")),
+                end("done", "state.files.name"),
+            )
         ),
         {},
         files=files,
@@ -247,19 +267,7 @@ async def test_a_run_that_starts_over_takes_its_files_to_its_new_session(
     with pytest.raises(TransientError):
         await w.run(run)
 
-    carry_on = Runner.run_async
-
-    def refusing(self: Runner, **options: Any) -> Any:
-        if options.get("invocation_id") and options.get("new_message") is None:
-
-            async def refuse() -> AsyncGenerator[Any]:
-                raise ValueError("that invocation can't be resumed")
-                yield
-
-            return refuse()
-        return carry_on(self, **options)
-
-    monkeypatch.setattr(Runner, "run_async", refusing)
+    monkeypatch.setattr(Runner, "run_async", refusing_to_carry_on(Runner.run_async))
     result = await w.run(run)
 
     assert result.status is JobStatus.OK, result.error
@@ -277,7 +285,7 @@ async def test_a_run_whose_files_are_gone_cant_start_over(
 ) -> None:
     files = [RunFile(name="gone.txt", media_type="text/plain", size_bytes=1, type="text")]
     w = worker(sessions, model=ScriptedLlm(turns=[overloaded()]), artifacts=InMemoryArtifactService())
-    run = payload(files_line(node("triage", "llm", llm_config()), end("done")), {}, files=files)
+    run = payload(starting_over(files_line(node("triage", "llm", llm_config()), end("done"))), {}, files=files)
     with pytest.raises(TransientError):
         await w.run(run)
 
@@ -292,4 +300,159 @@ async def test_a_run_whose_files_are_gone_cant_start_over(
     result = await w.run(run)
 
     assert result.status is JobStatus.FAILED
-    assert result.error == "The run can't start over: The run's file gone.txt isn't kept any more"
+    assert result.error == "The run can't go on without its files: The run's file gone.txt isn't kept any more"
+
+
+async def test_a_copy_of_its_files_that_failed_is_finished_before_the_run_goes_on(
+    sessions: DatabaseSessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # It starts over, and the storage hiccups as its files are copied to the
+    # new session: its next attempt copies them before it runs anything.
+    artifacts = InMemoryArtifactService()
+    files = await saved(artifacts, ("notes.txt", b"kept"))
+    llm = ScriptedLlm(turns=[overloaded(), [types.Part(text="Hi!")]])
+    w = worker(sessions, model=llm, artifacts=artifacts)
+    run = payload(
+        starting_over(files_line(node("triage", "llm", llm_config()), end("done", "state.files.name"))),
+        {},
+        files=files,
+    )
+    with pytest.raises(TransientError):
+        await w.run(run)
+    monkeypatch.setattr(Runner, "run_async", refusing_to_carry_on(Runner.run_async))
+    copy = runs.copy_run_files
+
+    async def hiccup(*args: Any, **kwargs: Any) -> None:
+        raise ConnectionError("the storage isn't answering")
+
+    monkeypatch.setattr(runs, "copy_run_files", hiccup)
+    with pytest.raises(TransientError, match="ConnectionError"):
+        await w.run(run)
+    assert w.control.state["adk_workflow"]["session_id"] == f"{SESSION}-r1"  # where it carries on
+
+    monkeypatch.setattr(runs, "copy_run_files", copy)
+    result = await w.run(run)
+
+    assert result.status is JobStatus.OK, result.error
+    assert result.detail["result"] == "notes.txt"
+    copied = await artifacts.load_artifact(
+        app_name=APP_NAME, user_id=MEMBER, session_id=f"{SESSION}-r1", filename="notes.txt"
+    )
+    assert copied is not None and copied.inline_data is not None and copied.inline_data.data == b"kept"
+
+
+async def test_a_resubmitted_run_takes_its_files_from_its_originals_session(
+    sessions: DatabaseSessionService,
+) -> None:
+    artifacts = InMemoryArtifactService()
+    files = await saved(artifacts, ("notes.txt", b"kept"))  # in the original run's session
+    w = worker(sessions, artifacts=artifacts)
+    reading = transform("read", "state.files.name")
+    run = payload(files_line(reading, end("done", "steps.read.output")), {}, files=files)
+    resubmitted = run.model_copy(update={"session_id": "resubmitted-session", "files_session_id": SESSION})
+
+    result = await w.run(resubmitted)
+
+    assert result.status is JobStatus.OK, result.error
+    assert result.detail["session_id"] == "resubmitted-session"
+    copied = await artifacts.load_artifact(
+        app_name=APP_NAME, user_id=MEMBER, session_id="resubmitted-session", filename="notes.txt"
+    )
+    assert copied is not None and copied.inline_data is not None and copied.inline_data.data == b"kept"
+    assert w.control.state["adk_workflow"]["files_session"] == "resubmitted-session"
+
+
+# ------------------------------------------------------------ files agents save
+
+
+def saving(name: str, content: str) -> list[types.Part]:
+    return [types.Part(function_call=types.FunctionCall(name="save_file", args={"name": name, "content": content}))]
+
+
+def answers(request: Any) -> list[dict[str, Any]]:
+    """What the tools answered, as a request sends it to the model."""
+    return [
+        part.function_response.response or {}
+        for content in request.contents
+        for part in content.parts or []
+        if part.function_response
+    ]
+
+
+async def test_on_a_worker_that_keeps_artifacts_agents_save_files_later_ones_read(
+    sessions: DatabaseSessionService,
+) -> None:
+    artifacts = InMemoryArtifactService()
+    llm = ScriptedLlm(
+        turns=[saving("summary.md", "# Done\nAll good."), [types.Part(text="Saved.")], [types.Part(text="Seen.")]]
+    )
+    w = worker(sessions, model=llm, artifacts=artifacts)
+    # A run without files: its agents have the file tools all the same.
+    document = line(
+        node("write", "llm", llm_config(instruction="Write it up.")),
+        node("read", "llm", llm_config(instruction="Read it.")),
+        end("done", "steps.write.output"),
+    )
+
+    result = await w.run(payload(document, {}))
+
+    assert result.status is JobStatus.OK, result.error
+    assert result.detail["result"] == "Saved."
+    first, second, third = llm.requests
+    assert {"load_artifacts", "save_file"} <= set(first.tools_dict)
+    assert answers(second)[-1] == {
+        "status": "saved",
+        "name": "summary.md",
+        "version": 0,
+        "media_type": "text/markdown",
+        "size_bytes": 16,
+    }
+    part = await artifacts.load_artifact(app_name=APP_NAME, user_id=MEMBER, session_id=SESSION, filename="summary.md")
+    assert part is not None and part.inline_data is not None
+    assert (part.inline_data.data, part.inline_data.mime_type) == (b"# Done\nAll good.", "text/markdown")
+    [version] = await artifacts.list_artifact_versions(
+        app_name=APP_NAME, user_id=MEMBER, session_id=SESSION, filename="summary.md"
+    )
+    assert version.custom_metadata == {"size_bytes": 16, "saved_by": "write"}
+    # The next agent is told of the file, and may load it.
+    assert "summary.md" in str(third.config.system_instruction)
+
+
+async def test_an_agent_saves_text_files_only_and_never_over_the_runs_own(sessions: DatabaseSessionService) -> None:
+    artifacts = InMemoryArtifactService()
+    files = await saved(artifacts, ("notes.txt", b"Mine."))
+    llm = ScriptedLlm(
+        turns=[
+            saving("tool.exe", "MZ"),
+            saving("NOTES.txt", "Overwritten."),
+            saving("dir/../out.json", '{"ok": true}'),
+            [types.Part(text="Done.")],
+        ]
+    )
+    w = worker(sessions, model=llm, artifacts=artifacts)
+
+    result = await w.run(payload(files_line(node("write", "llm", llm_config()), end("done")), {}, files=files))
+
+    assert result.status is JobStatus.OK, result.error
+    refused, taken, kept = (answers(request)[-1] for request in llm.requests[1:])
+    assert refused["status"] == "failed" and "tool.exe: a saved file's name ends in one of" in refused["reason"]
+    assert taken == {"status": "failed", "reason": "NOTES.txt is a file the run started with: save under another name"}
+    # A path is never kept: only its last part.
+    assert (kept["status"], kept["name"]) == ("saved", "out.json")
+    mine = await artifacts.load_artifact(app_name=APP_NAME, user_id=MEMBER, session_id=SESSION, filename="notes.txt")
+    assert mine is not None and mine.inline_data is not None and mine.inline_data.data == b"Mine."
+
+
+async def test_a_file_too_big_isnt_saved(sessions: DatabaseSessionService, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(files_module, "MAX_SAVED_BYTES", 4)
+    artifacts = InMemoryArtifactService()
+    llm = ScriptedLlm(turns=[saving("big.txt", "12345"), [types.Part(text="Done.")]])
+    w = worker(sessions, model=llm, artifacts=artifacts)
+
+    await w.run(payload(line(node("write", "llm", llm_config()), end("done")), {}))
+
+    assert answers(llm.requests[1])[-1] == {
+        "status": "failed",
+        "reason": "big.txt is 5 bytes: a saved file holds at most 4",
+    }
+    assert await artifacts.list_artifact_keys(app_name=APP_NAME, user_id=MEMBER, session_id=SESSION) == []

@@ -8,6 +8,7 @@ import httpx
 import pytest
 from conftest import MCP_HEADERS, REPO, SHOP_URL, Shop, make_settings
 from fastapi.testclient import TestClient
+from forge_codegraph_query import CodeGraph
 
 from forge_codegraph_mcp.access import ForgeAccessVerifier
 from forge_codegraph_mcp.core.settings import Settings
@@ -78,7 +79,7 @@ def serve(shop: Shop, admin: Admin) -> Iterator[Callable[..., TestClient]]:
             ServerBuilder(settings)
             .with_auth(verifier)
             .with_routes(HealthRoutes(settings, checks={"spanner": ready or ok}))
-            .with_toolsets(CodeGraphTools(settings, shop.store, None))
+            .with_toolsets(CodeGraphTools(settings, CodeGraph(shop.store)))
             .build()
         )
         client = TestClient(app)
@@ -196,39 +197,3 @@ def test_build_server_registers_everything(monkeypatch: pytest.MonkeyPatch) -> N
     client = TestClient(build_server(make_settings()).build())
     assert client.get("/health/live").json() == {"status": "ok"}
     assert {"/health/live", "/health/ready"} <= set(client.get("/openapi.json").json()["paths"])
-
-
-async def test_startup_waits_for_the_workers_database(monkeypatch: pytest.MonkeyPatch) -> None:
-    from forge_codegraph_mcp import main
-    from forge_codegraph_mcp.graph.spanner import VectorLengthMismatch
-
-    async def no_sleep(_seconds: float) -> None:
-        return None
-
-    monkeypatch.setattr(main.asyncio, "sleep", no_sleep)
-
-    class Store:
-        database = "projects/p/instances/i/databases/d"
-
-        def __init__(self, failures: list[Exception]) -> None:
-            self.failures = failures
-            self.pings = 0
-
-        async def ping(self) -> None:
-            self.pings += 1
-            if self.failures:
-                raise self.failures.pop(0)
-
-    # Not there yet, then there: startup goes on.
-    store = Store([ConnectionError("no database"), ConnectionError("no schema")])
-    await main.wait_for_graph(store, 60)  # type: ignore[arg-type]
-    assert store.pings == 3
-    # A database made for other embeddings never will be.
-    store = Store([VectorLengthMismatch("3072, configured 1024")])
-    with pytest.raises(VectorLengthMismatch):
-        await main.wait_for_graph(store, 60)  # type: ignore[arg-type]
-    assert store.pings == 1
-    # Out of patience, the last failure stops startup.
-    store = Store([ConnectionError("down")] * 3)
-    with pytest.raises(ConnectionError):
-        await main.wait_for_graph(store, 0)  # type: ignore[arg-type]

@@ -20,6 +20,7 @@ members = [
     "forge-async-worker",
     "forge-codegraph",
     "forge-codegraph-mcp",
+    "forge-codegraph-query",
     "forge-common",
     "forge-embeddings",
     "forge-jsonata",
@@ -1307,7 +1308,8 @@ dependencies = [
     { name = "fastapi" },
     { name = "forge-agent-runtime", extra = ["a2a", "server"] },
     { name = "forge-codegraph" },
-    { name = "forge-common", extra = ["adk", "adk-models", "logging"] },
+    { name = "forge-codegraph-query" },
+    { name = "forge-common", extra = ["adk", "adk-models", "logging", "patterns"] },
     { name = "forge-mcp-servers" },
     { name = "forge-task-adk-workflows" },
     { name = "forge-task-documents" },
@@ -1336,7 +1338,8 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.141.1" },
     { name = "forge-agent-runtime", extras = ["server", "a2a"], editable = "packages/python/agent-runtime" },
     { name = "forge-codegraph", editable = "packages/python/codegraph" },
-    { name = "forge-common", extras = ["adk", "adk-models", "logging"], editable = "packages/python/common" },
+    { name = "forge-codegraph-query", editable = "packages/python/codegraph-query" },
+    { name = "forge-common", extras = ["adk", "adk-models", "logging", "patterns"], editable = "packages/python/common" },
     { name = "forge-mcp-servers", editable = "packages/python/mcp-servers" },
     { name = "forge-task-adk-workflows", editable = "packages/python/adk-workflows" },
     { name = "forge-task-documents", editable = "packages/python/documents" },
@@ -1360,7 +1363,7 @@ name = "forge-agent-runtime"
 version = "0.1.0"
 source = { editable = "packages/python/agent-runtime" }
 dependencies = [
-    { name = "forge-common", extra = ["adk", "adk-models"] },
+    { name = "forge-common", extra = ["adk", "adk-models", "mcp", "patterns"] },
     { name = "forge-jsonata" },
     { name = "google-adk" },
     { name = "httpx" },
@@ -1410,14 +1413,14 @@ requires-dist = [
     { name = "asyncpg", marker = "extra == 'sessions-postgres'", specifier = ">=0.30" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "forge-agent-runtime", extras = ["server"], marker = "extra == 'a2a'", editable = "packages/python/agent-runtime" },
-    { name = "forge-common", extras = ["adk", "adk-models"], editable = "packages/python/common" },
+    { name = "forge-common", extras = ["adk", "adk-models", "mcp", "patterns"], editable = "packages/python/common" },
     { name = "forge-common", extras = ["adk-artifacts-s3"], marker = "extra == 'artifacts-s3'", editable = "packages/python/common" },
     { name = "forge-common", extras = ["adk-memory"], marker = "extra == 'memory-atlas'", editable = "packages/python/common" },
     { name = "forge-jsonata", editable = "packages/python/jsonata" },
     { name = "google-adk", specifier = ">=2.9.2" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "jsonschema", specifier = ">=4.23" },
-    { name = "mcp", specifier = ">=1.23,<3" },
+    { name = "mcp", specifier = ">=2.3.0,<3" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "pydantic-settings", specifier = ">=2.6" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'server'", specifier = ">=2.0" },
@@ -1460,11 +1463,11 @@ name = "forge-codegraph"
 version = "0.1.0"
 source = { editable = "packages/python/codegraph" }
 dependencies = [
-    { name = "httpx2" },
+    { name = "forge-codegraph-query" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "httpx2", specifier = ">=2.13.1" }]
+requires-dist = [{ name = "forge-codegraph-query", editable = "packages/python/codegraph-query" }]
 
 [[package]]
 name = "forge-codegraph-mcp"
@@ -1473,10 +1476,10 @@ source = { editable = "apps/forge-codegraph-mcp" }
 dependencies = [
     { name = "fastapi" },
     { name = "fastmcp" },
+    { name = "forge-codegraph" },
+    { name = "forge-codegraph-query" },
     { name = "forge-common", extra = ["logging"] },
-    { name = "google-cloud-spanner" },
     { name = "httpx" },
-    { name = "openai" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "uvicorn", extra = ["standard"] },
@@ -1486,13 +1489,30 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.141.1" },
     { name = "fastmcp", specifier = ">=4.0.10,<5" },
+    { name = "forge-codegraph", editable = "packages/python/codegraph" },
+    { name = "forge-codegraph-query", editable = "packages/python/codegraph-query" },
     { name = "forge-common", extras = ["logging"], editable = "packages/python/common" },
-    { name = "google-cloud-spanner", specifier = ">=3.70,<4" },
     { name = "httpx", specifier = ">=0.28" },
-    { name = "openai", specifier = ">=1.40" },
     { name = "pydantic-settings", specifier = ">=2.15.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.53.0" },
+]
+
+[[package]]
+name = "forge-codegraph-query"
+version = "0.1.0"
+source = { editable = "packages/python/codegraph-query" }
+dependencies = [
+    { name = "google-cloud-spanner" },
+    { name = "openai" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "google-cloud-spanner", specifier = ">=3.70,<4" },
+    { name = "openai", specifier = ">=1.40" },
+    { name = "pydantic", specifier = ">=2.7" },
 ]
 
 [[package]]
@@ -1527,15 +1547,30 @@ logging = [
     { name = "starlette" },
     { name = "structlog" },
 ]
+mcp = [
+    { name = "jsonschema" },
+    { name = "mcp" },
+    { name = "referencing" },
+    { name = "regex" },
+]
 model-provider = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
+patterns = [
+    { name = "jsonschema" },
+    { name = "referencing" },
+    { name = "regex" },
+]
+templates = [
+    { name = "jinja2" },
+    { name = "pydantic" },
+]
 
 [package.dev-dependencies]
 dev = [
-    { name = "forge-common", extra = ["adk", "adk-artifacts-s3", "adk-memory", "adk-models", "logging"] },
+    { name = "forge-common", extra = ["adk", "adk-artifacts-s3", "adk-memory", "adk-models", "logging", "mcp", "patterns", "templates"] },
 ]
 
 [package.metadata]
@@ -1543,24 +1578,31 @@ requires-dist = [
     { name = "boto3", marker = "extra == 'adk-artifacts-s3'", specifier = ">=1.35.16" },
     { name = "forge-common", extras = ["model-provider"], marker = "extra == 'adk-memory'", editable = "packages/python/common" },
     { name = "forge-common", extras = ["model-provider"], marker = "extra == 'adk-models'", editable = "packages/python/common" },
+    { name = "forge-common", extras = ["patterns"], marker = "extra == 'mcp'", editable = "packages/python/common" },
     { name = "google-adk", marker = "extra == 'adk'", specifier = ">=2.9.2" },
     { name = "google-adk", marker = "extra == 'adk-artifacts-s3'", specifier = ">=2.9.2" },
     { name = "google-adk", marker = "extra == 'adk-memory'", specifier = ">=2.9.2" },
     { name = "google-adk", marker = "extra == 'adk-models'", specifier = ">=2.9.2" },
     { name = "httpx", marker = "extra == 'adk-memory'", specifier = ">=0.28" },
     { name = "httpx", marker = "extra == 'model-provider'", specifier = ">=0.28" },
+    { name = "jinja2", marker = "extra == 'templates'", specifier = ">=3.1" },
+    { name = "jsonschema", marker = "extra == 'patterns'", specifier = ">=4.23" },
     { name = "litellm", marker = "extra == 'adk-models'", specifier = ">=1.83" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3.0,<3" },
     { name = "pydantic", marker = "extra == 'logging'", specifier = ">=2.11" },
     { name = "pydantic", marker = "extra == 'model-provider'", specifier = ">=2.11" },
+    { name = "pydantic", marker = "extra == 'templates'", specifier = ">=2.11" },
     { name = "pymongo", marker = "extra == 'adk-memory'", specifier = ">=4.13" },
     { name = "pyyaml", marker = "extra == 'model-provider'", specifier = ">=6.0" },
+    { name = "referencing", marker = "extra == 'patterns'", specifier = ">=0.28.4" },
+    { name = "regex", marker = "extra == 'patterns'", specifier = ">=2024.11.6" },
     { name = "starlette", marker = "extra == 'logging'", specifier = ">=0.46" },
     { name = "structlog", marker = "extra == 'logging'", specifier = ">=26.1.0" },
 ]
-provides-extras = ["adk", "model-provider", "adk-models", "logging", "adk-memory", "adk-artifacts-s3"]
+provides-extras = ["adk", "model-provider", "adk-models", "logging", "adk-memory", "adk-artifacts-s3", "templates", "patterns", "mcp"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "forge-common", extras = ["adk", "adk-artifacts-s3", "adk-memory", "adk-models", "logging"], editable = "packages/python/common" }]
+dev = [{ name = "forge-common", extras = ["adk", "adk-artifacts-s3", "adk-memory", "adk-models", "logging", "mcp", "patterns", "templates"], editable = "packages/python/common" }]
 
 [[package]]
 name = "forge-embeddings"
@@ -1619,6 +1661,7 @@ version = "0.1.0"
 source = { editable = "packages/python/mcp-servers" }
 dependencies = [
     { name = "cryptography" },
+    { name = "forge-common", extra = ["mcp"] },
     { name = "google-adk" },
     { name = "httpx2" },
     { name = "mcp" },
@@ -1635,6 +1678,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = ">=50.0.1" },
+    { name = "forge-common", extras = ["mcp"], editable = "packages/python/common" },
     { name = "google-adk", specifier = ">=2.9.2" },
     { name = "httpx2", specifier = ">=2.13.1" },
     { name = "mcp", specifier = ">=2.3.0,<3" },
@@ -1656,7 +1700,8 @@ dependencies = [
     { name = "aiomysql" },
     { name = "forge-agent-runtime" },
     { name = "forge-codegraph" },
-    { name = "forge-common", extra = ["adk", "adk-artifacts-s3", "adk-models"] },
+    { name = "forge-codegraph-query" },
+    { name = "forge-common", extra = ["adk", "adk-artifacts-s3", "adk-models", "patterns"] },
     { name = "forge-jsonata" },
     { name = "forge-mcp-servers" },
     { name = "forge-tasks" },
@@ -1672,7 +1717,8 @@ requires-dist = [
     { name = "aiomysql", specifier = ">=0.2" },
     { name = "forge-agent-runtime", editable = "packages/python/agent-runtime" },
     { name = "forge-codegraph", editable = "packages/python/codegraph" },
-    { name = "forge-common", extras = ["adk", "adk-models", "adk-artifacts-s3"], editable = "packages/python/common" },
+    { name = "forge-codegraph-query", editable = "packages/python/codegraph-query" },
+    { name = "forge-common", extras = ["adk", "adk-models", "adk-artifacts-s3", "patterns"], editable = "packages/python/common" },
     { name = "forge-jsonata", editable = "packages/python/jsonata" },
     { name = "forge-mcp-servers", editable = "packages/python/mcp-servers" },
     { name = "forge-tasks", editable = "packages/python/task-sdk" },
@@ -1688,10 +1734,12 @@ name = "forge-task-documents"
 version = "0.1.0"
 source = { editable = "packages/python/documents" }
 dependencies = [
+    { name = "beautifulsoup4" },
     { name = "boto3" },
     { name = "charset-normalizer" },
     { name = "forge-embeddings" },
     { name = "forge-tasks" },
+    { name = "lxml" },
     { name = "markdown-it-py" },
     { name = "openpyxl" },
     { name = "pdfplumber" },
@@ -1710,11 +1758,13 @@ docling = [
 
 [package.metadata]
 requires-dist = [
+    { name = "beautifulsoup4", specifier = ">=4.12" },
     { name = "boto3", specifier = ">=1.34" },
     { name = "charset-normalizer", specifier = ">=3.3" },
     { name = "docling", marker = "extra == 'docling'", specifier = ">=2.0" },
     { name = "forge-embeddings", editable = "packages/python/embeddings" },
     { name = "forge-tasks", editable = "packages/python/task-sdk" },
+    { name = "lxml", specifier = ">=5.0" },
     { name = "markdown-it-py", specifier = ">=3.0" },
     { name = "openpyxl", specifier = ">=3.1" },
     { name = "pdfplumber", specifier = ">=0.11" },
