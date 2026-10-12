@@ -5,6 +5,10 @@ import type {
 } from "@assistant-ui/react-google-adk"
 
 import type { AdkArtifactsApi } from "@/components/forge/assistant"
+import {
+  FOLLOW_UPS_REQUEST_KEY,
+  FOLLOW_UPS_STATE_KEY,
+} from "@/components/forge/assistant/follow-ups"
 
 /*
  * A stand-in for an ADK server, so the demo runs the real ADK runtime with
@@ -39,6 +43,42 @@ type Run = {
   /** The composer's model section, sent as ADK state (`stateDelta`). */
   model?: string
   thinkingLevel?: string
+  /** What the conversation held when the run started, in tokens. */
+  context: number
+}
+
+/**
+ * The models' windows and reply budgets, as model_provider.yaml gives them:
+ * what forge_common's `ContextWindowPlugin` measures against.
+ */
+const WINDOWS: Record<string, { window: number; reply: number }> = {
+  "gemini-2.5-pro": { window: 1_048_576, reply: 65_536 },
+  "gemini-2.5-flash": { window: 1_048_576, reply: 65_536 },
+}
+
+/**
+ * The agent's context window after it answered `text`, as the plugin keeps
+ * it in the session's state (`forge:context:<agent>`): the composer's
+ * context meter reads it.
+ */
+function contextState(run: Run, author: string, text: string) {
+  const model = run.model ?? "gemini-2.5-pro"
+  const { window, reply } = WINDOWS[model] ?? WINDOWS["gemini-2.5-pro"]!
+  const limit = window - reply
+  return {
+    [`forge:context:${author}`]: {
+      tokens: run.context + Math.ceil(text.length / 3.5),
+      limit,
+      threshold: Math.floor(limit * 0.8),
+      window,
+      reply,
+      share: 0.8,
+      auto: true,
+      counted: "provider",
+      model,
+      updated: Date.now() / 1000,
+    },
+  }
 }
 
 /** Streams `text` (and optional reasoning) as partial chunks, then the final event. */
@@ -98,7 +138,13 @@ async function* reply(
       role: "model",
       parts: [...(thought ? [{ text: thought, thought: true }] : []), { text }],
     },
-    actions,
+    actions: {
+      ...actions,
+      stateDelta: {
+        ...actions?.stateDelta,
+        ...contextState(run, author, text),
+      },
+    },
   }
 }
 
@@ -216,26 +262,29 @@ async function* scenario(
       return
     }
     if (last.name === "adk_request_input") {
-      const env = String(parsed.result ?? "staging")
+      // The form's answer, in the schema's types (or a plain answer).
+      const answer =
+        typeof parsed.result === "object" && parsed.result !== null
+          ? (parsed.result as Record<string, unknown>)
+          : { environment: parsed.result }
+      const env = String(answer.environment ?? "staging")
+      const replicas = Number(answer.replicas ?? 2)
+      const regions = Array.isArray(answer.regions)
+        ? ` in ${answer.regions.map((region) => String(region).toUpperCase()).join(" and ")}`
+        : ""
       yield* reply(
         run,
         COORDINATOR,
-        `Deploying \`main\` to **${env}**. I'll post the rollout status here when it finishes.`,
+        `Deploying \`main\` to **${env}** with ${replicas} ${replicas === 1 ? "replica" : "replicas"}${regions}.` +
+          (answer.notify ? " I'll tell the team when it's out." : "") +
+          " I'll post the rollout status here when it finishes.",
         { actions: { stateDelta: { "user:last_environment": env } } }
       )
       return
     }
   }
 
-  const text =
-    last?.type === "human"
-      ? (typeof last.content === "string"
-          ? last.content
-          : last.content
-              .map((part) => ("text" in part ? part.text : ""))
-              .join(" ")
-        ).toLowerCase()
-      : ""
+  const text = humanText(last)
 
   if (/fail|task/.test(text)) {
     const search = call(run, "search_tasks", { status: "failed", limit: 10 })
@@ -319,8 +368,32 @@ async function* scenario(
       run,
       "adk_request_input",
       {
-        message: "Which environment should I deploy `main` to?",
-        response_schema: { type: "string", enum: ["staging", "production"] },
+        message: "Before I deploy `main`, a few details.",
+        response_schema: {
+          type: "object",
+          properties: {
+            environment: {
+              type: "string",
+              title: "Which environment?",
+              enum: ["staging", "production"],
+            },
+            replicas: {
+              type: "integer",
+              title: "How many replicas?",
+              description: "Between 1 and 10.",
+              minimum: 1,
+              maximum: 10,
+              default: 2,
+            },
+            regions: {
+              type: "array",
+              title: "Which regions?",
+              items: { type: "string", enum: ["eu", "us", "apac"] },
+            },
+            notify: { type: "boolean", title: "Tell the team when it's out?" },
+          },
+          required: ["environment", "replicas"],
+        },
       },
       true
     )
@@ -381,20 +454,140 @@ async function* scenario(
   )
 }
 
+/** What the person wrote, in lower case; nothing for a tool's answer. */
+function humanText(message: AdkMessage | undefined) {
+  if (message?.type !== "human") return ""
+  return (
+    typeof message.content === "string"
+      ? message.content
+      : message.content
+          .map((part) => ("text" in part ? part.text : ""))
+          .join(" ")
+  ).toLowerCase()
+}
+
+/** What the demo's server suggests asking next, by what the turn was about. */
+const FOLLOW_UPS: [RegExp, string[]][] = [
+  [
+    /deploy|replica/i,
+    ["Show the deploy's logs", "Roll it back", "Deploy to staging too"],
+  ],
+  [/branch/i, ["Which other branches are stale?", "Protect main", "Undo that"]],
+  [
+    /review|hand/i,
+    ["What did the reviewer flag?", "Merge it", "Ask for another review"],
+  ],
+  [
+    /summar/i,
+    ["Make it shorter", "What's still open?", "Share it with the team"],
+  ],
+  [
+    /github|pull request/i,
+    ["List my open pull requests", "Which need my review?"],
+  ],
+]
+const SUGGESTED = [
+  "What can you do?",
+  "Deploy main",
+  "Summarize this week's activity",
+]
+
+// Whether the session's state holds the last reply's follow-ups.
+let suggested = false
+
+/**
+ * The run's events, then follow-up questions as forge_common's
+ * `FollowUpsPlugin` adds them: a run that asks (`forge:suggest_follow_ups`)
+ * and ends with a reply gets a few in the session's state
+ * (`forge:follow_ups`); one that ends waiting on the person gets none; every
+ * run clears the last reply's first.
+ */
+async function* withFollowUps(
+  events: AsyncGenerator<AdkEvent>,
+  run: Run,
+  asked: unknown,
+  said: string
+): AsyncGenerator<AdkEvent> {
+  if (suggested) {
+    suggested = false
+    yield {
+      id: nextId("evt"),
+      invocationId: run.invocationId,
+      author: COORDINATOR,
+      actions: { stateDelta: { [FOLLOW_UPS_STATE_KEY]: null } },
+    }
+  }
+  let last: AdkEvent | undefined
+  for await (const event of events) {
+    if (!event.partial && event.content?.parts?.length) last = event
+    yield event
+  }
+  const count =
+    asked === true
+      ? 3
+      : typeof asked === "object" && asked !== null
+        ? Number((asked as { count?: unknown }).count ?? 3)
+        : 0
+  const parts = last?.content?.parts ?? []
+  const text = parts.map((part) => (part.thought ? "" : (part.text ?? "")))
+  if (
+    !last ||
+    !count ||
+    last.longRunningToolIds?.length ||
+    parts.some((part) => part.functionCall) ||
+    !text.join("").trim()
+  ) {
+    return
+  }
+  // The model writes them once the reply is done.
+  await wait(500, run.signal)
+  // What the person asked about; for an answer to a form, what the reply was.
+  const about = said || text.join(" ")
+  const topic = FOLLOW_UPS.find(([pattern]) => pattern.test(about))
+  suggested = true
+  yield {
+    id: nextId("evt"),
+    invocationId: run.invocationId,
+    author: last.author ?? COORDINATOR,
+    actions: {
+      stateDelta: {
+        [FOLLOW_UPS_STATE_KEY]: {
+          suggestions: (topic?.[1] ?? SUGGESTED).slice(0, count),
+        },
+      },
+    },
+  }
+}
+
 /** An `AdkStreamCallback` backed by the scripted scenarios above. */
 export const mockAdkStream: AdkStreamCallback = async (messages, config) => {
   await config.initialize()
   const state = config.stateDelta ?? {}
+  // The instructions and tools, and the conversation so far.
+  const said = messages.reduce(
+    (chars, message) =>
+      chars +
+      (typeof message.content === "string"
+        ? message.content.length
+        : JSON.stringify(message.content ?? "").length),
+    0
+  )
   const run: Run = {
     invocationId: nextId("inv"),
     signal: config.abortSignal,
+    context: 6_000 + Math.ceil(said / 3.5),
     model: typeof state.model === "string" ? state.model : undefined,
     thinkingLevel:
       typeof state.thinking_level === "string"
         ? state.thinking_level
         : undefined,
   }
-  return scenario(messages, run)
+  return withFollowUps(
+    scenario(messages, run),
+    run,
+    state[FOLLOW_UPS_REQUEST_KEY],
+    humanText(messages.at(-1))
+  )
 }
 
 /** Artifact downloads for the demo, as the ADK session adapter would. */
@@ -410,6 +603,8 @@ export const mockSignIn = async () => {
   await new Promise((resolve) => setTimeout(resolve, 900))
   return {
     authType: "oauth2" as const,
-    oauth2: { authResponseUri: "https://forge.example/oauth/callback?code=demo" },
+    oauth2: {
+      authResponseUri: "https://forge.example/oauth/callback?code=demo",
+    },
   }
 }

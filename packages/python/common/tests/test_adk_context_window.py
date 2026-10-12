@@ -18,6 +18,7 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService, Session
+from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 from pydantic import Field
@@ -117,6 +118,7 @@ async def ran(
     *,
     tools: list[Any] | None = None,
     messages: tuple[str, ...] = (TASK,),
+    state: dict[str, Any] | None = None,
     **agent: Any,
 ) -> Session:
     sessions = InMemorySessionService()
@@ -137,7 +139,9 @@ async def ran(
     )
     for text in messages:
         message = types.Content(role="user", parts=[types.Part(text=text)])
-        async for _ in runner.run_async(user_id=USER, session_id="s-1", new_message=message):
+        async for _ in runner.run_async(
+            user_id=USER, session_id="s-1", new_message=message, state_delta=state
+        ):
             pass
     await runner.close()
     session = await sessions.get_session(app_name=APP, user_id=USER, session_id="s-1")
@@ -258,17 +262,29 @@ async def test_each_agent_keeps_its_context_in_the_state() -> None:
             usage(prompt_token_count=1_100, candidates_token_count=30, total_token_count=1_130),
         ],
     )
-    plugin = ContextWindowPlugin(window=lambda name: Window(400_000, 128_000) if name else None)
+    plugin = ContextWindowPlugin(
+        window=lambda name: Window(400_000, 128_000) if name else None, clock=lambda: 1_000.0
+    )
     session = await ran(model, plugin)
 
     kept = context_of(session.state, "researcher")
     assert kept is not None
     # After the last call: the prompt and reply as the provider counted them.
     assert (kept["tokens"], kept["reported"], kept["model"]) == (1_130, 1_100, "openai/gpt-5.2")
+    assert (kept["counted"], kept["updated"]) == ("provider", 1_000.0)
+    # What it may hold and where it compacts, with what they come from.
     assert (kept["limit"], kept["threshold"]) == (272_000, 217_600)
+    assert (kept["window"], kept["reply"], kept["share"], kept["auto"]) == (
+        400_000,
+        128_000,
+        0.8,
+        True,
+    )
     # Characters per token follow what the provider reported.
     assert kept["chars_per_token"] != 3.5
     assert "compactions" not in kept
+    # It's the conversation's own agent.
+    assert kept["apart"] is False
     assert state_key("researcher") in session.state
 
 
@@ -335,6 +351,23 @@ async def test_an_agent_that_sees_only_its_turn_keeps_its_task_and_last_step() -
     assert "summary 1" in third
     assert "<q1.txt>" not in third
     assert "<q2.txt>" in third
+
+
+async def test_a_model_just_chosen_counts_from_its_first_request() -> None:
+    # The agent last answered on a big model; the person picks a small one.
+    model = Scripted(turns=reads("q1.txt", "q2.txt"))
+
+    def window(name: str) -> Window | None:
+        return SMALL if name == "openai/gpt-5-mini" else Window(400_000, 128_000)
+
+    plugin = ContextWindowPlugin(window=window, summarizer=Summaries())
+    session = await ran(model, plugin, state={"model": "openai/gpt-5-mini"})
+
+    assert len(summaries(session)) == 1
+    assert "<q1.txt>" not in model.texts(2)
+    kept = context_of(session.state, "researcher")
+    assert kept is not None
+    assert (kept["limit"], kept["window"]) == (2_000, 2_500)
 
 
 async def test_under_its_threshold_nothing_is_compacted() -> None:
@@ -626,6 +659,7 @@ async def test_branches_side_by_side_and_the_agent_after_them_each_compact_their
         assert TASK in last and first not in last and "Summary of the work" in last
         kept = context_of(session.state, agent)
         assert kept is not None and kept["tokens"] < kept["limit"]
+        assert kept["apart"] is True
     # Neither branch's summary reached the other.
     (of_a,) = summaries_of(session.state, "a", "fan.a")
     (of_b,) = summaries_of(session.state, "b", "fan.b")
@@ -640,6 +674,100 @@ async def test_branches_side_by_side_and_the_agent_after_them_each_compact_their
     assert "Summary of the conversation before the current request" in compare
     summarized = {e.author for e in made.given[-1]}
     assert {"a", "b"} <= summarized
+    assert (context_of(session.state, "c") or {}).get("apart") is False
+
+
+async def test_a_task_agent_starts_each_call_apart_from_the_conversation() -> None:
+    model = Routed(
+        routed={
+            "Supervise": [call("helper", goal="Read q1"), said("Q1 grew.")],
+            "Help": [call("finish_task", result="q1 grew")],
+        }
+    )
+    helper = LlmAgent(name="helper", model=model, mode="task", instruction="Help.")
+    root = LlmAgent(name="boss", model=model, instruction="Supervise.", sub_agents=[helper])
+    sessions = InMemorySessionService()
+    runner = Runner(
+        app=App(name=APP, root_agent=root, plugins=[ContextWindowPlugin()]),
+        session_service=sessions,
+        auto_create_session=True,
+    )
+    message = types.Content(role="user", parts=[types.Part(text=TASK)])
+    async for _ in runner.run_async(user_id=USER, session_id="s-1", new_message=message):
+        pass
+    await runner.close()
+    session = await sessions.get_session(app_name=APP, user_id=USER, session_id="s-1")
+    assert session is not None
+
+    # The task reads only what it was handed, not the person's message.
+    assert model.seen["Help"] == ['{"goal": "Read q1"}']
+    assert (context_of(session.state, "helper") or {}).get("apart") is True
+    assert (context_of(session.state, "boss") or {}).get("apart") is False
+
+
+@pytest.mark.parametrize("called", ["task", "tool"])
+async def test_an_agent_called_for_its_help_compacts_and_each_call_starts_afresh(
+    called: str,
+) -> None:
+    """A task (the assistant's specialists) and an agent called as a tool
+    (chat agents' sub-agents) compact while they read, and leave no summary
+    for their next call."""
+
+    def helping(tag: str) -> list[list[types.Part]]:
+        read = [call("read_file", path=f"{tag}{i}") for i in range(5)]
+        done = call("finish_task", result="done") if called == "task" else said("done")
+        return [*read, done]
+
+    def ask() -> list[types.Part]:
+        return call("helper", goal="Read") if called == "task" else call("helper", request="Read")
+
+    model = Routed(
+        routed={
+            "Supervise": [ask(), said("A."), ask(), said("B.")],
+            "Help": [*helping("a"), *helping("b")],
+        }
+    )
+    made = Summaries()
+    if called == "task":
+        helper = LlmAgent(
+            name="helper", model=model, mode="task", instruction="Help.", tools=[read_file]
+        )
+        root = LlmAgent(name="boss", model=model, instruction="Supervise.", sub_agents=[helper])
+    else:
+        helper = LlmAgent(name="helper", model=model, instruction="Help.", tools=[read_file])
+        root = LlmAgent(
+            name="boss", model=model, instruction="Supervise.", tools=[AgentTool(helper)]
+        )
+    sessions = InMemorySessionService()
+    runner = Runner(
+        app=App(
+            name=APP,
+            root_agent=root,
+            plugins=[ContextWindowPlugin(default=SMALL, summarizer=made)],
+        ),
+        session_service=sessions,
+        auto_create_session=True,
+    )
+    for text in ("first", "second"):
+        message = types.Content(role="user", parts=[types.Part(text=text)])
+        async for _ in runner.run_async(user_id=USER, session_id="s-1", new_message=message):
+            pass
+    await runner.close()
+    session = await sessions.get_session(app_name=APP, user_id=USER, session_id="s-1")
+    assert session is not None
+
+    # It compacted while it read, and was counted apart from the conversation.
+    seen = model.seen["Help"]
+    assert any("Summary of the work" in sent for sent in seen)
+    kept = context_of(session.state, "helper")
+    assert kept is not None and kept["compactions"] >= 2 and kept["apart"] is True
+    # Its second call starts from what it was handed, not the first call's summary.
+    assert "Summary of the work" not in seen[6] and "<a" not in seen[6]
+    # And neither call's summaries stay in the conversation's state.
+    left = {
+        key: value for key, value in session.state.items() if key.startswith("forge:summaries:")
+    }
+    assert left and not any(left.values())
 
 
 # -------------------------------------------------------------------- splicing

@@ -22,6 +22,11 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from fastapi import FastAPI
+from forge_common.adk.ask_person import (
+    ASK_PERSON_INSTRUCTION,
+    ask_person,
+    repair_input_schemas,
+)
 from forge_common.adk.models import ProviderModels
 from google.adk.agents import LlmAgent
 from google.adk.agents.callback_context import CallbackContext
@@ -224,7 +229,7 @@ def supervisor_instruction(screens: Screens) -> Callable[[ReadonlyContext], str]
 
     def provide(context: ReadonlyContext) -> str:
         state = context.state
-        parts = [INSTRUCTION]
+        parts = [INSTRUCTION, ASK_PERSON_INSTRUCTION]
         elsewhere = _elsewhere(screens, screens.active(state))
         if elsewhere:
             parts.append(elsewhere)
@@ -330,6 +335,9 @@ def supervisor(screens: Screens, models: ProviderModels) -> ForgeAgent:
         description="Answers questions about Forge and the work in it.",
         model=models,
         instruction=supervisor_instruction(screens),
+        # It may stop to ask the person; the chat shows a form for the answer.
+        tools=[ask_person],
+        after_model_callback=repair_input_schemas,
         sub_agents=[
             specialist(entry, screens, models) for entry in screens.available()
         ],

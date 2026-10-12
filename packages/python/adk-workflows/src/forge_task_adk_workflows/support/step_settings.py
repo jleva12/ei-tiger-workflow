@@ -34,6 +34,8 @@ class ApprovalConfig(_Config):
 
 
 class Header(_Config):
+    """A header, or a query parameter: its name and its value, templates."""
+
     id: str = ""
     name: str = ""
     value: str = ""
@@ -42,6 +44,8 @@ class Header(_Config):
 class HttpConfig(_Config):
     method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
     url: str = ""
+    # Query parameters, added to the URL's own, each name and value encoded.
+    query: list[Header] = Field(default_factory=list)
     headers: list[Header] = Field(default_factory=list)
     body: str = ""
     timeout_seconds: float = 30

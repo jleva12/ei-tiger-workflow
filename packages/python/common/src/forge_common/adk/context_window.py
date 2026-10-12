@@ -41,6 +41,14 @@ branch's summary would hide its siblings' events from it. So branches side by
 side, steps in a workflow, and agents later in the run see the events as they
 were, and compact their own view of them when they need to.
 
+Agents that work apart from the conversation compact the same way: a task
+(``mode="task"``, in its own isolation scope) and an agent another calls as a
+tool (``AgentTool``, which runs it in a session of its own with the caller's
+plugins and state). Each of their calls starts from what it was handed, so
+their summaries go once the call is over (a task's once it finished), and a
+summary that covers none of the session's events (one copied in with the
+caller's state) is dropped.
+
 Counts are estimates: characters over characters per token, which starts at
 3.5 and then follows what the provider reported for each request the agent
 sent. Once the model answers, the count is the provider's (prompt and reply).
@@ -58,11 +66,17 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any, Literal
 
+from google.adk.agents.llm.task._finish_task_tool import (
+    FINISH_TASK_ERROR_RESULT,
+    FINISH_TASK_SUCCESS_RESULT,
+    FINISH_TASK_TOOL_NAME,
+)
 from google.adk.apps.base_events_summarizer import BaseEventsSummarizer
 from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
 from google.adk.events._rewind_events import _apply_rewinds
@@ -71,6 +85,7 @@ from google.adk.events.event_actions import EventActions, EventCompaction
 from google.adk.flows.llm_flows import contents as adk_contents
 from google.adk.models.google_llm import Gemini
 from google.adk.plugins.base_plugin import BasePlugin
+from google.adk.tools.agent_tool import AgentTool
 from google.genai import types
 
 from forge_common.adk.usage import MODEL_KEY, tokens_of
@@ -197,14 +212,20 @@ def context_of(state: State | Mapping[str, Any], agent: str) -> dict[str, Any] |
     - ``tokens``: what its conversation holds: the request it last sent
       (estimated, after any compaction), or once the model answered, that
       request's prompt and the reply as the provider counted them;
-    - ``limit``: what a request may hold (the model's window less what's kept
-      for the reply), and ``threshold``: where it compacts;
+    - ``limit``: what a request may hold: the model's ``window`` less the
+      ``reply`` kept for its answer; ``threshold``: where it compacts, the
+      ``share`` of the limit; ``auto``: whether it compacts there by itself;
+    - ``counted``: ``estimate`` (the request about to go out) or ``provider``
+      (what the model reported); ``updated``: when, in seconds since the epoch;
     - ``model``: the model that last answered; ``reported``: the prompt the
       provider counted then;
     - ``compactions``: how many times it was compacted; ``last_compaction``:
-      ``tokens_before``, ``tokens_after`` and how many ``summaries`` it has
-      (:func:`summaries_of` reads them);
-    - ``requested``: a compaction was asked for (:func:`request_compaction`).
+      ``at``, ``tokens_before``, ``tokens_after`` and how many ``summaries``
+      it has (:func:`summaries_of` reads them);
+    - ``requested``: a compaction was asked for (:func:`request_compaction`);
+    - ``apart``: it works apart from the conversation, on a branch or in an
+      isolation scope (a task, an agent called as a tool, a parallel branch),
+      so each of its calls starts from what it was handed, not the conversation.
 
     :param state: The session's state (any context's ``state``).
     :param agent: The agent's name.
@@ -665,8 +686,9 @@ class ContextWindowPlugin(BasePlugin):
     """
     Keeps each agent's context window in the state, and compacts it mid-turn.
 
-    :param window: A model's window, by the model that last answered the agent
-        or else the one its request names; :func:`windows_from` reads
+    :param window: A model's window: the one the next request runs on (the
+        person's choice in ``model_key``), else the one that last answered the
+        agent, else the one its request names; :func:`windows_from` reads
         model_provider.yaml's.
     :param default: The window of a model ``window`` doesn't know.
     :param threshold: How much of what a request may hold makes it compact (0–1].
@@ -676,6 +698,10 @@ class ContextWindowPlugin(BasePlugin):
     :param summarizer: Makes the summaries; by default ADK's ``LlmEventSummarizer``
         on the agent's own model, with ``prompt``.
     :param prompt: The default summarizer's prompt, with ``{conversation_history}``.
+    :param model_key: The state key the person's choice of model is in, as the
+        assistant's and chat agents' model pickers send it; None when nothing
+        chooses models through the state.
+    :param clock: The time now, in seconds since the epoch (``updated``).
     """
 
     def __init__(
@@ -688,6 +714,8 @@ class ContextWindowPlugin(BasePlugin):
         keep_steps: int = 1,
         summarizer: BaseEventsSummarizer | None = None,
         prompt: str = DEFAULT_PROMPT,
+        model_key: str | None = "model",
+        clock: Callable[[], float] = time.time,
     ) -> None:
         super().__init__(name="forge_context_window")
         if not 0 < threshold <= 1:
@@ -699,6 +727,75 @@ class ContextWindowPlugin(BasePlugin):
         self.keep_steps = keep_steps
         self.summarizer = summarizer
         self.prompt = prompt
+        self.model_key = model_key
+        self.clock = clock
+        # The agents being called as tools (AgentTool) right now: how many
+        # calls each, by name (each runs a copy of the agent, sharing this
+        # plugin, in a session of its own).
+        self._called: dict[str, int] = {}
+
+    async def before_tool_callback(
+        self, *, tool: Any, tool_args: dict[str, Any], tool_context: Any
+    ) -> dict[str, Any] | None:
+        if isinstance(tool, AgentTool):
+            name = tool.agent.name
+            self._called[name] = self._called.get(name, 0) + 1
+        return None
+
+    async def after_tool_callback(
+        self, *, tool: Any, tool_args: dict[str, Any], tool_context: Any, result: Any
+    ) -> dict[str, Any] | None:
+        self._returned(tool)
+        if tool.name == FINISH_TASK_TOOL_NAME and _terminal(result):
+            # A task that finished leaves no summaries: its next call starts afresh.
+            try:
+                ic: InvocationContext = tool_context._invocation_context
+                key = summaries_key(tool_context.agent_name, ic.branch, ic.isolation_scope)
+                if tool_context.state.get(key):
+                    tool_context.state[key] = None
+            except Exception:
+                log.warning(
+                    "context window: %s's summaries weren't cleared",
+                    tool_context.agent_name,
+                    exc_info=True,
+                )
+        return None
+
+    async def on_tool_error_callback(
+        self, *, tool: Any, tool_args: dict[str, Any], tool_context: Any, error: Exception
+    ) -> dict[str, Any] | None:
+        self._returned(tool)
+        return None
+
+    def _returned(self, tool: Any) -> None:
+        if not isinstance(tool, AgentTool):
+            return
+        name = tool.agent.name
+        left = self._called.get(name, 0) - 1
+        if left > 0:
+            self._called[name] = left
+        else:
+            self._called.pop(name, None)
+
+    def _called_as_tool(self, ic: InvocationContext) -> bool:
+        """Whether ``ic``'s run is of an agent another is calling as a tool."""
+        root: Any = ic.agent
+        while getattr(root, "parent_agent", None) is not None:
+            root = root.parent_agent
+        return getattr(root, "name", None) in self._called
+
+    async def after_agent_callback(
+        self, *, agent: Any, callback_context: CallbackContext
+    ) -> types.Content | None:
+        # A call as a tool that's over leaves no summaries: the next starts afresh.
+        try:
+            ic: InvocationContext = callback_context._invocation_context
+            key = summaries_key(agent.name, ic.branch, ic.isolation_scope)
+            if callback_context.state.get(key) and self._called_as_tool(ic):
+                callback_context.state[key] = None
+        except Exception:
+            log.warning("context window: %s's summaries weren't cleared", agent.name, exc_info=True)
+        return None
 
     async def before_model_callback(
         self, *, callback_context: CallbackContext, llm_request: LlmRequest
@@ -735,6 +832,8 @@ class ContextWindowPlugin(BasePlugin):
                 tokens=counted.input + counted.output,
                 reported=counted.input,
                 model=_model_of(llm_response),
+                counted="provider",
+                updated=round(self.clock(), 3),
             )
             callback_context.state[state_key(agent)] = kept
         except Exception:
@@ -750,7 +849,10 @@ class ContextWindowPlugin(BasePlugin):
         kept = context_of(context.state, agent_name) or {}
         requested = bool(kept.pop("requested", False))
         ratio = _chars_per_token(kept.get("chars_per_token"))
-        limit = self._window_of(kept.get("model"), request.model).prompt
+        # The model the request runs on: one just chosen counts from its first request.
+        chosen = context.state.get(self.model_key) if self.model_key else None
+        window = self._window_of(chosen, kept.get("model"), request.model)
+        limit = window.prompt
         threshold = max(1, math.floor(limit * self.threshold))
         view = self._view(context, request)
         if view is not None and view.summaries:
@@ -766,6 +868,7 @@ class ContextWindowPlugin(BasePlugin):
                 after = measure(request)
                 kept["compactions"] = int(kept.get("compactions") or 0) + 1
                 kept["last_compaction"] = {
+                    "at": round(self.clock(), 3),
                     "invocation_id": context.invocation_id,
                     "tokens_before": tokens,
                     "tokens_after": after.tokens(ratio),
@@ -779,10 +882,18 @@ class ContextWindowPlugin(BasePlugin):
                 tokens,
                 limit,
             )
+        ic: InvocationContext = context._invocation_context
         kept.update(
             tokens=tokens,
             limit=limit,
             threshold=threshold,
+            window=window.tokens,
+            reply=window.reply,
+            share=self.threshold,
+            auto=self.auto,
+            apart=bool(ic.branch or ic.isolation_scope) or self._called_as_tool(ic),
+            counted="estimate",
+            updated=round(self.clock(), 3),
             chars_per_token=round(ratio, 3),
             sent_chars=size.chars,
             sent_media=size.media,
@@ -809,7 +920,11 @@ class ContextWindowPlugin(BasePlugin):
         if not hasattr(agent, "canonical_model") or not hasattr(agent, "include_contents"):
             return None
         key = summaries_key(agent.name, ic.branch, ic.isolation_scope)
-        summaries = summaries_of(context.state, agent.name, ic.branch, ic.isolation_scope)
+        kept = summaries_of(context.state, agent.name, ic.branch, ic.isolation_scope)
+        # A summary of none of this session's events came in with another's state.
+        summaries = [s for s in kept if _covers_any(s, ic.session.events)]
+        if len(summaries) != len(kept):
+            context.state[key] = summaries or None
         view = _View(ic, agent, key, summaries)
         if view.own_turn and summaries:
             # An agent that sees only its turn sees none of an earlier turn's summaries.
@@ -926,6 +1041,18 @@ def _as_read(event: Event) -> Event:
         timestamp=compaction.start_timestamp,
         content=compaction.compacted_content,
     )
+
+
+def _covers_any(summary: Mapping[str, Any], events: Sequence[Event]) -> bool:
+    start, end = float(summary["start"]), float(summary["end"])
+    return any(start <= event.timestamp <= end for event in events)
+
+
+def _terminal(result: object) -> bool:
+    """Whether ``finish_task`` returned this as the task's end (not a retry)."""
+    if isinstance(result, Mapping):
+        result = result.get("result")
+    return result in (FINISH_TASK_SUCCESS_RESULT, FINISH_TASK_ERROR_RESULT)
 
 
 def _model_of(response: LlmResponse) -> str | None:

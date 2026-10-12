@@ -472,7 +472,12 @@ def _choices(options: StarterOptions) -> str:
 
 
 def _env_example(
-    model_names: list[str], tool_names: Mapping[str, str], options: StarterOptions, slug: str
+    model_names: list[str],
+    tool_names: Mapping[str, str],
+    options: StarterOptions,
+    slug: str,
+    *,
+    runs_code: bool = False,
 ) -> str:
     out = [
         "# Copy to .env and fill in. The server reads it as it starts.",
@@ -552,6 +557,15 @@ def _env_example(
         "# What HTTP tools may reach besides the internet",
         "# FORGE_AGENT_ALLOW_PRIVATE=false",
         "# FORGE_AGENT_ALLOWED_HOSTS=[]",
+        *(
+            [
+                "# Where its Code execution tools run code: off (they don't build), or local, on",
+                "# this machine, unsandboxed, with this server's environment and files (development only)",
+                "# FORGE_AGENT_CODE_EXECUTION=off",
+            ]
+            if runs_code
+            else []
+        ),
         "",
     ]
     return "\n".join(out)
@@ -730,6 +744,13 @@ def generate_project(
             f"{node} {what}, which only Forge's runtime has: give it one with .with_services({service}=…)."
         )
     kinds = {node.get("kind") for node in _nodes(doc)}
+    for item in _nodes(doc):
+        if item.get("kind") == "code_execution":
+            notes.append(
+                f"{item.get('name') or item.get('id')} runs code, which is off until "
+                "FORGE_AGENT_CODE_EXECUTION=local: that runs it on the server's machine, unsandboxed, "
+                "so only in development."
+            )
     if options.memory == "atlas" and "memory" not in kinds:
         notes.append("The agent has no Memory tool, so MongoDB Atlas memory isn't used until it gets one.")
     if options.memory == "atlas" and not _has_provider(model_provider_yaml, "openai"):
@@ -764,7 +785,7 @@ def generate_project(
         f"\t# .with_services({service}=...)  # {node} {what}\n" for node, service, what in hosted
     )
     chain, uses_env = _chain(options)
-    env_example = _env_example(model_names, tool_names, options, slug)
+    env_example = _env_example(model_names, tool_names, options, slug, runs_code="code_execution" in kinds)
     needs = [
         line.removesuffix("=")
         for line in env_example.splitlines()

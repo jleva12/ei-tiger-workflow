@@ -58,6 +58,7 @@ export const LLM_TOOL_KINDS = [
   "openapi",
   "saved_agent",
   "adk_workflow",
+  "code_execution",
 ] as const satisfies readonly (keyof ChatConfigs)[]
 
 export type LlmToolKind = (typeof LLM_TOOL_KINDS)[number]
@@ -103,7 +104,7 @@ export type LlmSettings = {
   max_output_tokens: number | null
   /** The agents it may hand off to. */
   sub_agents: SubAgent[]
-  /** What it can call: MCP servers, knowledge bases, HTTP endpoints, APIs, agents, workflows. */
+  /** What it can call: MCP servers, knowledge bases, HTTP endpoints, APIs, agents, workflows, code. */
   tools: LlmTool[]
 }
 

@@ -73,5 +73,7 @@ export function toolLine(tool: LlmTool, lookups: ToolLookups): string {
       return tool.config.workflow
         ? (lookups.workflows[tool.config.workflow] ?? "A deleted workflow")
         : "No workflow yet"
+    case "code_execution":
+      return tool.config.confirm ? "Asks before running" : "Python"
   }
 }

@@ -528,6 +528,8 @@ type Props = {
   rows?: number
   /** Show only the label to assistive technology (a list row's field). */
   labelHidden?: boolean
+  /** Take focus when it's first shown (a list row just added). */
+  autoFocus?: boolean
   className?: string
   /**
    * The step's issues about this setting beyond what the field checks
@@ -564,6 +566,7 @@ export function ExpressionField({
   multiline = false,
   rows,
   labelHidden,
+  autoFocus = false,
   className,
   issues = [],
   field,
@@ -847,6 +850,7 @@ export function ExpressionField({
       state: EditorState.create({ doc: value, extensions }),
     })
     view.current = editor
+    if (autoFocus && !readOnly) editor.focus()
     return () => {
       editor.destroy()
       view.current = null

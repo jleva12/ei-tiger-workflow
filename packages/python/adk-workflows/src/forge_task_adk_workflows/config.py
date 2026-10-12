@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from forge_codegraph_query import CodeGraphSettings
 from pydantic import BaseModel, Field, SecretStr, field_validator
 
@@ -92,6 +94,11 @@ class AdkWorkflowsSettings(BaseModel):
     # secrets anywhere. Put API keys and tokens in the organization's
     # credentials instead (the same key decrypts them).
     tool_environment: list[str] = Field(default_factory=list)
+    # Where LLM agents' Code execution tools run the code they send: off (a
+    # step whose agent has one fails), or local: ADK's UnsafeLocalCodeExecutor,
+    # a new Python process on this worker's machine for each call, with the
+    # worker's environment, files and network. Local development only.
+    code_execution: Literal["off", "local"] = "off"
     # Seconds a workflow an LLM agent calls as a tool is waited for before
     # the tool answers where it got to.
     workflow_tool_wait: float = Field(default=120.0, gt=0)

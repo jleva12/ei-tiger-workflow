@@ -16,7 +16,9 @@ const server = await createServer({
 const { checkField, completeField, resolveExpression, typeAt } = await server.ssrLoadModule("/src/features/steps/lib/expressions.ts")
 const { normalizeReferences } = await server.ssrLoadModule("/src/features/steps/lib/references.ts")
 const { t, valuesOf } = await server.ssrLoadModule("/src/features/steps/lib/types.ts")
-const { fieldOfCode, switchIssues } = await server.ssrLoadModule("/src/features/steps/lib/validate.ts")
+const { fieldOfCode, settingsIssues, switchIssues } = await server.ssrLoadModule("/src/features/steps/lib/validate.ts")
+const { expressionSetting } = await server.ssrLoadModule("/src/features/steps/lib/fields.ts")
+const { STEP_KINDS } = await server.ssrLoadModule("/src/features/steps/lib/model.ts")
 await server.close()
 
 const fixtures = JSON.parse(await readFile(new URL("../../../packages/python/adk-workflows/tests/fixtures/expression-references.json", import.meta.url)))
@@ -112,4 +114,31 @@ test("a step's issue names the setting its field shows it under", () => {
   assert.equal(fieldOfCode("field:arms.rule_1:2"), "arms.rule_1")
   // A way that goes nowhere is the step's, not a setting's.
   assert.equal(fieldOfCode("open-true"), undefined)
+})
+
+test("an HTTP step's query parameters are templates, name and value, and each needs a name", () => {
+  const step = {
+    kind: "http",
+    name: "Search",
+    config: {
+      ...STEP_KINDS.http.defaults(),
+      url: "https://api.example.com/search",
+      query: [
+        { id: "q1", name: "{{ input.field }}", value: "{{ input.since }}" },
+        { id: "q2", name: " ", value: "x" },
+      ],
+    },
+  }
+  const name = expressionSetting(step, "query.q1.name")
+  const value = expressionSetting(step, "query.q1")
+  assert.equal(name.mode, "template")
+  assert.equal(name.text, "{{ input.field }}")
+  assert.equal(value.mode, "template")
+  assert.equal(value.text, "{{ input.since }}")
+  assert.deepEqual(
+    settingsIssues(step).filter(([code]) => code === "query"),
+    [["query", "error", "Every query parameter needs a name."]]
+  )
+  assert.equal(fieldOfCode("query"), "query")
+  assert.equal(fieldOfCode("field:query.q1.name:0"), "query.q1.name")
 })

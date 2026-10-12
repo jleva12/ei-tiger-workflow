@@ -191,6 +191,14 @@ function settingsIssues(
           "description",
         ])
       }
+      if (!c.query.every((q) => q.name.trim())) {
+        out.push([
+          "query",
+          "error",
+          "Every query parameter needs a name.",
+          "query",
+        ])
+      }
       if (!c.headers.every((h) => h.name.trim())) {
         out.push(["headers", "error", "Every header needs a name.", "headers"])
       }
@@ -198,7 +206,7 @@ function settingsIssues(
         out.push([
           `unused-${name}`,
           "warning",
-          `${name} isn't in its URL or body: the model isn't offered it. Put {${name}} where it goes, or take it out.`,
+          `${name} isn't in its URL, query parameters or body: the model isn't offered it. Put {${name}} where it goes, or take it out.`,
           "parameters",
         ])
       }
@@ -649,6 +657,14 @@ export function validateChatAgent(
           step.id,
           "memories",
           "It has Memory twice: one is enough."
+        )
+      }
+      if (attached.filter((t) => t?.kind === "code_execution").length > 1) {
+        add(
+          "warning",
+          step.id,
+          "code-twice",
+          "It has Code execution twice: one is enough."
         )
       }
     }

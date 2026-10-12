@@ -10,9 +10,11 @@
  *
  * A URL's query parameter that is one argument (`?status={status}`) is left
  * out when the model doesn't send it; any other argument the URL names must
- * be sent. The body is JSON: a placeholder that's a whole value (`{id}` or
- * `"{id}"`) goes in as it is, a number staying a number; one in a string is
- * written into it.
+ * be sent. Listed query parameters are templates too, name and value, filled
+ * in and then percent-encoded whole: one whose value is one placeholder is
+ * left out when it comes to nothing. The body is JSON: a placeholder that's
+ * a whole value (`{id}` or `"{id}"`) goes in as it is, a number staying a
+ * number; one in a string is written into it.
  */
 
 /** A placeholder: `${NAME}`, `{{ expression }}` or `{name}`, in that order at one place. */
@@ -102,6 +104,42 @@ export function urlArguments(url: string): {
   return { names, required }
 }
 
+/** A listed query parameter: its name and its value, templates. */
+type QueryRow = { name: string; value: string }
+
+/** What a listed parameter's value is when it's one placeholder and nothing else (but spaces). */
+function wholeValue(parts: Part[]): Part | undefined {
+  const placeholders = parts.filter((part) => typeof part === "object")
+  const literal = parts.filter((part) => typeof part === "string").join("")
+  return placeholders.length === 1 && !literal.trim()
+    ? placeholders[0]
+    : undefined
+}
+
+/**
+ * The arguments listed query parameters name, in order, and those they
+ * can't do without: all but a value that's one argument. One without a
+ * name isn't sent.
+ */
+export function queryArguments(rows: readonly QueryRow[]): {
+  names: string[]
+  required: Set<string>
+} {
+  const names: string[] = []
+  const required = new Set<string>()
+  for (const row of rows) {
+    if (!row.name.trim()) continue
+    const value = partsOf(row.value)
+    const whole = wholeValue(value)
+    for (const part of [...partsOf(row.name.trim()), ...value]) {
+      if (typeof part !== "object" || !("argument" in part)) continue
+      if (!names.includes(part.argument)) names.push(part.argument)
+      if (part !== whole) required.add(part.argument)
+    }
+  }
+  return { names, required }
+}
+
 /** The JSON text with each placeholder outside its strings quoted: a whole value. */
 function quoted(text: string): string {
   let out = ""
@@ -173,11 +211,17 @@ export function bodyArguments(body: string): string[] {
   return names
 }
 
-type HttpToolConfig = { method: string; url: string; body: string }
+type HttpToolConfig = {
+  method: string
+  url: string
+  body: string
+  query?: readonly QueryRow[]
+}
 
 /**
- * The arguments an HTTP tool's URL and body (one it sends) name, in order;
- * those its URL needs; and those only a query pair of its URL is.
+ * The arguments an HTTP tool's URL, query parameters and body (one it
+ * sends) name, in order; those they need; and those only a query
+ * parameter's whole value is.
  */
 export function toolArguments(config: HttpToolConfig): {
   names: string[]
@@ -185,6 +229,9 @@ export function toolArguments(config: HttpToolConfig): {
   optional: Set<string>
 } {
   const { names, required } = urlArguments(config.url)
+  const query = queryArguments(config.query ?? [])
+  for (const name of query.names) if (!names.includes(name)) names.push(name)
+  for (const name of query.required) required.add(name)
   const inBody = takesBody(config.method) ? bodyArguments(config.body) : []
   const optional = new Set(
     names.filter((name) => !required.has(name) && !inBody.includes(name))

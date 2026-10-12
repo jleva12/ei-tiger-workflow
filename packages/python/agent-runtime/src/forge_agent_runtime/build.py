@@ -31,6 +31,7 @@ from google.adk.tools.openapi_tool import OpenAPIToolset
 from google.adk.tools.preload_memory_tool import preload_memory_tool
 from google.genai import types
 
+from forge_agent_runtime.code_execution import CodeTool
 from forge_agent_runtime.document import (
     DEFAULTS,
     HANDS_OFF,
@@ -64,7 +65,9 @@ from forge_agent_runtime.tools import (
     header_dict,
     http_client,
 )
+from forge_common.adk.ask_person import ASK_PERSON_INSTRUCTION, ask_person, repair_input_schemas
 from forge_common.adk.context_window import ContextWindowPlugin, windows_from
+from forge_common.adk.follow_ups import FollowUpsPlugin
 from forge_common.adk.models import ProviderModels
 
 
@@ -94,7 +97,16 @@ def _operations(value: Any) -> list[str] | None:
 
 #: What a tool item may be outside a chat agent's canvas (a workflow's LLM agent's tools).
 TOOL_KINDS = frozenset(
-    {"saved_agent", "adk_workflow", "memory", "knowledge_base", "http_tool", "openapi", "mcp"}
+    {
+        "saved_agent",
+        "adk_workflow",
+        "memory",
+        "knowledge_base",
+        "http_tool",
+        "openapi",
+        "mcp",
+        "code_execution",
+    }
 )
 
 
@@ -129,6 +141,12 @@ class _Builder:
             tools.extend(await self.tool(target))
         sub_agents: list[Any] = [await self.handed(target) for target in self.doc.targets(node.id, HANDS_OFF)]
         options: dict[str, Any] = {}
+        template = str(config.get("instruction") or "")
+        if config.get("ask_person") is True and self.services.ask_person:
+            # It may stop to ask the person, and the chat shows a form for the answer.
+            tools.append(ask_person)
+            options["after_model_callback"] = repair_input_schemas
+            template = f"{template}\n\n{ASK_PERSON_INSTRUCTION}" if template else ASK_PERSON_INSTRUCTION
         tokens = config.get("max_output_tokens")
         if isinstance(tokens, int) and tokens > 0:
             options["generate_content_config"] = types.GenerateContentConfig(max_output_tokens=tokens)
@@ -141,7 +159,7 @@ class _Builder:
         return LlmAgent(
             name=name,
             description=str(config.get("description") or ""),
-            instruction=instruction_provider(str(config.get("instruction") or ""), what=what),
+            instruction=instruction_provider(template, what=what),
             model=self.models,
             before_model_callback=model_selection(self.models, config, timeout=self.services.model_timeout),
             tools=tools,
@@ -225,6 +243,7 @@ class _Builder:
                     method=str(config.get("method") or "GET"),
                     url=str(config.get("url") or ""),
                     body=str(config.get("body") or ""),
+                    query=config.get("query") or [],
                     headers=header_dict(
                         config.get("headers"),
                         self.services.environment,
@@ -254,6 +273,12 @@ class _Builder:
                 return [GuardedTools(await self.knowledge_base(node), timeout_seconds=guarded)]
             case "adk_workflow":
                 return [await self.workflow(node)]
+            case "code_execution":
+                executor = self.services.code_executor
+                if executor is None:
+                    raise BuildError(f"{node.name!r} runs code, and code execution is off here.")
+                runs = CodeTool(name=adk_name(node.name) or "run_code", executor=executor)
+                return [GuardedTools([runs], confirm=bool(config.get("confirm")), timeout_seconds=guarded)]
         raise BuildError(f"{node.name!r} ({node.kind}) can't be a tool.")
 
     async def openapi(self, node: Node) -> OpenAPIToolset:
@@ -550,13 +575,16 @@ async def build_app(
     :param plugins: ADK plugins for the app, e.g. one that records what it uses.
         Its agents' context windows are kept in the state and compacted
         mid-turn as well (``forge_common.adk.context_window``, at the models'
-        windows), unless one of these does that.
+        windows), and runs that ask get follow-up questions after a reply
+        (``forge_common.adk.follow_ups``), unless one of these does that.
     :return: The app, its root the entry agent.
     :raises BuildError: Something it uses can't be found or set up.
     """
     root = await build_root_agent(doc, models=models, services=services, http=http)
     if not any(isinstance(plugin, ContextWindowPlugin) for plugin in plugins):
         plugins = [ContextWindowPlugin(window=windows_from(models)), *plugins]
+    if not any(isinstance(plugin, FollowUpsPlugin) for plugin in plugins):
+        plugins = [*plugins, FollowUpsPlugin()]
     return App(name=app_name or doc.id, root_agent=root, plugins=list(plugins))
 
 

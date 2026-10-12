@@ -217,7 +217,7 @@ const KIND_ENUMS: Record<string, Record<string, readonly string[]>> = {
   end: { outcome: ["succeeded", "failed"] },
 }
 // Lists of rows, read as a workflow's are.
-const LISTS = new Set(["headers", "cases", "arms"])
+const LISTS = new Set(["query", "headers", "cases", "arms"])
 // Settings that hold a JSON Schema of their own.
 const SCHEMAS = new Set(["input_schema", "output_schema", "response_schema"])
 // Settings that are a number, or null for the model's own.

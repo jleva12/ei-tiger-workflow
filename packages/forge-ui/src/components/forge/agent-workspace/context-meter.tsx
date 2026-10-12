@@ -1,5 +1,9 @@
-import { useAssistantSettings } from "@/components/forge/assistant"
-import { composerChip } from "@/components/forge/assistant"
+import { useAdkSessionState } from "@assistant-ui/react-google-adk"
+import {
+  composerChip,
+  currentContext,
+  useAssistantSettings,
+} from "@/components/forge/assistant"
 import { StatsList } from "./stats-list"
 import {
   Tooltip,
@@ -58,6 +62,11 @@ function Ring({ fraction }: { fraction: number }) {
  * call's input and output against the chosen model's window) and what the
  * conversation has cost so far. It also keeps the conversation's stats read
  * (`useTurnStatsSync`) for the replies' `MessageStats`.
+ *
+ * An agent server that reports its context window itself (forge_common's
+ * `ContextWindowPlugin`, `forge:context:<agent>` in the session's state) is
+ * shown by the assistant's own context meter, with where it's compacted; this
+ * one steps aside for it then, and only keeps the stats read.
  */
 export function ContextMeter({
   adkUrl,
@@ -74,8 +83,11 @@ export function ContextMeter({
 }) {
   useTurnStatsSync(adkUrl, appName, userId, catalog, defaultModel)
   const stats = useTurnStats((state) => state.stats)
-  const chosen = useAssistantSettings().modelSettings?.model ?? defaultModel
+  const { modelSettings, showContext = true } = useAssistantSettings()
+  const reported = currentContext(useAdkSessionState()) !== undefined
+  const chosen = modelSettings?.model ?? defaultModel
   const model = catalog.find((each) => each.id === chosen)
+  if (reported && showContext) return null
   if (!stats || !model || stats.contextTokens === 0) return null
   const fraction = stats.contextTokens / model.contextWindow
   const turns = Object.values(stats.turns).filter((turn) => turn.calls > 0)

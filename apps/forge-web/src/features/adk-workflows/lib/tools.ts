@@ -62,6 +62,11 @@ export const TOOL_KINDS: Record<
       "Runs another of the organization's workflows and reads its result.",
     icon: CHAT_KINDS.adk_workflow.icon,
   },
+  code_execution: {
+    label: "Code execution",
+    summary: "Runs Python the model writes and reads what it printed.",
+    icon: CHAT_KINDS.code_execution.icon,
+  },
 }
 
 export const toolDefaults = <K extends LlmToolKind>(kind: K): ChatConfigs[K] =>

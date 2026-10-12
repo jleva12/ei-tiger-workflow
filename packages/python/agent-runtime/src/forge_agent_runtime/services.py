@@ -14,6 +14,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from google.adk.code_executors.base_code_executor import BaseCodeExecutor
     from google.adk.tools.base_toolset import BaseToolset
     from google.adk.tools.tool_context import ToolContext
 
@@ -190,6 +191,12 @@ class RuntimeServices:
         adds to its error: where a deployment's names are listed.
     :ivar tool_values: Fills in ``{{ }}`` in HTTP tools' URLs and bodies;
         without it, from the chat's request and state, as instructions are.
+    :ivar ask_person: Agents whose ``ask_person`` setting is on may ask the
+        person mid-turn (``forge_common.adk.ask_person``); off where nobody is
+        there to answer, e.g. in a workflow's run.
+    :ivar code_executor: Runs the code agents' Code execution tools are sent
+        (``forge_agent_runtime.code_execution``); without it, agents running
+        code don't build.
     """
 
     environment: Mapping[str, str] = field(default_factory=lambda: os.environ)
@@ -206,6 +213,8 @@ class RuntimeServices:
     credentials: CredentialProvider | None = None
     environment_note: str = ""
     tool_values: ToolValues | None = None
+    ask_person: bool = True
+    code_executor: BaseCodeExecutor | None = None
 
     def but(self, **changes: Any) -> RuntimeServices:
         """:return: These services with some changed."""

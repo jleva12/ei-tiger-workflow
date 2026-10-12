@@ -1094,6 +1094,30 @@
       ]
     },
     {
+      "name": "questionnaire",
+      "type": "registry:ui",
+      "title": "Questionnaire",
+      "description": "shadcn's questionnaire, one question at a time with progress, choices and typed answers, in the compact Forge look.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "@hugeicons/react@^1.1.10",
+        "@hugeicons/core-free-icons@^4.3.5",
+        "@shadcn/react@^0.3.1"
+      ],
+      "registryDependencies": [
+        "@forge-ui/button"
+      ],
+      "files": [
+        {
+          "path": "src/components/ui/questionnaire.tsx",
+          "type": "registry:ui",
+          "target": "@ui/questionnaire.tsx"
+        }
+      ]
+    },
+    {
       "name": "select",
       "type": "registry:ui",
       "title": "Select",
@@ -2463,7 +2487,7 @@
       "name": "assistant",
       "type": "registry:component",
       "title": "Assistant",
-      "description": "Google ADK assistant, full screen in the workspace shell or as a floating launcher: conversations, agent hand-offs, artifacts, inline tool approvals, sign-in and input cards, / commands, voice input and an optional model section.",
+      "description": "Google ADK assistant, full screen in the workspace shell or as a floating launcher: conversations, agent hand-offs, artifacts, inline tool approvals, sign-in cards, questions answered in a form, / commands, voice input, an optional model section and a context meter.",
       "dependencies": [
         "@base-ui/react@^1.8.0",
         "class-variance-authority@^0.7.1",
@@ -2480,6 +2504,7 @@
         "@forge-ui/dropdown-menu",
         "@forge-ui/input",
         "@forge-ui/popover",
+        "@forge-ui/questionnaire",
         "@forge-ui/spinner",
         "@forge-ui/app-shell",
         "@forge-ui/avatars",
@@ -2497,6 +2522,11 @@
           "path": "src/components/forge/assistant/adk.tsx",
           "type": "registry:component",
           "target": "@components/forge/assistant/adk.tsx"
+        },
+        {
+          "path": "src/components/forge/assistant/ask-person.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/ask-person.ts"
         },
         {
           "path": "src/components/forge/assistant/assistant-context.ts",
@@ -2527,6 +2557,16 @@
           "path": "src/components/forge/assistant/commands.tsx",
           "type": "registry:component",
           "target": "@components/forge/assistant/commands.tsx"
+        },
+        {
+          "path": "src/components/forge/assistant/context-window.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/context-window.ts"
+        },
+        {
+          "path": "src/components/forge/assistant/follow-ups.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/follow-ups.ts"
         },
         {
           "path": "src/components/forge/assistant/index.ts",
@@ -3029,6 +3069,7 @@
         "@forge-ui/native-select",
         "@forge-ui/popover",
         "@forge-ui/progress",
+        "@forge-ui/questionnaire",
         "@forge-ui/select",
         "@forge-ui/separator",
         "@forge-ui/sheet",
@@ -3138,6 +3179,7 @@
         "@forge-ui/native-select",
         "@forge-ui/popover",
         "@forge-ui/progress",
+        "@forge-ui/questionnaire",
         "@forge-ui/select",
         "@forge-ui/separator",
         "@forge-ui/sheet",

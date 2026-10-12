@@ -204,6 +204,8 @@ export function useForgeAgent(
           defaultModel: savedModel || defaultModel,
           thinkingLevels: extendedThinkingLevels,
           defaultThinkingLevel: savedLevel || undefined,
+          // A few questions to ask next, above the composer after each reply.
+          suggestFollowUps: true,
         }
       : { stream: notConnected }
   )

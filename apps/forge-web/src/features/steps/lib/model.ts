@@ -32,7 +32,7 @@ import type { StepOutput } from "@/features/builder/lib/types"
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
 export type DelayUnit = "seconds" | "minutes" | "hours" | "days"
 
-/** A header of an HTTP request. */
+/** A header, or a query parameter, of an HTTP request: its name and its value. */
 export type HeaderRow = { id: string; name: string; value: string }
 /** A case of a switch: the value that sends the run its way. */
 export type SwitchCase = { id: string; value: string }
@@ -62,6 +62,11 @@ export type StepConfigs = {
   http: {
     method: HttpMethod
     url: string
+    /**
+     * Query parameters, added to the URL's own: each name and value a
+     * template, filled in and then percent-encoded whole as it's sent.
+     */
+    query: HeaderRow[]
     headers: HeaderRow[]
     /** A JSONata expression making the body: an object or list goes as JSON. */
     body: string
@@ -215,6 +220,7 @@ export const STEP_KINDS: { [K in StepKind]: KindInfo<K> } = {
     defaults: () => ({
       method: "GET",
       url: "",
+      query: [],
       headers: [],
       body: "",
       timeout_seconds: 30,

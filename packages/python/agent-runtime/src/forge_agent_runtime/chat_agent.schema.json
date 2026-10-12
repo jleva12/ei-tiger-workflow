@@ -114,7 +114,8 @@
             "http_tool",
             "openapi",
             "mcp",
-            "adk_workflow"
+            "adk_workflow",
+            "code_execution"
           ]
         },
         "name": {
@@ -276,6 +277,22 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "code_execution"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_code_execution"
+              }
+            }
+          }
         }
       ]
     },
@@ -315,6 +332,7 @@
         "model",
         "thinking_level",
         "max_output_tokens",
+        "ask_person",
         "state_schema"
       ],
       "additionalProperties": false,
@@ -365,6 +383,10 @@
           "minimum": 1,
           "description": "Null: the model's limit."
         },
+        "ask_person": {
+          "type": "boolean",
+          "description": "It may stop mid-turn to ask the person something (ADK's adk_request_input); the chat shows a form for the answer. Not in workflows' runs."
+        },
         "state_schema": {
           "type": "object",
           "description": "A JSON Schema of the state the chat sends in stateDelta besides model and thinking_level; {} declares none."
@@ -380,6 +402,7 @@
         "model",
         "thinking_level",
         "max_output_tokens",
+        "ask_person",
         "mode",
         "disallow_transfer_to_parent",
         "disallow_transfer_to_peers",
@@ -432,6 +455,10 @@
           ],
           "minimum": 1,
           "description": "Null: the model's limit."
+        },
+        "ask_person": {
+          "type": "boolean",
+          "description": "It may stop mid-turn to ask the person something (ADK's adk_request_input); the chat shows a form for the answer. Not in workflows' runs."
         },
         "mode": {
           "type": "string",
@@ -526,6 +553,7 @@
         "description",
         "method",
         "url",
+        "query",
         "headers",
         "body",
         "parameters",
@@ -551,6 +579,30 @@
         "url": {
           "type": "string",
           "description": "Where it calls: {name} puts in the model's argument of that name, {{ expression }} one of the run's values. A query parameter that's one argument is left out when the model doesn't send it."
+        },
+        "query": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Query parameters, added to the URL's own: each name and value a template like the URL, filled in then percent-encoded. A value that's one placeholder coming to nothing (an argument the model didn't send) leaves its parameter out; a list sends it once per item."
         },
         "headers": {
           "type": "array",
@@ -720,6 +772,20 @@
             }
           ],
           "description": "Which of its versions runs: a published one, its draft, or null for its latest published (as each run starts)."
+        }
+      }
+    },
+    "config_code_execution": {
+      "type": "object",
+      "description": "Runs Python the model writes, to calculate or transform data, and answers with what it printed.",
+      "required": [
+        "confirm"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "type": "boolean",
+          "description": "A person confirms each run, seeing the code, before it runs."
         }
       }
     }

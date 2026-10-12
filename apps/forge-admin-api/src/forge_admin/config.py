@@ -12,6 +12,7 @@ forge_admin.env_files.
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from forge_codegraph_query import CodeGraphSettings
 from forge_common.logging import LoggingSettings
@@ -233,6 +234,11 @@ class Settings(BaseSettings):
     # secrets anywhere. Put API keys and tokens in the organization's
     # credentials instead.
     agent_tool_environment: list[str] = []
+    # Where chat agents' Code execution tools run the code they send: off (an
+    # agent with one doesn't build), or local: ADK's UnsafeLocalCodeExecutor,
+    # a new Python process on this machine for each call, with this API's
+    # environment, files and network. Local development only.
+    agent_code_execution: Literal["off", "local"] = "off"
     # Standalone agent projects (the builder's Generate standalone agent): where
     # their runtime comes from. wheels: the wheels in starter_wheels are copied
     # into each project's vendor/, until the runtime is on PyPI; pypi:<version>

@@ -903,6 +903,55 @@ def test_an_http_request_sends_its_body_and_hands_on_the_response() -> None:
     assert [e.actions.route for e in session.events if name_of(e) == "post"] == ["success"]
 
 
+def test_an_http_requests_query_parameters_are_filled_in_and_encoded() -> None:
+    seen: list[httpx.Request] = []
+
+    def api(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=[])
+
+    rows = [
+        ("q", "{{ input.search }}"),
+        ("{{ input.field }}", "{{ input.since }}"),
+        ("tag", "{{ input.tags }}"),
+        ("status", "{{ input.status }}"),
+        ("note", "from {{ input.who }}"),
+    ]
+    document = agent(
+        [
+            START_NODE,
+            node(
+                "search",
+                "http",
+                {
+                    "url": "https://api.example.com/{{ input.folder }}/search?sort=asc",
+                    "query": [{"id": f"q{i}", "name": n, "value": v} for i, (n, v) in enumerate(rows)],
+                },
+            ),
+            end("done", "steps.search.output.status"),
+        ],
+        [("start", "next", "search"), ("search", "success", "done")],
+    )
+    data = {
+        "folder": "my files",
+        "search": "red & blue = #1/2?",
+        "field": "created after",
+        "since": "2026-10-01",
+        "tags": ["a", "b c"],
+        "who": "Ada & Co",
+    }
+    session = run(lambda: ran(document, data, svc=services(api)))
+    assert session.result == 200
+    url = seen[0].url
+    assert url.raw_path.decode() == (
+        "/my%20files/search?sort=asc&q=red%20%26%20blue%20%3D%20%231%2F2%3F"
+        "&created%20after=2026-10-01&tag=a&tag=b%20c&note=from%20Ada%20%26%20Co"
+    )
+    # A value that's one {{ }} and comes to nothing (input.status) is left out.
+    assert [name for name, _ in url.params.multi_items()] == ["sort", "q", "created after", "tag", "tag", "note"]
+    assert url.params["q"] == "red & blue = #1/2?"
+
+
 def test_an_http_request_retries_then_takes_its_error_way() -> None:
     calls: list[httpx.Request] = []
 

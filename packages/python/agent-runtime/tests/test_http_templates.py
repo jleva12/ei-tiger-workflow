@@ -34,7 +34,7 @@ def recording(seen: list[httpx.Request]) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
-def http_tool(seen, *, url, method="POST", body="", parameters=None, **services):
+def http_tool(seen, *, url, method="POST", body="", parameters=None, query=(), **services):
     services.setdefault("allowed_hosts", HOSTS)
     return HttpTool(
         name="create_order",
@@ -42,6 +42,7 @@ def http_tool(seen, *, url, method="POST", body="", parameters=None, **services)
         method=method,
         url=url,
         body=body,
+        query=list(query),
         headers={},
         parameters=parameters or {},
         confirm=False,
@@ -114,6 +115,44 @@ async def test_the_model_is_offered_only_the_arguments_the_url_and_body_name():
     # A GET sends no body: what only its body names isn't offered.
     getting = http_tool([], method="GET", url="https://api.example.com/orders", body='{"note": {note}}')
     assert getting._get_declaration().parameters_json_schema == {"type": "object", "properties": {}}
+
+
+async def test_listed_query_parameters_are_filled_in_then_encoded_whole():
+    seen: list[httpx.Request] = []
+    query = [
+        {"id": "a", "name": "q", "value": "{search}"},
+        {"id": "b", "name": "region", "value": "{{ state.region }}"},
+        {"id": "c", "name": "tag", "value": "{{ state.tags }}"},
+        {"id": "d", "name": "note", "value": "for {who} & co"},
+        {"id": "e", "name": "status", "value": "{status}"},
+        {"id": "f", "name": "", "value": "dropped"},
+        {"id": "g", "name": "key", "value": "${SEARCH_KEY}"},
+    ]
+    made = http_tool(
+        seen,
+        method="GET",
+        url="https://api.example.com/{{ state.folder }}/search?sort=asc",
+        query=query,
+        environment={"SEARCH_KEY": "k=1&2"},
+    )
+    context = Context(folder="my files", region="eu west", tags=["a", "b c"])
+    await made.run_async(args={"search": "red & blue = #1/2?", "who": "Ada"}, tool_context=context)
+
+    url = seen[0].url
+    assert url.raw_path.decode() == (
+        "/my%20files/search?sort=asc&q=red%20%26%20blue%20%3D%20%231%2F2%3F&region=eu%20west"
+        "&tag=a&tag=b%20c&note=for%20Ada%20%26%20co&key=k%3D1%262"
+    )
+    # Unsent, a value that's one argument leaves its parameter out.
+    assert "status" not in url.params
+
+    # Its arguments are offered: one that's a whole value optional, one in text required.
+    declared = made._get_declaration().parameters_json_schema
+    assert list(declared["properties"]) == ["search", "who", "status"]
+    assert declared["required"] == ["who"]
+
+    with pytest.raises(ToolFailure, match="'who'"):
+        await made.run_async(args={"search": "x"}, tool_context=context)
 
 
 async def test_run_values_come_from_the_chat_or_the_runs_provider():

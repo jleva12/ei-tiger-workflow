@@ -1,5 +1,5 @@
 import copy
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from google.adk.agents import LlmAgent
@@ -40,6 +40,37 @@ async def test_the_example_builds_as_the_canvas_draws_it(example, models, web):
     openapi = billing_api.items[0]
     names = sorted(tool.name for tool in await openapi.get_tools())
     assert names == ["get_invoice", "list_charges", "preview_refund"]
+
+
+async def test_an_agent_that_can_ask_the_person_gets_the_tool_and_its_instruction(example, models, web):
+    from google.adk.agents.readonly_context import ReadonlyContext
+
+    from forge_common.adk.ask_person import ASK_PERSON, ASK_PERSON_INSTRUCTION, repair_input_schemas
+
+    # Off unless it's switched on: the example (and older documents) can't ask.
+    root = (await build(example, models, web)).root_agent
+    assert isinstance(root, LlmAgent)
+    assert ASK_PERSON not in [getattr(tool, "name", "") for tool in root.tools]
+
+    doc = copy.deepcopy(example)
+    entry = next(node for node in doc["nodes"] if node["kind"] == "agent")
+    entry["config"]["ask_person"] = True
+    root = (await build(doc, models, web)).root_agent
+    assert isinstance(root, LlmAgent)
+    assert getattr(root.tools[-1], "name", "") == ASK_PERSON
+    assert root.after_model_callback is repair_input_schemas
+    assert callable(root.instruction)
+
+    class State:
+        state: dict[str, Any] = {}
+
+    told = root.instruction(cast(ReadonlyContext, State()))
+    assert isinstance(told, str) and told.endswith(ASK_PERSON_INSTRUCTION)
+
+    # Where nobody is there to answer (a workflow's run), it doesn't get it.
+    root = (await build(doc, models, web, ask_person=False)).root_agent
+    assert isinstance(root, LlmAgent)
+    assert ASK_PERSON not in [getattr(tool, "name", "") for tool in root.tools]
 
 
 async def test_a_sub_agent_on_the_tools_way_is_called_like_a_tool(example, models, web):

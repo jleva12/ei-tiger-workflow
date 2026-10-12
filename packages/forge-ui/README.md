@@ -263,7 +263,7 @@ copies `public/r` into `dist/r`.
 | `@forge-ui/attachments`                      | `ChatAttachmentAdapter` — images, PDFs and text files on messages                                                                                |
 | `@forge-ui/timestamps`                       | `parseTimestamp`, `localDay` — API times as UTC, bare dates as local days                                                                        |
 | `@forge-ui/use-now`, `…/use-debounced-value` | A shared one-second clock; a value that settles after it stops changing                                                                          |
-| `@forge-ui/button`, `@forge-ui/tabs`, …      | The 34 shadcn primitives, tuned to the workspace (incl. `@forge-ui/command`, the cmdk palette, `chart`, `switch`)                                |
+| `@forge-ui/button`, `@forge-ui/tabs`, …      | The 35 shadcn primitives, tuned to the workspace (incl. `@forge-ui/command`, the cmdk palette, `chart`, `switch`, `questionnaire`)               |
 
 ## Project layout
 
@@ -1071,9 +1071,10 @@ takes `open` / `onOpenChange`) has slots for an app's own parts:
 | `composerLead`            | A component just above the composer, e.g. task progress                                 |
 | `composerContext`         | Shown at the top of the composer: what the agent gets with the next message             |
 | `composerActions`         | After the model picker in the composer's bottom row (`composerChip` matches their look) |
+| `showContext`             | The composer's context meter; on by default, see [Context meter](#context-meter)        |
 | `composerTrailingActions` | A component right before Send, e.g. a chat history button                               |
 | `messageMeta`             | A component beside each reply's actions, e.g. its timing and tokens                     |
-| `followUps`               | A component above the composer after a reply, in place of the runtime's suggestions     |
+| `followUps`               | A component above the composer after a reply, in place of the agent server's follow-ups |
 | `onOpenArtifact`          | Opens an artifact picked in the top bar (e.g. in a canvas) instead of downloading it    |
 | `agents`                  | Names for the app's ADK agents; a call handing a request to one shows as asking it      |
 | `approvals`               | Per gated tool: a title, description, preview and button labels for its approval card   |
@@ -1259,6 +1260,138 @@ def apply_model_settings(callback_context, llm_request):
 root_agent = Agent(..., before_model_callback=apply_model_settings)
 ```
 
+### Questions from the agent
+
+When the agent asks the person something (ADK's `adk_request_input`: an
+agent's `request_input` tool, a Workflow `RequestInput` node, or an MCP
+server's input request), the thread shows a card with the agent's message
+and a form built from the call's `response_schema` with the
+[`questionnaire`](#questionnaire) primitive, one question at a time with
+progress:
+
+| The schema                                               | The question                                     |
+| -------------------------------------------------------- | ------------------------------------------------ |
+| an `object` with `properties`                            | one question per field, `required` ones required |
+| `enum` (any type)                                        | pick one                                         |
+| `array` of `items` with an `enum`                        | pick several                                     |
+| `boolean`                                                | Yes / No                                         |
+| `number`, `integer` (with `minimum`, `maximum`)          | a number                                         |
+| `string` with `format` email, uri, date, date-time, time | that input type                                  |
+| anything else, or none                                   | text                                             |
+
+A field's `title` is its question (else its name, humanized) and its
+`description` the help under it; `default` fills it in. The answer goes back
+in the schema's types (`{ "environment": "staging", "replicas": 3 }`), as
+ADK checks it when the turn carries on, and the card folds to a line saying
+what was answered. `askForm`, `answerFrom` and `describeAnswer`
+(`ask-person.ts`) do the reading, for a card of your own.
+
+On the agent side, forge_common's `ask_person` tool is ADK's
+`adk_request_input` with a description that teaches the model these schemas,
+and `repair_input_schemas` (an `after_model_callback`) fixes the ones it gets
+wrong:
+
+```python
+from forge_common.adk.ask_person import ask_person, repair_input_schemas
+
+root_agent = Agent(..., tools=[ask_person], after_model_callback=repair_input_schemas)
+```
+
+### Questionnaire
+
+`@forge-ui/questionnaire` is shadcn's
+[Questionnaire](https://ui.shadcn.com/docs/components/base/questionnaire)
+(behaviour from `@shadcn/react`) in the compact Forge look: a form that shows
+one question at a time with progress, single and multiple choice (with
+optional `shortcuts="numbers"` or `"letters"`), typed inputs, required
+answers and Previous / Skip / Next / Submit. Read the answers from the
+form's data on submit (`get` for one, `getAll` for several):
+
+```tsx
+<Questionnaire
+  onSubmit={(event) => {
+    event.preventDefault()
+    const data = new FormData(event.currentTarget)
+    save({ plan: data.get("plan"), seats: Number(data.get("seats")) })
+  }}
+>
+  <QuestionnaireProgress />
+  <QuestionnaireItem name="plan" required>
+    <QuestionnaireTitle>Which plan?</QuestionnaireTitle>
+    <QuestionnaireChoices>
+      <QuestionnaireChoice value="team">Team</QuestionnaireChoice>
+      <QuestionnaireChoice value="business">Business</QuestionnaireChoice>
+    </QuestionnaireChoices>
+    <QuestionnaireError />
+  </QuestionnaireItem>
+  <QuestionnaireItem name="seats" required>
+    <QuestionnaireTitle>How many seats?</QuestionnaireTitle>
+    <QuestionnaireInput type="number" min={1} aria-label="Seats" />
+    <QuestionnaireError />
+  </QuestionnaireItem>
+  <QuestionnaireActions>
+    <QuestionnairePrevious />
+    <QuestionnaireSkip />
+    <QuestionnaireNext />
+    <QuestionnaireSubmit />
+  </QuestionnaireActions>
+</Questionnaire>
+```
+
+### Follow-up questions
+
+Pass `suggestFollowUps` to `useAdkAssistant` and every run asks the agent
+server for follow-up questions: once the turn ends with a reply, a few
+messages the person might send next appear above the composer as chips, and
+clicking one sends it. They're hidden while the agent works or waits on the
+person, and each turn replaces the last one's.
+
+```tsx
+const { runtime } = useAdkAssistant({ adk, suggestFollowUps: true })
+// or how many (1–5): suggestFollowUps: { count: 2 }
+```
+
+Runs send `forge:suggest_follow_ups` in their state, and the server writes the
+suggestions to the session's `forge:follow_ups` state, which the thread reads
+(`AdkFollowUps`, `followUpsOf`). Forge's agent runtimes do this with
+forge_common's `FollowUpsPlugin`:
+
+```python
+from forge_common.adk.follow_ups import FollowUpsPlugin
+
+app = App(name="forge_assistant", root_agent=root_agent, plugins=[FollowUpsPlugin()])
+```
+
+Without follow-ups the thread shows the runtime's own suggestions there, as
+before; `followUps` replaces both with your own component. A server that
+checks the state it's sent must allow the key.
+
+### Context meter
+
+After the model picker the composer shows how much of the model's context
+window the conversation holds: a ring and a percentage, quiet until it's
+within a tenth of the compaction point, amber there and past it, red past
+the model's limit. Its popover has the tokens used and left, where the agent
+is compacted and how far away that is, the model's window and what it keeps
+for replies, whether the count is the model's or an estimate, and the
+compactions so far. It reads the agent server's `forge:context:<agent>`
+session state for the agent answering, which forge_common's
+`ContextWindowPlugin` keeps (and compacts the agent mid-turn by):
+
+```python
+from forge_common.adk.context_window import ContextWindowPlugin, windows_from
+
+app = App(name="forge_assistant", root_agent=root_agent,
+          plugins=[ContextWindowPlugin(window=windows_from(models))])
+```
+
+A model in the model section with `contextWindow` and `maxTokens` sets the
+window while it's chosen, so the meter shows before the first reply and
+re-measures when the person switches models (the server compacts at the same
+share of the new limit). Nothing shows until there's a window to measure
+against; `showContext={false}` hides it. `contextView` and `currentContext`
+(from `context-window.ts`) are the numbers, for a meter of your own.
+
 ### Limits
 
 - assistant-ui merges consecutive assistant messages, so a hand-off inside
@@ -1283,6 +1416,9 @@ conversation that makes a capable agent's work legible, mounted through
   which shows the agent's documents (ADK artifacts) with their versions.
 - **Statistics** — `ContextMeter` (context used and the conversation's cost)
   and `MessageStats` / `TurnDetails` (each reply's time, tokens and cost).
+  An agent that reports its own context window (`ContextWindowPlugin`) is
+  shown by the assistant's [context meter](#context-meter) instead, with
+  where it's compacted; `ContextMeter` then only keeps the stats read.
   Missing prices show as unavailable, never as $0.
 - **Navigation** — `ChatHistoryPalette`, a button before Send (and ⌘K)
   opening New chat and the conversations, searched by what was said.
@@ -1290,7 +1426,8 @@ conversation that makes a capable agent's work legible, mounted through
   `FollowUps` (suggested next questions).
 - **Tool cards** — `toolUIs` and `approvalViews` for the chat API's built-in
   tools (plans, notes, documents, the calculator, dice, time) and
-  `AskUserUI` for ADK's `adk_request_input`; `ToolFrame` for your own.
+  `AskUserUI` for ADK's `adk_request_input` (the assistant's own question
+  card, `AdkInputRequestUI`); `ToolFrame` for your own.
 
 ```bash
 npx shadcn@latest add @forge-ui/agent-workspace

@@ -185,7 +185,11 @@ function toolsIssues(
         ])
       }
     }
-    if (each.kind === "http_tool" || each.kind === "knowledge_base") {
+    if (
+      each.kind === "http_tool" ||
+      each.kind === "knowledge_base" ||
+      each.kind === "code_execution"
+    ) {
       const name = adkName(each.name)
       if (name) named.set(name, [...(named.get(name) ?? []), each.id])
     }

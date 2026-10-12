@@ -57,6 +57,7 @@ export type ToolKind =
   | "http_tool"
   | "openapi"
   | "mcp"
+  | "code_execution"
 
 /** What a tool may pick from: the organization's, by ID. */
 export type ToolLookups = {
@@ -175,6 +176,29 @@ function MemoryFields({ config, set }: ToolProps<"memory">) {
       onChange={(value) => set("mode", value)}
       description="Memory is what was said in the person's earlier conversations with it."
     />
+  )
+}
+
+function CodeExecutionFields({
+  config,
+  set,
+  confirmAbout,
+}: ToolProps<"code_execution">) {
+  return (
+    <>
+      <p className="text-xs/[1.5] text-muted-foreground">
+        The model writes Python and runs it, then reads what it printed and its
+        errors. Each run starts afresh. For now it runs on the server&apos;s own
+        machine, unsandboxed (ADK&apos;s local code executor), so only where
+        code execution is turned on: in local development.
+      </p>
+      <CheckField
+        label="A person confirms each run"
+        checked={config.confirm}
+        onChange={(on) => set("confirm", on)}
+        description={confirmAbout}
+      />
+    </>
   )
 }
 
@@ -369,6 +393,106 @@ function HeaderRows({
   )
 }
 
+/**
+ * Query parameters: a row each, its name and value side by side and a bin
+ * to remove it. Both are templates like the URL, completed as it is; filled
+ * in, each is percent-encoded as it's sent.
+ */
+function QueryRows({
+  query,
+  onChange,
+  scope,
+  args,
+}: {
+  query: HeaderRow[]
+  onChange: (query: HeaderRow[]) => void
+  scope: Scope
+  args: readonly TemplateArgument[]
+}) {
+  const [added, setAdded] = React.useState<string>()
+  const { issues, key } = useFieldIssues("query")
+  const change = (row: HeaderRow, patch: Partial<HeaderRow>) =>
+    onChange(query.map((x) => (x.id === row.id ? { ...x, ...patch } : x)))
+  // No space under a template until it has something to say.
+  const quiet = "gap-0 has-[[aria-live]>*]:gap-1.5"
+  return (
+    <div
+      role="group"
+      aria-label="Query parameters"
+      data-field={key}
+      className="flex flex-col gap-2"
+    >
+      <span className="text-xs font-medium text-foreground">
+        Query parameters
+      </span>
+      <FieldDescription>
+        Added to the URL&apos;s query, each name and value encoded as it&apos;s
+        sent. A value that&apos;s one placeholder ({code("{status}")}) is left
+        out when it comes to nothing; a list is sent once per item.
+      </FieldDescription>
+      {query.map((row) => (
+        <div
+          key={row.id}
+          className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-start gap-1.5"
+        >
+          <ExpressionField
+            mode="template"
+            label="Query parameter name"
+            labelHidden
+            value={row.name}
+            placeholder="Key"
+            scope={scope}
+            check={{ textual: true }}
+            args={args}
+            autoFocus={row.id === added}
+            field={`${key}.${row.id}.name`}
+            onChange={(name) => change(row, { name })}
+            className={quiet}
+          />
+          <ExpressionField
+            mode="template"
+            label={`${row.name.trim() || "Query parameter"} value`}
+            labelHidden
+            value={row.value}
+            placeholder="Value"
+            scope={scope}
+            check={{ textual: true }}
+            args={args}
+            field={`${key}.${row.id}`}
+            onChange={(value) => change(row, { value })}
+            className={quiet}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={`Remove ${row.name.trim() || "query parameter"}`}
+            onClick={() => onChange(query.filter((x) => x.id !== row.id))}
+            className="h-[2.125rem] text-muted-foreground hover:text-destructive"
+          >
+            <Icon icon={Delete02Icon} />
+          </Button>
+        </div>
+      ))}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          const row = { id: uid("query"), name: "", value: "" }
+          setAdded(row.id)
+          onChange([...query, row])
+        }}
+        className="w-full border-dashed text-muted-foreground"
+      >
+        <Icon icon="plus" data-icon="inline-start" />
+        Add query parameter
+      </Button>
+      <IssueMessages issues={issues} />
+    </div>
+  )
+}
+
 const CONFIRM = "A person confirms each call"
 
 /** One of an HTTP tool's templates: its URL or its body. */
@@ -451,10 +575,15 @@ function HttpToolFields({
       </div>
       <p className="-mt-1 text-xs/[1.6] text-muted-foreground">
         {code("{name}")} puts in an argument the model fills in; {code("{{ }}")}{" "}
-        puts in {valuesAbout}. A query parameter that&apos;s one argument (
-        {code("?status={status}")}) is left out when the model doesn&apos;t send
-        it.
+        puts in {valuesAbout}. List query parameters below rather than in the
+        URL: their values are encoded for you.
       </p>
+      <QueryRows
+        query={config.query}
+        onChange={(value) => set("query", value)}
+        scope={scope}
+        args={args}
+      />
       <CredentialField
         organizationId={organizationId}
         value={config.credential}
@@ -816,6 +945,12 @@ export function ToolFields<K extends ToolKind>({
       return <OpenApiFields {...(props as unknown as ToolProps<"openapi">)} />
     case "mcp":
       return <McpFields {...(props as unknown as ToolProps<"mcp">)} />
+    case "code_execution":
+      return (
+        <CodeExecutionFields
+          {...(props as unknown as ToolProps<"code_execution">)}
+        />
+      )
   }
   return null
 }

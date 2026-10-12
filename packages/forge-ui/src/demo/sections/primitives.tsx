@@ -1,6 +1,23 @@
 import * as React from "react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  Questionnaire,
+  QuestionnaireActions,
+  QuestionnaireChoice,
+  QuestionnaireChoiceDescription,
+  QuestionnaireChoices,
+  QuestionnaireDescription,
+  QuestionnaireError,
+  QuestionnaireInput,
+  QuestionnaireItem,
+  QuestionnaireNext,
+  QuestionnairePrevious,
+  QuestionnaireProgress,
+  QuestionnaireSkip,
+  QuestionnaireSubmit,
+  QuestionnaireTitle,
+} from "@/components/ui/questionnaire"
 import { Button } from "@/components/ui/button"
 import {
   Command,
@@ -66,7 +83,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { PrimaryAction } from "@/components/forge/app-shell"
-import { AgentAvatars, AgentOrb, WorkspaceOrb } from "@/components/forge/avatars"
+import {
+  AgentAvatars,
+  AgentOrb,
+  WorkspaceOrb,
+} from "@/components/forge/avatars"
 import { FileFilter } from "@/components/forge/changes"
 import {
   ActiveFilters,
@@ -345,6 +366,39 @@ export function InputsSection() {
           </Field>
         </FieldGroup>
       </Specimen>
+      <Specimen
+        title="Questionnaire"
+        description="One question at a time, with progress: pick one (number shortcuts), pick several, or a typed answer. Required questions hold Next until they're answered; answers come from the form's data on submit. The assistant asks with it when an agent calls adk_request_input."
+        code={`<Questionnaire shortcuts="numbers" onSubmit={(event) => {
+  event.preventDefault()
+  const data = new FormData(event.currentTarget)
+  save({ plan: data.get("plan"), seats: data.get("seats"), add_ons: data.getAll("add_ons") })
+}}>
+  <QuestionnaireProgress />
+  <QuestionnaireItem name="plan" required>
+    <QuestionnaireTitle>Which plan?</QuestionnaireTitle>
+    <QuestionnaireChoices>
+      <QuestionnaireChoice value="team">Team</QuestionnaireChoice>
+      <QuestionnaireChoice value="business">Business</QuestionnaireChoice>
+    </QuestionnaireChoices>
+    <QuestionnaireError />
+  </QuestionnaireItem>
+  <QuestionnaireItem name="add_ons" multiple>…</QuestionnaireItem>
+  <QuestionnaireItem name="seats" required>
+    <QuestionnaireTitle>How many seats?</QuestionnaireTitle>
+    <QuestionnaireInput type="number" min={1} aria-label="Seats" />
+    <QuestionnaireError />
+  </QuestionnaireItem>
+  <QuestionnaireActions>
+    <QuestionnairePrevious />
+    <QuestionnaireSkip />
+    <QuestionnaireNext />
+    <QuestionnaireSubmit />
+  </QuestionnaireActions>
+</Questionnaire>`}
+      >
+        <QuestionnaireDemo />
+      </Specimen>
     </SectionPage>
   )
 }
@@ -394,6 +448,83 @@ function DemoCommands({ onRun }: { onRun: (label: string) => void }) {
         </CommandGroup>
       </CommandList>
     </>
+  )
+}
+
+/** The questionnaire specimen: three questions, and what was answered. */
+function QuestionnaireDemo() {
+  const [answers, setAnswers] = React.useState<string | null>(null)
+  return (
+    <div className="flex w-full max-w-md flex-col gap-3">
+      <Questionnaire
+        key={answers ?? "asking"}
+        shortcuts="numbers"
+        onSubmit={(event) => {
+          event.preventDefault()
+          const data = new FormData(event.currentTarget)
+          setAnswers(
+            JSON.stringify({
+              plan: data.get("plan"),
+              add_ons: data.getAll("add_ons"),
+              seats: Number(data.get("seats")),
+            })
+          )
+        }}
+      >
+        <QuestionnaireProgress />
+        <QuestionnaireItem name="plan" required>
+          <QuestionnaireTitle>Which plan?</QuestionnaireTitle>
+          <QuestionnaireDescription>
+            You can change it later.
+          </QuestionnaireDescription>
+          <QuestionnaireChoices>
+            <QuestionnaireChoice value="team">
+              Team
+              <QuestionnaireChoiceDescription>
+                Up to 20 people
+              </QuestionnaireChoiceDescription>
+            </QuestionnaireChoice>
+            <QuestionnaireChoice value="business">
+              Business
+              <QuestionnaireChoiceDescription>
+                SSO and audit logs
+              </QuestionnaireChoiceDescription>
+            </QuestionnaireChoice>
+          </QuestionnaireChoices>
+          <QuestionnaireError />
+        </QuestionnaireItem>
+        <QuestionnaireItem name="add_ons" multiple>
+          <QuestionnaireTitle>Any add-ons?</QuestionnaireTitle>
+          <QuestionnaireChoices>
+            <QuestionnaireChoice value="support">
+              Priority support
+            </QuestionnaireChoice>
+            <QuestionnaireChoice value="storage">
+              Extra storage
+            </QuestionnaireChoice>
+          </QuestionnaireChoices>
+        </QuestionnaireItem>
+        <QuestionnaireItem name="seats" required>
+          <QuestionnaireTitle>How many seats?</QuestionnaireTitle>
+          <QuestionnaireInput
+            type="number"
+            min={1}
+            placeholder="10"
+            aria-label="Seats"
+          />
+          <QuestionnaireError />
+        </QuestionnaireItem>
+        <QuestionnaireActions>
+          <QuestionnairePrevious />
+          <QuestionnaireSkip />
+          <QuestionnaireNext />
+          <QuestionnaireSubmit />
+        </QuestionnaireActions>
+      </Questionnaire>
+      {answers && (
+        <p className="font-mono text-2xs text-muted-foreground">{answers}</p>
+      )}
+    </div>
   )
 }
 

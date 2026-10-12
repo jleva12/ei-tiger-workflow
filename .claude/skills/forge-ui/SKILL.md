@@ -135,7 +135,10 @@ sizes `default` h-8, `xs`, `sm`, `lg`, `icon`, `icon-xs`, `icon-sm`,
 `Command` (cmdk palette; `CommandDialog` behind ⌘K),
 `Popover`, `Tooltip`, `Tabs` (`variant="line"` on `TabsList`), `ToggleGroup`,
 `Badge`, `Kbd`, `Alert` (`variant="error"`), `Skeleton`, `Spinner`,
-`Progress`, `Table`, toasts.
+`Progress`, `Table`, `Questionnaire` (shadcn's one-question-at-a-time form:
+`QuestionnaireItem` with `QuestionnaireChoices`/`QuestionnaireChoice` or
+`QuestionnaireInput`, `QuestionnaireActions` with Previous/Skip/Next/Submit;
+answers from `FormData` on submit), toasts.
 
 ## Forms
 

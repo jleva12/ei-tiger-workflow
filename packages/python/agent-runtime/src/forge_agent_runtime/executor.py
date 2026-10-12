@@ -46,15 +46,24 @@ from forge_agent_runtime.refs import AgentNotFound, AgentRef, Version
 from forge_agent_runtime.services import RuntimeServices
 from forge_agent_runtime.templating import REQUEST_KEY
 from forge_agent_runtime.tools import http_client
+from forge_common.adk.follow_ups import MOST
+from forge_common.adk.follow_ups import REQUEST_KEY as FOLLOW_UPS_REQUEST
 from forge_common.adk.models import ProviderModels
 from forge_common.patterns import schema_errors
 
 log = logging.getLogger(__name__)
 
-#: The state the model picker sends with every message.
+#: The state a chat may send with every message: the model picker's choices,
+#: and whether to suggest follow-up questions after the reply (how many).
 FIXED_STATE: dict[str, Any] = {
     "model": {"type": "string"},
     "thinking_level": {"enum": ["", "off", "minimal", "low", "medium", "high", "xhigh"]},
+    FOLLOW_UPS_REQUEST: {
+        "anyOf": [
+            {"type": "boolean"},
+            {"type": "object", "properties": {"count": {"type": "integer", "minimum": 1, "maximum": MOST}}},
+        ]
+    },
 }
 
 

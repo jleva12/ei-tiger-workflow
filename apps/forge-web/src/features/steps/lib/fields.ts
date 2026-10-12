@@ -39,6 +39,10 @@ export function expressionSettings(step: StepData): ExpressionSetting[] {
     case "http":
       return [
         template("url", "URL", step.config.url),
+        ...step.config.query.flatMap((q) => [
+          template(`query.${q.id}.name`, `Query parameter ${q.name || "without a name"}`, q.name),
+          template(`query.${q.id}`, `Query parameter ${q.name || "without a name"}'s value`, q.value),
+        ]),
         ...step.config.headers.map((h) =>
           template(`headers.${h.id}`, `Header ${h.name || "without a name"}`, h.value)
         ),

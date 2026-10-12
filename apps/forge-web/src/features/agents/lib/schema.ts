@@ -56,6 +56,11 @@ const LLM = {
     minimum: 1,
     description: "Null: the model's limit.",
   },
+  ask_person: {
+    ...bool,
+    description:
+      "It may stop mid-turn to ask the person something (ADK's adk_request_input); the chat shows a form for the answer. Not in workflows' runs.",
+  },
 }
 
 /** Each kind's settings: a workflow's LLM agents' tools take them too. */
@@ -139,6 +144,11 @@ export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
       description:
         "Where it calls: {name} puts in the model's argument of that name, {{ expression }} one of the run's values. A query parameter that's one argument is left out when the model doesn't send it.",
     },
+    query: {
+      ...headers,
+      description:
+        "Query parameters, added to the URL's own: each name and value a template like the URL, filled in then percent-encoded. A value that's one placeholder coming to nothing (an argument the model didn't send) leaves its parameter out; a list sends it once per item.",
+    },
     headers,
     body: {
       ...text,
@@ -193,6 +203,13 @@ export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
         "The server's tools it may call, comma-separated; empty for all.",
     },
     confirm: bool,
+  },
+  code_execution: {
+    confirm: {
+      ...bool,
+      description:
+        "A person confirms each run, seeing the code, before it runs.",
+    },
   },
 }
 

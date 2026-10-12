@@ -45,6 +45,7 @@ Kind = Literal[
     "http_tool",
     "openapi",
     "mcp",
+    "code_execution",
 ]
 AGENT_LIKE = frozenset({"agent", "sub_agent"})
 #: What can be handed off to: an agent.
@@ -56,6 +57,7 @@ _LLM: dict[str, Any] = {
     "model": {"provider": "", "name": ""},
     "thinking_level": "",
     "max_output_tokens": None,
+    "ask_person": False,
 }
 
 #: Each kind's settings with nothing set, as the builder makes a new node's.
@@ -76,6 +78,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "description": "",
         "method": "GET",
         "url": "",
+        "query": [],
         "headers": [],
         "parameters": {},
         "body": "",
@@ -98,6 +101,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "tools": "",
         "confirm": False,
     },
+    "code_execution": {"confirm": False},
 }
 
 

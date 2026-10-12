@@ -20,6 +20,14 @@ one). A query parameter that is one argument, ``?status={status}``, is left
 out when the model doesn't send it; any other argument the URL names must
 be sent.
 
+Query parameters may also be listed by name and value (:func:`parse_query`),
+each a template: they're filled in, then each name and value is
+percent-encoded whole and added to the URL's query
+(``forge_common.urls.with_query``), so a value arrives as it was filled in,
+``&``, ``=`` and spaces included. A value that is one placeholder and comes to
+nothing (an argument the model didn't send, a run's value that's null) leaves
+its parameter out; a list sends it once per item.
+
 The body (POST, PUT, PATCH) is JSON. A placeholder that is a whole value,
 ``{order_id}`` or ``"{order_id}"``, sends what it gives as it is (a number
 stays a number, an object an object); one inside a string is written into
@@ -31,7 +39,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
@@ -142,6 +150,60 @@ def _droppable(pair: Sequence[Part]) -> Argument | None:
     ):
         return pair[1]
     return None
+
+
+@dataclass(frozen=True)
+class QueryRow:
+    """A listed query parameter: its name and its value, as literal text and placeholders."""
+
+    name: tuple[Part, ...]
+    value: tuple[Part, ...]
+
+    @property
+    def whole(self) -> Argument | Value | None:
+        """What its value is when it's one placeholder and nothing else (but spaces)."""
+        placeholders = [part for part in self.value if not isinstance(part, str)]
+        literal = "".join(part for part in self.value if isinstance(part, str))
+        return placeholders[0] if len(placeholders) == 1 and not literal.strip() else None
+
+
+def parse_query(
+    rows: Any, fill: Callable[[str], str], *, what: str = "Its query parameter"
+) -> tuple[QueryRow, ...]:
+    """
+    :param rows: The listed query parameters, ``[{name, value}]``; one without a name is left out.
+    :return: Each as a :class:`QueryRow`.
+    :raises TemplateProblem: One has an empty ``{{ }}``.
+    """
+    out: list[QueryRow] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, Mapping):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        where = f"{what} {name!r}"
+        out.append(
+            QueryRow(
+                parse_text(name, fill, what=where), parse_text(str(row.get("value") or ""), fill, what=where)
+            )
+        )
+    return tuple(out)
+
+
+def query_arguments(rows: Sequence[QueryRow]) -> tuple[list[str], set[str]]:
+    """:return: The arguments listed query parameters name, in order, and those they must have: all but a value that's one argument."""
+    names: list[str] = []
+    required: set[str] = set()
+    for row in rows:
+        whole = row.whole
+        for part in (*row.name, *row.value):
+            if isinstance(part, Argument):
+                if part.name not in names:
+                    names.append(part.name)
+                if part is not whole:
+                    required.add(part.name)
+    return names, required
 
 
 @dataclass(frozen=True)
@@ -283,7 +345,10 @@ def body_arguments(body: Any) -> list[str]:
 
 
 def parameters_of(
-    schema: Mapping[str, Any], names: Sequence[str], required: set[str], optional: set[str] = frozenset()
+    schema: Mapping[str, Any],
+    names: Sequence[str],
+    required: set[str],
+    optional: Collection[str] = frozenset(),
 ) -> dict[str, Any]:
     """
     :param schema: The arguments' JSON Schema as the author wrote it: their
@@ -324,7 +389,13 @@ async def _filled(
     *,
     encode: bool,
     what: str,
+    need: bool | None = None,
 ) -> str:
+    """
+    :param encode: Percent-encode the arguments.
+    :param need: Fail when an argument wasn't sent; as ``encode`` by default
+        (a URL's must be, a body's text leaves it out).
+    """
     out: list[str] = []
     for part in parts:
         if isinstance(part, str):
@@ -334,7 +405,7 @@ async def _filled(
         elif args.get(part.name) is not None:
             text = as_text(args[part.name])
             out.append(quote(text, safe="") if encode else text)
-        elif encode:
+        elif encode if need is None else need:
             raise ToolFailure(
                 f"{what} needs the {part.name!r} argument.", [f"Call it again with {part.name}."]
             )
@@ -351,6 +422,33 @@ async def render_url(url: UrlTemplate, args: Mapping[str, Any], values: Callable
             continue
         pairs.append(await _filled(pair, args, values, encode=True, what="Its URL"))
     return path + ("?" + "&".join(pairs) if pairs else "")
+
+
+async def render_query(
+    rows: Sequence[QueryRow], args: Mapping[str, Any], values: Callable[[str], Any]
+) -> list[tuple[str, str]]:
+    """
+    :return: The listed query parameters a call sends, filled in and not yet
+        encoded: one whose value is one placeholder that comes to nothing
+        left out, a list sent once per item.
+    """
+    pairs: list[tuple[str, str]] = []
+    for row in rows:
+        what = "Its query parameters"
+        name = (await _filled(row.name, args, values, encode=False, need=True, what=what)).strip()
+        if not name:
+            continue
+        whole = row.whole
+        if whole is None:
+            pairs.append((name, await _filled(row.value, args, values, encode=False, need=True, what=what)))
+            continue
+        value = await values(whole.expression) if isinstance(whole, Value) else args.get(whole.name)
+        pairs.extend(
+            (name, as_text(item))
+            for item in (value if isinstance(value, list) else [value])
+            if item is not None
+        )
+    return pairs
 
 
 async def render_body(body: Any, args: Mapping[str, Any], values: Callable[[str], Any]) -> Any:

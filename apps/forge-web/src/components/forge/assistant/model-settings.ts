@@ -17,6 +17,12 @@ export type AssistantModel = {
    * that doesn't reason. Default: every level of the model section.
    */
   thinkingLevels?: string[]
+  /**
+   * Its context window, and of it the most one reply may take, in tokens:
+   * the context meter measures against them while it's the one chosen.
+   */
+  contextWindow?: number
+  maxTokens?: number
 }
 
 /** How long the model thinks before it answers. */

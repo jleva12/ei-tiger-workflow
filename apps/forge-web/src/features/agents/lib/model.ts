@@ -4,14 +4,23 @@ import {
   BookOpen01Icon,
   Brain01Icon,
   ChatBotIcon,
+  CommandLineIcon,
   Globe02Icon,
   McpServerIcon,
   Robot01Icon,
 } from "@hugeicons/core-free-icons"
 
 import type { IconProp } from "@/components/forge/icons"
-import { AGENTS_ICON, adkName, type ModelChoice } from "@/features/adk-workflows/lib/model"
-import type { KindGroup, KindInfo, StepOutput } from "@/features/builder/lib/types"
+import {
+  AGENTS_ICON,
+  adkName,
+  type ModelChoice,
+} from "@/features/adk-workflows/lib/model"
+import type {
+  KindGroup,
+  KindInfo,
+  StepOutput,
+} from "@/features/builder/lib/types"
 import type {
   HeaderRow,
   HttpMethod,
@@ -22,7 +31,8 @@ import type {
  * A chat agent, as the Agents page builds it: one Google ADK `LlmAgent`
  * people talk to, and what's attached to it on the canvas. It has two
  * ways out: its tools (what it can call: memory, knowledge bases, HTTP
- * endpoints, an OpenAPI spec, an MCP server, a workflow, another agent), and
+ * endpoints, an OpenAPI spec, an MCP server, a workflow, another agent, code
+ * execution), and
  * the agents it hands off to (sub-agents it transfers the conversation
  * to, or gives a task). A sub-agent has the same two ways out, so a
  * specialist can have tools of its own.
@@ -42,6 +52,11 @@ export type ChatAgentSettings = {
   thinking_level: ThinkingLevel | ""
   /** The most tokens it answers with; null for the model's limit. */
   max_output_tokens: number | null
+  /**
+   * It may stop mid-turn to ask the person something (ADK's
+   * adk_request_input), and the chat shows a form for the answer.
+   */
+  ask_person: boolean
 }
 
 /** How a sub-agent is handed to, when it's on the Hands off to way. */
@@ -100,6 +115,12 @@ export type ChatConfigs = {
      * that name, `{{ expression }}` one of the run's values.
      */
     url: string
+    /**
+     * Query parameters, added to the URL's own: each name and value a
+     * template like its URL, filled in and then percent-encoded whole. A
+     * value that's one placeholder coming to nothing leaves it out.
+     */
+    query: HeaderRow[]
     headers: HeaderRow[]
     /**
      * Its JSON body (POST, PUT, PATCH), a template like its URL: a
@@ -146,6 +167,15 @@ export type ChatConfigs = {
     headers: HeaderRow[]
     /** The server's tools it may call, comma-separated; empty for all. */
     tools: string
+    confirm: boolean
+  }
+  /**
+   * Python the model writes, run where the runtime runs code (for now ADK's
+   * UnsafeLocalCodeExecutor, when the deployment turns it on): it answers
+   * with what the code printed and its errors.
+   */
+  code_execution: {
+    /** A person confirms each run, seeing the code, before it runs. */
     confirm: boolean
   }
 }
@@ -207,6 +237,7 @@ const agentSettings = (): ChatAgentSettings => ({
   model: { provider: "", name: "" },
   thinking_level: "",
   max_output_tokens: null,
+  ask_person: false,
 })
 
 export const CHAT_KINDS: { [K in ChatKind]: ChatKindInfo<K> } = {
@@ -280,6 +311,7 @@ export const CHAT_KINDS: { [K in ChatKind]: ChatKindInfo<K> } = {
       description: "",
       method: "GET",
       url: "",
+      query: [],
       headers: [],
       body: "",
       parameters: {},
@@ -329,6 +361,16 @@ export const CHAT_KINDS: { [K in ChatKind]: ChatKindInfo<K> } = {
     keywords: "adk workflow graph tool run process",
     idPrefix: "workflow",
     defaults: () => ({ workflow: "", version: null }),
+  },
+  code_execution: {
+    label: "Code execution",
+    group: "tools",
+    icon: CommandLineIcon,
+    summary:
+      "Runs Python the model writes, to calculate or transform data, and answers with what it printed.",
+    keywords: "code execution python run script calculate interpreter sandbox",
+    idPrefix: "code",
+    defaults: () => ({ confirm: false }),
   },
 }
 

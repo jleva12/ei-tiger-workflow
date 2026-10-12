@@ -2,8 +2,12 @@
 Actions: HTTP requests, transforms, filters and delays.
 
 - ``http``: calls a URL and hands on ``{status, headers, body}`` by its
-  Success way. Its URL and headers are text with ``{{ }}`` in them; its body a
-  JSONata expression (an object or list is sent as JSON). Private addresses
+  Success way. Its URL, query parameters and headers are text with ``{{ }}``
+  in them; its body a JSONata expression (an object or list is sent as JSON).
+  Its query parameters are added to the URL's own, each name and value
+  percent-encoded, so they arrive as they were filled in: a value that's one
+  ``{{ }}`` and comes to nothing leaves its parameter out, and a list sends it
+  once per item. What the URL can't hold as it is (a space) is encoded too. Private addresses
   are refused, redirects included. 408, 425, 429, 5xx and no answer are
   retried (2s, 4s… apart); anything else but a 2xx, or no answer after its
   retries, takes its Error way, handing on nothing, with its error as
@@ -30,6 +34,7 @@ from typing import Any
 from urllib.parse import urljoin
 
 import httpx
+from forge_common.urls import with_query
 from google.adk import Context, Event
 from google.adk.events import RequestInput
 from google.adk.workflow import FunctionNode
@@ -50,6 +55,7 @@ from forge_task_adk_workflows.graph.names import adk_name
 from forge_task_adk_workflows.graph.schemas import held_to, problems, to_model
 from forge_task_adk_workflows.graph.services import RunServices
 from forge_task_adk_workflows.support.errors import StepFailed
+from forge_task_adk_workflows.support.expressions import TEMPLATE, as_text
 from forge_task_adk_workflows.support.http import MAX_REDIRECTS, RETRYABLE, check_url, parse_body, read_body
 from forge_task_adk_workflows.support.step_settings import (
     UNIT_SECONDS,
@@ -88,8 +94,27 @@ def http(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
             return {}, {}
         return dict(auth.headers), dict(auth.params)
 
+    async def query(data: dict[str, Any]) -> list[tuple[str, str]]:
+        # Its query parameters, filled in: one whose value is one {{ }} that
+        # comes to nothing is left out; a list sends it once per item.
+        pairs: list[tuple[str, str]] = []
+        for row in s.query:
+            name = (await evaluator.render(row.name, data, what="A query parameter's name")).strip()
+            if not name:
+                continue
+            what = f"Its {name} query parameter"
+            whole = _whole(row.value)
+            if whole is None:
+                pairs.append((name, await evaluator.render(row.value, data, what=what)))
+                continue
+            value = await evaluator.evaluate(whole, data, what=what)
+            pairs.extend(
+                (name, as_text(item)) for item in (value if isinstance(value, list) else [value]) if item is not None
+            )
+        return pairs
+
     async def request(data: dict[str, Any]) -> dict[str, Any]:
-        url = (await evaluator.render(s.url, data, what="Its URL")).strip()
+        url = with_query((await evaluator.render(s.url, data, what="Its URL")).strip(), await query(data))
         headers = {
             header.name.strip(): await evaluator.render(header.value, data, what=f"Its {header.name} header")
             for header in s.headers
@@ -147,6 +172,13 @@ def http(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
         return Event(output=response, route="success")  # type: ignore[call-arg]  # ADK's shorthand for actions.route
 
     return FunctionNode(name=adk_name(text(node.get("name"))), func=run)
+
+
+def _whole(template: str) -> str | None:
+    """:return: The expression a template is when it's one ``{{ }}`` and nothing else; None otherwise."""
+    stripped = template.strip()
+    found = TEMPLATE.findall(stripped)
+    return found[0] if len(found) == 1 and TEMPLATE.fullmatch(stripped) else None
 
 
 #: What a request to a URL sends besides: headers and query parameters

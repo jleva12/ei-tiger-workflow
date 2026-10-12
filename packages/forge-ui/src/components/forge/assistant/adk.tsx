@@ -1,5 +1,6 @@
 import * as React from "react"
 import {
+  ThreadPrimitive,
   useAuiState,
   type ToolCallMessagePartComponent,
 } from "@assistant-ui/react"
@@ -9,6 +10,8 @@ import {
   useAdkAuthRequests,
   useAdkConfirmTool,
   useAdkEscalation,
+  useAdkLongRunningToolIds,
+  useAdkSessionState,
   useAdkSubmitAuth,
   useAdkSubmitInput,
   type AdkAuthCredential,
@@ -20,6 +23,7 @@ import {
 } from "@hugeicons/core-free-icons"
 import { cn } from "cn"
 
+import { ThreadFollowupSuggestions } from "@/components/assistant-ui/elements/follow-up-suggestions.aui"
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui"
 import { Button } from "@/components/ui/button"
 import {
@@ -30,7 +34,27 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Input } from "@/components/ui/input"
+import {
+  Questionnaire,
+  QuestionnaireActions,
+  QuestionnaireChoice,
+  QuestionnaireChoices,
+  QuestionnaireDescription,
+  QuestionnaireError,
+  QuestionnaireInput,
+  QuestionnaireItem,
+  QuestionnaireNext,
+  QuestionnairePrevious,
+  QuestionnaireProgress,
+  QuestionnaireSkip,
+  QuestionnaireSubmit,
+  QuestionnaireTitle,
+} from "@/components/ui/questionnaire"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { Spinner } from "@/components/ui/spinner"
 import { AgentOrb } from "@/components/forge/avatars"
 import { Icon } from "@/components/forge/icon"
@@ -39,6 +63,16 @@ import { CountBadge } from "@/components/forge/status"
 
 import { useAssistantSettings, type ApprovalView } from "./assistant-context"
 import { SearchLabel, type AssistantSearch } from "./sources"
+import { answerFrom, askForm, describeAnswer } from "./ask-person"
+import { followUpsOf } from "./follow-ups"
+import {
+  compactTokens,
+  contextView,
+  currentContext,
+  fullTokens,
+  percent,
+  type ContextView,
+} from "./context-window"
 import { extendedThinkingLevels } from "./model-settings"
 import {
   ModelSelectorRoot,
@@ -110,18 +144,25 @@ function RequestCard({
   title,
   description,
   done,
+  plain = false,
   children,
 }: {
   icon: IconProp
   title: React.ReactNode
   description?: React.ReactNode
   done?: React.ReactNode
+  /** Part of the reply, without the card's outline and fill. */
+  plain?: boolean
   children?: React.ReactNode
 }) {
   return (
     <div
       data-slot="adk-request"
-      className="my-2 flex flex-col gap-3 rounded-(--radius-card) border border-border bg-card p-3.5 text-xs"
+      data-plain={plain || undefined}
+      className={cn(
+        "my-2 flex flex-col gap-3 text-xs",
+        !plain && "rounded-(--radius-card) border border-border bg-card p-3.5"
+      )}
     >
       <div className="flex items-start gap-2.5">
         <span className="flex size-7 shrink-0 items-center justify-center rounded-(--radius-soft) bg-muted text-muted-foreground">
@@ -236,92 +277,118 @@ export const AdkAuthRequestUI: ToolCallMessagePartComponent<
 
 type RequestInputArgs = {
   message?: string
-  response_schema?: { type?: string; enum?: unknown[] }
+  response_schema?: unknown
 }
 
 /**
- * Renders ADK's `adk_request_input` call (Workflow `RequestInput` nodes):
- * choice buttons for an enum or boolean schema, a text field otherwise.
+ * Renders ADK's `adk_request_input` call (an agent asking the person, or a
+ * Workflow `RequestInput` node) as a form: a `Questionnaire` with a question
+ * per field of its `response_schema` (one at a time, with progress), or one
+ * question for any other schema: pick one, pick several, yes or no, or a typed
+ * answer (text, number, email, URL, date…). The answer goes back in the
+ * schema's types (`answerFrom`), and the turn carries on.
  */
 export const AdkInputRequestUI: ToolCallMessagePartComponent<
   RequestInputArgs,
   unknown
 > = ({ toolCallId, args, result }) => {
   const submitInput = useAdkSubmitInput()
-  const [value, setValue] = React.useState("")
   const [pending, setPending] = React.useState(false)
-  const schema = args.response_schema
-  const choices =
-    schema?.enum?.map(String) ??
-    (schema?.type === "boolean" ? ["Yes", "No"] : undefined)
+  const message = args.message?.trim() || "Please provide input to continue."
+  const form = React.useMemo(
+    () => askForm(args.response_schema, message),
+    [args.response_schema, message]
+  )
+  const several = form.questions.length > 1
 
-  const submit = async (answer: string) => {
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const answer = answerFrom(form, new FormData(event.currentTarget))
     setPending(true)
     try {
-      const typed = schema?.type === "boolean" ? answer === "Yes" : answer
-      await submitInput(toolCallId, typed)
+      await submitInput(toolCallId, answer)
     } finally {
       setPending(false)
     }
   }
 
   const answered = result === undefined ? undefined : unwrapResult(result)
-  const answer =
-    answered === undefined
-      ? undefined
-      : answered === true
-        ? "Yes"
-        : answered === false
-          ? "No"
-          : String(answered)
-
   return (
     <RequestCard
       icon="message"
       title="The agent has a question"
-      description={
-        <InlineText
-          text={args.message ?? "Please provide input to continue."}
-        />
+      plain
+      // One question is its own title; a form's questions are its fields.
+      description={form.fields ? <InlineText text={message} /> : undefined}
+      done={
+        answered !== undefined ? (
+          <>Answered: {describeAnswer(answered, form)}</>
+        ) : undefined
       }
-      done={answer !== undefined ? <>Answered: {answer}</> : undefined}
     >
-      {choices ? (
-        <div className="flex flex-wrap gap-2">
-          {choices.map((choice) => (
-            <Button
-              key={choice}
-              size="sm"
-              variant="outline"
-              disabled={pending}
-              onClick={() => submit(choice)}
-            >
-              {choice}
-            </Button>
-          ))}
-        </div>
-      ) : (
-        <form
-          className="flex items-center gap-2"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (value.trim()) void submit(value.trim())
-          }}
-        >
-          <Input
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-            placeholder="Your answer"
-            aria-label={args.message ?? "Your answer"}
-            className="h-8 text-xs"
+      <Questionnaire
+        onSubmit={submit}
+        aria-busy={pending}
+        aria-label={message}
+        className="gap-3"
+      >
+        {several && <QuestionnaireProgress />}
+        {form.questions.map((question) => (
+          <QuestionnaireItem
+            key={question.name}
+            name={question.name}
+            required={question.required}
+            multiple={question.kind === "multiple"}
             disabled={pending}
-          />
-          <Button type="submit" size="sm" disabled={pending || !value.trim()}>
+          >
+            <QuestionnaireTitle>
+              {form.fields ? (
+                question.title
+              ) : (
+                <InlineText text={question.title} />
+              )}
+            </QuestionnaireTitle>
+            {question.description && (
+              <QuestionnaireDescription>
+                {question.description}
+              </QuestionnaireDescription>
+            )}
+            {question.choices ? (
+              <QuestionnaireChoices>
+                {question.choices.map((choice) => (
+                  <QuestionnaireChoice
+                    key={choice.value}
+                    value={choice.value}
+                    defaultChecked={question.defaults.includes(choice.value)}
+                  >
+                    {choice.label}
+                  </QuestionnaireChoice>
+                ))}
+              </QuestionnaireChoices>
+            ) : (
+              <QuestionnaireInput
+                type={question.input?.type}
+                placeholder={question.input?.placeholder}
+                min={question.input?.min}
+                max={question.input?.max}
+                step={question.input?.step}
+                defaultValue={question.defaults[0]}
+                aria-label={question.title}
+              />
+            )}
+            <QuestionnaireError />
+          </QuestionnaireItem>
+        ))}
+        <QuestionnaireActions>
+          {several && <QuestionnairePrevious />}
+          <QuestionnaireSkip />
+          {several && <QuestionnaireNext />}
+          <QuestionnaireSubmit disabled={pending}>
             {pending && <Spinner data-icon="inline-start" />}
             Send
-          </Button>
-        </form>
-      )}
+          </QuestionnaireSubmit>
+        </QuestionnaireActions>
+      </Questionnaire>
     </RequestCard>
   )
 }
@@ -888,11 +955,337 @@ function AdkModelSection({ className }: { className?: string }) {
   )
 }
 
+/* -------------------------------------------------------------------------- */
+/* Composer context meter                                                     */
+/* -------------------------------------------------------------------------- */
+
+/** The meter's colour at each phase: quiet until compaction is close. */
+const contextTone = {
+  clear: "text-muted-foreground",
+  near: "text-warning-foreground",
+  compacting: "text-warning-foreground",
+  full: "text-danger-foreground",
+} as const
+
+const contextFill = {
+  clear: "bg-foreground/55",
+  near: "bg-warning-foreground",
+  compacting: "bg-warning-foreground",
+  full: "bg-danger-foreground",
+} as const
+
+/** A small ring filled as far as the conversation fills the window. */
+function ContextRing({ view }: { view: ContextView }) {
+  const radius = 6
+  const circumference = 2 * Math.PI * radius
+  const filled = Math.min(1, view.usedShare) * circumference
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      aria-hidden
+      className={cn("size-3.5 shrink-0 -rotate-90", contextTone[view.phase])}
+    >
+      <circle
+        cx="8"
+        cy="8"
+        r={radius}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        className="opacity-25"
+      />
+      <circle
+        cx="8"
+        cy="8"
+        r={radius}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray={`${filled} ${circumference}`}
+      />
+    </svg>
+  )
+}
+
+/** Used, and where it's compacted, along what a request may hold. */
+function ContextBar({ view }: { view: ContextView }) {
+  return (
+    <div
+      role="meter"
+      aria-label="Context used"
+      aria-valuemin={0}
+      aria-valuemax={view.limit}
+      aria-valuenow={Math.min(view.used, view.limit)}
+      aria-valuetext={`${fullTokens(view.used)} of ${fullTokens(view.limit)} tokens`}
+      className="relative h-1.5 w-full rounded-full bg-muted"
+    >
+      <div
+        className={cn("h-full rounded-full", contextFill[view.phase])}
+        style={{ width: `${Math.min(100, view.usedShare * 100)}%` }}
+      />
+      {view.thresholdShare !== undefined && (
+        <div
+          aria-hidden
+          title="Compaction"
+          className="absolute -top-0.5 h-2.5 w-0.5 -translate-x-1/2 rounded-full bg-foreground/70"
+          style={{ left: `${Math.min(100, view.thresholdShare * 100)}%` }}
+        />
+      )}
+    </div>
+  )
+}
+
+function ContextFact({
+  label,
+  children,
+}: {
+  label: string
+  children: React.ReactNode
+}) {
+  return (
+    <>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 text-foreground">{children}</dd>
+    </>
+  )
+}
+
+/** When the next compaction comes, in words. */
+function compactionText(view: ContextView) {
+  if (view.threshold === undefined) return "Shown once the agent has answered"
+  const at = `${fullTokens(view.threshold)} (${percent(view.thresholdShare ?? 0)})`
+  if (view.requested) return `Asked for: before the next request`
+  if (!view.auto) return `Off: only when asked for · its point is ${at}`
+  if (view.untilCompaction !== undefined && view.untilCompaction <= 0) {
+    return `At ${at} · due before the next request`
+  }
+  return `At ${at} · ${compactTokens(view.untilCompaction ?? 0)} to go`
+}
+
+const warning = "bg-warning-surface text-warning-foreground"
+const danger = "bg-danger-surface text-danger-foreground"
+
+/** What the phase means for the next request, when it's worth saying. */
+function phaseNote(view: ContextView) {
+  if (view.phase === "full") {
+    return view.auto
+      ? {
+          tone: warning,
+          text: "More than the model can read: the agent's earlier work is summarized before its next request.",
+        }
+      : {
+          tone: danger,
+          text: "More than the model can read, and automatic compaction is off: the next request may fail.",
+        }
+  }
+  if (view.phase === "compacting") {
+    return view.auto
+      ? {
+          tone: warning,
+          text: "Past the compaction point: the agent's earlier work is summarized before its next request.",
+        }
+      : {
+          tone: warning,
+          text: "Past the compaction point, and automatic compaction is off: the agent may run out of room.",
+        }
+  }
+  return undefined
+}
+
+/**
+ * The composer's context meter: how much of its model's context window the
+ * conversation holds, what's left, and when it's compacted, from the agent
+ * server's `forge:context:<agent>` state (forge_common's
+ * `ContextWindowPlugin`) for the agent answering. With the model section,
+ * the model chosen there sets the window (the next request runs on it), so
+ * it shows before the first message too. Nothing shows until there's a
+ * window to measure against.
+ */
+function AdkContextMeter({ className }: { className?: string }) {
+  const state = useAdkSessionState()
+  const agent = useAdkAgentInfo()
+  const nameOf = useAgentName()
+  const { modelSettings, title } = useAssistantSettings()
+  const found = currentContext(state, agent?.name)
+  const chosen = modelSettings?.models.find(
+    (option) => option.id === modelSettings.model
+  )
+  const view = contextView(found?.context, chosen)
+  if (!view) return null
+
+  const agentName = found
+    ? nameOf(found.agent)
+    : agent?.name
+      ? nameOf(agent.name)
+      : (title ?? "Assistant")
+  const note = phaseNote(view)
+  const used = percent(view.usedShare)
+  const summary = view.empty
+    ? `Context: nothing used yet, ${compactTokens(view.limit)} tokens available`
+    : `Context: ${compactTokens(view.used)} of ${compactTokens(view.limit)} tokens used (${used}), ` +
+      (view.left >= 0
+        ? `${compactTokens(view.left)} left`
+        : `${compactTokens(-view.left)} over`) +
+      (view.threshold !== undefined
+        ? view.auto
+          ? `; compacts at ${compactTokens(view.threshold)}`
+          : "; automatic compaction is off"
+        : "")
+
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="xs"
+            className={cn(composerChip, className)}
+          />
+        }
+        aria-label={summary}
+        data-slot="adk-context-meter"
+        data-phase={view.phase}
+      >
+        <ContextRing view={view} />
+        <span
+          className={cn(
+            "tabular-nums",
+            view.phase === "clear" ? "text-foreground" : contextTone[view.phase]
+          )}
+        >
+          {used}
+        </span>
+        <span className="@max-[30rem]:hidden">context</span>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="start" className="w-80 gap-3">
+        <div className="flex items-baseline justify-between gap-2">
+          <p className="text-sm font-medium text-foreground">Context window</p>
+          <p className="truncate text-muted-foreground">{agentName}</p>
+        </div>
+        <div className="flex flex-col gap-2">
+          <p className="flex items-baseline justify-between gap-2">
+            <span className="text-foreground tabular-nums">
+              <span className="text-sm font-medium">
+                {fullTokens(view.used)}
+              </span>{" "}
+              <span className="text-muted-foreground">
+                of {fullTokens(view.limit)} tokens
+              </span>
+            </span>
+            <span
+              className={cn(
+                "font-medium tabular-nums",
+                view.phase === "clear"
+                  ? "text-foreground"
+                  : contextTone[view.phase]
+              )}
+            >
+              {used}
+            </span>
+          </p>
+          <ContextBar view={view} />
+        </div>
+        {note && (
+          <p className={cn("rounded-(--radius-chip) px-2 py-1.5", note.tone)}>
+            {note.text}
+          </p>
+        )}
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5">
+          <ContextFact label="Left">
+            {view.left >= 0
+              ? `${fullTokens(view.left)} tokens before the limit`
+              : `${fullTokens(-view.left)} tokens over the limit`}
+          </ContextFact>
+          <ContextFact label="Compaction">{compactionText(view)}</ContextFact>
+          {view.model && (
+            <ContextFact label="Model">
+              {view.model}
+              {view.window !== undefined && (
+                <span className="text-muted-foreground">
+                  {` · ${compactTokens(view.window)} window`}
+                  {view.reply
+                    ? `, ${compactTokens(view.reply)} kept for replies`
+                    : ""}
+                </span>
+              )}
+            </ContextFact>
+          )}
+          <ContextFact label="Counted">
+            {view.empty
+              ? "Nothing in the conversation yet"
+              : view.estimated
+                ? "Estimated, before the agent's last request"
+                : "By the model, after its last reply"}
+          </ContextFact>
+          {view.compactions > 0 && (
+            <ContextFact label="Compacted">
+              {view.compactions === 1 ? "Once" : `${view.compactions} times`}
+              {view.lastCompaction && (
+                <span className="text-muted-foreground">
+                  {` · last ${compactTokens(view.lastCompaction.tokensBefore)} → ${compactTokens(view.lastCompaction.tokensAfter)}`}
+                </span>
+              )}
+            </ContextFact>
+          )}
+        </dl>
+        {view.modelChanged && (
+          <p className="text-muted-foreground">
+            Counted on the model that last answered; this is the window of the
+            one chosen, which the next request runs on.
+          </p>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/* Follow-up questions                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Above the composer once a reply is done: the follow-up questions the agent
+ * server wrote for it (`suggestFollowUps` on `useAdkAssistant`), as chips
+ * that send their question, wrapping onto more lines in a narrow chat so
+ * each can be read; while there are none, the runtime's own suggestions.
+ * Hidden while the agent works or waits on the person.
+ */
+function AdkFollowUps() {
+  const state = useAdkSessionState()
+  const suggestions = React.useMemo(() => followUpsOf(state), [state])
+  const running = useAuiState((s) => s.thread.isRunning)
+  const waiting = useAdkLongRunningToolIds().length > 0
+  if (suggestions.length === 0) return <ThreadFollowupSuggestions />
+  if (running || waiting) return null
+  return (
+    <div
+      data-slot="adk-follow-ups"
+      aria-label="Suggested follow-ups"
+      role="group"
+      className="flex animate-in flex-wrap justify-center gap-1.5 duration-300 fade-in slide-in-from-bottom-1 motion-reduce:animate-none"
+    >
+      {suggestions.map((prompt) => (
+        <ThreadPrimitive.Suggestion
+          key={prompt}
+          prompt={prompt}
+          send
+          className="max-w-full rounded-(--radius-control) border border-border px-2.5 py-1 text-start text-xs text-pretty transition-colors ease-in hover:border-foreground/25 hover:bg-foreground/[0.03] motion-reduce:transition-none"
+        >
+          {prompt}
+        </ThreadPrimitive.Suggestion>
+      ))}
+    </div>
+  )
+}
+
 export {
   composerChip,
   AdkAgentIndicator,
   AdkArtifactsMenu,
+  AdkContextMeter,
   AdkEscalationBanner,
+  AdkFollowUps,
   AdkMessageAuthor,
   AdkModelSection,
 }

@@ -64,6 +64,7 @@ Settings are flags or `FORGE_AGENT_*` variables:
 | `FORGE_AGENT_STREAMING` | `true` or `false` to stream replies, or not, whatever requests ask; as each asks by default |
 | `FORGE_AGENT_API_KEYS` | Keys the API asks for (`["k1","k2"]`): callers send `Authorization: Bearer <key>` or `X-API-Key` |
 | `FORGE_AGENT_ALLOW_PRIVATE`, `FORGE_AGENT_ALLOWED_HOSTS` | What HTTP tools may reach. Private networks are refused by default. |
+| `FORGE_AGENT_CODE_EXECUTION` | Where Code execution tools run the code agents send: `off` (the default; agents with one don't build), or `local` (`--code-execution`): ADK's `UnsafeLocalCodeExecutor`, a new Python process on this machine for each call, with the server's environment, files and network. Development only. |
 | `FORGE_AGENT_API_PREFIX` | Mount the run API under a path (`--prefix`; none by default, `/api` in `AgentServer`) |
 | `FORGE_AGENT_A2A` | `true` serves Google's A2A protocol too, at `/a2a` (`--a2a`; the `a2a` extra) |
 | `FORGE_AGENT_A2A_TASKS` | Where A2A tasks are kept: `memory`, or a database URL; the conversations' database by default |
@@ -209,9 +210,18 @@ it logs where it keeps things.
 
 Every request is ADK's run request: `appName`, `userId`, `sessionId`,
 `newMessage`, `streaming` and `stateDelta`. `stateDelta` may set `model` and
-`thinking_level` (the model picker's) and the fields the agent's **input
-schema** declares (its `state_schema`), each of its declared type. Anything
-else is refused with a 422. The schema's patterns run on forge-common's bounded
+`thinking_level` (the model picker's), `forge:suggest_follow_ups` and the
+fields the agent's **input schema** declares (its `state_schema`), each of its
+declared type. Anything else is refused with a 422.
+
+`forge:suggest_follow_ups` (`true`, or `{"count": 1–5}`) asks for follow-up
+questions after the reply: once the turn ends with one, its model (without
+thinking) writes a few short messages the person might send next, and the
+run's last event sets them in the state as `forge:follow_ups`
+(`{"suggestions": [...]}`), for the chat to show above its composer. Each turn
+clears the last turn's; one that ends waiting on the person gets none.
+forge-ui's assistant sends it with `useAdkAssistant({ suggestFollowUps: true })`
+(`forge_common.adk.follow_ups`). The schema's patterns run on forge-common's bounded
 engine (`forge_common.patterns`), not Python's `re`: one that runs away on a
 value refuses it within half a second, rather than holding the interpreter
 lock, and every other conversation with it.
@@ -281,6 +291,7 @@ organization's MCP servers and knowledge bases with it.
 | Saved agent | ✓ | Exported in the agent's `dependencies` |
 | Workflow | hosted only | Pass `RuntimeServices(workflows=…)` to provide your own |
 | Knowledge base | hosted only | Pass `RuntimeServices(knowledge_bases=…)` to provide your own |
+| Code execution | ✓ | Off until `FORGE_AGENT_CODE_EXECUTION=local` (unsandboxed: development only); or pass `RuntimeServices(code_executor=…)`, any of ADK's code executors |
 
 Exports never carry secrets: write them as `${NAME}` in the builder, and set
 them in the environment the agent runs in.

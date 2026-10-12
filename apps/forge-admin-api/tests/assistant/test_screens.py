@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from forge_common.adk.follow_ups import FollowUpsPlugin
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.apps import App
 from google.adk.models.llm_request import LlmRequest
@@ -522,13 +523,38 @@ def test_the_supervisor_is_offered_the_pages_specialists(
     sse_events(run(client, session, {"text": "Hi"}, stateDelta=home))
 
     [request] = llm.requests
-    assert sorted(request.tools_dict) == ["code"]
+    # Its specialists, and asking the person (the chat shows a form).
+    assert sorted(request.tools_dict) == ["adk_request_input", "code"]
     declared = [
         declaration.name
         for tool in request.config.tools or []
         for declaration in tool.function_declarations or []
     ]
-    assert declared == ["code"]
+    assert sorted(declared) == ["adk_request_input", "code"]
+
+
+def test_a_turn_that_asks_for_follow_ups_ends_with_them(
+    agent_client: Client, screens: Screens
+) -> None:
+    llm = ScriptedLlm(
+        turns=[
+            [types.Part(text="Two tasks are running.")],
+            [types.Part(text='["Which one is slower?", "Stop them"]')],
+        ]
+    )
+    assistant = app_on(screens, llm)
+    assistant.plugins.append(FollowUpsPlugin())
+    client = agent_client(assistant)
+    session = client.post(SESSIONS, json={}).json()["id"]
+
+    asked = {PAGE_CONTEXT: page(route="/"), "forge:suggest_follow_ups": True}
+    events = sse_events(
+        run(client, session, {"text": "What's running?"}, stateDelta=asked)
+    )
+
+    assert events[-1]["actions"]["stateDelta"] == {
+        "forge:follow_ups": {"suggestions": ["Which one is slower?", "Stop them"]}
+    }
 
 
 def test_a_conversation_keeps_its_specialists_when_the_person_moves_on(
@@ -554,11 +580,11 @@ def test_a_conversation_keeps_its_specialists_when_the_person_moves_on(
 
     declared = [sorted(request.tools_dict) for request in llm.requests]
     assert declared == [
-        ["code", "tasks"],
+        ["adk_request_input", "code", "tasks"],
         ["cancel_task", "finish_task", "read_tasks"],
         ["cancel_task", "finish_task", "read_tasks"],
-        ["code", "tasks"],
-        ["code", "tasks"],
+        ["adk_request_input", "code", "tasks"],
+        ["adk_request_input", "code", "tasks"],
     ]
     # The screen's model ran the first turn, supervisor and specialist alike;
     # the second has no screen.

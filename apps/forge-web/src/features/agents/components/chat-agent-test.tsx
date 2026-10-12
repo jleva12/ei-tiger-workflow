@@ -146,6 +146,8 @@ function TestChat({
     // the builder's chat, not an outside app's.
     headers: consoleHeaders,
     runState: state,
+    // As a chat would show them: a few questions to ask next, after each reply.
+    suggestFollowUps: true,
   })
   return (
     <AssistantProvider

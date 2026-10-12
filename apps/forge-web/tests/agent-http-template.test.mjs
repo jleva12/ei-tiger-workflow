@@ -12,7 +12,9 @@ const server = await createServer({
   root: fileURLToPath(new URL("..", import.meta.url)),
   server: { middlewareMode: true, watch: null },
   optimizeDeps: { noDiscovery: true, include: [] },
-  resolve: { alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) } },
+  resolve: {
+    alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
+  },
 })
 const load = (path) => server.ssrLoadModule(path)
 const http = await load("/src/features/agents/lib/http-template.ts")
@@ -73,21 +75,29 @@ test("the model is offered what the URL and body name, as declared", () => {
   ])
   // Undeclared, a query pair's own argument is optional; the path's is required.
   assert.deepEqual(
-    http.toolParameters(tool({ method: "GET", url: "https://x.example.com/{store}?page={page}" })).required,
+    http.toolParameters(
+      tool({ method: "GET", url: "https://x.example.com/{store}?page={page}" })
+    ).required,
     ["store"]
   )
   // A GET sends no body: what only the body names isn't offered.
-  assert.deepEqual(Object.keys(http.toolParameters({ ...config, method: "GET" }).properties), [
-    "order_id",
-    "expand",
-  ])
+  assert.deepEqual(
+    Object.keys(http.toolParameters({ ...config, method: "GET" }).properties),
+    ["order_id", "expand"]
+  )
 })
 
 test("a body is JSON once its bare placeholders are values", () => {
-  assert.equal(http.parseBody('{"a": {a}, "b": [{{ input.x }}], "c": "{c} and }"}').ok, true)
+  assert.equal(
+    http.parseBody('{"a": {a}, "b": [{{ input.x }}], "c": "{c} and }"}').ok,
+    true
+  )
   const broken = http.parseBody('{"a": a}')
   assert.equal(broken.ok, false)
-  assert.deepEqual(http.bodyArguments('{"a": {a}, "b": "x {b}", "c": [{a}]}'), ["a", "b"])
+  assert.deepEqual(http.bodyArguments('{"a": {a}, "b": "x {b}", "c": [{a}]}'), [
+    "a",
+    "b",
+  ])
 })
 
 test("an HTTP tool from before its body is read with its arguments written in", () => {
@@ -97,15 +107,26 @@ test("an HTTP tool from before its body is read with its arguments written in", 
   }
   const getting = readSettings(
     "http_tool",
-    { method: "GET", url: "https://api.example.com/orders/{order_id}", parameters },
+    {
+      method: "GET",
+      url: "https://api.example.com/orders/{order_id}",
+      parameters,
+    },
     "nodes[0].config",
     []
   )
-  assert.equal(getting.url, "https://api.example.com/orders/{order_id}?expand={expand}")
+  assert.equal(
+    getting.url,
+    "https://api.example.com/orders/{order_id}?expand={expand}"
+  )
   assert.equal(getting.body, "")
   const posting = readSettings(
     "http_tool",
-    { method: "POST", url: "https://api.example.com/orders/{order_id}", parameters },
+    {
+      method: "POST",
+      url: "https://api.example.com/orders/{order_id}",
+      parameters,
+    },
     "nodes[0].config",
     []
   )
@@ -131,10 +152,82 @@ test("a body that isn't JSON, and an argument named nowhere, are reported", () =
     body: '{"note": note}',
     parameters: { type: "object", properties: { gone: { type: "string" } } },
   }
-  const issues = validateChatAgent(toGraph(doc), {}).filter((i) => i.id.includes(node.id))
+  const issues = validateChatAgent(toGraph(doc), {}).filter((i) =>
+    i.id.includes(node.id)
+  )
   const said = issues.map((i) => i.message).join("\n")
   assert.match(said, /Its body isn't JSON/)
-  assert.match(said, /gone isn't in its URL or body/)
+  assert.match(said, /gone isn't in its URL, query parameters or body/)
   // A URL that starts with a run's value is one once it's filled in.
   assert.doesNotMatch(said, /A URL starts with/)
+})
+
+test("listed query parameters name arguments: a whole value's is optional, the rest required", () => {
+  const query = [
+    { id: "a", name: "status", value: "{status}" },
+    { id: "b", name: "q", value: "about {topic} " },
+    { id: "c", name: "{field}", value: " {since} " },
+    { id: "d", name: "region", value: "{{ state.region }}" },
+    { id: "e", name: "", value: "{ignored}" },
+  ]
+  const { names, required } = http.queryArguments(query)
+  assert.deepEqual(names, ["status", "topic", "field", "since"])
+  assert.deepEqual([...required].sort(), ["field", "topic"])
+
+  // The model is offered them after the URL's; one only a whole value is optional.
+  const offered = http.toolParameters(
+    tool({
+      method: "GET",
+      url: "https://api.example.com/{store}/search",
+      query,
+    })
+  )
+  assert.deepEqual(Object.keys(offered.properties), [
+    "store",
+    "status",
+    "topic",
+    "field",
+    "since",
+  ])
+  assert.deepEqual(offered.required, ["store", "topic", "field"])
+  assert.deepEqual(
+    http.unusedParameters(
+      tool({
+        url: "https://api.example.com/search",
+        query,
+        parameters: { type: "object", properties: { status: {}, gone: {} } },
+      })
+    ),
+    ["gone"]
+  )
+})
+
+test("query parameters are read from a document, and each needs a name", () => {
+  const notes = []
+  const read = readSettings(
+    "http_tool",
+    {
+      method: "GET",
+      url: "https://api.example.com/search",
+      body: "",
+      query: [{ name: "q", value: "{q}" }, "nonsense"],
+    },
+    "nodes[0].config",
+    notes
+  )
+  assert.equal(read.query.length, 1)
+  assert.equal(read.query[0].name, "q")
+  assert.ok(read.query[0].id)
+  assert.match(notes.join("\n"), /isn't an object/)
+
+  const doc = exampleChatAgent("org-1")
+  const node = doc.nodes.find((n) => n.kind === "http_tool")
+  node.config = { ...node.config, query: [{ id: "x", name: " ", value: "1" }] }
+  const issues = validateChatAgent(toGraph(doc), {}).filter((i) =>
+    i.id.includes(node.id)
+  )
+  assert.match(
+    issues.map((i) => i.message).join("\n"),
+    /Every query parameter needs a name/
+  )
 })

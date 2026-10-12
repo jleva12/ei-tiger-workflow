@@ -45,6 +45,8 @@ function detailOf(step: ChatStep, lookups: ChatLookups): string {
         : "When it decides to"
     case "http_tool":
       return step.config.confirm ? "Asks before calling" : "Calls it directly"
+    case "code_execution":
+      return step.config.confirm ? "Asks before running" : "Runs it directly"
     case "openapi":
       return step.config.source === "url"
         ? hostOf(step.config.url) || "Spec from a URL"
@@ -89,6 +91,8 @@ function summaryOf(step: ChatStep): NodeSummary | null {
       return step.config.description.trim()
         ? { text: step.config.description.trim() }
         : { text: `Up to ${step.config.max_results} passages a search` }
+    case "code_execution":
+      return { text: "Python the model writes, run on the server" }
     case "mcp":
       if (step.config.server)
         return step.config.tools.trim()

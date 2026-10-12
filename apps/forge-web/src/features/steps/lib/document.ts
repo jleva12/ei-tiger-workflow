@@ -19,6 +19,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 // What each item of a list setting looks like.
 const ITEMS: Record<string, Record<string, string>> = {
   headers: { id: "", name: "", value: "" },
+  query: { id: "", name: "", value: "" },
   cases: { id: "", value: "" },
   arms: { id: "", label: "", condition: "" },
 }

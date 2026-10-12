@@ -65,9 +65,9 @@ function NodeName({ id, step }: { id: string; step: ChatStep }) {
     ) : (
       "Its name needs a letter for ADK to call it by."
     )
-  ) : step.kind === "http_tool" ? (
-    name ? (
-      <>The model calls it {code(name)}.</>
+  ) : step.kind === "http_tool" || step.kind === "code_execution" ? (
+    name || step.kind === "code_execution" ? (
+      <>The model calls it {code(name || "run_code")}.</>
     ) : (
       "Its name is the tool's: it needs a letter for the model to call it by."
     )
@@ -198,6 +198,12 @@ function LlmSettings({
         placeholder="Model's limit"
         onChange={(value) => set("max_output_tokens", value)}
       />
+      <CheckField
+        label="Can ask the person"
+        checked={config.ask_person}
+        onChange={(on) => set("ask_person", on)}
+        description="It may stop to ask something only the person can tell it, and the chat shows a form for the answer. Not when a workflow runs it."
+      />
     </>
   )
 }
@@ -313,8 +319,8 @@ function ChatToolFields<K extends ToolKind>({
       scope={scope}
       valuesAbout={
         <>
-          what the chat sends ({code("{{ state.… }}")}) or who&apos;s chatting
-          ({code("{{ request.… }}")})
+          what the chat sends ({code("{{ state.… }}")}) or who&apos;s chatting (
+          {code("{{ request.… }}")})
         </>
       }
     />

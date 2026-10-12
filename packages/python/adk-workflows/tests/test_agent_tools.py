@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from forge_agent_runtime import RuntimeServices
+from forge_agent_runtime import RuntimeServices, code_executor
 from forge_common.adk.models import ProviderModels
 from google.adk.artifacts import InMemoryArtifactService
 from google.adk.sessions import DatabaseSessionService
@@ -134,13 +134,19 @@ def with_tools(
     code: Any = None,
     answer: Callable[..., Any] | None = None,
     workflow_wait: float = 120.0,
+    code_execution: str = "off",
 ) -> Worker:
     """A worker whose LLM agents run on ``llm``, their tools on fakes."""
     models = ProviderModels(PROVIDERS, build=lambda _call: llm)
     w = worker(sessions, model=models, answer=answer)
     agents = AgentServices(
         models=models,
-        runtime=RuntimeServices(environment={}, allowed_hosts=("api.example.com",), mcp_servers=servers),
+        runtime=RuntimeServices(
+            environment={},
+            allowed_hosts=("api.example.com",),
+            mcp_servers=servers,
+            code_executor=code_executor(code_execution),
+        ),
         http=w.task.services.http,
         search=search,
         code=code,
@@ -220,6 +226,26 @@ async def test_an_http_tools_url_and_body_read_the_runs_data(sessions: DatabaseS
         "properties": {"sku": {"type": "string"}, "count": {"type": "integer"}},
         "required": ["sku"],
     }
+
+
+async def test_an_llm_agent_runs_code_and_reads_what_it_printed(sessions: DatabaseSessionService) -> None:
+    llm = ScriptedLlm(turns=[[call("calculate", code="print(sum(range(1, 101)))")], [text("5050")]])
+    w = with_tools(sessions, llm, code_execution="local")
+    code = tool("tool_code", "code_execution", "Calculate")
+    document = line(node("helper", "llm", llm_config(tools=[code])), end("done", "steps.helper.output"))
+
+    result = await w.run(payload(document, {}))
+
+    assert result.status is JobStatus.OK, result.detail
+    assert result.detail["result"] == "5050"
+    ran = llm.requests[1].contents[-1].parts[0].function_response.response  # type: ignore[index, union-attr]
+    assert ran == {"status": "success", "payload": {"stdout": "5050\n", "stderr": ""}}
+
+    # Where code execution is off, a step whose agent runs code fails, saying so.
+    llm.turns = [[text("unused")]]
+    off = await with_tools(sessions, llm).run(payload(document, {}).model_copy(update={"session_id": "other"}))
+    assert off.status is JobStatus.FAILED
+    assert "tool 'Calculate'" in str(off.error) and "code execution is off" in str(off.error)
 
 
 async def test_a_knowledge_base_tool_searches_what_the_run_carries(sessions: DatabaseSessionService) -> None:

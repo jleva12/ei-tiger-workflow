@@ -42,7 +42,10 @@ from forge_agent_runtime.http_templates import (
     body_arguments,
     parameters_of,
     parse_body,
+    parse_query,
+    query_arguments,
     render_body,
+    render_query,
     render_url,
     run_values,
 )
@@ -53,6 +56,7 @@ from forge_agent_runtime.services import (
     WorkflowRunner,
 )
 from forge_common.adk import ForgeBaseToolset, ToolFailure
+from forge_common.urls import with_query
 
 #: The most redirects one request follows.
 MAX_REDIRECTS = 5
@@ -166,6 +170,8 @@ class HttpTool(BaseTool):
     redirect elsewhere goes without it.
 
     :param url: Its URL, a template.
+    :param query: Its query parameters, ``[{name, value}]``, each a template:
+        added to the URL's query, each name and value percent-encoded.
     :param body: Its JSON body, a template; sent by POST, PUT and PATCH only.
     :param parameters: A JSON Schema of the arguments: their types and
         descriptions. The model is offered those the URL and body name.
@@ -186,6 +192,7 @@ class HttpTool(BaseTool):
         services: RuntimeServices,
         http: httpx.AsyncClient,
         body: str = "",
+        query: Any = (),
         credential: str = "",
         organization_id: str | None = None,
         label: str = "",
@@ -207,8 +214,14 @@ class HttpTool(BaseTool):
             if self.method in BODY_METHODS
             else None
         )
+        self.query = parse_query(
+            query, lambda n: fill(n, where=f"{label!r}'s query"), what=f"{label!r}'s query parameter"
+        )
         self.headers = headers
         names, required = self.url.arguments()
+        in_query, query_needs = query_arguments(self.query)
+        names += [n for n in in_query if n not in names]
+        required |= query_needs
         in_body = body_arguments(self.body)
         optional = {n for n in names if n not in required and n not in in_body}
         names += [n for n in in_body if n not in names]
@@ -249,7 +262,10 @@ class HttpTool(BaseTool):
     async def run_async(self, *, args: dict[str, Any], tool_context: ToolContext) -> Any:
         # Only what its URL and body name: anything else the model sends goes nowhere.
         values = run_values(self.services.tool_values, tool_context, what=f"{self.name!r}")
-        url = await render_url(self.url, args, values)
+        # The listed query parameters after the URL's own, each name and value encoded.
+        url = with_query(
+            await render_url(self.url, args, values), await render_query(self.query, args, values)
+        )
         body = OMITTED if self.body is None else await render_body(self.body, args, values)
         for hop in range(MAX_REDIRECTS + 1):
             await check_url(url, self.services)

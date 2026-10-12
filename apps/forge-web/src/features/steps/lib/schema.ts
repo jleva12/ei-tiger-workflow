@@ -33,6 +33,11 @@ export const CONFIGS: Record<StepKind, Record<string, unknown>> = {
   http: {
     method: oneOf("GET", "POST", "PUT", "PATCH", "DELETE"),
     url: text,
+    query: {
+      ...listOf({ id: text, name: text, value: text }),
+      description:
+        "Query parameters, added to the URL's own: each name and value a template, filled in then percent-encoded. A value that's one {{ }} coming to nothing leaves its parameter out; a list sends it once per item.",
+    },
     headers: listOf({ id: text, name: text, value: text }),
     body: {
       ...text,

@@ -11,7 +11,13 @@ import {
 
 import { Thread } from "@/components/assistant-ui/elements/thread.aui"
 
-import { AdkMessageAuthor, AdkModelSection, AdkToolFallback } from "./adk"
+import {
+  AdkContextMeter,
+  AdkFollowUps,
+  AdkMessageAuthor,
+  AdkModelSection,
+  AdkToolFallback,
+} from "./adk"
 import { adkToolkit, delegationToolkit } from "./adk-toolkit"
 import {
   AssistantSettingsContext,
@@ -75,8 +81,10 @@ export type AssistantOptions = {
   /** Beside each reply's copy and retry actions, e.g. its timing and tokens. */
   messageMeta?: React.ComponentType
   /**
-   * Above the composer once a reply is done, e.g. suggested follow-up
-   * questions; the runtime's own suggestions otherwise.
+   * Above the composer once a reply is done, in place of the default: the
+   * follow-up questions the agent server wrote for the reply
+   * (`suggestFollowUps` on `useAdkAssistant`), or the runtime's own
+   * suggestions while there are none (`AdkFollowUps`).
    */
   followUps?: React.ComponentType
   /**
@@ -96,6 +104,16 @@ export type AssistantOptions = {
    * their names. A call handing a request to one of them shows as asking it.
    */
   agents?: Readonly<Record<string, string>>
+  /**
+   * Shows the context meter in the composer, after the model section: how
+   * much of the model's context window the conversation holds, what's left
+   * and when it's compacted, from an agent server that reports it in the
+   * session's state (`forge:context:<agent>`, forge_common's
+   * `ContextWindowPlugin`). A model with a `contextWindow` in the model
+   * section sets the window (the next request runs on it). Nothing shows
+   * until there's a window to measure against. Default true.
+   */
+  showContext?: boolean
 } & (
   | { showModels?: false; modelSettings?: ModelSettings }
   | {
@@ -163,6 +181,7 @@ function AssistantProvider({
   onOpenArtifact,
   sources,
   agents,
+  showContext,
   showModels,
   modelSettings,
   children,
@@ -198,6 +217,7 @@ function AssistantProvider({
       onOpenArtifact,
       sources,
       agents,
+      showContext,
       showModels,
       modelSettings,
     }),
@@ -217,6 +237,7 @@ function AssistantProvider({
       onOpenArtifact,
       sources,
       agents,
+      showContext,
       showModels,
       modelSettings,
     ]
@@ -254,12 +275,20 @@ function AssistantComposerContext() {
   return <>{composerContext}</>
 }
 
-/** The composer's bottom row: the model section, then the app's controls. */
+/**
+ * The composer's bottom row: the model section, the context meter (each
+ * when it's on), then the app's controls.
+ */
 function AssistantComposerActions() {
-  const { showModels, composerActions } = useAssistantSettings()
+  const {
+    showModels,
+    showContext = true,
+    composerActions,
+  } = useAssistantSettings()
   return (
     <>
       {showModels && <AdkModelSection />}
+      {showContext && <AdkContextMeter />}
       {composerActions}
     </>
   )
@@ -275,23 +304,21 @@ const threadComponents = {
 
 /**
  * The conversation and composer with the Forge and ADK parts: welcome, ADK
- * tool cards, agent labels, and the composer's context, model section and
- * `/` commands when they're configured. Render it inside `AssistantProvider`.
+ * tool cards, agent labels, and the composer's context, model section,
+ * context meter and `/` commands when they're configured. Render it inside
+ * `AssistantProvider`.
  */
 function AssistantThread() {
   const {
-    showModels,
     commands,
     composerContext,
     composerLead,
-    composerActions,
     composerTrailingActions,
     messageMeta,
     followUps,
   } = useAssistantSettings()
   const hasCommands = Boolean(commands?.length)
   const hasContext = composerContext != null
-  const hasActions = showModels || composerActions != null
   const components = React.useMemo(
     () => ({
       ...threadComponents,
@@ -300,14 +327,15 @@ function AssistantThread() {
       ...(composerTrailingActions && {
         ComposerTrailingActions: composerTrailingActions,
       }),
-      ...(hasActions && { ComposerActions: AssistantComposerActions }),
+      // The model section, the context meter and the app's controls, each when it's on.
+      ComposerActions: AssistantComposerActions,
       ...(hasCommands && { ComposerTriggers: AssistantCommandMenu }),
       ...(messageMeta && { MessageMeta: messageMeta }),
-      ...(followUps && { FollowUps: followUps }),
+      // The agent server's follow-up questions, unless the app has its own.
+      FollowUps: followUps ?? AdkFollowUps,
     }),
     [
       hasContext,
-      hasActions,
       hasCommands,
       messageMeta,
       followUps,

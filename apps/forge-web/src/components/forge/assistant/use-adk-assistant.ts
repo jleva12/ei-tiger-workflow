@@ -15,6 +15,7 @@ import {
   type UseAdkRuntimeOptions,
 } from "@assistant-ui/react-google-adk"
 
+import { followUpsRequest, type FollowUpsOption } from "./follow-ups"
 import {
   defaultModelStateDelta,
   defaultThinkingLevels,
@@ -92,6 +93,16 @@ export type UseAdkAssistantOptions = Omit<
    * each run. Default: `{ model, thinking_level }`.
    */
   modelStateDelta?: (selection: ModelSelection) => Record<string, unknown>
+  /**
+   * Asks the agent server for follow-up questions after each reply: every run
+   * sends `forge:suggest_follow_ups` in its state (true, or `{ count }`, 1–5),
+   * and once the turn ends with a reply, the server's model writes a few
+   * messages the person might send next (forge_common's `FollowUpsPlugin`,
+   * in Forge's agent runtimes). The thread shows them above the composer as
+   * chips that send them. A server that doesn't know it ignores it, or refuses
+   * the key if it checks the state it's sent.
+   */
+  suggestFollowUps?: FollowUpsOption
 }
 
 /**
@@ -112,6 +123,7 @@ export function useAdkAssistant({
   thinkingLevels = defaultThinkingLevels,
   defaultThinkingLevel,
   modelStateDelta = defaultModelStateDelta,
+  suggestFollowUps,
   ...options
 }: UseAdkAssistantOptions) {
   // Headers may change (a refreshed token) without rebuilding the transport:
@@ -160,30 +172,34 @@ export function useAdkAssistant({
     defaultThinkingLevel,
   })
 
-  // Runs carry `runState` and, while it's shown, the model section's
-  // selection as ADK state.
+  // Runs carry `runState`, the request for follow-ups when they're on and,
+  // while it's shown, the model section's selection as ADK state.
   const selectionRef = useRef<ModelSelection | undefined>(undefined)
   const toStateDeltaRef = useRef(modelStateDelta)
   const runStateRef = useRef(runState)
+  const followUpsRef = useRef(suggestFollowUps)
   useEffect(() => {
     const { model, thinkingLevel } = modelSettings
     selectionRef.current = modelsShown ? { model, thinkingLevel } : undefined
     toStateDeltaRef.current = modelStateDelta
     runStateRef.current = runState
+    followUpsRef.current = suggestFollowUps
   })
   const send = useCallback<AdkStreamCallback>(
     async function* (messages, config) {
       const selection = selectionRef.current
       try {
         const state = runStateRef.current?.()
+        const followUps = followUpsRequest(followUpsRef.current)
         yield* await connection.stream(
           messages,
-          selection || state
+          selection || state || followUps
             ? {
                 ...config,
                 stateDelta: {
                   ...config.stateDelta,
                   ...state,
+                  ...followUps,
                   ...(selection && toStateDeltaRef.current(selection)),
                 },
               }

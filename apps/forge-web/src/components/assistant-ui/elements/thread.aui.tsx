@@ -110,6 +110,11 @@ export type ThreadComponents = {
    * commands or `@` mentions), rendered inside its trigger root.
    */
   ComposerTriggers?: ComponentType | undefined
+  /**
+   * Above the composer once a reply is done, in place of the runtime's own
+   * follow-up suggestions, e.g. ones a server writes.
+   */
+  FollowUps?: ComponentType | undefined
 }
 
 const messageGroupBy = groupPartByType({
@@ -229,7 +234,8 @@ const ThreadRoot: FC<{
   placeholder: string
   composer: boolean
 }> = ({ isEmpty, autoFocus, placeholder, composer }) => {
-  const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext)
+  const { Welcome = ThreadWelcome, FollowUps = ThreadFollowupSuggestions } =
+    useContext(ThreadComponentsContext)
   // A new message scrolls to the top (turnAnchor="top") and its reply fills
   // the space below; once the reply outgrows it, the thread follows it.
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -284,7 +290,7 @@ const ThreadRoot: FC<{
             <ThreadScrollToBottom />
             {composer && (
               <>
-                <ThreadFollowupSuggestions />
+                <FollowUps />
                 <Composer autoFocus={autoFocus} placeholder={placeholder} />
                 <AuiIf
                   condition={(s) => isNewChatView(s) && s.composer.isEmpty}

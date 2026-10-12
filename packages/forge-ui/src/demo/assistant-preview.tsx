@@ -25,11 +25,15 @@ const models = [
     id: "gemini-2.5-pro",
     name: "Gemini 2.5 Pro",
     description: "Most capable, for complex work",
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
   },
   {
     id: "gemini-2.5-flash",
     name: "Gemini 2.5 Flash",
     description: "Fast, for everyday tasks",
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
   },
 ]
 
@@ -93,7 +97,7 @@ const suggestions = [
   },
   {
     title: "Deploy main",
-    label: "asks you a question",
+    label: "asks a few questions in a form",
     prompt: "Deploy main",
   },
   {
@@ -109,6 +113,7 @@ export function AssistantPreview({ className }: { className?: string }) {
     stream: mockAdkStream,
     models,
     onFeedback: recordFeedback,
+    suggestFollowUps: true,
   })
   return (
     <AssistantScreen
@@ -144,6 +149,7 @@ export function AssistantModalPreview({
     stream: mockAdkStream,
     models,
     onFeedback: recordFeedback,
+    suggestFollowUps: true,
   })
   return (
     <div className={cn("relative", className)}>

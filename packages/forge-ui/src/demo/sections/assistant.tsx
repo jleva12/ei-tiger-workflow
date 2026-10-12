@@ -184,6 +184,23 @@ root_agent = Agent(
 )`}
         />
       </Specimen>
+
+      <Specimen
+        title="Context meter"
+        description="Beside the model section, the composer shows how much of the model's context window the conversation holds, what's left and when the agent is compacted, from the agent server's forge:context:<agent> session state (forge_common's ContextWindowPlugin, which also compacts the agent mid-turn). With showModels, a model's contextWindow and maxTokens set the window before the first reply and after a switch. It turns amber near the compaction point and red past the model's limit; showContext={false} hides it."
+      >
+        <CodeBlock
+          code={`from google.adk.apps import App
+from forge_common.adk.context_window import ContextWindowPlugin, windows_from
+
+app = App(
+    name="forge_assistant",
+    root_agent=root_agent,
+    # Keeps forge:context:<agent> in the session's state; compacts at 80%.
+    plugins=[ContextWindowPlugin(window=windows_from(models))],
+)`}
+        />
+      </Specimen>
     </SectionPage>
   )
 }

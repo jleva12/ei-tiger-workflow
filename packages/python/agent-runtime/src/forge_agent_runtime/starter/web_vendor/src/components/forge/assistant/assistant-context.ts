@@ -56,6 +56,8 @@ export type AssistantSettings = {
   title?: string | undefined
   /** Whether the composer shows the model section. */
   showModels?: boolean | undefined
+  /** Whether the composer shows the context meter; see `AssistantOptions`. */
+  showContext?: boolean | undefined
   modelSettings?: ModelSettings | undefined
   commands?: AssistantCommand[] | undefined
   /** Shown at the top of the composer; see `AssistantOptions`. */

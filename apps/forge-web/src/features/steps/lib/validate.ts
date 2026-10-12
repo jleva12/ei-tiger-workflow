@@ -70,6 +70,11 @@ export function settingsIssues(
         )
       }
       need(
+        c.query.every((q) => q.name.trim()),
+        "query",
+        "Every query parameter needs a name."
+      )
+      need(
         c.headers.every((h) => h.name.trim()),
         "headers",
         "Every header needs a name."
@@ -194,6 +199,7 @@ export function switchIssues(
 const FIELDS: Record<string, string> = {
   message: "message",
   url: "url",
+  query: "query",
   headers: "headers",
   body: "body",
   expression: "expression",

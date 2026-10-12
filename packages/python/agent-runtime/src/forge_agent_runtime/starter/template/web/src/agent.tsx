@@ -26,7 +26,8 @@ function personId() {
 /**
  * The agent, as a floating assistant in the page's bottom-right corner. It
  * asks the server which agent it runs (GET /api/agent), then talks to it over
- * ADK's run API, sending `agentState` with every message.
+ * ADK's run API, sending `agentState` with every message and asking for
+ * follow-up questions after each reply.
  */
 export function AgentAssistant() {
   const [agent, setAgent] = React.useState<Agent | null>(null)
@@ -58,6 +59,8 @@ function Assistant({ agent }: { agent: Agent }) {
   const { runtime, artifacts } = useAdkAssistant({
     adk: { url: API, appName: agent.id, userId },
     runState: () => ({ ...agentState }),
+    // A few questions to ask next, above the composer after each reply.
+    suggestFollowUps: true,
   })
   return (
     <AssistantModal

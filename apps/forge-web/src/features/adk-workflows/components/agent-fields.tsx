@@ -897,7 +897,7 @@ function ToolList({
         <p className="text-xs/[1.5] text-muted-foreground">
           What the agent can call: the organization&apos;s MCP servers and
           knowledge bases, HTTP endpoints, OpenAPI specs, agents from the Agents
-          page and workflows, set up as on the Agents page.
+          page, workflows and code execution, set up as on the Agents page.
         </p>
       )}
     </div>
@@ -1010,9 +1010,11 @@ function ToolSettings({
         />
         <IssueMessages issues={issues} />
         <FieldDescription hidden={issues.length > 0}>
-          {tool.kind === "http_tool" || tool.kind === "knowledge_base" ? (
-            name ? (
-              <>The model calls it {code(name)}.</>
+          {tool.kind === "http_tool" ||
+          tool.kind === "knowledge_base" ||
+          tool.kind === "code_execution" ? (
+            name || tool.kind === "code_execution" ? (
+              <>The model calls it {code(name || "run_code")}.</>
             ) : (
               "Its name is the tool's: it needs a letter for the model to call it by."
             )

@@ -24,6 +24,7 @@ from forge_agent_runtime import (
     DocumentError,
     ResolvedAgent,
     RuntimeServices,
+    code_executor,
     parse_document,
 )
 from forge_codegraph_query import CodeGraph
@@ -274,6 +275,7 @@ def create_executor(
         environment_note=TOOL_ENVIRONMENT_NOTE,
         allow_private=settings.agent_tools_allow_private,
         allowed_hosts=tuple(settings.agent_tools_allowed_hosts),
+        code_executor=code_executor(settings.agent_code_execution),
         mcp_servers=OrganizationMcpServers(mcp_servers, sessions)
         if mcp_servers is not None
         else None,

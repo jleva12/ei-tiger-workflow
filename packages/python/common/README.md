@@ -10,6 +10,8 @@ what it imports.
 | `forge_common.model_provider` | `model-provider` | The shared `model_provider.yaml` files and their loader: the model providers and models the apps may use |
 | `forge_common.adk.models` | `adk-models` | `ProviderModels`: an ADK model that runs each turn on one of `model_provider.yaml`'s models |
 | `forge_common.adk.context_window` | `adk` | `ContextWindowPlugin`: each agent's context window kept in the session's state, and compacted in the middle of a turn, branch by branch |
+| `forge_common.adk.ask_person` | `adk` | `ask_person`: ADK's `adk_request_input` tool for asking the person mid-turn, answered in the chat's form, and `repair_input_schemas` |
+| `forge_common.adk.follow_ups` | `adk` | `FollowUpsPlugin`: follow-up questions after a reply, for the runs that ask for them, kept in the state for the chat to show |
 | `forge_common.logging`, `forge_common.middleware` | `logging` | Structured logs for every logger (structlog), and `RequestContextMiddleware`: request ids and access lines |
 | `forge_common.adk.memory` | `adk-memory` | `AtlasVectorMemoryService`: ADK memory in MongoDB Atlas, embedded by OpenAI and searched with Atlas Vector Search |
 | `forge_common.templates` | `templates` | `TemplateEngine`: Jinja templates in a directory rendered to HTML with a dictionary, as a service apps inject |
@@ -229,10 +231,14 @@ context_of(session.state, "researcher")
 
 - **Counting.** Before each model call it measures the request (instructions,
   tool declarations, messages) and keeps it in the state under
-  `forge:context:<agent>`, with what the model may read (`contextWindow` less
-  `maxTokens`, from `windows_from`). Characters per token start at 3.5 and
-  follow what the provider reported; once the model answers, the count is the
-  provider's.
+  `forge:context:<agent>`: `tokens`, `limit` (the model's `window` less the
+  `reply` it keeps, from `windows_from`), `threshold` (the `share` it
+  compacts at), `auto`, `counted` (`estimate` or `provider`), `updated`,
+  `compactions` and `last_compaction`. The window is the model the next
+  request runs on: one just chosen in the state's `model` (`model_key`) counts
+  from its first request. Characters per token start at 3.5 and follow what
+  the provider reported; once the model answers, the count is the provider's.
+  The console's composer shows it as a context meter beside the model picker.
 - **Compacting.** At `threshold` (0.8 of what it may read), or when a tool or
   callback asks (`request_compaction(tool_context)`), it summarizes the older
   part of what the agent sees and rebuilds the request before it goes out.
@@ -255,6 +261,55 @@ context_of(session.state, "researcher")
 
 It relies on ADK 2.10's contents step (`google.adk.flows.llm_flows.contents`);
 its tests check it against the ADK this workspace locks.
+
+## Asking the person
+
+`forge_common.adk.ask_person.ask_person` is ADK's own `adk_request_input`
+tool with a description that teaches the model the answer schemas the Forge
+chat turns into a form (one question per field of an object; pick one, pick
+several, yes/no, numbers, dates, emails…). Calling it pauses the turn; the
+person's answer comes back as the call's function response
+(`{"result": …}`, in the schema's types) and carries the turn on.
+
+```python
+from forge_common.adk.ask_person import ask_person, repair_input_schemas
+
+agent = LlmAgent(..., tools=[ask_person], after_model_callback=repair_input_schemas)
+```
+
+`repair_input_schemas` moves a `required` the model put among the
+`properties` to beside them and drops what isn't a schema there: ADK checks
+the answer against the schema, and fails on a property that isn't one.
+`ASK_PERSON_INSTRUCTION` is a sentence for the agent's instruction. The
+Forge assistant always has the tool; chat agents have it when their "Can ask
+the person" setting is on; agents a workflow runs never do.
+
+## Follow-up questions
+
+`forge_common.adk.follow_ups.FollowUpsPlugin` goes on the `App`. A run asks
+for follow-ups in its state delta (`forge:suggest_follow_ups`: `true`, or
+`{"count": 1–5}`), as forge-ui's `useAdkAssistant({ suggestFollowUps: true })`
+sends it. When the agent that took the turn ends it with a reply, the model
+that wrote the reply (thinking off) writes a few short messages the person
+might send next, from the conversation's last messages, and the run's last
+event keeps them in the state as `forge:follow_ups` (`{"suggestions": [...]}`;
+`follow_ups_of` reads it). The chat shows them above its composer.
+
+```python
+from forge_common.adk.follow_ups import FollowUpsPlugin
+
+app = App(name="ca_x", root_agent=root, plugins=[FollowUpsPlugin()])
+```
+
+Each turn clears the last turn's first, so they always follow the last reply.
+A turn that ends waiting on the person (a question, an approval, a sign-in)
+gets none, and so does a run that didn't ask: an A2A call, another client, or
+an agent run as a tool (`AgentTool`), which is given the caller's state but
+not its request. `count`, `model`, `thinking_level`, `instruction` and
+`timeout` change how they're written. Suggesting never fails a turn, and its
+model call isn't recorded as usage (other plugins don't see it). The chat
+agents' runtime (`build_app`) and the Forge assistant have the plugin; their
+run-state checks allow the key.
 
 ## Logging
 

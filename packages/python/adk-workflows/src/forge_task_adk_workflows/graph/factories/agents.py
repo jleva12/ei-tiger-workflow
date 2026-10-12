@@ -17,7 +17,7 @@ Agents: ADK's own, with their sub-agents built the same way inside them.
 
 An LLM agent's ``tools`` are the Agents builder's (an MCP server, a knowledge
 base, an HTTP tool, an OpenAPI spec, an agent from the Agents page, a
-workflow), each built the first time the agent asks the model
+workflow, code execution), each built the first time the agent asks the model
 (``graph.agent_tools.LazyToolset``). In a run started with files, every one
 also has the run's file tools (``forge_task_adk_workflows.files.file_tools``)
 wherever the worker keeps artifacts: ADK's ``load_artifacts`` (it's told the
@@ -92,7 +92,9 @@ from forge_task_adk_workflows.support.expressions import plain
 DEFAULT_MODEL = "gemini-3.5-flash"
 SUB_AGENT_KINDS = frozenset({"llm", "sequential", "parallel", "loop_agent"})
 #: What an LLM agent's tools may be: the Agents builder's kinds.
-TOOL_KINDS = frozenset({"mcp", "knowledge_base", "http_tool", "openapi", "saved_agent", "adk_workflow"})
+TOOL_KINDS = frozenset(
+    {"mcp", "knowledge_base", "http_tool", "openapi", "saved_agent", "adk_workflow", "code_execution"}
+)
 # ADK would have a Workflow instead of a team agent, but a Workflow can't yet
 # be an LLM agent's sub-agent.
 _DEPRECATED = "[A-Za-z]+Agent is deprecated in favor of Workflow"

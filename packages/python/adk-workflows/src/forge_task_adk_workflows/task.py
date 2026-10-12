@@ -181,11 +181,12 @@ def build_agent_services(
     What LLM agents' tools use on this worker: its models, ``${NAME}`` from
     its environment, where HTTP tools may go (its HTTP steps' rules), the
     organization's MCP servers in the admin MySQL (with the admin's secrets
-    key), and knowledge base search when given.
+    key), where Code execution tools run code, and knowledge base search
+    when given.
     """
     import os
 
-    from forge_agent_runtime import RuntimeServices
+    from forge_agent_runtime import RuntimeServices, code_executor
 
     servers: Any = None
     store: Any = None
@@ -216,12 +217,16 @@ def build_agent_services(
     if unavailable:
         log.warning("adk_workflows: the organization's MCP servers and credentials can't be used: %s", unavailable)
     runtime = RuntimeServices(
+        # A run asks people with its Human input steps, on the run's page: an
+        # agent it runs has nobody to ask mid-turn.
+        ask_person=False,
         environment=tool_environment(settings.tool_environment, os.environ),
         environment_note=TOOL_ENVIRONMENT_NOTE,
         allow_private=settings.http_allow_private,
         allowed_hosts=tuple(settings.http_allowed_hosts),
         max_response_bytes=settings.http_max_response_bytes,
         model_timeout=settings.model_timeout,
+        code_executor=code_executor(settings.code_execution),
         mcp_servers=WorkerMcpServers(
             servers,
             store,

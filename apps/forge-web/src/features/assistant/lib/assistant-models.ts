@@ -71,6 +71,8 @@ export function toAssistantModel(model: AgentModel): AssistantModel {
     group: model.providerName,
     icon: modelMakerIcon(model),
     thinkingLevels: model.thinkingLevels,
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
   }
 }
 

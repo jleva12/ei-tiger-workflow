@@ -42,6 +42,8 @@
       "config": {
         "method": "GET",
         "url": "https://api.example.com/customers/{{ input.customer_id }}",
+        "query": [],
+
         "headers": [
           {
             "id": "h_accept",
@@ -332,6 +334,8 @@
       "config": {
         "method": "POST",
         "url": "https://hooks.example.com/support/replies",
+        "query": [],
+
         "headers": [
           {
             "id": "h_ct",

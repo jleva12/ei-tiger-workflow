@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 from fastapi import FastAPI
 from forge_common.adk.context_window import ContextWindowPlugin, windows_from
+from forge_common.adk.follow_ups import FollowUpsPlugin
 from forge_common.adk.models import ProviderModels
 from forge_common.adk.usage import UsagePlugin, price_from
 from forge_task_adk_workflows.usage_store import UsageStore
@@ -78,6 +79,8 @@ class AgentRuntime:
         # Each agent's context window kept in the conversation's state, and
         # compacted mid-turn when its request nears the model's window.
         assistant.plugins.append(ContextWindowPlugin(window=windows_from(model)))
+        # Follow-up questions after a reply, for the runs that ask for them.
+        assistant.plugins.append(FollowUpsPlugin())
         usage = UsageStore(engine)
         # Every model and tool call of a turn the run attributes (attributed()).
         assistant.plugins.append(

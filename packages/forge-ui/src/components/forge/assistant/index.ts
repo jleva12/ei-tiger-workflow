@@ -11,7 +11,9 @@ export {
   AdkArtifactsMenu,
   AdkAuthRequestUI,
   AdkConfirmationUI,
+  AdkContextMeter,
   AdkEscalationBanner,
+  AdkFollowUps,
   AdkInputRequestUI,
   AdkMessageAuthor,
   AdkModelSection,
@@ -19,6 +21,24 @@ export {
   composerChip,
 } from "./adk"
 export { adkToolkit } from "./adk-toolkit"
+export {
+  CONTEXT_STATE_PREFIX,
+  contextView,
+  currentContext,
+  parseAgentContext,
+  type AgentContext,
+  type ContextPhase,
+  type ContextView,
+  type ModelWindow,
+} from "./context-window"
+export {
+  FOLLOW_UPS_REQUEST_KEY,
+  FOLLOW_UPS_STATE_KEY,
+  MOST_FOLLOW_UPS,
+  followUpsOf,
+  followUpsRequest,
+  type FollowUpsOption,
+} from "./follow-ups"
 export { citedRefs, remarkSourceRefs } from "./source-refs"
 export {
   MessageSources,

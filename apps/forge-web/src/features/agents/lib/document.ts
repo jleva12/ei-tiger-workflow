@@ -239,7 +239,7 @@ export function readSettings(
         notes.push(
           `${path} should be one of ${enums[key].map((v) => v || "empty").join(", ")}.`
         )
-    } else if (key === "headers") {
+    } else if (key === "headers" || key === "query") {
       config[key] = readList(key, value, path, notes) ?? fallback
     } else if (key === "parameters" || key === "state_schema") {
       if (isRecord(value)) config[key] = value

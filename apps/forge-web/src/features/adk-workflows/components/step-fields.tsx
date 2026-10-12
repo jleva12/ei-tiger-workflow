@@ -203,6 +203,95 @@ function HeaderList({
   )
 }
 
+/**
+ * An HTTP request's query parameters: a row each, its name and its value
+ * side by side and a bin to remove it. Both are templates, completed and
+ * checked like the URL; filled in, each is percent-encoded as it's sent.
+ */
+function QueryList({
+  id,
+  query,
+  onChange,
+}: {
+  id: string
+  query: HeaderRow[]
+  onChange: (query: HeaderRow[]) => void
+}) {
+  // A parameter just added: its name takes focus.
+  const [added, setAdded] = React.useState<string>()
+  const change = (row: HeaderRow, patch: Partial<HeaderRow>) =>
+    onChange(query.map((x) => (x.id === row.id ? { ...x, ...patch } : x)))
+  // "Every query parameter needs a name".
+  const { issues, key } = useFieldIssues("query")
+  // No space under a template until it has something to say.
+  const quiet = "gap-0 has-[[aria-live]>*]:gap-1.5"
+  return (
+    <div
+      role="group"
+      aria-label="Query parameters"
+      data-field={key}
+      className="flex flex-col gap-2"
+    >
+      <span className="text-xs font-medium text-foreground">
+        Query parameters
+      </span>
+      {query.map((row) => (
+        <div
+          key={row.id}
+          className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-start gap-1.5"
+        >
+          <Setting
+            id={id}
+            setting={`query.${row.id}.name`}
+            label="Query parameter name"
+            labelHidden
+            value={row.name}
+            placeholder="Key"
+            autoFocus={row.id === added}
+            onChange={(name) => change(row, { name })}
+            className={quiet}
+          />
+          <Setting
+            id={id}
+            setting={`query.${row.id}`}
+            label={`${row.name.trim() || "Query parameter"} value`}
+            labelHidden
+            value={row.value}
+            placeholder="Value"
+            onChange={(value) => change(row, { value })}
+            className={quiet}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={`Remove ${row.name.trim() || "query parameter"}`}
+            onClick={() => onChange(query.filter((x) => x.id !== row.id))}
+            className="h-[2.125rem] text-muted-foreground hover:text-destructive"
+          >
+            <Icon icon={Delete02Icon} />
+          </Button>
+        </div>
+      ))}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          const row = { id: uid("query"), name: "", value: "" }
+          setAdded(row.id)
+          onChange([...query, row])
+        }}
+        className="w-full border-dashed text-muted-foreground"
+      >
+        <Icon icon="plus" data-icon="inline-start" />
+        Add query parameter
+      </Button>
+      <IssueMessages issues={issues} />
+    </div>
+  )
+}
+
 /* -------------------------------------------------------------------------- */
 /* Kinds                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -265,6 +354,11 @@ function HttpFields({ id, config }: Props<"http">) {
           onChange={(value) => set("url", value)}
         />
       </div>
+      <QueryList
+        id={id}
+        query={config.query}
+        onChange={(value) => set("query", value)}
+      />
       <CredentialField
         organizationId={organizationId}
         value={config.credential}

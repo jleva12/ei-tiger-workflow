@@ -11,7 +11,12 @@ import {
 
 import { Thread } from "@/components/assistant-ui/elements/thread.aui"
 
-import { AdkMessageAuthor, AdkModelSection, AdkToolFallback } from "./adk"
+import {
+  AdkComposerActions,
+  AdkFollowUps,
+  AdkMessageAuthor,
+  AdkToolFallback,
+} from "./adk"
 import { adkToolkit, delegationToolkit } from "./adk-toolkit"
 import {
   AssistantSettingsContext,
@@ -67,6 +72,13 @@ export type AssistantOptions = {
    * their names. A call handing a request to one of them shows as asking it.
    */
   agents?: Readonly<Record<string, string>>
+  /**
+   * Shows the context meter in the composer: how much of the model's context
+   * window the conversation holds, what's left and when it's compacted (the
+   * agent server's `forge:context:<agent>` state). It appears once there's a
+   * window to measure against. Default true.
+   */
+  showContext?: boolean
 } & (
   | { showModels?: false; modelSettings?: ModelSettings }
   | {
@@ -127,6 +139,7 @@ function AssistantProvider({
   composerContext,
   sources,
   agents,
+  showContext,
   showModels,
   modelSettings,
   children,
@@ -155,6 +168,7 @@ function AssistantProvider({
       composerContext,
       sources,
       agents,
+      showContext,
       showModels,
       modelSettings,
     }),
@@ -167,6 +181,7 @@ function AssistantProvider({
       composerContext,
       sources,
       agents,
+      showContext,
       showModels,
       modelSettings,
     ]
@@ -210,27 +225,30 @@ const threadComponents = {
   MessageHeader: AdkMessageAuthor,
   Text: SourcedMarkdownText,
   MessageFooter: MessageSources,
+  // The follow-up questions the agent server wrote for the last reply.
+  FollowUps: AdkFollowUps,
 }
 
 /**
  * The conversation and composer with the Forge and ADK parts: welcome, ADK
- * tool cards, agent labels, and the composer's context, model section and
- * `/` commands when they're configured. Render it inside `AssistantProvider`.
+ * tool cards, agent labels, and the composer's context, model section,
+ * context meter and `/` commands when they're configured. Render it inside `AssistantProvider`.
  * `readOnly` shows the conversation without the composer: one that's only
  * read, e.g. an audit's replay of what was said.
  */
 function AssistantThread({ readOnly = false }: { readOnly?: boolean } = {}) {
-  const { showModels, commands, composerContext } = useAssistantSettings()
+  const { commands, composerContext } = useAssistantSettings()
   const hasCommands = Boolean(commands?.length)
   const hasContext = composerContext != null
   const components = React.useMemo(
     () => ({
       ...threadComponents,
       ...(hasContext && { ComposerHeader: AssistantComposerContext }),
-      ...(showModels && { ComposerActions: AdkModelSection }),
+      // The model section and the context meter, each when it's on.
+      ComposerActions: AdkComposerActions,
       ...(hasCommands && { ComposerTriggers: AssistantCommandMenu }),
     }),
-    [hasContext, showModels, hasCommands]
+    [hasContext, hasCommands]
   )
   return (
     <Thread

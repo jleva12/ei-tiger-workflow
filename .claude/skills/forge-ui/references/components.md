@@ -369,7 +369,11 @@ const { runtime, artifacts, modelSettings } = useAdkAssistant({
   browser's Web Speech API for the composer mic; `false` to turn off, or an
   assistant-ui `DictationAdapter`), `onFeedback` (shows thumbs up / down on
   replies and receives `{ type, message, text, sessionId, comment? }`; hidden
-  without it), every `useAdkRuntime` option
+  without it), `suggestFollowUps` (`true` or `{ count }`, 1–5: every run asks
+  the agent server for follow-up questions, `forge:suggest_follow_ups` in its
+  state; the server's `FollowUpsPlugin` writes them to `forge:follow_ups`, and
+  the thread shows them above the composer as chips that send them, hidden
+  while the agent works or waits on the person), every `useAdkRuntime` option
   (`getCheckpointId` enables edit/regenerate, `adapters.attachments` makes
   the attach button work), and the model section's `models`,
   `defaultModel`, `thinkingLevels` (default off/low/medium/high),
@@ -382,7 +386,8 @@ const { runtime, artifacts, modelSettings } = useAdkAssistant({
   `sidebar?`, `actions?` (top bar), `commands?: AssistantCommand[]` (the
   `/` menu), `sources?: AssistantSourcesConfig` (cited sources, below),
   `showModels?` + `modelSettings`
-  (required together; TypeScript enforces it).
+  (required together; TypeScript enforces it), `showContext?` (the context
+  meter, default true).
 - **Cited sources** (`sources`): the agent's tools return passages that each
   carry a `ref` ("S3"), and the agent cites them inline as `[S3]` (or
   `[S1, S3]`). `sources.fromToolCall(toolName, result)` turns a finished tool
@@ -403,6 +408,16 @@ const { runtime, artifacts, modelSettings } = useAdkAssistant({
   applies in a `before_model_callback` (set `llm_request.model` and
   `llm_request.config.thinking_config`). Nothing is sent without
   `showModels`.
+- **Context meter** (`AdkContextMeter`, on unless `showContext={false}`):
+  after the model section, a ring and percentage of the model's context
+  window the conversation holds (amber within a tenth of the compaction
+  point and past it, red past the limit) with a popover of tokens used and
+  left, where compaction happens, the window, the count's source and past
+  compactions. It reads `forge:context:<agent>` from the session state
+  (forge_common's `ContextWindowPlugin`) for the agent answering; an
+  `AssistantModel`'s `contextWindow` / `maxTokens` set the window while it's
+  chosen (before the first reply, after a switch). Nothing shows without a
+  window. `contextView` / `currentContext` give the numbers.
 - **Slash commands** (`commands`): `{ id, description?, icon?, prompt?,
   send?, execute? }`. `execute(aui)` runs in the app (e.g.
   `aui.threads.switchToNewThread()`) and removes the typed `/id`; `prompt`
@@ -411,7 +426,13 @@ const { runtime, artifacts, modelSettings } = useAdkAssistant({
   `/` at the start of the message.
 - Rendered automatically: `adk_request_confirmation` → Approve/Deny card,
   `adk_request_credential` → sign-in card, `adk_request_input` → question
-  card (choices from an enum/boolean `response_schema`), `transfer_to_agent`
+  card: a `Questionnaire` built from its `response_schema` (a question per
+  field of an object, its `required` ones required; enum → pick one, array of
+  enum items → pick several, boolean → Yes/No, number/integer and string
+  formats → typed inputs; `title`/`description`/`default` per field), the
+  answer sent back in the schema's types (`askForm` / `answerFrom` /
+  `describeAnswer` in `ask-person.ts`); agents ask with forge_common's
+  `ask_person` tool, `transfer_to_agent`
   → active agent in the top bar plus author labels, `escalate` → banner,
   `artifactDelta` → artifacts menu.
 - Parts for custom layouts: `AssistantCommandMenu`, `AdkAgentIndicator`, `AdkArtifactsMenu`,

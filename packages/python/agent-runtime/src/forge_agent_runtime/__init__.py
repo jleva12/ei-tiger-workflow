@@ -15,6 +15,7 @@
 
 from forge_agent_runtime.app import AgentServer, AgentServerSettings, MissingSetting, env
 from forge_agent_runtime.build import TOOL_KINDS, BuildError, build_app, build_root_agent, build_tools
+from forge_agent_runtime.code_execution import CodeExecution, code_executor
 from forge_agent_runtime.document import ChatAgentDocument, DocumentError, load_document, parse_document
 from forge_agent_runtime.executor import (
     AgentExecutor,
@@ -50,6 +51,7 @@ __all__ = [
     "AgentSource",
     "BuildError",
     "ChatAgentDocument",
+    "CodeExecution",
     "CredentialProvider",
     "DirectoryAgentSource",
     "DocumentAgentSource",
@@ -69,6 +71,7 @@ __all__ = [
     "build_app",
     "build_root_agent",
     "build_tools",
+    "code_executor",
     "env",
     "http_client",
     "load_document",

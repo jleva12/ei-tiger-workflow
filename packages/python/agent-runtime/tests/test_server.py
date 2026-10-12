@@ -124,6 +124,30 @@ def test_a_turn_runs_with_its_instruction_filled_in_and_its_tools(client, llm, c
     assert [s["id"] for s in client.get(f"/apps/{AGENT}/users/ada/sessions").json()] == [sid]
 
 
+def test_a_turn_that_asks_for_follow_ups_ends_with_them(client, llm, calls):
+    llm.turns = [
+        [text("Your order A1 has shipped.")],
+        [text('["Track it", "Change the address", "Cancel it"]')],
+    ]
+    sid = session(client)
+    asked = {"forge:suggest_follow_ups": {"count": 2}, "model": "openai/gpt-other"}
+    got = events(run(client, sid, "Where's A1?", stateDelta=asked))
+
+    # The stream's last event carries them, written by the reply's model.
+    assert got[-1]["actions"]["stateDelta"] == {
+        "forge:follow_ups": {"suggestions": ["Track it", "Change the address"]}
+    }
+    assert [call.model.ref for call in calls] == ["openai/gpt-other", "openai/gpt-other"]
+    kept = client.get(f"/apps/{AGENT}/users/ada/sessions/{sid}").json()
+    assert kept["state"]["forge:follow_ups"]["suggestions"] == ["Track it", "Change the address"]
+
+    # A turn that doesn't ask clears them, and costs no model call.
+    llm.turns = [[text("Anything else?")]]
+    got = events(run(client, sid, "Thanks"))
+    assert len(llm.requests) == 3
+    assert client.get(f"/apps/{AGENT}/users/ada/sessions/{sid}").json()["state"]["forge:follow_ups"] is None
+
+
 def test_state_the_agent_doesnt_declare_is_refused(client):
     sid = session(client)
     refused = run(client, sid, "hi", stateDelta={"plan": "pro"})
@@ -227,6 +251,15 @@ def test_state_references_resolve_within_the_state_schema(example):
     assert refused.value.problems == [
         "broken: its $ref '#/$defs/broken' can't be resolved: only references within the schema are read"
     ]
+
+
+def test_any_agent_takes_a_request_for_follow_ups(example):
+    agent = load_document(without(example, "help"))
+    for asked in (True, False, {"count": 2}, {}):
+        assert check_state(agent, {"forge:suggest_follow_ups": asked}) == {"forge:suggest_follow_ups": asked}
+    for wrong in ({"count": 9}, "yes"):
+        with pytest.raises(StateRefused):
+            check_state(agent, {"forge:suggest_follow_ups": wrong})
 
 
 def test_unknown_agents_and_conversations_are_404s(client):

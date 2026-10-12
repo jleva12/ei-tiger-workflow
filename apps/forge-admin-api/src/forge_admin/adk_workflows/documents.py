@@ -77,7 +77,8 @@ ADDED_SETTINGS: dict[str, dict[str, Any]] = {
     # 2026-10-09: whether a run ADK can't carry on starts over.
     "start": {"allow_files": False, "file_types": [], "start_over": False},
     # 2026-10-09: the organization's credential it signs its requests with.
-    "http": {"credential": ""},
+    # 2026-10-12: its query parameters, by name and value.
+    "http": {"credential": "", "query": []},
 }
 # The same for sub-agents, in a node's settings.
 ADDED_SUB_AGENT_SETTINGS: dict[str, dict[str, Any]] = {"llm": {"tools": []}}
@@ -88,7 +89,8 @@ ADDED_TOOL_SETTINGS: dict[str, dict[str, Any]] = {
     # 2026-10-09: the organization's credential its calls sign in with.
     # 2026-10-10: its JSON body, a template (one saved before is upgraded
     # first: _upgraded_http_tools).
-    "http_tool": {"credential": "", "body": ""},
+    # 2026-10-12: its query parameters, by name and value.
+    "http_tool": {"credential": "", "body": "", "query": []},
     "openapi": {"credential": ""},
 }
 

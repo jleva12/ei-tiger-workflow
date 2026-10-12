@@ -9,9 +9,10 @@ artifact changes), and artifacts are the files an agent saved.
 
 Everything is the signed-in user's own: the ``user_id`` in a path or body
 must be theirs. Unlike ADK's server, a request sets only the state the web
-console sends (``CLIENT_STATE``): the model section's choices, and the page
+console sends (``CLIENT_STATE``): the model section's choices, the page
 the person is on (``assistant/page_context.py``), which is checked and left out
-when malformed. Who the person is comes from their sign-in
+when malformed, and whether to suggest follow-up questions after the reply
+(``forge_common.adk.follow_ups``). Who the person is comes from their sign-in
 (``assistant/person.py``). Binary data is standard base64 (see
 ``assistant/wire.py``).
 """
@@ -25,6 +26,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from forge_common.adk.follow_ups import REQUEST_KEY as FOLLOW_UPS_REQUEST
 from forge_common.adk.usage import Attribution, attributed
 from forge_common.model_provider import ModelProviderAuthError
 from forge_task_adk_workflows.usage_store import UsageStore
@@ -79,12 +81,12 @@ ARTIFACT = f"{ARTIFACTS}/{{artifact_name:path}}"
 # Keep proxies from buffering or caching the stream.
 SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
-# The session state a request may set: the model section's choices and the
-# page the person is on. The rest is the server's or the agent's: app-wide
-# (``app:``) state every user shares, state shared across their conversations
-# (``user:``), and who the person is (``temp:person``), which each run looks
-# up from their sign-in.
-CLIENT_STATE = frozenset({"model", "thinking_level", PAGE_CONTEXT})
+# The session state a request may set: the model section's choices, the
+# page the person is on, and whether to suggest follow-ups after the reply.
+# The rest is the server's or the agent's: app-wide (``app:``) state every
+# user shares, state shared across their conversations (``user:``), and who
+# the person is (``temp:person``), which each run looks up from their sign-in.
+CLIENT_STATE = frozenset({"model", "thinking_level", PAGE_CONTEXT, FOLLOW_UPS_REQUEST})
 
 
 class CamelModel(BaseModel):
@@ -106,8 +108,8 @@ class RunRequest(CamelModel):
     new_message: types.Content | None = None
     # Stream text and reasoning as they're written (partial events).
     streaming: bool = False
-    # Session state to set before the turn: model, thinking_level and
-    # page_context (CLIENT_STATE).
+    # Session state to set before the turn: model, thinking_level,
+    # page_context and forge:suggest_follow_ups (CLIENT_STATE).
     state_delta: dict[str, Any] | None = None
     # To resume an invocation that paused for a long-running call.
     invocation_id: str | None = None

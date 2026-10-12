@@ -208,6 +208,12 @@ const ui = [
   ],
   ["progress", [], [], "Progress primitive."],
   [
+    "questionnaire",
+    [...icons, version("@shadcn/react")],
+    ["button"],
+    "shadcn's questionnaire, one question at a time with progress, choices and typed answers, in the compact Forge look.",
+  ],
+  [
     "select",
     icons,
     [],
@@ -714,7 +720,7 @@ const assistant = {
   type: "registry:component",
   title: "Assistant",
   description:
-    "Google ADK assistant, full screen in the workspace shell or as a floating launcher: conversations, agent hand-offs, artifacts, inline tool approvals, sign-in and input cards, / commands, voice input and an optional model section.",
+    "Google ADK assistant, full screen in the workspace shell or as a floating launcher: conversations, agent hand-offs, artifacts, inline tool approvals, sign-in cards, questions answered in a form, / commands, voice input, an optional model section and a context meter.",
   dependencies: [
     ...base,
     ...icons,
@@ -729,6 +735,7 @@ const assistant = {
       "dropdown-menu",
       "input",
       "popover",
+      "questionnaire",
       "spinner",
     ].map(forge),
     forge("app-shell"),

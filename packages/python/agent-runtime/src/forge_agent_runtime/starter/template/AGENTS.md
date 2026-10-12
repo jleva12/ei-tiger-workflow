@@ -99,7 +99,8 @@ docker build -t @@SLUG@@ .
 - Instructions are templates: `{{ request.userId }}` and `{{ state.customer_tier }}` are
   filled in (JSONata) before each model call.
 - `state_schema` on the entry agent declares what callers may send as ADK's `stateDelta`;
-  anything else is refused with a 422. `model` and `thinking_level` are always allowed.
+  anything else is refused with a 422. `model`, `thinking_level` and `forge:suggest_follow_ups`
+  (follow-up questions after the reply, kept in the state as `forge:follow_ups`) are always allowed.
 - Secrets are never in the JSON: HTTP tools and MCP servers use `${NAME}` in their URLs
   and headers, filled in from `.env`. Add each new one to `.env.example`.
 - Saved agents it uses are bundled in its `dependencies`.
