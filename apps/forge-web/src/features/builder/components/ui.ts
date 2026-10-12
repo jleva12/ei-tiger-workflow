@@ -72,12 +72,17 @@ export const BuilderUiContext = React.createContext<BuilderUi | null>(null)
 
 export function useBuilderUi(): BuilderUi {
   const ui = React.useContext(BuilderUiContext)
-  if (!ui) throw new Error("Builder components must be used inside a BuilderUiContext.")
+  if (!ui)
+    throw new Error(
+      "Builder components must be used inside a BuilderUiContext."
+    )
   return ui
 }
 
 /** "workflow" → "Workflow". */
-export const capitalized = (word: string) => word.charAt(0).toUpperCase() + word.slice(1)
+export const capitalized = (word: string) =>
+  word.charAt(0).toUpperCase() + word.slice(1)
 
 /** "a workflow", "an agent". */
-export const withArticle = (word: string) => `${/^[aeiou]/i.test(word) ? "an" : "a"} ${word}`
+export const withArticle = (word: string) =>
+  `${/^[aeiou]/i.test(word) ? "an" : "a"} ${word}`

@@ -51,7 +51,7 @@ from forge_admin.assistant.runtime import AgentRuntime
 from forge_admin.assistant.screens import STICKY, page_of
 from forge_admin.assistant.wire import sse, to_wire
 from forge_admin.auth.access import CurrentPerson
-from forge_admin.overview.recording import assistant_attribution
+from forge_admin.overview.recording import ASSISTANT_CHANNEL, assistant_attribution
 
 logger = logging.getLogger(__name__)
 
@@ -485,7 +485,12 @@ async def _stream(
     # The turn, and its model and tool calls, count for the organization it
     # was asked from (forge_admin.overview.recording).
     recorded = (
-        usage.invocation(attribution, session_id=body.session_id, user_id=body.user_id)
+        usage.invocation(
+            attribution,
+            session_id=body.session_id,
+            user_id=body.user_id,
+            channel=ASSISTANT_CHANNEL,
+        )
         if usage is not None and attribution is not None
         else contextlib.nullcontext()
     )

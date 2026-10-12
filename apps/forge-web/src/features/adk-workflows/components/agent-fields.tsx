@@ -309,7 +309,8 @@ function cardsFor(step: AgentStep, field: string): string[] {
 function useAgentName(id: string, path: string[]) {
   return useAgentBuilder((s) => {
     const step = s.nodes.find((n) => n.id === id)?.data
-    const name = step && (path.length ? subAgentAt(step, path)?.name : step.name)
+    const name =
+      step && (path.length ? subAgentAt(step, path)?.name : step.name)
     return name?.trim() || "Unnamed"
   })
 }
@@ -1030,8 +1031,8 @@ function ToolSettings({
         scope={scope}
         valuesAbout={
           <>
-            the workflow&apos;s data, as the agent&apos;s instruction reads it
-            ({code("{{ input.… }}")}, {code("{{ steps.… }}")})
+            the workflow&apos;s data, as the agent&apos;s instruction reads it (
+            {code("{{ input.… }}")}, {code("{{ steps.… }}")})
           </>
         }
       />
@@ -1042,7 +1043,6 @@ function ToolSettings({
 /* -------------------------------------------------------------------------- */
 /* An agent from the Agents page                                              */
 /* -------------------------------------------------------------------------- */
-
 
 /**
  * One of the input fields of an agent from the Agents page: a JSONata
@@ -1527,8 +1527,8 @@ function StartFields({ id, config }: Props<"start">) {
               Files of other types are refused. Steps find the run&apos;s files
               in {code("state.files")} (each one&apos;s {code("name")},{" "}
               {code("media_type")} and {code("size_bytes")}) and load them by
-              name from the artifact service; LLM agents get a tool that
-              loads them.
+              name from the artifact service; LLM agents get a tool that loads
+              them.
             </>
           }
         />
@@ -1573,7 +1573,9 @@ function SavedFields({ id, config }: Props<"saved">) {
         issue="agent"
         label="Workflow"
         value={config.agent}
-        placeholder={others.length ? "Pick a workflow" : "No other workflows yet"}
+        placeholder={
+          others.length ? "Pick a workflow" : "No other workflows yet"
+        }
         options={others.map(([value, label]) => ({ value, label }))}
         onChange={(value) =>
           patch({ agent: value, version: null, inputs: {} }, "agent")

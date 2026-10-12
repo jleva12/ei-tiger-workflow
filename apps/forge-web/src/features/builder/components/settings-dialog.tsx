@@ -181,7 +181,8 @@ export function SettingsDialog({
         // closes the deepest first, unsaved, and the rest stay.
         if (
           ids.length &&
-          (details.reason === "escape-key" || details.reason === "outside-press")
+          (details.reason === "escape-key" ||
+            details.reason === "outside-press")
         ) {
           details.cancel()
           actions.closeFrom(ids.length)
@@ -392,10 +393,16 @@ export function SettingsHeader({
 }
 
 /** The settings' scrolling body. */
-export function SettingsBody({ className, ...props }: React.ComponentProps<"div">) {
+export function SettingsBody({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
   return (
     <div
-      className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain", className)}
+      className={cn(
+        "min-h-0 flex-1 overflow-y-auto overscroll-contain",
+        className
+      )}
       {...props}
     />
   )

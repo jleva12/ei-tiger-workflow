@@ -8,7 +8,10 @@ import {
   SidebarHint,
   SidebarSection,
 } from "@/components/forge/workspace-sidebar"
-import { ShellSidebarHeader, ShellSidebarTop } from "@/components/forge/shell/index"
+import {
+  ShellSidebarHeader,
+  ShellSidebarTop,
+} from "@/components/forge/shell/index"
 import { SearchField } from "@/components/forge/toolbar"
 import {
   Tooltip,
@@ -17,7 +20,13 @@ import {
 } from "@/components/ui/tooltip"
 import type { KindInfo } from "@/features/builder/lib/types"
 import { KindGlyph } from "./glyph"
-import { selectedStep, useBuilder, useBuilderApi, type FlowEdge, type FlowNode } from "./store"
+import {
+  selectedStep,
+  useBuilder,
+  useBuilderApi,
+  type FlowEdge,
+  type FlowNode,
+} from "./store"
 import { useBuilderUi } from "./ui"
 import { kindMime, STEP_MIME } from "./utils"
 
@@ -57,7 +66,9 @@ export function StepLibrary({ organizationId }: { organizationId: string }) {
   const words = query.trim().toLowerCase()
   const matches = (kind: string) =>
     !words ||
-    `${adapter.kinds[kind].label} ${adapter.kinds[kind].keywords}`.toLowerCase().includes(words)
+    `${adapter.kinds[kind].label} ${adapter.kinds[kind].keywords}`
+      .toLowerCase()
+      .includes(words)
   const shown = adapter.kindList.filter(matches)
   const placed = new Set(placedKinds.split(" "))
 
@@ -76,10 +87,14 @@ export function StepLibrary({ organizationId }: { organizationId: string }) {
     if (from && outputs.length && adapter.hasInput(kind)) {
       // After the selected step: off its first way out that goes nowhere.
       const used = new Set(
-        store.edges.filter((e) => e.source === from.id).map((e) => e.sourceHandle)
+        store.edges
+          .filter((e) => e.source === from.id)
+          .map((e) => e.sourceHandle)
       )
-      const open = outputs.find((o) => !used.has(o.id) && !o.fallback) ??
-        outputs.find((o) => !used.has(o.id)) ?? outputs[0]
+      const open =
+        outputs.find((o) => !used.has(o.id) && !o.fallback) ??
+        outputs.find((o) => !used.has(o.id)) ??
+        outputs[0]
       link = { source: from.id, output: open.id }
       const size = from.measured ?? FALLBACK
       at = {
@@ -92,12 +107,19 @@ export function StepLibrary({ organizationId }: { organizationId: string }) {
         x: box.left + box.width / 2,
         y: box.top + box.height / 2,
       })
-      at = { x: center.x - FALLBACK.width / 2, y: center.y - FALLBACK.height / 2 }
+      at = {
+        x: center.x - FALLBACK.width / 2,
+        y: center.y - FALLBACK.height / 2,
+      }
     } else {
       at = { x: 0, y: 0 }
     }
     at = clear(at, store.nodes)
-    store.addStep(kind, { x: Math.round(at.x / 8) * 8, y: Math.round(at.y / 8) * 8 }, link)
+    store.addStep(
+      kind,
+      { x: Math.round(at.x / 8) * 8, y: Math.round(at.y / 8) * 8 },
+      link
+    )
     store.setView("canvas")
   }
 
@@ -108,7 +130,11 @@ export function StepLibrary({ organizationId }: { organizationId: string }) {
           <NavItem
             icon="left"
             render={
-              <Link to="/organizations/$organizationId" params={{ organizationId }} search={{ view: ui.listView }} />
+              <Link
+                to="/organizations/$organizationId"
+                params={{ organizationId }}
+                search={{ view: ui.listView }}
+              />
             }
           >
             All {nouns.docs}
@@ -141,11 +167,20 @@ export function StepLibrary({ organizationId }: { organizationId: string }) {
             className="mb-3 w-full @max-[1270px]/shell:w-full @max-[800px]/shell:w-full @max-[600px]/shell:w-full"
           />
           {adapter.groups.map((group) => {
-            const kinds = shown.filter((kind) => adapter.kinds[kind].group === group.id)
+            const kinds = shown.filter(
+              (kind) => adapter.kinds[kind].group === group.id
+            )
             if (!kinds.length) return null
             return (
-              <div key={group.id} role="group" aria-label={group.label} className="mb-2.5 last:mb-0">
-                <NavSectionHeading className="pt-1 pb-1.5">{group.label}</NavSectionHeading>
+              <div
+                key={group.id}
+                role="group"
+                aria-label={group.label}
+                className="mb-2.5 last:mb-0"
+              >
+                <NavSectionHeading className="pt-1 pb-1.5">
+                  {group.label}
+                </NavSectionHeading>
                 {kinds.map((kind) => (
                   <LibraryItem
                     key={kind}
@@ -171,15 +206,19 @@ export function StepLibrary({ organizationId }: { organizationId: string }) {
               (ui.readOnlyHint ?? "Read-only") + "."
             ) : (
               <>
-            Drag a {nouns.step} onto the canvas, or onto a connection to put it in between.{" "}
-            {after ? (
-              <>
-                Click one to add it after{" "}
-                <span className="font-medium text-muted-foreground">{after}</span>.
-              </>
-            ) : (
-              "Click one to add it in the middle of the view."
-            )}
+                Drag a {nouns.step} onto the canvas, or onto a connection to put
+                it in between.{" "}
+                {after ? (
+                  <>
+                    Click one to add it after{" "}
+                    <span className="font-medium text-muted-foreground">
+                      {after}
+                    </span>
+                    .
+                  </>
+                ) : (
+                  "Click one to add it in the middle of the view."
+                )}
               </>
             )}
           </SidebarHint>
@@ -241,7 +280,8 @@ function LibraryItem({
                 event.dataTransfer.setData(STEP_MIME, kind)
                 event.dataTransfer.setData(kindMime(kind), "")
                 event.dataTransfer.effectAllowed = "copy"
-                if (ghost.current) event.dataTransfer.setDragImage(ghost.current, 20, 28)
+                if (ghost.current)
+                  event.dataTransfer.setDragImage(ghost.current, 20, 28)
               }}
               className="min-h-8 cursor-grab gap-2.5 py-1 text-[0.8125rem] active:cursor-grabbing disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent"
             />
@@ -262,8 +302,12 @@ function LibraryItem({
       >
         <KindGlyph info={info} />
         <span className="flex min-w-0 flex-col">
-          <span className="truncate text-xs font-medium text-foreground">{info.label}</span>
-          <span className="truncate text-2xs text-muted-foreground">{info.summary}</span>
+          <span className="truncate text-xs font-medium text-foreground">
+            {info.label}
+          </span>
+          <span className="truncate text-2xs text-muted-foreground">
+            {info.summary}
+          </span>
         </span>
       </div>
     </>

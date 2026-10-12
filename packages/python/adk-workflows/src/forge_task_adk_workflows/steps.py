@@ -5,7 +5,7 @@ in the run's ADK session, read from the session's events.
 One entry per node of the document, in the document's order::
 
     {"id", "name", "kind", "status", "output", "error", "started_at", "finished_at", "calls",
-     "input", "input_from", "state_changes"}
+     "input", "input_from", "state_changes", "handed_to"}
 
 - ``status``:
   - ``done``: it handed on its output (``error`` too when it took its Error
@@ -92,6 +92,9 @@ class _Seen:
     confirming: set[str] = field(default_factory=set)
     #: What it changed in the session's state, in order: ``{"key", "value", "at"}``.
     changes: list[dict[str, Any]] = field(default_factory=list)
+    #: The way it took, as its last event said (a branching step's output ID,
+    #: or a list of them); None for a step whose every way is taken.
+    route: Any = None
 
     def saw(self, when: float) -> None:
         if self.started is None or when < self.started:
@@ -119,6 +122,24 @@ def run_steps(
         session another run shares holds that run's too). None reads the
         session's latest invocation.
     :return: Each of its steps, in the document's order, with what it did.
+    """
+    steps: list[dict[str, Any]] = run_progress(session, document, invocation_id=invocation_id)["steps"]
+    return steps
+
+
+def run_progress(
+    session: Session | None, document: dict[str, Any], *, invocation_id: str | None = None
+) -> dict[str, Any]:
+    """
+    A run's steps (:func:`run_steps`, each with ``handed_to`` too) and the
+    edges it has taken: ``{"steps": [...], "taken_edges": [<edge ID>, ...]}``.
+
+    An edge is taken once its source handed on and, for a branching step,
+    took the way it leaves by (the route the step's event says; a loop's Each
+    item way once its body started). A step an edge taken leads to is
+    ``handed_to``: when it hasn't finished, it's the one the run is on (ADK
+    records most steps only once they hand on, so a step at work shows
+    nothing of its own until then).
     """
     nodes = document_nodes(document)
     infos, loops = step_infos(nodes)
@@ -166,6 +187,8 @@ def run_steps(
             found.finished = when
             found.output = as_data(record.get("output"))
             found.error = record.get("error")
+            if event.actions is not None and event.actions.route is not None:
+                found.route = event.actions.route
 
     sources = _sources(document, seen)
     _infer_silent(nodes, sources, seen)
@@ -173,7 +196,9 @@ def run_steps(
     _failed_ends(nodes, seen)
     kinds = {node["id"]: text(node.get("kind")) for node in nodes}
     handed_in = {node["id"]: _handed_in(node["id"], sources, seen, kinds, set()) or (None, None) for node in nodes}
-    return [
+    taken = _taken_edges(document, seen)
+    handed_to = {str(edge["target"]) for edge in items(document.get("edges")) if edge.get("id") in taken}
+    steps = [
         {
             "id": node["id"],
             "name": text(node.get("name")),
@@ -187,9 +212,36 @@ def run_steps(
             "input": handed_in[node["id"]][1],
             "input_from": handed_in[node["id"]][0],
             "state_changes": seen[node["id"]].changes,
+            "handed_to": node["id"] in handed_to,
         }
         for node in nodes
     ]
+    return {"steps": steps, "taken_edges": sorted(taken)}
+
+
+def _taken_edges(document: dict[str, Any], seen: Mapping[str, _Seen]) -> set[str]:
+    # The edges the run has gone along: from a step that handed on, by a way
+    # it took (any, for a step that doesn't branch); a loop's Each item way
+    # once its body started.
+    taken: set[str] = set()
+    for edge in items(document.get("edges")):
+        if not isinstance(edge, dict) or not isinstance(edge.get("id"), str):
+            continue
+        source, target = seen.get(str(edge.get("source"))), seen.get(str(edge.get("target")))
+        if source is None or target is None:
+            continue
+        way = edge.get("source_output")
+        if way == "each":
+            if target.started is not None or target.handed_on:
+                taken.add(edge["id"])
+            continue
+        if not source.handed_on:
+            continue
+        route = source.route
+        ways = route if isinstance(route, list) else [route]
+        if route is None or way in ways:
+            taken.add(edge["id"])
+    return taken
 
 
 def document_nodes(document: dict[str, Any]) -> list[dict[str, Any]]:

@@ -388,6 +388,11 @@ export type AdkRunStep = {
   input_from?: string | null
   /** What it set in the session's state, in order; absent from older APIs. */
   state_changes?: AdkStateChange[]
+  /**
+   * A step before it handed on to it: unfinished, it's the step the run is
+   * on, though it has recorded nothing yet; absent from older APIs.
+   */
+  handed_to?: boolean
 }
 
 /** A value a step set in the session's state. */
@@ -411,7 +416,12 @@ export type AdkToolCall = {
 export type AdkRunSteps = {
   session_id: string
   steps: AdkRunStep[]
+  /** The document's edges the run went along; absent from older APIs. */
+  taken_edges?: string[]
 }
+
+/** How often a run followed closely (from its builder) refreshes while it goes. */
+export const FOLLOW_POLL_MS = 1_500
 
 const STEP_STATUS: Record<AdkStepStatus, { label: string; tone: ChipTone }> = {
   done: { label: "Done", tone: "success" },
@@ -701,7 +711,11 @@ export function useAdkWorkflowRuns(
  * activity. Refreshes every few seconds while a worker has it (or it was
  * just acted on), every 30 s while it waits for a person or a time.
  */
-export function useAdkRun(organizationId: string, runId: string | undefined) {
+export function useAdkRun(
+  organizationId: string,
+  runId: string | undefined,
+  { close = false }: { close?: boolean } = {}
+) {
   return useQuery({
     queryKey: adkRunKeys.detail(organizationId, runId ?? ""),
     queryFn: ({ signal }) =>
@@ -711,7 +725,7 @@ export function useAdkRun(organizationId: string, runId: string | undefined) {
       if (query.state.status === "error") return false
       const run = query.state.data
       if (isLiveRun(run) || isFollowingAdkRun(organizationId, runId ?? ""))
-        return OPEN_POLL_MS
+        return close ? FOLLOW_POLL_MS : OPEN_POLL_MS
       return run && isOpenRun(run) ? IDLE_POLL_MS : false
     },
     meta: { errorTitle: "Couldn't refresh the workflow run" },
@@ -736,7 +750,8 @@ export function stepsPollMs(
  */
 export function useAdkRunSteps(
   organizationId: string,
-  run: Pick<AdkRun, "id" | "status" | "updated_at"> | undefined
+  run: Pick<AdkRun, "id" | "status" | "updated_at"> | undefined,
+  { close = false }: { close?: boolean } = {}
 ) {
   const client = useQueryClient()
   const runId = run?.id ?? ""
@@ -747,10 +762,12 @@ export function useAdkRunSteps(
         signal,
       }),
     enabled: Boolean(organizationId && runId),
-    refetchInterval: (query) =>
-      query.state.status === "error"
-        ? false
-        : stepsPollMs(run, isFollowingAdkRun(organizationId, runId)),
+    refetchInterval: (query) => {
+      if (query.state.status === "error") return false
+      const every = stepsPollMs(run, isFollowingAdkRun(organizationId, runId))
+      // Followed closely (from its builder), it refreshes faster while it goes.
+      return close && every === OPEN_POLL_MS ? FOLLOW_POLL_MS : every
+    },
     meta: { errorTitle: "Couldn't refresh the run's steps" },
   })
 

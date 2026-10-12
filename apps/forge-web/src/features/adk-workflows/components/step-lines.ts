@@ -18,13 +18,17 @@ const firstLine = (text: string) => text.trim().split("\n")[0] ?? ""
 export function stepDetail(step: StepData): string {
   switch (step.kind) {
     case "approval":
-      return step.config.approvers === "org:admin" ? "An organization admin decides" : "Any member decides"
+      return step.config.approvers === "org:admin"
+        ? "An organization admin decides"
+        : "Any member decides"
     case "http":
       return step.config.retries
         ? `${step.config.timeout_seconds} s timeout · ${plural(step.config.retries, "retry")}`
         : `${step.config.timeout_seconds} s timeout`
     case "transform":
-      return Object.keys(step.config.output_schema).length ? "JSONata, declared output" : "JSONata"
+      return Object.keys(step.config.output_schema).length
+        ? "JSONata, declared output"
+        : "JSONata"
     case "filter":
       return `Keeps each ${step.config.item_name || "item"} that holds`
     case "delay":
@@ -41,7 +45,9 @@ export function stepDetail(step: StepData): string {
         ? `${step.config.concurrency} at a time`
         : "One at a time"
     case "merge":
-      return step.config.mode === "all" ? "Waits for every way" : "Goes on at the first"
+      return step.config.mode === "all"
+        ? "Waits for every way"
+        : "Goes on at the first"
     case "end":
       return step.config.outcome === "succeeded" ? "Succeeds" : "Fails"
   }

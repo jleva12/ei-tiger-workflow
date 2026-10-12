@@ -9,7 +9,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { INPUT, type BuilderIssue } from "@/features/builder/lib/types"
+import { Spinner } from "@/components/ui/spinner"
 import { KindGlyph } from "./glyph"
+import {
+  useRunOverlay,
+  useStepRunState,
+  type StepRunState,
+} from "./run-overlay"
 import { useBuilder, type FlowNode } from "./store"
 import { useBuilderUi } from "./ui"
 
@@ -49,6 +55,59 @@ function IssueMark({ issues }: { issues: BuilderIssue[] }) {
   )
 }
 
+const RUN_LOOKS: Record<
+  Exclude<StepRunState, "idle">,
+  { card: string; badge: string; label: string }
+> = {
+  running: {
+    card: "border-signal-running ring-2 ring-signal-running/30 forge-node-running",
+    badge: "border-signal-running/50 text-signal-running",
+    label: "Running",
+  },
+  done: {
+    card: "border-signal-success/60",
+    badge: "border-signal-success/50 text-signal-success",
+    label: "Done",
+  },
+  failed: {
+    card: "border-signal-failed ring-2 ring-signal-failed/25",
+    badge: "border-signal-failed/50 text-signal-failed",
+    label: "Failed",
+  },
+  waiting: {
+    card: "border-notice-accent ring-2 ring-notice-accent/25",
+    badge: "border-notice-border text-notice-accent",
+    label: "Waiting for a person or a time",
+  },
+}
+
+/** A step's state in the run drawn over the canvas, in its top right corner. */
+function RunBadge({ state }: { state: Exclude<StepRunState, "idle"> }) {
+  const look = RUN_LOOKS[state]
+  return (
+    <span
+      role="img"
+      aria-label={look.label}
+      title={look.label}
+      className={cn(
+        "absolute -top-2.5 -right-2.5 z-10 grid size-6 place-items-center rounded-full border bg-background shadow-(--shadow-raised)",
+        look.badge
+      )}
+    >
+      {state === "running" ? (
+        <Spinner className="size-3.5" />
+      ) : (
+        <Icon
+          icon={
+            state === "done" ? "check" : state === "failed" ? "failed" : "clock"
+          }
+          size={13}
+        />
+      )}
+    </span>
+  )
+}
+
 /**
  * A step on the canvas: a hairline card with its mark, name and what it
  * does. Its way in is on the left of the header; a single way out is on
@@ -76,17 +135,25 @@ export const FlowNodeView = React.memo(function FlowNodeView({
       : undefined
   const detail = [kind, ui.detailOf(data, lookups)].filter(Boolean).join(" · ")
   const badge = ui.badgeOf?.(data)
+  // The run followed over the canvas, if one is.
+  const runState = useStepRunState(id)
+  const live = useRunOverlay()?.live ?? false
+  const run = runState && runState !== "idle" ? runState : undefined
 
   return (
     <div
       data-kind={data.kind}
+      data-run-state={runState}
       className={cn(
-        "w-[15rem] rounded-(--radius-card) border bg-background text-foreground transition-[border-color,box-shadow] duration-150",
+        "relative w-[15rem] rounded-(--radius-card) border bg-background text-foreground transition-[border-color,box-shadow,opacity] duration-150",
         info.person && "border-notice-border bg-notice-surface",
         selected && "border-foreground/45",
-        dragging ? "shadow-(--shadow-float)" : "shadow-(--shadow-node)"
+        dragging ? "shadow-(--shadow-float)" : "shadow-(--shadow-node)",
+        run && RUN_LOOKS[run].card,
+        runState === "idle" && live && "opacity-55"
       )}
     >
+      {run && <RunBadge state={run} />}
       <div className="relative flex items-center gap-2.5 px-3 py-2.5">
         {adapter.hasInput(data.kind) && (
           <Handle type="target" position={Position.Left} id={INPUT} />
@@ -94,7 +161,9 @@ export const FlowNodeView = React.memo(function FlowNodeView({
         <KindGlyph info={info} />
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-xs font-medium text-foreground">{data.name}</span>
+            <span className="truncate text-xs font-medium text-foreground">
+              {data.name}
+            </span>
             {badge && (
               <span className="shrink-0 rounded-full bg-primary px-1.5 text-[0.625rem] leading-4 font-medium text-primary-foreground">
                 {badge}
@@ -126,7 +195,9 @@ export const FlowNodeView = React.memo(function FlowNodeView({
               )}
             >
               {summary.tag && (
-                <span className="shrink-0 font-medium text-foreground">{summary.tag}</span>
+                <span className="shrink-0 font-medium text-foreground">
+                  {summary.tag}
+                </span>
               )}
               <span className="truncate">{summary.code}</span>
             </p>
@@ -145,10 +216,7 @@ export const FlowNodeView = React.memo(function FlowNodeView({
 
       {branches && (
         <ul
-          className={cn(
-            "border-t py-1",
-            info.person && "border-notice-border"
-          )}
+          className={cn("border-t py-1", info.person && "border-notice-border")}
           aria-label="Ways out"
         >
           {outputs.map((output, index) => {
@@ -162,13 +230,19 @@ export const FlowNodeView = React.memo(function FlowNodeView({
                   output.fallback ? "text-subtle" : "text-muted-foreground"
                 )}
               >
-                {output.body && <Icon icon="refresh" size={12} className="shrink-0" />}
+                {output.body && (
+                  <Icon icon="refresh" size={12} className="shrink-0" />
+                )}
                 <span className="ml-auto truncate">{output.label}</span>
                 <Handle
                   type="source"
                   position={Position.Right}
                   id={output.id}
-                  className={tone === "neutral" ? undefined : `forge-handle-toned forge-tone-${tone}`}
+                  className={
+                    tone === "neutral"
+                      ? undefined
+                      : `forge-handle-toned forge-tone-${tone}`
+                  }
                 />
               </li>
             )

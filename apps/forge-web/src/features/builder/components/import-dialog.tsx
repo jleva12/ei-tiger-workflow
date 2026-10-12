@@ -33,7 +33,9 @@ export type ImportResult<Doc> =
  * the format is listed before anything changes; the caller decides what
  * importing does (replace the canvas, or add one).
  */
-export function ImportDialog<Doc extends { name: string; nodes: unknown[]; edges: unknown[] }>({
+export function ImportDialog<
+  Doc extends { name: string; nodes: unknown[]; edges: unknown[] },
+>({
   open,
   onOpenChange,
   format,
@@ -70,7 +72,10 @@ export function ImportDialog<Doc extends { name: string; nodes: unknown[]; edges
     onOpenChange(next)
   }
 
-  const result = React.useMemo(() => (text.trim() ? parse(text) : null), [text, parse])
+  const result = React.useMemo(
+    () => (text.trim() ? parse(text) : null),
+    [text, parse]
+  )
 
   return (
     <Dialog open={open} onOpenChange={changeOpen}>
@@ -92,7 +97,9 @@ export function ImportDialog<Doc extends { name: string; nodes: unknown[]; edges
           </DialogHeader>
           <Field>
             <div className="flex items-center justify-between gap-2">
-              <FieldLabel htmlFor={fieldId}>{capitalized(nouns.doc)} JSON</FieldLabel>
+              <FieldLabel htmlFor={fieldId}>
+                {capitalized(nouns.doc)} JSON
+              </FieldLabel>
               <Button
                 type="button"
                 variant="outline"
@@ -113,11 +120,12 @@ export function ImportDialog<Doc extends { name: string; nodes: unknown[]; edges
                 setText(event.target.value)
                 setFileName(undefined)
               }}
-              className="max-h-64 min-h-40 field-sizing-fixed font-mono text-xs break-all md:text-xs"
+              className="field-sizing-fixed max-h-64 min-h-40 font-mono text-xs break-all md:text-xs"
             />
             {fileName && (
               <p className="text-2xs text-muted-foreground">
-                From <span className="font-mono text-foreground">{fileName}</span>
+                From{" "}
+                <span className="font-mono text-foreground">{fileName}</span>
               </p>
             )}
             <input
@@ -135,12 +143,18 @@ export function ImportDialog<Doc extends { name: string; nodes: unknown[]; edges
             />
           </Field>
           {result && !result.ok && (
-            <ErrorCallout title="Can't import this">{result.error}</ErrorCallout>
+            <ErrorCallout title="Can't import this">
+              {result.error}
+            </ErrorCallout>
           )}
           {result?.ok && (
             <div className="flex flex-col gap-1.5 rounded-(--radius-card) border px-3.5 py-3 text-xs">
               <p className="flex items-center gap-2 font-medium text-foreground">
-                <Icon icon="completed" size={14} className="text-signal-success" />
+                <Icon
+                  icon="completed"
+                  size={14}
+                  className="text-signal-success"
+                />
                 {result.doc.name}: {result.doc.nodes.length} {nouns.steps},{" "}
                 {result.doc.edges.length} connections
               </p>

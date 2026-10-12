@@ -17,6 +17,14 @@ const adminSidebar: ShellConfig["sidebar"] = {
           href: "/admin/organizations",
           role: SITE_ADMIN,
         },
+        {
+          // Every conversation with the assistant, for its audit.
+          id: "conversations",
+          label: "Conversations",
+          icon: "message",
+          href: "/admin/conversations",
+          role: SITE_ADMIN,
+        },
       ],
     },
     {
@@ -50,7 +58,7 @@ const adminSidebar: ShellConfig["sidebar"] = {
 }
 
 /**
- * Site administration's sub nav: Organizations, then Users, Roles and
+ * Site administration's sub nav: Organizations and Conversations, then Users, Roles and
  * Permissions, for site administrators. Only the admin scope shows it (its
  * layout, admin/route.tsx, and error pages while you work in it); the
  * shell's own sub nav is empty, so no organization's page falls back to it.

@@ -87,15 +87,15 @@ function offset(ms: number | undefined) {
 const json = (value: unknown) => JSON.stringify(value ?? null, null, 2)
 
 /** A step's name and glyph, as the run's workflow has it. */
-function useStepLabel(doc: AgentDocument | undefined) {
+function useStepLabel(doc: AgentDocument | undefined, root = "Run") {
   return React.useCallback(
     (id: string | null) => {
-      if (!id) return { name: "Run", kind: undefined }
+      if (!id) return { name: root, kind: undefined }
       const kind = stepKindOf({ id, kind: "" }, doc)
       const name = stepNameOf({ id, name: "", kind: kind ?? "" }, doc)
       return { name, kind }
     },
-    [doc]
+    [doc, root]
   )
 }
 
@@ -439,6 +439,7 @@ function Inspector({
   label,
   onFilterStep,
   onDownload,
+  subject = "run",
 }: {
   trace: AdkRunTrace
   event: TraceEvent
@@ -446,8 +447,10 @@ function Inspector({
   start: string | undefined
   label: (id: string | null) => Label
   onFilterStep: (step: string) => void
-  /** Download a version of a file the run saved. */
-  onDownload: (name: string, version: number) => void
+  /** Download a version of a file the run saved; none where files aren't kept. */
+  onDownload?: (name: string, version: number) => void
+  /** What an event at no step is part of: "run", "conversation". */
+  subject?: string
 }) {
   const before = React.useMemo(
     () => stateAt(trace, event.seq - 1),
@@ -517,7 +520,7 @@ function Inspector({
               </span>
             ) : (
               <span className="text-muted-foreground">
-                The run itself (no step)
+                The {subject} itself (no step)
               </span>
             )}
           </RecordRow>
@@ -698,15 +701,17 @@ function Inspector({
                   <span className="text-muted-foreground">
                     (ADK version {version})
                   </span>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    className="ml-auto"
-                    aria-label={`Download ${name}, version ${version + 1}`}
-                    onClick={() => onDownload(name, version)}
-                  >
-                    <Icon icon="download" />
-                  </Button>
+                  {onDownload && (
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      className="ml-auto"
+                      aria-label={`Download ${name}, version ${version + 1}`}
+                      onClick={() => onDownload(name, version)}
+                    >
+                      <Icon icon="download" />
+                    </Button>
+                  )}
                 </span>
               </RecordRow>
             ))}
@@ -828,6 +833,7 @@ function Timeline({
   selected,
   onSelect,
   onDownload,
+  subject = "run",
 }: {
   trace: AdkRunTrace
   doc: AgentDocument | undefined
@@ -835,9 +841,11 @@ function Timeline({
   onStepChange: (step: string | undefined) => void
   selected: number | undefined
   onSelect: (seq: number | undefined) => void
-  onDownload: (name: string, version: number) => void
+  onDownload?: (name: string, version: number) => void
+  /** What the events are of: "run", "conversation". */
+  subject?: string
 }) {
-  const label = useStepLabel(doc)
+  const label = useStepLabel(doc, subject[0].toUpperCase() + subject.slice(1))
   const [query, setQuery] = React.useState("")
   const [kinds, setKinds] = React.useState<TraceKind[]>([])
   const events = trace.events
@@ -881,28 +889,30 @@ function Timeline({
             <Icon icon="search" />
           </InputGroupAddon>
         </InputGroup>
-        <Select
-          items={stepOptions}
-          value={step ?? ""}
-          onValueChange={(value) =>
-            onStepChange(value ? String(value) : undefined)
-          }
-        >
-          <SelectTrigger
-            size="sm"
-            aria-label="Step"
-            className="max-w-56 text-xs"
+        {stepOptions.length > 1 && (
+          <Select
+            items={stepOptions}
+            value={step ?? ""}
+            onValueChange={(value) =>
+              onStepChange(value ? String(value) : undefined)
+            }
           >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent alignItemWithTrigger={false}>
-            {stepOptions.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+            <SelectTrigger
+              size="sm"
+              aria-label="Step"
+              className="max-w-56 text-xs"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              {stepOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         <ToggleGroup
           aria-label="Kinds of event"
           multiple
@@ -957,6 +967,7 @@ function Timeline({
             label={label}
             onFilterStep={(id) => onStepChange(id)}
             onDownload={onDownload}
+            subject={subject}
           />
         ) : (
           <div />
@@ -972,22 +983,24 @@ function Timeline({
 
 type Moment = "before" | "after" | "now"
 
-const MOMENTS: Record<Moment, string> = {
-  before: "Before the run",
-  after: "After the run",
-  now: "Session now",
-}
-
 function StateView({
   trace,
   doc,
   onOpenEvent,
+  subject = "run",
 }: {
   trace: AdkRunTrace
   doc: AgentDocument | undefined
   onOpenEvent: (seq: number) => void
+  /** What the state is of: "run", "conversation". */
+  subject?: string
 }) {
-  const label = useStepLabel(doc)
+  const label = useStepLabel(doc, subject[0].toUpperCase() + subject.slice(1))
+  const moments: Record<Moment, string> = {
+    before: `Before the ${subject}`,
+    after: `After the ${subject}`,
+    now: "Session now",
+  }
   const [showPrivate, setShowPrivate] = React.useState(false)
   const [query, setQuery] = React.useState("")
   const [moment, setMoment] = React.useState<Moment>("after")
@@ -1132,8 +1145,8 @@ function StateView({
             >
               {history.length === 0 ? (
                 <p className="text-2xs text-muted-foreground">
-                  The run never changed it: it had this value before the run
-                  started.
+                  The {subject} never changed it: it had this value before the{" "}
+                  {subject} started.
                 </p>
               ) : (
                 <ol className="flex flex-col gap-3">
@@ -1177,7 +1190,7 @@ function StateView({
           <h2 className="text-lg font-[550]">The whole state</h2>
           <Switcher
             label="When"
-            options={MOMENTS}
+            options={moments}
             value={moment}
             onValueChange={setMoment}
           />
@@ -1190,11 +1203,11 @@ function StateView({
         </div>
         <p className="max-w-[75ch] text-xs text-muted-foreground">
           {moment === "before"
-            ? "The session's state as the run's first event found it: what it started with, and what earlier runs in the session set."
+            ? `The session's state as the ${subject}'s first event found it: what it started with, and what earlier ${subject}s in the session set.`
             : moment === "after"
-              ? "The state once every one of the run's events applied. Keys the run set are marked."
+              ? `The state once every one of the ${subject}'s events applied. Keys the ${subject} set are marked.`
               : trace.later_changes
-                ? "The session's state now: a later run in the same session has changed it since."
+                ? `The session's state now: a later ${subject} in the same session has changed it since.`
                 : "The session's state now, as the database has it."}
         </p>
         <ValueTree
@@ -1472,4 +1485,10 @@ export function AdkRunTraceTab({
       )}
     </>
   )
+}
+
+export {
+  StateView as TraceStateView,
+  Timeline as TraceTimeline,
+  Totals as TraceTotals,
 }

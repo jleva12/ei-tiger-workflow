@@ -20,7 +20,7 @@ from google.adk.sessions.sqlite_session_service import SqliteSessionService
 from google.genai import types
 
 from forge_task_adk_workflows.graph import RunFailed, RunServices, build_agent, pending_pauses
-from forge_task_adk_workflows.steps import STATUSES, run_steps
+from forge_task_adk_workflows.steps import STATUSES, run_progress, run_steps
 
 from .scripted_llm import ScriptedLlm
 
@@ -173,6 +173,7 @@ def test_a_paused_run_shows_what_ran_and_the_step_that_waits(tmp_path: Path) -> 
         "input": None,
         "input_from": None,
         "state_changes": [],
+        "handed_to": False,
     }
     # Each step was handed what the one before it handed on; the start keeps
     # the run's input in state.
@@ -199,6 +200,10 @@ def test_a_paused_run_shows_what_ran_and_the_step_that_waits(tmp_path: Path) -> 
     assert steps["review"]["started_at"] <= steps["review"]["finished_at"]
     assert steps["yes"]["output"] == {"outcome": "succeeded", "result": True}
     assert steps["yes"]["input_from"] == "review"
+    # The way the approval took is the edge the run went along.
+    taken = set(run_progress(asyncio.run(ran.session()), APPROVAL)["taken_edges"])
+    assert taken == {"start:next->shape", "shape:next->review", "review:approved->yes"}
+    assert steps["yes"]["handed_to"] and not steps["no"]["handed_to"]
 
 
 def test_the_step_that_failed_the_run_says_why(tmp_path: Path) -> None:
@@ -437,6 +442,8 @@ def test_logic_steps_record_their_way_and_an_llms_answer_its_schema(tmp_path: Pa
     }
     assert steps["triage"]["output"] == {"category": "BILLING", "refund": 3}
     assert steps["big"]["output"] == {"branch": "true"}
+    taken = set(run_progress(asyncio.run(ran.session()), document)["taken_edges"])
+    assert "big:true->refund" in taken and "big:false->keep" not in taken
     # A logic step hands on what came in: what it was handed.
     assert (steps["refund"]["input_from"], steps["refund"]["input"]) == ("triage", {"category": "BILLING", "refund": 3})
 
@@ -560,3 +567,35 @@ def test_a_step_starts_when_the_step_before_hands_on_to_it() -> None:
 def test_before_its_session_nothing_is_reached() -> None:
     steps = run_steps(None, APPROVAL)
     assert [(step["id"], step["status"]) for step in steps] == [(n["id"], "not_reached") for n in APPROVAL["nodes"]]
+
+
+def test_the_step_the_run_is_on_is_handed_to_before_it_records_anything() -> None:
+    # The start handed on; the LLM agent after it hasn't answered yet, so ADK
+    # has nothing of it: it's still the step the run is on.
+    document = agent(
+        [ANY_START, node("write", "llm", {"output_schema": {}}), end("done")],
+        [("start", "next", "write"), ("write", "next", "done")],
+    )
+    session = Session(
+        id="s1",
+        app_name=APP,
+        user_id=USER,
+        events=[
+            Event(
+                invocation_id="i1",
+                author="steps",
+                output={"a": 1},
+                node_info=NodeInfo(path="steps@1/__input__@1", output_for=["steps@1/__input__@1"]),
+                timestamp=1790000000.0,
+            ),
+        ],
+    )
+    progress = run_progress(session, document)
+    steps = {step["id"]: step for step in progress["steps"]}
+    assert statuses(steps) == {"start": "done", "write": "not_reached", "done": "not_reached"}
+    assert (steps["write"]["handed_to"], steps["done"]["handed_to"]) == (True, False)
+    assert progress["taken_edges"] == ["start:next->write"]
+    assert run_progress(None, document) == {
+        "steps": [s | {"handed_to": False} for s in run_steps(None, document)],
+        "taken_edges": [],
+    }

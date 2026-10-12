@@ -22,6 +22,7 @@ function event(seq, fields = {}) {
   return {
     seq,
     id: `e-${seq}`,
+    invocation_id: "e-turn",
     at: `2026-10-11T12:00:0${seq}.000Z`,
     author: "steps",
     role: null,

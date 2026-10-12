@@ -36,6 +36,20 @@ import {
   HumanInputPanel,
 } from "@/features/runs/components/pause-panels"
 import { AdkRunTraceTab } from "@/features/runs/components/run-trace"
+import {
+  RunFileActions,
+  RunFileIcon,
+  RunFileName,
+  RunFileViewer,
+} from "@/features/runs/components/run-files"
+import {
+  inputFileRef,
+  runFileKey,
+  savedFileRef,
+  savedVersionDetail,
+  useRunFileDownload,
+  type RunFileRef,
+} from "@/features/runs/lib/run-files"
 import { preview } from "@/features/runs/lib/trace"
 import { ValueTree } from "@/features/json/components/value-tree"
 import { Button } from "@/components/ui/button"
@@ -78,7 +92,6 @@ import {
   stepTiming,
   triggerLabel,
   useAbandonAdkRun,
-  downloadAdkRunFile,
   useAdkRun,
   useAdkRunSessionFiles,
   useAdkRunSteps,
@@ -90,7 +103,6 @@ import {
   versionLabel,
   type AdkRunDetail,
   type AdkRunFile,
-  type AdkRunFileVersion,
   type AdkRunSessionFile,
   type AdkRunPause,
   type AdkRunStep,
@@ -99,14 +111,12 @@ import {
   type AdkToolCall,
 } from "@/features/runs/lib/runs"
 import type { ChipTone } from "@/components/forge/variants"
-import { toApiError } from "@/lib/api/index"
 import {
   formatBytes,
   formatDateTime,
   formatDuration,
   formatRelative,
 } from "@/lib/format"
-import { downloadBlob } from "@/features/builder/components/utils"
 import { WORKSPACE_VIEWS } from "@/features/organizations/lib/organization-workspace"
 import { usePageContext } from "@/features/assistant/lib/page-context"
 import {
@@ -196,7 +206,7 @@ function AdkPausePanel(props: Pause) {
  * person, a time, a worker), its being stopped, the hiccup it's retried
  * after, or why it failed.
  */
-function StatusNotice({
+export function StatusNotice({
   organizationId,
   run,
 }: {
@@ -364,107 +374,84 @@ function Endings({ endings }: { endings: Ending[] }) {
 
 /**
  * The files a run's agents saved (`save_file`), each with who saved it and
- * when; its latest version downloads, and its earlier ones beneath it.
+ * when; its latest version previews and downloads, and its earlier ones
+ * beneath it.
  */
 function SavedFiles({
   organizationId,
   runId,
   files,
   doc,
+  onPreview,
 }: {
   organizationId: string
   runId: string
   files: AdkRunSessionFile[]
   doc: AgentDocument | undefined
+  onPreview: (file: RunFileRef) => void
 }) {
-  const [fetching, setFetching] = React.useState<string>()
-  const download = async (name: string, version: number) => {
-    const key = `${name}@${version}`
-    setFetching(key)
-    try {
-      const blob = await downloadAdkRunFile(
-        organizationId,
-        runId,
-        name,
-        version
-      )
-      downloadBlob(blob, name)
-    } catch (error) {
-      toast.add({
-        title: `Couldn't download ${name}`,
-        description: toApiError(error).message,
-        type: "error",
-      })
-    } finally {
-      setFetching(undefined)
-    }
-  }
-  const describe = (version: AdkRunFileVersion) =>
-    [
-      version.size_bytes === null ? null : formatBytes(version.size_bytes),
-      version.step
-        ? `by ${stepNameOf({ id: version.step, name: "", kind: "" }, doc)}`
-        : version.saved_by && `by ${version.saved_by}`,
-      version.saved_at && formatDateTime(version.saved_at),
-    ]
-      .filter(Boolean)
-      .join(" · ")
-  const button = (name: string, version: number) => (
-    <Button
-      variant="ghost"
-      size="icon-xs"
-      aria-label={`Download ${name}, version ${version + 1}`}
-      disabled={fetching === `${name}@${version}`}
-      onClick={() => void download(name, version)}
-    >
-      {fetching === `${name}@${version}` ? (
-        <Spinner />
-      ) : (
-        <Icon icon="download" />
-      )}
-    </Button>
-  )
+  const { download, fetching } = useRunFileDownload(organizationId, runId)
   return (
     <ul className="flex flex-col divide-y divide-border rounded-(--radius-control) border">
       {files.map((file) => {
         const latest = file.versions.at(-1)
         const earlier = file.versions.slice(0, -1).reverse()
+        const shown = latest && savedFileRef(file, latest, doc)
         return (
           <li key={file.name} className="flex flex-col gap-1 px-3 py-2">
             <div className="flex min-w-0 items-center gap-2.5">
-              <Icon icon="file" className="shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-                {file.name}
-              </span>
+              <RunFileIcon name={file.name} />
+              {shown ? (
+                <RunFileName file={shown} onPreview={() => onPreview(shown)} />
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-sm">
+                  {file.name}
+                </span>
+              )}
               {file.versions.length > 1 && (
                 <Chip tone="outline" className="shrink-0">
                   {file.versions.length} versions
                 </Chip>
               )}
               <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                {[file.media_type, latest && describe(latest)]
+                {[file.media_type, latest && savedVersionDetail(latest, doc)]
                   .filter(Boolean)
                   .join(" · ")}
               </span>
-              {latest && button(file.name, latest.version)}
+              {shown && (
+                <RunFileActions
+                  file={shown}
+                  fetching={fetching === runFileKey(shown)}
+                  onPreview={() => onPreview(shown)}
+                  onDownload={() => void download(shown)}
+                />
+              )}
             </div>
             {earlier.length > 0 && (
               <Disclosure summary="Earlier versions" className="pl-7 text-xs">
                 <ul className="flex flex-col gap-1">
-                  {earlier.map((version) => (
-                    <li
-                      key={version.version}
-                      className="flex items-center gap-2 text-xs text-muted-foreground"
-                    >
-                      <span className="text-foreground">
-                        Version {version.version + 1}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate">
-                        {describe(version)}
-                      </span>
-                      {button(file.name, version.version)}
-                    </li>
-                  ))}
+                  {earlier.map((version) => {
+                    const ref = savedFileRef(file, version, doc)
+                    return (
+                      <li
+                        key={version.version}
+                        className="flex items-center gap-2 text-xs text-muted-foreground"
+                      >
+                        <span className="text-foreground">
+                          Version {version.version + 1}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate">
+                          {savedVersionDetail(version, doc)}
+                        </span>
+                        <RunFileActions
+                          file={ref}
+                          fetching={fetching === runFileKey(ref)}
+                          onPreview={() => onPreview(ref)}
+                          onDownload={() => void download(ref)}
+                        />
+                      </li>
+                    )
+                  })}
                 </ul>
               </Disclosure>
             )}
@@ -475,57 +462,42 @@ function SavedFiles({
   )
 }
 
-/** The files a run started with, each downloadable as it was sent. */
+/** The files a run started with, each previewed or downloaded as it was sent. */
 function RunFiles({
   organizationId,
   runId,
   files,
+  onPreview,
 }: {
   organizationId: string
   runId: string
   files: AdkRunFile[]
+  onPreview: (file: RunFileRef) => void
 }) {
-  const [fetching, setFetching] = React.useState<string>()
-  const download = async (file: AdkRunFile) => {
-    setFetching(file.name)
-    try {
-      const blob = await downloadAdkRunFile(organizationId, runId, file.name)
-      downloadBlob(blob, file.name)
-    } catch (error) {
-      toast.add({
-        title: `Couldn't download ${file.name}`,
-        description: toApiError(error).message,
-        type: "error",
-      })
-    } finally {
-      setFetching(undefined)
-    }
-  }
+  const { download, fetching } = useRunFileDownload(organizationId, runId)
   return (
     <ul className="flex flex-col divide-y divide-border rounded-(--radius-control) border">
-      {files.map((file) => (
-        <li
-          key={file.name}
-          className="flex min-w-0 items-center gap-2.5 px-3 py-2"
-        >
-          <Icon icon="file" className="shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-            {file.name}
-          </span>
-          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-            {file.media_type} · {formatBytes(file.size_bytes)}
-          </span>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label={`Download ${file.name}`}
-            disabled={fetching === file.name}
-            onClick={() => void download(file)}
+      {files.map((file) => {
+        const ref = inputFileRef(file)
+        return (
+          <li
+            key={file.name}
+            className="flex min-w-0 items-center gap-2.5 px-3 py-2"
           >
-            {fetching === file.name ? <Spinner /> : <Icon icon="download" />}
-          </Button>
-        </li>
-      ))}
+            <RunFileIcon name={file.name} />
+            <RunFileName file={ref} onPreview={() => onPreview(ref)} />
+            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+              {file.media_type} · {formatBytes(file.size_bytes)}
+            </span>
+            <RunFileActions
+              file={ref}
+              fetching={fetching === runFileKey(ref)}
+              onPreview={() => onPreview(ref)}
+              onDownload={() => void download(ref)}
+            />
+          </li>
+        )
+      })}
     </ul>
   )
 }
@@ -547,181 +519,210 @@ function AdkRunOverview({
   onOpenRun: (runId: string) => void
 }) {
   const sessionFiles = useAdkRunSessionFiles(organizationId, run)
-  const saved =
-    sessionFiles.data?.files.filter((file) => file.origin === "run") ?? []
+  const saved = React.useMemo(
+    () =>
+      sessionFiles.data?.files.filter((file) => file.origin === "run") ?? [],
+    [sessionFiles.data]
+  )
+  // Every file it has, to page through in the viewer: what it started
+  // with, then what it saved (each one's latest).
+  const [previewing, setPreviewing] = React.useState<RunFileRef>()
+  const previewable = React.useMemo(
+    () => [
+      ...(run.files ?? []).map(inputFileRef),
+      ...saved.flatMap((file) => {
+        const latest = file.versions.at(-1)
+        return latest ? [savedFileRef(file, latest, doc)] : []
+      }),
+    ],
+    [run.files, saved, doc]
+  )
   const ended = run.finished_at !== null
   const hasResult = run.result !== null && run.result !== undefined
   const endings = endingsOf(run.result)
   return (
-    <SubmissionLayout
-      aside={
-        <AsideSection title="Timing">
-          <AsideFact label="Started">
-            {formatDateTime(run.created_at)}
-          </AsideFact>
-          <AsideFact label="Picked up">
-            {run.started_at ? formatDateTime(run.started_at) : "Not yet"}
-          </AsideFact>
-          {run.finished_at && (
-            <AsideFact label="Ended">
-              {formatDateTime(run.finished_at)}
+    <>
+      <SubmissionLayout
+        aside={
+          <AsideSection title="Timing">
+            <AsideFact label="Started">
+              {formatDateTime(run.created_at)}
             </AsideFact>
-          )}
-          <AsideFact label="Duration">
-            {run.duration_ms === null ? "—" : formatDuration(run.duration_ms)}
-          </AsideFact>
-          <AsideFact label="Attempt">{run.attempt}</AsideFact>
-        </AsideSection>
-      }
-    >
-      <StatusNotice organizationId={organizationId} run={run} />
-      <PageSection
-        title="What it was given"
-        meta={
-          <CopyButton value={json(run.input)} label="Copy input" size="xs" />
+            <AsideFact label="Picked up">
+              {run.started_at ? formatDateTime(run.started_at) : "Not yet"}
+            </AsideFact>
+            {run.finished_at && (
+              <AsideFact label="Ended">
+                {formatDateTime(run.finished_at)}
+              </AsideFact>
+            )}
+            <AsideFact label="Duration">
+              {run.duration_ms === null ? "—" : formatDuration(run.duration_ms)}
+            </AsideFact>
+            <AsideFact label="Attempt">{run.attempt}</AsideFact>
+          </AsideSection>
         }
-        description="The input its start received."
       >
-        <JsonView value={run.input ?? null} className="max-h-[28rem]" />
-      </PageSection>
-      {run.files?.length ? (
+        <StatusNotice organizationId={organizationId} run={run} />
         <PageSection
-          title="Files it started with"
-          description="Saved in the run's artifact store, where its steps read them by name (state.files lists them)."
-        >
-          <RunFiles
-            organizationId={organizationId}
-            runId={run.id}
-            files={run.files}
-          />
-        </PageSection>
-      ) : null}
-      {saved.length > 0 && (
-        <PageSection
-          title="Files it saved"
-          description="What its agents saved with save_file, in its session: later steps read them with load_artifacts."
-        >
-          <SavedFiles
-            organizationId={organizationId}
-            runId={run.id}
-            files={saved}
-            doc={doc}
-          />
-        </PageSection>
-      )}
-      {(hasResult || (ended && run.status === "succeeded")) && (
-        <PageSection
-          title="What it handed on"
+          title="What it was given"
           meta={
-            hasResult ? (
-              <CopyButton
-                value={json(run.result)}
-                label="Copy result"
-                size="xs"
-              />
-            ) : undefined
+            <CopyButton value={json(run.input)} label="Copy input" size="xs" />
           }
-          description={
-            endings
-              ? `${endings.length} ways ended, in the order they did: each one's step, how it ended and its result.`
-              : "Its End's result."
-          }
+          description="The input its start received."
         >
-          {endings ? (
-            <Endings endings={endings} />
-          ) : hasResult ? (
-            <JsonView value={run.result} className="max-h-[28rem]" />
-          ) : (
-            <p className="text-[0.8125rem] text-muted-foreground">
-              It ended without handing anything on.
-            </p>
-          )}
+          <JsonView value={run.input ?? null} className="max-h-[28rem]" />
         </PageSection>
-      )}
-      {run.children?.length ? (
-        <PageSection
-          title="Runs it started"
-          description="Workflows its LLM agents called as tools, each a run of its own. Abandoning this run abandons those still going."
-        >
-          <RecordList>
-            {run.children.map((child) => {
-              const shown = runStatusDisplay(child)
-              return (
-                <RecordRow
-                  key={child.id}
-                  label={child.agent_name || child.agent_id}
-                >
-                  <span className="flex flex-wrap items-center gap-2">
-                    <StatusBadge status={shown.status}>
-                      {shown.label}
-                    </StatusBadge>
-                    <Button
-                      variant="link"
-                      size="xs"
-                      className="h-auto p-0 font-mono"
-                      onClick={() => onOpenRun(child.id)}
-                    >
-                      {shortId(child.id)}
-                    </Button>
-                    <span className="text-muted-foreground">
-                      {formatDateTime(child.created_at)}
+        {run.files?.length ? (
+          <PageSection
+            title="Files it started with"
+            description="Saved in the run's artifact store, where its steps read them by name (state.files lists them)."
+          >
+            <RunFiles
+              organizationId={organizationId}
+              runId={run.id}
+              files={run.files}
+              onPreview={setPreviewing}
+            />
+          </PageSection>
+        ) : null}
+        {saved.length > 0 && (
+          <PageSection
+            title="Files it saved"
+            description="What its agents saved with save_file, in its session: later steps read them with load_artifacts."
+          >
+            <SavedFiles
+              organizationId={organizationId}
+              runId={run.id}
+              files={saved}
+              doc={doc}
+              onPreview={setPreviewing}
+            />
+          </PageSection>
+        )}
+        {(hasResult || (ended && run.status === "succeeded")) && (
+          <PageSection
+            title="What it handed on"
+            meta={
+              hasResult ? (
+                <CopyButton
+                  value={json(run.result)}
+                  label="Copy result"
+                  size="xs"
+                />
+              ) : undefined
+            }
+            description={
+              endings
+                ? `${endings.length} ways ended, in the order they did: each one's step, how it ended and its result.`
+                : "Its End's result."
+            }
+          >
+            {endings ? (
+              <Endings endings={endings} />
+            ) : hasResult ? (
+              <JsonView value={run.result} className="max-h-[28rem]" />
+            ) : (
+              <p className="text-[0.8125rem] text-muted-foreground">
+                It ended without handing anything on.
+              </p>
+            )}
+          </PageSection>
+        )}
+        {run.children?.length ? (
+          <PageSection
+            title="Runs it started"
+            description="Workflows its LLM agents called as tools, each a run of its own. Abandoning this run abandons those still going."
+          >
+            <RecordList>
+              {run.children.map((child) => {
+                const shown = runStatusDisplay(child)
+                return (
+                  <RecordRow
+                    key={child.id}
+                    label={child.agent_name || child.agent_id}
+                  >
+                    <span className="flex flex-wrap items-center gap-2">
+                      <StatusBadge status={shown.status}>
+                        {shown.label}
+                      </StatusBadge>
+                      <Button
+                        variant="link"
+                        size="xs"
+                        className="h-auto p-0 font-mono"
+                        onClick={() => onOpenRun(child.id)}
+                      >
+                        {shortId(child.id)}
+                      </Button>
+                      <span className="text-muted-foreground">
+                        {formatDateTime(child.created_at)}
+                      </span>
                     </span>
-                  </span>
-                </RecordRow>
-              )
-            })}
+                  </RecordRow>
+                )
+              })}
+            </RecordList>
+          </PageSection>
+        ) : null}
+        <PageSection title="Record">
+          <RecordList>
+            <RecordRow label="Run ID">
+              <code>{run.id}</code>
+            </RecordRow>
+            <RecordRow label="Workflow">
+              {run.agent_name || run.agent_id} ·{" "}
+              {versionLabel(run).toLowerCase()}
+            </RecordRow>
+            <RecordRow label="Run by">
+              {run.requested_by.name || run.requested_by.id || "Unknown"}
+              {run.resubmit_of
+                ? " · Resubmitted"
+                : triggerLabel(run.trigger)
+                  ? ` · ${triggerLabel(run.trigger)}`
+                  : ""}
+            </RecordRow>
+            {run.parent_run_id && (
+              <RecordRow label="Started by run">
+                <Button
+                  variant="link"
+                  size="xs"
+                  className="h-auto p-0 font-mono"
+                  onClick={() => onOpenRun(run.parent_run_id!)}
+                >
+                  {shortId(run.parent_run_id)}
+                </Button>
+              </RecordRow>
+            )}
+            {run.resubmit_of && (
+              <RecordRow label="Resubmitted from">
+                <Button
+                  variant="link"
+                  size="xs"
+                  className="h-auto p-0 font-mono"
+                  onClick={() => onOpenRun(run.resubmit_of!)}
+                >
+                  {shortId(run.resubmit_of)}
+                </Button>
+              </RecordRow>
+            )}
+            <RecordRow label="ADK session">
+              <code>{run.session_id}</code>
+            </RecordRow>
+            <RecordRow label="Last updated">
+              {formatDateTime(run.updated_at)}
+            </RecordRow>
           </RecordList>
         </PageSection>
-      ) : null}
-      <PageSection title="Record">
-        <RecordList>
-          <RecordRow label="Run ID">
-            <code>{run.id}</code>
-          </RecordRow>
-          <RecordRow label="Workflow">
-            {run.agent_name || run.agent_id} · {versionLabel(run).toLowerCase()}
-          </RecordRow>
-          <RecordRow label="Run by">
-            {run.requested_by.name || run.requested_by.id || "Unknown"}
-            {run.resubmit_of
-              ? " · Resubmitted"
-              : triggerLabel(run.trigger)
-                ? ` · ${triggerLabel(run.trigger)}`
-                : ""}
-          </RecordRow>
-          {run.parent_run_id && (
-            <RecordRow label="Started by run">
-              <Button
-                variant="link"
-                size="xs"
-                className="h-auto p-0 font-mono"
-                onClick={() => onOpenRun(run.parent_run_id!)}
-              >
-                {shortId(run.parent_run_id)}
-              </Button>
-            </RecordRow>
-          )}
-          {run.resubmit_of && (
-            <RecordRow label="Resubmitted from">
-              <Button
-                variant="link"
-                size="xs"
-                className="h-auto p-0 font-mono"
-                onClick={() => onOpenRun(run.resubmit_of!)}
-              >
-                {shortId(run.resubmit_of)}
-              </Button>
-            </RecordRow>
-          )}
-          <RecordRow label="ADK session">
-            <code>{run.session_id}</code>
-          </RecordRow>
-          <RecordRow label="Last updated">
-            {formatDateTime(run.updated_at)}
-          </RecordRow>
-        </RecordList>
-      </PageSection>
-    </SubmissionLayout>
+      </SubmissionLayout>
+      <RunFileViewer
+        organizationId={organizationId}
+        runId={run.id}
+        files={previewable}
+        open={previewing}
+        onOpen={setPreviewing}
+        onClose={() => setPreviewing(undefined)}
+      />
+    </>
   )
 }
 

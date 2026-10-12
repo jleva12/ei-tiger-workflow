@@ -7,7 +7,8 @@ import { DETAILS_WIDTH } from "./utils"
 // canvas keeps room to work in.
 const MOST_OF_BUILDER = 0.5
 
-const remPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+const remPx = () =>
+  parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
 
 /**
  * The details panel's left edge, dragged to widen or narrow it. Arrow
@@ -21,10 +22,18 @@ export function DetailsResizer({
 }: {
   /** In rem. */
   width: number
-  onWidthChange: (rem: number, options?: { save?: boolean; max?: number }) => void
+  onWidthChange: (
+    rem: number,
+    options?: { save?: boolean; max?: number }
+  ) => void
   className?: string
 }) {
-  const drag = React.useRef<{ x: number; width: number; rem: number; max: number } | null>(null)
+  const drag = React.useRef<{
+    x: number
+    width: number
+    rem: number
+    max: number
+  } | null>(null)
   const latest = React.useRef(width)
   const [dragging, setDragging] = React.useState(false)
   React.useEffect(() => {
@@ -36,7 +45,10 @@ export function DetailsResizer({
     const builder = element.parentElement?.parentElement
     const rem = remPx()
     return builder
-      ? Math.min(DETAILS_WIDTH.max, (builder.clientWidth * MOST_OF_BUILDER) / rem)
+      ? Math.min(
+          DETAILS_WIDTH.max,
+          (builder.clientWidth * MOST_OF_BUILDER) / rem
+        )
       : DETAILS_WIDTH.max
   }
 

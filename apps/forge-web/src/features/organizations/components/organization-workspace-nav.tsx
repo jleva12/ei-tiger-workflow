@@ -25,6 +25,7 @@ export function OrganizationWorkspaceNav({
   view,
   members,
   apiKeys,
+  audit = false,
 }: {
   organizationId: string
   /** The page open; none when it isn't one of them (an error page). */
@@ -33,6 +34,8 @@ export function OrganizationWorkspaceNav({
   members: boolean
   /** You manage its API keys (`api_keys:manage`): show API keys. */
   apiKeys: boolean
+  /** You audit its conversations (`agents:audit`): show Conversations. */
+  audit?: boolean
 }) {
   // The default page is the one without a view.
   const viewItem = (key: WorkspaceView) => (
@@ -55,7 +58,10 @@ export function OrganizationWorkspaceNav({
   const sections = WORKSPACE_SECTIONS.map((section) => ({
     ...section,
     views: section.views.filter(
-      (key) => (key !== "config" || members) && (key !== "api-keys" || apiKeys)
+      (key) =>
+        (key !== "config" || members) &&
+        (key !== "api-keys" || apiKeys) &&
+        (key !== "conversations" || audit)
     ),
   })).filter((section) => section.views.length > 0)
 

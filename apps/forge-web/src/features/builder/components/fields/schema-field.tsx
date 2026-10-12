@@ -56,12 +56,16 @@ export function SchemaField({
   const type = declared ? fromJsonSchema(schema) : undefined
   // A field still being named isn't one yet.
   const fields =
-    type?.kind === "object" ? Object.entries(type.properties).filter(([name]) => name.trim()) : []
+    type?.kind === "object"
+      ? Object.entries(type.properties).filter(([name]) => name.trim())
+      : []
   const closed = type?.kind === "object" && !type.open
   const required = new Set(type?.kind === "object" ? (type.required ?? []) : [])
 
   const edit = () => {
-    const parsed = declared ? parseJsonSchema(schema) : { draft: emptyDraft(), warnings: [] }
+    const parsed = declared
+      ? parseJsonSchema(schema)
+      : { draft: emptyDraft(), warnings: [] }
     setDraft(parsed.draft)
     setWarnings(parsed.warnings)
     editor.show()
@@ -84,7 +88,10 @@ export function SchemaField({
           disabled={!editor.canOpen}
           onClick={edit}
         >
-          <Icon icon={declared ? "settings" : "plus"} data-icon="inline-start" />
+          <Icon
+            icon={declared ? "settings" : "plus"}
+            data-icon="inline-start"
+          />
           {declared ? "Edit fields" : "Declare fields"}
         </Button>
       </div>
@@ -95,8 +102,12 @@ export function SchemaField({
               key={name}
               className="flex items-baseline gap-3 border-t px-2.5 py-1.5 first:border-t-0"
             >
-              <code className="min-w-0 truncate font-mono text-xs text-foreground">{name}</code>
-              {required.has(name) && <span className="text-2xs text-subtle">required</span>}
+              <code className="min-w-0 truncate font-mono text-xs text-foreground">
+                {name}
+              </code>
+              {required.has(name) && (
+                <span className="text-2xs text-subtle">required</span>
+              )}
               <span className="ml-auto shrink-0 font-mono text-2xs text-muted-foreground">
                 {typeLabel(field)}
               </span>
@@ -126,7 +137,9 @@ export function SchemaField({
               event.preventDefault()
               // Empty and open is the same as undeclared; empty and closed allows nothing.
               onChange(
-                draft.properties.length || !draft.additionalProperties ? buildJsonSchema(draft) : {}
+                draft.properties.length || !draft.additionalProperties
+                  ? buildJsonSchema(draft)
+                  : {}
               )
               editor.hide()
             }}
@@ -158,8 +171,8 @@ export function SchemaField({
           <p className="flex items-start gap-2 text-xs/[1.6] text-tone-amber-foreground">
             <Icon icon="warning" size={14} className="mt-0.5 shrink-0" />
             <span>
-              Some of it can&apos;t be edited here and is left out when you save:{" "}
-              {warnings.join("; ")}.
+              Some of it can&apos;t be edited here and is left out when you
+              save: {warnings.join("; ")}.
             </span>
           </p>
         )}

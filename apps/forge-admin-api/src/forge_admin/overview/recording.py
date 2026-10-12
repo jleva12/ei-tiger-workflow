@@ -13,8 +13,9 @@ Workflow runs are recorded by the async worker that runs them. Here:
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
+from contextvars import ContextVar
 from typing import Any
 
 from forge_agent_runtime import ResolvedAgent, RunRequest
@@ -26,6 +27,35 @@ from forge_admin.auth.access import caller_subject
 
 #: The assistant's subject ID: there's one.
 ASSISTANT = "assistant"
+
+#: How a turn came in, as its invocation keeps it (``usage_invocations.channel``).
+CONSOLE, API, A2A, ASSISTANT_CHANNEL = "console", "api", "a2a", "assistant"
+#: The header Forge's console sends with the builder's chat, so its turns
+#: read as the console's rather than an outside app's.
+CLIENT_HEADER = "X-Forge-Client"
+
+_channel: ContextVar[str | None] = ContextVar("forge_channel", default=None)
+
+
+def current_channel() -> str | None:
+    """:return: How the turn being run came in, when its route said."""
+    return _channel.get()
+
+
+@contextlib.contextmanager
+def channel(name: str | None) -> Iterator[None]:
+    """Runs a block as a turn that came in through ``name``."""
+    token = _channel.set(name)
+    try:
+        yield
+    finally:
+        _channel.reset(token)
+
+
+def set_channel(name: str) -> None:
+    """Says how this request's turn came in, for the rest of the request (and
+    the tasks it starts, which copy it)."""
+    _channel.set(name)
 
 
 class AgentUsage:
@@ -61,25 +91,28 @@ class AgentUsage:
             # Who called, when the runtime knows (an API key, a person):
             # otherwise whoever the caller says the conversation is with.
             user_id=caller_subject() or request.user_id,
+            channel=current_channel(),
         )
 
 
 def assistant_attribution(
     page_context: Any, organizations: Sequence[Mapping[str, Any]] | None, user_id: str
-) -> Attribution | None:
+) -> Attribution:
     """
     :param page_context: The session's ``page_context``: what the page the
         person asks from shows (``entities``, each a ``kind`` and ``id``).
     :param organizations: The person's organizations (each with an ``id``).
     :param user_id: The person.
     :return: Whom the turn's calls are for: the organization the page is in,
-        when it's one of theirs; None otherwise.
+        when it's one of theirs; else no organization's (an empty ID: the
+        site's audit lists it, no overview counts it).
     """
+    nobody = Attribution("", "assistant", ASSISTANT, "Assistant", user_id=user_id)
     if not isinstance(page_context, Mapping) or not organizations:
-        return None
+        return nobody
     entities = page_context.get("entities")
     if not isinstance(entities, list):
-        return None
+        return nobody
     theirs = {str(org.get("id")) for org in organizations if isinstance(org, Mapping)}
     for entity in entities:
         if isinstance(entity, Mapping) and entity.get("kind") == "organization":
@@ -92,4 +125,4 @@ def assistant_attribution(
                     "Assistant",
                     user_id=user_id,
                 )
-    return None
+    return nobody

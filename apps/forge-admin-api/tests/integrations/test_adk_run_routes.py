@@ -692,6 +692,9 @@ def test_a_runs_steps_are_read_from_its_adk_session(workspace: Workspace) -> Non
         ("no", "not_reached"),
     ]
     assert read["steps"][1]["output"] == {"loud": "K-1"}
+    # The edges it went along, and the step it waits at was handed to.
+    assert set(read["taken_edges"]) >= {"start:next->shape", "shape:next->review"}
+    assert read["steps"][2]["handed_to"] is True
     outsider = workspace.get(f"{RUNS}/{run['id']}/steps", OUTSIDER)
     assert outsider.status_code == 403
 

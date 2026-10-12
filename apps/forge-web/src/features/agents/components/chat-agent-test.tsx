@@ -10,6 +10,12 @@ import { Icon } from "@/components/forge/icon"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { apiAuthHeaders } from "@/lib/api-instance"
+
+/** The builder's chat's requests: who's testing, and that it's Forge's console. */
+const consoleHeaders = () => ({
+  ...apiAuthHeaders(),
+  "X-Forge-Client": "console",
+})
 import { useMe } from "@/lib/users"
 import { RUNTIME_URL, type ChatAgentRecord } from "@/features/agents/lib/api"
 import { declaredState } from "@/features/agents/lib/input"
@@ -136,8 +142,9 @@ function TestChat({
   const { runtime, artifacts } = useAdkAssistant({
     adk: { url: RUNTIME_URL!, appName, userId },
     // Who's testing: needed when the runtime isn't public, and their turns
-    // are theirs when it is.
-    headers: apiAuthHeaders,
+    // are theirs when it is. The console header has the audit list them as
+    // the builder's chat, not an outside app's.
+    headers: consoleHeaders,
     runState: state,
   })
   return (

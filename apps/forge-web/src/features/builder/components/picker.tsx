@@ -37,16 +37,21 @@ export function StepPicker({ pending }: { pending: PendingConnection }) {
   const { nouns } = useBuilderUi()
   const from = useBuilder((s) => s.nodes.find((n) => n.id === pending.source))
   const panel = React.useRef<HTMLDivElement>(null)
-  const [bounds, setBounds] = React.useState<{ width: number; height: number }>()
+  const [bounds, setBounds] = React.useState<{
+    width: number
+    height: number
+  }>()
 
   React.useLayoutEffect(() => {
     const parent = panel.current?.parentElement
-    if (parent) setBounds({ width: parent.clientWidth, height: parent.clientHeight })
+    if (parent)
+      setBounds({ width: parent.clientWidth, height: parent.clientHeight })
   }, [])
 
   React.useEffect(() => {
     const close = (event: PointerEvent) => {
-      if (!panel.current?.contains(event.target as Node)) api.getState().setPending(null)
+      if (!panel.current?.contains(event.target as Node))
+        api.getState().setPending(null)
     }
     document.addEventListener("pointerdown", close, true)
     return () => document.removeEventListener("pointerdown", close, true)
@@ -59,9 +64,14 @@ export function StepPicker({ pending }: { pending: PendingConnection }) {
   const right = pending.screen.x + 12
   const left = Math.max(
     12,
-    right + WIDTH + 12 <= width ? right : Math.min(pending.screen.x - WIDTH - 12, width - WIDTH - 12)
+    right + WIDTH + 12 <= width
+      ? right
+      : Math.min(pending.screen.x - WIDTH - 12, width - WIDTH - 12)
   )
-  const top = Math.max(12, Math.min(pending.screen.y - 40, height - HEIGHT - 12))
+  const top = Math.max(
+    12,
+    Math.min(pending.screen.y - 40, height - HEIGHT - 12)
+  )
   // Only kinds with a way in, and that the way out takes, can follow it.
   const kinds = adapter.kindList.filter(
     (kind) =>
@@ -70,7 +80,10 @@ export function StepPicker({ pending }: { pending: PendingConnection }) {
   )
   const pick = (kind: string) => {
     const store = api.getState()
-    store.addStep(kind, pending.at, { source: pending.source, output: pending.output })
+    store.addStep(kind, pending.at, {
+      source: pending.source,
+      output: pending.output,
+    })
     store.setPending(null)
   }
 
@@ -89,14 +102,17 @@ export function StepPicker({ pending }: { pending: PendingConnection }) {
       }}
     >
       <p className="border-b px-3 py-2 text-2xs text-muted-foreground">
-        After <span className="font-medium text-foreground">{from?.data.name}</span>
+        After{" "}
+        <span className="font-medium text-foreground">{from?.data.name}</span>
       </p>
       <Command filter={byWords} className="min-h-0 flex-1 rounded-none">
         <CommandInput placeholder={`Find a ${nouns.step}`} autoFocus />
         <CommandList className="max-h-none min-h-0 flex-1 overflow-y-auto">
           <CommandEmpty>No {nouns.step} by that name.</CommandEmpty>
           {adapter.groups.map((group) => {
-            const members = kinds.filter((kind) => adapter.kinds[kind].group === group.id)
+            const members = kinds.filter(
+              (kind) => adapter.kinds[kind].group === group.id
+            )
             if (!members.length) return null
             return (
               <CommandGroup key={group.id} heading={group.label}>

@@ -5,12 +5,20 @@ import { cn } from "cn"
 import { Icon } from "@/components/forge/icon"
 import { CountBadge, StatusBadge } from "@/components/forge/status"
 import { Button } from "@/components/ui/button"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { ApiError } from "@/lib/api/index"
 import { shortId, type AdkRunPage } from "@/features/runs/lib/runs"
 import type { WorkspaceSearch } from "@/features/organizations/lib/organization-workspace"
-import { isOpenRun, runLine, runStatusDisplay } from "@/features/runs/lib/display"
+import {
+  isOpenRun,
+  runLine,
+  runStatusDisplay,
+} from "@/features/runs/lib/display"
 
 /**
  * Its latest runs (`runs`), from a builder's header: how each stands, the
@@ -54,7 +62,10 @@ export function RunsMenu({
         <span className="@max-[800px]/shell:sr-only">Runs</span>
         {open > 0 && (
           <CountBadge
-            className={cn(deciding > 0 && "border-notice-border bg-notice-surface text-notice-accent")}
+            className={cn(
+              deciding > 0 &&
+                "border-notice-border bg-notice-surface text-notice-accent"
+            )}
           >
             {open}
           </CountBadge>
@@ -100,8 +111,12 @@ export function RunsMenu({
                     className="flex items-center gap-3 px-3 py-2 hover:bg-accent focus-visible:bg-accent"
                   >
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                      <span className="font-mono text-2xs text-subtle">{shortId(run.id)}</span>
-                      <span className="truncate text-xs text-foreground">{runLine(run)}</span>
+                      <span className="font-mono text-2xs text-subtle">
+                        {shortId(run.id)}
+                      </span>
+                      <span className="truncate text-xs text-foreground">
+                        {runLine(run)}
+                      </span>
                     </span>
                     <StatusBadge status={shown.status} className="shrink-0">
                       {shown.label}

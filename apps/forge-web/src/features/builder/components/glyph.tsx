@@ -37,11 +37,17 @@ export function KindGlyph({
   const tone = React.useContext(BuilderUiContext)?.kindTones?.[info.group]
   if (info.orb !== undefined) {
     return (
-      <span className={cn("grid shrink-0 place-items-center", box, className)} aria-hidden="true">
+      <span
+        className={cn("grid shrink-0 place-items-center", box, className)}
+        aria-hidden="true"
+      >
         <AgentOrb
           variant={info.orb}
           size="lg"
-          className={cn("border-0", size === "sm" ? "size-[1.125rem]" : "size-[1.3125rem]")}
+          className={cn(
+            "border-0",
+            size === "sm" ? "size-[1.125rem]" : "size-[1.3125rem]"
+          )}
         />
       </span>
     )

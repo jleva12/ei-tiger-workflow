@@ -456,3 +456,26 @@ async def test_a_file_too_big_isnt_saved(sessions: DatabaseSessionService, monke
         "reason": "big.txt is 5 bytes: a saved file holds at most 4",
     }
     assert await artifacts.list_artifact_keys(app_name=APP_NAME, user_id=MEMBER, session_id=SESSION) == []
+
+
+async def test_an_agent_is_told_plainly_to_answer_from_a_file_it_loaded(sessions: DatabaseSessionService) -> None:
+    # ADK's own wording ("always call load_artifacts … call it again") had a
+    # real model load the same file sixty times over.
+    artifacts = InMemoryArtifactService()
+    files = await saved(artifacts, ("notes.txt", b"The answer is 42."))
+    load = [types.Part(function_call=types.FunctionCall(name="load_artifacts", args={"artifact_names": ["notes.txt"]}))]
+    llm = ScriptedLlm(turns=[load, load, [types.Part(text="42")]])
+    w = worker(sessions, model=llm, artifacts=artifacts)
+
+    result = await w.run(payload(files_line(node("read", "llm", llm_config()), end("done")), {}, files=files))
+
+    assert result.status is JobStatus.OK, result.error
+    first, second, third = llm.requests
+    told = str(first.config.system_instruction)
+    assert files_module.FILES_NOTE.format(names='["notes.txt"]') in told
+    assert "You have a list of artifacts" not in told
+    assert answers(second)[-1]["status"] == files_module.LOADED
+    # Asked again straight away: told firmly, and the contents still follow.
+    assert answers(third)[-1]["status"] == files_module.LOADED_AGAIN
+    sent = [part.text for part in third.contents[-1].parts or [] if part.text]
+    assert sent == ["Artifact notes.txt is:", "The answer is 42."]

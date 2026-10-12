@@ -8,6 +8,7 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import type { IconProp } from "@/components/forge/icons"
+import type { Channel, Since } from "@/features/conversations/lib/conversations"
 import type { OverviewPeriod } from "@/features/overview/lib/overview"
 import type { AdkRunTab } from "@/features/runs/lib/runs"
 
@@ -33,6 +34,10 @@ export const WORKSPACE_VIEWS = {
   overview: { label: "Overview", icon: "dashboard" },
   agents: { label: "Workflows", icon: FlowSquareIcon },
   "chat-agents": { label: "Agents", icon: AiBrain01Icon },
+  // Every conversation with its agents and its assistant, for its admins
+  // (agents:audit), each opening whole (conversation, conversationApp,
+  // conversationUser); found by q, agent, channel and since.
+  conversations: { label: "Conversations", icon: "message" },
   "mcp-servers": { label: "MCP servers", icon: McpServerIcon },
   // API credentials: keys, tokens and OAuth sign-ins, each sent only to the
   // URLs it names.
@@ -54,7 +59,10 @@ export type WorkspaceView = keyof typeof WORKSPACE_VIEWS
  * its settings.
  */
 export const WORKSPACE_SECTIONS: { title: string; views: WorkspaceView[] }[] = [
-  { title: "Workflows and agents", views: ["agents", "chat-agents"] },
+  {
+    title: "Workflows and agents",
+    views: ["agents", "chat-agents", "conversations"],
+  },
   {
     title: "Integrations",
     views: ["mcp-servers", "credentials", "knowledge"],
@@ -92,4 +100,16 @@ export type WorkspaceSearch = {
   knowledgeTab?: "repositories"
   /** On Code repositories, the repository open in its side panel (its ID). */
   repository?: string
+  /** On Conversations: who held or called them (a name, email, API key, ID). */
+  q?: string
+  /** On Conversations: one chat agent's (its ID), or `assistant`. */
+  agent?: string
+  /** On Conversations: how they came in. */
+  channel?: Channel
+  /** On Conversations: active since. */
+  since?: Exclude<Since, "all">
+  /** On Conversations, the one open: its ADK session, app and user. */
+  conversation?: string
+  conversationApp?: string
+  conversationUser?: string
 }

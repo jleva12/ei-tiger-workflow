@@ -164,3 +164,21 @@ def test_the_files_a_runs_events_saved_say_their_step(tmp_path: Path) -> None:
         ("summary.md", 0): {"step": "write", "author": "write", "at": "2026-10-03T04:00:00.000Z"}
     }
     assert trace.saved_files(None, document, invocation_id="e-1") == {}
+
+
+def test_a_conversations_trace_lists_every_turn_or_only_those_asked_for(tmp_path: Path) -> None:
+    document = agent([ANY_START, end("done", "input")], [("start", "next", "done")])
+    ran = asyncio.run(Sessions(tmp_path).run(document, {"n": 1}))
+    asyncio.run(ran.send(types.Content(role="user", parts=[types.Part(text='{"n": 2}')])))
+    session = asyncio.run(ran.session())
+    turns = list(dict.fromkeys(event.invocation_id for event in session.events))
+    assert len(turns) == 2
+
+    whole = trace.session_trace(session)
+    assert [event["seq"] for event in whole["events"]] == list(range(1, len(session.events) + 1))
+    assert {event["step"] for event in whole["events"]} == {None}
+    assert whole["state_before"] == {} and public(whole["state_after"]) == {"input": {"n": 2}}
+
+    first = trace.session_trace(session, invocations={turns[0]})
+    assert all(event["text"] != '{"n": 2}' for event in first["events"])
+    assert public(first["state_after"]) == {"input": {"n": 1}} and first["later_changes"]

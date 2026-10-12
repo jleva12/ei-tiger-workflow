@@ -9,7 +9,11 @@ import {
 import { createStore, type StoreApi } from "zustand"
 
 import { createContextStore } from "@/lib/context-store"
-import type { BaseMeta, BuilderAdapter, Lookups } from "@/features/builder/lib/adapter"
+import type {
+  BaseMeta,
+  BuilderAdapter,
+  Lookups,
+} from "@/features/builder/lib/adapter"
 import type { Measure } from "@/features/builder/lib/layout"
 import {
   edgeId,
@@ -322,7 +326,9 @@ export function createBuilderStore<S extends BaseStep, Doc, Context, Scope>({
       onNodesChange: (allChanges) => {
         // Read-only: a step can be selected, and measured, but not moved or removed.
         const changes = get().readOnly
-          ? allChanges.filter((c) => c.type === "select" || c.type === "dimensions")
+          ? allChanges.filter(
+              (c) => c.type === "select" || c.type === "dimensions"
+            )
           : allChanges
         const structural = changes.some(
           (c) => c.type === "remove" || c.type === "add"
@@ -465,7 +471,13 @@ export function createBuilderStore<S extends BaseStep, Doc, Context, Scope>({
         const { nodes, adapter } = get()
         const from = nodes.find((n) => n.id === source)
         const to = nodes.find((n) => n.id === target)
-        if (from && to && adapter.accepts && !adapter.accepts(from.data, output, to.data.kind)) return
+        if (
+          from &&
+          to &&
+          adapter.accepts &&
+          !adapter.accepts(from.data, output, to.data.kind)
+        )
+          return
         const id = edgeId(source, output, target)
         if (get().edges.some((e) => e.id === id)) return
         get().checkpoint()

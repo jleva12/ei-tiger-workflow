@@ -1,8 +1,17 @@
 import * as React from "react"
-import { useStore as useFlowStore, type InternalNode, type ReactFlowState } from "@xyflow/react"
+import {
+  useStore as useFlowStore,
+  type InternalNode,
+  type ReactFlowState,
+} from "@xyflow/react"
 
 import type { ConnectionMeaning } from "@/features/builder/lib/connections"
-import { routeEdges, type Box, type EdgeRoute, type RouteRequest } from "@/features/builder/lib/routing"
+import {
+  routeEdges,
+  type Box,
+  type EdgeRoute,
+  type RouteRequest,
+} from "@/features/builder/lib/routing"
 import { edgeId, INPUT, type Point } from "@/features/builder/lib/types"
 import { graphOf, useBuilder, type FlowNode } from "./store"
 
@@ -15,10 +24,13 @@ import { graphOf, useBuilder, type FlowNode } from "./store"
 
 export type EdgeLook = ConnectionMeaning & { route?: EdgeRoute }
 
-export const EdgeLooksContext = React.createContext<Map<string, EdgeLook>>(new Map())
+export const EdgeLooksContext = React.createContext<Map<string, EdgeLook>>(
+  new Map()
+)
 
 /** How the canvas draws this connection. */
-export const useEdgeLook = (id: string) => React.useContext(EdgeLooksContext).get(id)
+export const useEdgeLook = (id: string) =>
+  React.useContext(EdgeLooksContext).get(id)
 
 // Where every step stands, how big it is and where its ways out sit, as
 // one string: the routes are worked out again only when it changes, not
@@ -27,7 +39,8 @@ function geometryOf(state: ReactFlowState) {
   let key = ""
   for (const node of state.nodeLookup.values()) {
     const { x, y } = node.internals.positionAbsolute
-    const ports = node.internals.handleBounds?.source?.map((h) => h.y).join("/") ?? ""
+    const ports =
+      node.internals.handleBounds?.source?.map((h) => h.y).join("/") ?? ""
     key += `${node.id}:${x},${y},${node.measured.width},${node.measured.height},${ports};`
   }
   return key
@@ -43,7 +56,8 @@ const measured = new Map<string, number>()
  */
 function labelMeasure() {
   measuring ??= document.createElement("canvas").getContext("2d")
-  const root = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+  const root =
+    parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
   const font = `500 ${root * 0.625}px ${getComputedStyle(document.body).fontFamily}`
   return (text: string, icon: boolean) => {
     const key = `${font}|${text}`
@@ -63,7 +77,9 @@ function portOf(
   handle: string | null | undefined,
   type: "source" | "target"
 ): Point | undefined {
-  const bounds = node?.internals.handleBounds?.[type]?.find((h) => h.id === handle)
+  const bounds = node?.internals.handleBounds?.[type]?.find(
+    (h) => h.id === handle
+  )
   if (!node || !bounds) return undefined
   const { x, y } = node.internals.positionAbsolute
   return {
@@ -74,7 +90,10 @@ function portOf(
 
 export function useEdgeLooks(): Map<string, EdgeLook> {
   const geometry = useFlowStore(geometryOf)
-  const lookup = useFlowStore((s) => s.nodeLookup) as Map<string, InternalNode<FlowNode>>
+  const lookup = useFlowStore((s) => s.nodeLookup) as Map<
+    string,
+    InternalNode<FlowNode>
+  >
   const adapter = useBuilder((s) => s.adapter)
   const nodes = useBuilder((s) => s.nodes)
   const edges = useBuilder((s) => s.edges)
@@ -82,7 +101,9 @@ export function useEdgeLooks(): Map<string, EdgeLook> {
   const { meanings, bodies } = React.useMemo(() => {
     const graph = graphOf(nodes, edges)
     return {
-      meanings: adapter.meaningsOf(graph, (c) => edgeId(c.source, c.output, c.target)),
+      meanings: adapter.meaningsOf(graph, (c) =>
+        edgeId(c.source, c.output, c.target)
+      ),
       bodies: adapter.loopBodies(graph),
     }
   }, [adapter, nodes, edges])
@@ -137,7 +158,8 @@ export function useEdgeLooks(): Map<string, EdgeLook> {
     }
     const routes = routeEdges(boxes, requests, bodies)
     const looks = new Map<string, EdgeLook>()
-    for (const [id, meaning] of meanings) looks.set(id, { ...meaning, route: routes.get(id) })
+    for (const [id, meaning] of meanings)
+      looks.set(id, { ...meaning, route: routes.get(id) })
     return looks
   }, [geometry, lookup, edges, meanings, bodies])
 }

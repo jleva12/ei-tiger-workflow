@@ -1,6 +1,10 @@
 import type { SymbolKind, TaskStatus } from "@/components/forge/variants"
 import { formatRelative } from "@/lib/format"
-import type { AdkRun, AdkRunDetail, AdkRunStatus } from "@/features/runs/lib/runs"
+import type {
+  AdkRun,
+  AdkRunDetail,
+  AdkRunStatus,
+} from "@/features/runs/lib/runs"
 
 /*
  * How workflow runs read in lists (a workflow's Runs menu, the
@@ -22,12 +26,14 @@ const STATUS: Record<AdkRunStatus, { status: TaskStatus; label: string }> = {
 
 /** A run's badge and label; a run waiting for an answer, or being stopped, says so. */
 export function runStatusDisplay(
-  run: Pick<AdkRun, "status" | "pause"> & Partial<Pick<AdkRun, "cancel_requested_at">>
+  run: Pick<AdkRun, "status" | "pause"> &
+    Partial<Pick<AdkRun, "cancel_requested_at">>
 ) {
   const shown = STATUS[run.status] ?? { status: "pending", label: "Unknown" }
   if (run.status === "paused" && run.pause?.kind === "human_input")
     return { ...shown, label: "Awaiting an answer" }
-  if (run.status === "running" && run.cancel_requested_at) return { ...shown, label: "Stopping" }
+  if (run.status === "running" && run.cancel_requested_at)
+    return { ...shown, label: "Stopping" }
   return shown
 }
 
@@ -37,7 +43,9 @@ export function runStatusDisplay(
  * has it, so it isn't retried: it's resubmitted, as a run of its own.
  */
 export const isA2aTask = (run: Pick<AdkRunDetail, "trigger" | "resubmit_of">) =>
-  run.trigger?.type === "runtime" && run.trigger.protocol === "a2a" && !run.resubmit_of
+  run.trigger?.type === "runtime" &&
+  run.trigger.protocol === "a2a" &&
+  !run.resubmit_of
 
 /** Waiting for a worker or on one: queued or running. */
 export const isLiveRun = (run: Pick<AdkRun, "status"> | undefined) =>
@@ -59,9 +67,12 @@ export function runNote(
   run: Pick<AdkRun, "status" | "pause" | "waiting_until" | "error"> &
     Partial<Pick<AdkRun, "cancel_requested_at">>
 ) {
-  if (run.status === "running" && run.cancel_requested_at) return "Abandoned: its worker stops it"
+  if (run.status === "running" && run.cancel_requested_at)
+    return "Abandoned: its worker stops it"
   if (run.status === "paused")
-    return run.pause?.kind === "human_input" ? "Waiting for an answer" : "Waiting for a decision"
+    return run.pause?.kind === "human_input"
+      ? "Waiting for an answer"
+      : "Waiting for a decision"
   if (run.status === "waiting" && run.waiting_until)
     return `Carries on ${formatRelative(run.waiting_until)}`
   if (run.error && run.status === "failed") return run.error.message
@@ -71,9 +82,13 @@ export function runNote(
 
 /** What a run is doing, in the Runs menu's words. */
 export const runLine = (
-  run: Pick<AdkRun, "status" | "pause" | "waiting_until" | "error" | "started_at" | "created_at"> &
+  run: Pick<
+    AdkRun,
+    "status" | "pause" | "waiting_until" | "error" | "started_at" | "created_at"
+  > &
     Partial<Pick<AdkRun, "cancel_requested_at">>
-) => runNote(run) ?? `Started ${formatRelative(run.started_at ?? run.created_at)}`
+) =>
+  runNote(run) ?? `Started ${formatRelative(run.started_at ?? run.created_at)}`
 
 export type RunGroup = {
   id: TaskStatus
@@ -105,5 +120,12 @@ export const IDLE_POLL_MS = 30_000
  * going, else every 30 s; not once it failed (one error notice, then the
  * window regaining focus tries again).
  */
-export const runsPollMs = (state: { status: string; data?: { items: Pick<AdkRun, "status">[] } }) =>
-  state.status === "error" ? false : state.data?.items.some(isOpenRun) ? OPEN_POLL_MS : IDLE_POLL_MS
+export const runsPollMs = (state: {
+  status: string
+  data?: { items: Pick<AdkRun, "status">[] }
+}) =>
+  state.status === "error"
+    ? false
+    : state.data?.items.some(isOpenRun)
+      ? OPEN_POLL_MS
+      : IDLE_POLL_MS

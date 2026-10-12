@@ -25,7 +25,10 @@ import {
 } from "@/components/forge/empty-state"
 import { ErrorCallout } from "@/components/forge/feedback"
 import { Icon } from "@/components/forge/icon"
-import { ShellHeaderActions, ShellToolbar } from "@/components/forge/shell/index"
+import {
+  ShellHeaderActions,
+  ShellToolbar,
+} from "@/components/forge/shell/index"
 import { Chip } from "@/components/forge/status"
 import { ViewTabsList, ViewTabsTrigger } from "@/components/forge/toolbar"
 import { Button } from "@/components/ui/button"
@@ -47,10 +50,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import {
-  RunList,
-  type RunListWords,
-} from "@/features/runs/components/run-list"
+import { RunList, type RunListWords } from "@/features/runs/components/run-list"
 import {
   organizationAgents,
   useOrganizationAgents,
@@ -541,8 +541,9 @@ export function OrganizationAgents({
             <DialogTitle>Delete {removing?.name}?</DialogTitle>
             <DialogDescription>
               It's removed for everyone in {organizationName}, with its nodes
-              and edges. Workflows that run it as a saved workflow will need another.
-              You can't undo this; export its JSON first to keep a copy.
+              and edges. Workflows that run it as a saved workflow will need
+              another. You can't undo this; export its JSON first to keep a
+              copy.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

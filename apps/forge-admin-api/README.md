@@ -338,6 +338,27 @@ Runs of the organization's ADK workflows (its agents); see
 | POST | `/organizations/{id}/adk-runs/{run_id}/answers` | Answer the question (human input) it waits at, `{"request_id", "answer"}`: 202 with the run | `agents:run` |
 | POST | `/organizations/{id}/adk-runs/{run_id}/retry`, `.../resubmit`, `.../abandon` | Retry a failed run as its next attempt (202); run a finished one again as a new run (202 with the new run); give one up (200; 202 while its worker stops a running one) | `agents:manage_runs` |
 
+### Conversation audit
+
+| Method | Path | What | Permission |
+|---|---|---|---|
+| GET | `/organizations/{id}/conversations?q=&agent=&channel=&since=&limit=&offset=` | The organization's conversations, the latest active first: its chat agents' (every channel) and the assistant's asked from inside it, each with its user, callers, channels, turns, tool calls, tokens and cost | `agents:audit` |
+| GET | `/organizations/{id}/conversations/{session_id}?app=&user=` | One of them whole: every event (messages, tool calls and answers, state changes), its state, turns and model/tool calls; an assistant conversation shows only the turns asked from inside the organization (`partial`) | `agents:audit` |
+| GET | `/conversations?q=&channel=&since=` | Every assistant conversation, asked from inside an organization or not | `agents:audit` on the site |
+| GET | `/conversations/{session_id}?app=&user=` | Any conversation, whole | `agents:audit` on the site |
+
+`forge_admin.conversations.audit` reads ADK's own `sessions` and `events`
+tables (where the hosted runtime and the assistant keep conversations) beside
+`usage_invocations` and `usage_calls`. Each turn keeps its `channel`
+(0024conversation_audit): `console` (the builder's chat: a signed-in person
+sending `X-Forge-Client: console`), `api` (the run API otherwise), `a2a`, or
+`assistant`; turns from before have none (`unknown`). The runtime's authorize
+hook tells the channel from the call's action (`chat_agents.runtime`). The
+assistant's turns are always recorded now: asked from no organization of the
+person's, with an empty `organization_id`, which no overview counts. `q`
+finds people by name or email, API keys by name, and conversation users',
+callers' and sessions' IDs. 0024 grants `agents:audit` to `org:admin`.
+
 ### Assistant routes
 
 | Method | Path | What |

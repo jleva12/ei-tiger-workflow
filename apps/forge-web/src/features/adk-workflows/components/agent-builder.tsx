@@ -24,6 +24,7 @@ import {
   VersionChip,
 } from "@/features/builder/components/versions"
 import { BuilderUiContext } from "@/features/builder/components/ui"
+import { selectedStep } from "@/features/builder/components/store"
 import {
   DETAILS_PANEL_ID,
   downloadJson,
@@ -101,6 +102,7 @@ import { usePageContext } from "@/features/assistant/lib/page-context"
 import { useAgentStepModels } from "@/features/steps/lib/models"
 import { AdkRunDialog, AdkRunsMenu } from "@/features/runs/components/adk-runs"
 import { AgentDetails } from "./agent-details"
+import { TestRunOverlay, TestRunPanel } from "./test-run-panel"
 import { WorkflowRunInfo } from "./workflow-versions"
 import { agentFileName } from "./agent-files"
 import {
@@ -464,6 +466,13 @@ function Builder({
     schema: Record<string, unknown>
     files: FilesRule
   }>()
+  // The test run followed beside the canvas, and drawn over it.
+  const [testRun, setTestRun] = React.useState<string>()
+  const selected = useAgentBuilder((s) => selectedStep(s)?.id)
+  const testRunDoc = React.useMemo(
+    () => (testRun ? agentDocumentOf(api.getState()) : undefined),
+    [testRun, api]
+  )
   const [detailsWidth, setDetailsWidth] = useDetailsWidth(
     "forge.agents.detailsWidth"
   )
@@ -565,22 +574,22 @@ function Builder({
         : { schema: {}, files: NO_FILES }
     )
   }
-  const started = (run: AdkRun) =>
-    toast.add({
-      title: "Run started.",
-      description:
-        "It's queued, and a worker takes it within seconds. Follow it under Runs, or on its page.",
-      type: "success",
-      actionProps: {
-        children: "Open the run",
-        onClick: () =>
-          void navigate({
-            to: "/organizations/$organizationId",
-            params: { organizationId: organization.id },
-            search: { view: "agents", agentRun: run.id },
-          }),
-      },
+  // Followed here, beside the canvas, its progress drawn over the steps.
+  const started = (run: AdkRun) => {
+    api.getState().select(null)
+    setTestRun(run.id)
+    // The panel takes the canvas's right: the whole workflow back in view.
+    requestAnimationFrame(() => api.getState().requestFit())
+  }
+  const showStep = (id: string) => {
+    api.getState().select(id)
+    void flow.fitView({
+      nodes: [{ id }],
+      duration: 350,
+      maxZoom: 1,
+      padding: 0.6,
     })
+  }
 
   const parse = React.useCallback(
     (text: string) => parseAgent(text, { organizationId: organization.id }),
@@ -768,11 +777,12 @@ function Builder({
       </ShellToolbar>
 
       {/* The panel is as wide as its viewer left it, up to half the builder;
-          tucked away (as it opens), the canvas has the whole width. */}
+          tucked away (as it opens), the canvas has the whole width. A test
+          run takes its place while it's followed. */}
       <div
         className={cn(
           "absolute inset-0 grid grid-cols-1",
-          details &&
+          (details || testRun) &&
             "grid-cols-[minmax(0,1fr)_min(var(--details-width),50%)] @max-[900px]/shell:grid-cols-1"
         )}
         style={
@@ -786,7 +796,9 @@ function Builder({
           )}
           inert={view === "json" || undefined}
         >
-          <BuilderCanvas needsLayout={needsLayout} />
+          <TestRunOverlay organizationId={organization.id} runId={testRun}>
+            <BuilderCanvas needsLayout={needsLayout} />
+          </TestRunOverlay>
           {readOnly && shownVersion !== undefined && (
             <ReadOnlyBanner
               version={shownVersion}
@@ -801,13 +813,13 @@ function Builder({
         </div>
         <aside
           id={DETAILS_PANEL_ID}
-          aria-label="Workflow details"
+          aria-label={testRun ? "Test run" : "Workflow details"}
           inert={view === "json" || undefined}
           className={cn(
             "relative flex min-h-0 flex-col border-l bg-background",
             view === "json" && "invisible",
             "@max-[900px]/shell:absolute @max-[900px]/shell:top-3 @max-[900px]/shell:right-3 @max-[900px]/shell:bottom-3 @max-[900px]/shell:z-10 @max-[900px]/shell:w-[min(var(--details-width),calc(100%-1.5rem))] @max-[900px]/shell:rounded-(--radius-card) @max-[900px]/shell:border @max-[900px]/shell:shadow-(--shadow-float)",
-            !details && "hidden"
+            !details && !testRun && "hidden"
           )}
         >
           <DetailsResizer
@@ -815,12 +827,27 @@ function Builder({
             onWidthChange={setDetailsWidth}
             className="@max-[900px]/shell:hidden"
           />
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <WorkflowRunInfo record={record} viewing={viewing} />
-            <AgentDetails />
-          </div>
-          {/* Kept clear for the assistant's launcher, which floats here. */}
-          <div aria-hidden="true" className="h-18 shrink-0" />
+          {testRun ? (
+            <TestRunPanel
+              key={testRun}
+              organizationId={organization.id}
+              runId={testRun}
+              doc={testRunDoc}
+              selectedStep={selected}
+              onShowStep={showStep}
+              onRunAgain={canRun && !runBlocked ? startRun : undefined}
+              onClose={() => setTestRun(undefined)}
+            />
+          ) : (
+            <>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <WorkflowRunInfo record={record} viewing={viewing} />
+                <AgentDetails />
+              </div>
+              {/* Kept clear for the assistant's launcher, which floats here. */}
+              <div aria-hidden="true" className="h-18 shrink-0" />
+            </>
+          )}
         </aside>
         {view === "json" && (
           <div className="absolute inset-0 bg-background">

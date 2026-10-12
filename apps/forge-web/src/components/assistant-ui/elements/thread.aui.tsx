@@ -158,6 +158,11 @@ export type ThreadProps = {
   autoFocus?: boolean | undefined
   /** The composer's placeholder. Default "Send a message...". */
   placeholder?: string | undefined
+  /**
+   * Shows the composer. Default true; false for a conversation that's only
+   * read (a transcript, an audit), with nothing to send.
+   */
+  composer?: boolean | undefined
 }
 
 const EMPTY_COMPONENTS: ThreadComponents = {}
@@ -202,6 +207,7 @@ export const Thread: FC<ThreadProps> = ({
   components = EMPTY_COMPONENTS,
   autoFocus = true,
   placeholder = "Send a message...",
+  composer = true,
 }) => {
   const isEmpty = useAuiState(isNewChatView)
 
@@ -211,6 +217,7 @@ export const Thread: FC<ThreadProps> = ({
         isEmpty={isEmpty}
         autoFocus={autoFocus}
         placeholder={placeholder}
+        composer={composer}
       />
     </ThreadComponentsContext.Provider>
   )
@@ -220,7 +227,8 @@ const ThreadRoot: FC<{
   isEmpty: boolean
   autoFocus: boolean
   placeholder: string
-}> = ({ isEmpty, autoFocus, placeholder }) => {
+  composer: boolean
+}> = ({ isEmpty, autoFocus, placeholder, composer }) => {
   const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext)
   // A new message scrolls to the top (turnAnchor="top") and its reply fills
   // the space below; once the reply outgrows it, the thread follows it.
@@ -274,11 +282,17 @@ const ThreadRoot: FC<{
             )}
           >
             <ThreadScrollToBottom />
-            <ThreadFollowupSuggestions />
-            <Composer autoFocus={autoFocus} placeholder={placeholder} />
-            <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
-              <ThreadSuggestions />
-            </AuiIf>
+            {composer && (
+              <>
+                <ThreadFollowupSuggestions />
+                <Composer autoFocus={autoFocus} placeholder={placeholder} />
+                <AuiIf
+                  condition={(s) => isNewChatView(s) && s.composer.isEmpty}
+                >
+                  <ThreadSuggestions />
+                </AuiIf>
+              </>
+            )}
           </ThreadPrimitive.ViewportFooter>
         </div>
       </ThreadPrimitive.Viewport>

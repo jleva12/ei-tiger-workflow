@@ -16,6 +16,14 @@ import { OrganizationCredentials } from "@/features/credentials/components/organ
 import { OrganizationApiKeys } from "@/features/api-keys/components/organization-api-keys"
 import { OrganizationKnowledge } from "@/features/knowledge/components/organization-knowledge"
 import { OrganizationMembers } from "@/features/admin/components/organization-members"
+import { ConversationList } from "@/features/conversations/components/conversation-list"
+import { ConversationPage } from "@/features/conversations/components/conversation-page"
+import {
+  CHANNELS,
+  SINCE,
+  type Channel,
+  type Since,
+} from "@/features/conversations/lib/conversations"
 import { PrimaryAction } from "@/components/forge/app-shell"
 import { PageEmpty } from "@/components/forge/empty-state"
 import { ErrorCallout } from "@/components/forge/feedback"
@@ -58,6 +66,35 @@ import {
  * organization is also site administration, at
  * /admin/organizations/$organizationId.
  */
+const text = (value: unknown) =>
+  typeof value === "string" && value ? value : undefined
+
+/** What the Conversations page's URL says: its filters, and the conversation open. */
+function conversationSearch(search: Record<string, unknown>): WorkspaceSearch {
+  const conversation = text(search.conversation)
+  const app = text(search.conversationApp)
+  const user = text(search.conversationUser)
+  const since = search.since
+  return {
+    q: text(search.q),
+    agent: text(search.agent),
+    channel: Object.hasOwn(CHANNELS, String(search.channel))
+      ? (search.channel as Channel)
+      : undefined,
+    since:
+      Object.hasOwn(SINCE, String(since)) && since !== "all"
+        ? (since as Exclude<Since, "all">)
+        : undefined,
+    ...(conversation &&
+      app &&
+      user && {
+        conversation,
+        conversationApp: app,
+        conversationUser: user,
+      }),
+  }
+}
+
 export const Route = createFileRoute("/organizations/$organizationId")({
   validateSearch: (search: Record<string, unknown>): WorkspaceSearch => {
     // Code repositories was a page of its own before it moved under
@@ -91,6 +128,7 @@ export const Route = createFileRoute("/organizations/$organizationId")({
       ...(view === "credentials" &&
         typeof search.credential === "string" &&
         search.credential && { credential: search.credential }),
+      ...(view === "conversations" && conversationSearch(search)),
       ...(view === "knowledge" &&
         repositories && {
           knowledgeTab: "repositories" as const,
@@ -114,6 +152,13 @@ function OrganizationWorkspacePage() {
     credential,
     knowledgeTab,
     repository,
+    q,
+    agent,
+    channel,
+    since,
+    conversation,
+    conversationApp,
+    conversationUser,
   } = Route.useSearch()
   const navigate = Route.useNavigate()
   const myOrganizations = useMyOrganizations()
@@ -126,6 +171,7 @@ function OrganizationWorkspacePage() {
   const canManageRuns = can("agents:manage_runs")
   const canReadMembers = can("members:read")
   const canManageKeys = can("api_keys:manage")
+  const canAudit = can("agents:audit")
   const [assigning, setAssigning] = React.useState(false)
 
   useShellPage({
@@ -202,6 +248,7 @@ function OrganizationWorkspacePage() {
         view={view}
         members={canReadMembers}
         apiKeys={canManageKeys}
+        audit={canAudit}
       />
       {view === "overview" ? (
         <>
@@ -261,6 +308,62 @@ function OrganizationWorkspacePage() {
           <OrganizationApiKeys
             organizationId={organizationId}
             organizationName={organization.name}
+          />
+        )
+      ) : view === "conversations" ? (
+        !canAudit ? (
+          <PageEmpty
+            illustration="locked"
+            title="You can't audit this organization's conversations"
+            description={`Ask one of ${organization.name}'s admins for the conversation audit permission (agents:audit).`}
+          />
+        ) : conversation && conversationApp && conversationUser ? (
+          <ConversationPage
+            key={`${conversationApp}/${conversationUser}/${conversation}`}
+            scope={{ organizationId }}
+            conversation={{
+              session: conversation,
+              app: conversationApp,
+              user: conversationUser,
+            }}
+            onBack={() =>
+              void navigate({
+                search: (prev) => ({
+                  ...prev,
+                  conversation: undefined,
+                  conversationApp: undefined,
+                  conversationUser: undefined,
+                }),
+              })
+            }
+          />
+        ) : (
+          <ConversationList
+            scope={{ organizationId }}
+            filters={{ q, agent, channel, since }}
+            onFiltersChange={(next) =>
+              void navigate({
+                search: {
+                  view: "conversations",
+                  q: next.q || undefined,
+                  agent: next.agent || undefined,
+                  channel: next.channel || undefined,
+                  since:
+                    next.since && next.since !== "all" ? next.since : undefined,
+                },
+                replace: true,
+              })
+            }
+            onOpen={(ref) =>
+              void navigate({
+                search: (prev) => ({
+                  ...prev,
+                  conversation: ref.session,
+                  conversationApp: ref.app,
+                  conversationUser: ref.user,
+                }),
+              })
+            }
           />
         )
       ) : view === "mcp-servers" ? (

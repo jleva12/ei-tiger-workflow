@@ -29,6 +29,7 @@ from forge_agent_runtime.server import CallAction, create_router
 from forge_admin.adk_workflows.a2a import workflow_a2a_service
 from forge_admin.auth.runtime_access import authorize_call, check_conversation_user
 from forge_admin.config import Settings
+from forge_admin.overview.recording import A2A, API, CLIENT_HEADER, CONSOLE, set_channel
 
 NOT_SET_UP = "Chat agents aren't set up: set FORGE_ADMIN_MONGO_URI"
 
@@ -66,6 +67,14 @@ async def authorize_agent(
     caller = await authorize_call(request, agent.document.organization_id)
     if user_id is not None:
         await check_conversation_user(request, caller, user_id)
+    # How its turns came in, for the conversation's audit: A2A, the builder's
+    # chat (a signed-in person in Forge's console), or the run API.
+    if action == "a2a":
+        set_channel(A2A)
+    elif action == "run":
+        console = request.headers.get(CLIENT_HEADER) == CONSOLE
+        person = not (caller.is_anonymous or caller.is_api_key)
+        set_channel(CONSOLE if console and person else API)
 
 
 def runtime_security() -> dict[str, SecurityScheme]:

@@ -14,7 +14,9 @@ import { downloadJson, useBuilderDocument, useOpenStep } from "./utils"
  * as the canvas changes, beside what it holds, what stops it from running,
  * and the JSON Schema of the format.
  */
-export function BuilderJson<Doc extends { name: string; nodes: unknown[]; edges: unknown[] }>({
+export function BuilderJson<
+  Doc extends { name: string; nodes: unknown[]; edges: unknown[] },
+>({
   format,
   schema,
   schemaFileName,
@@ -48,7 +50,8 @@ export function BuilderJson<Doc extends { name: string; nodes: unknown[]; edges:
           <code className="font-mono text-foreground">{fileName(doc)}</code>
           <span aria-hidden="true">·</span>
           <span className="tabular-nums">
-            {lines.toLocaleString()} lines, {doc.nodes.length} nodes, {doc.edges.length} edges
+            {lines.toLocaleString()} lines, {doc.nodes.length} nodes,{" "}
+            {doc.edges.length} edges
           </span>
         </div>
         <JsonView value={doc} className="min-h-0 flex-1" />
@@ -59,11 +62,17 @@ export function BuilderJson<Doc extends { name: string; nodes: unknown[]; edges:
         className="min-h-0 overflow-y-auto border-l @max-[900px]/shell:max-h-72 @max-[900px]/shell:border-t @max-[900px]/shell:border-l-0"
       >
         <section className="flex flex-col gap-3 px-4 py-4">
-          <h2 className="text-sm font-medium text-foreground">{capitalized(nouns.doc)} JSON</h2>
+          <h2 className="text-sm font-medium text-foreground">
+            {capitalized(nouns.doc)} JSON
+          </h2>
           <p className="text-xs/[1.6] text-muted-foreground">{about}</p>
           <div className="flex gap-2">
             <CopyButton value={text} label="Copy JSON" />
-            <Button variant="outline" size="sm" onClick={() => downloadJson(doc, fileName(doc))}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => downloadJson(doc, fileName(doc))}
+            >
               <Icon icon="download" data-icon="inline-start" />
               Download
             </Button>
@@ -77,7 +86,11 @@ export function BuilderJson<Doc extends { name: string; nodes: unknown[]; edges:
             <IssueList issues={issues} onOpen={openStep} />
           ) : (
             <p className="flex items-start gap-2 text-xs/[1.6] text-muted-foreground">
-              <Icon icon="completed" size={14} className="mt-0.5 shrink-0 text-signal-success" />
+              <Icon
+                icon="completed"
+                size={14}
+                className="mt-0.5 shrink-0 text-signal-success"
+              />
               {ready}
             </p>
           )}
@@ -85,8 +98,9 @@ export function BuilderJson<Doc extends { name: string; nodes: unknown[]; edges:
         <section className="flex flex-col gap-3 border-t px-4 py-4">
           <h3 className="text-xs font-medium text-foreground">Format</h3>
           <p className="text-xs/[1.6] text-muted-foreground">
-            <code className="font-mono text-foreground">{format}</code>, described
-            by a JSON Schema (draft 2020-12) a runner or an API can check {nouns.docs} against.
+            <code className="font-mono text-foreground">{format}</code>,
+            described by a JSON Schema (draft 2020-12) a runner or an API can
+            check {nouns.docs} against.
           </p>
           <div className="flex gap-2">
             <CopyButton
@@ -104,12 +118,19 @@ export function BuilderJson<Doc extends { name: string; nodes: unknown[]; edges:
           </div>
         </section>
         <section className="flex flex-col gap-3 border-t px-4 py-4">
-          <h3 className="text-xs font-medium text-foreground">Replace from JSON</h3>
+          <h3 className="text-xs font-medium text-foreground">
+            Replace from JSON
+          </h3>
           <p className="text-xs/[1.6] text-muted-foreground">
-            Paste or choose {withArticle(nouns.doc)} file to put its {nouns.steps} on this canvas. You
-            can undo it.
+            Paste or choose {withArticle(nouns.doc)} file to put its{" "}
+            {nouns.steps} on this canvas. You can undo it.
           </p>
-          <Button variant="outline" size="sm" className="self-start" onClick={onImport}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="self-start"
+            onClick={onImport}
+          >
             Import JSON…
           </Button>
         </section>

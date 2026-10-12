@@ -98,7 +98,10 @@ export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
   // canvas has measured it.
   React.useEffect(() => {
     if (!reveal) return
-    const timer = setTimeout(() => revealSteps(flow, frame.current, reveal.ids), 60)
+    const timer = setTimeout(
+      () => revealSteps(flow, frame.current, reveal.ids),
+      60
+    )
     return () => clearTimeout(timer)
   }, [reveal, flow])
 
@@ -121,7 +124,8 @@ export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
       const nodes = api.getState().nodes
       const from = nodes.find((n) => n.id === source)
       const to = nodes.find((n) => n.id === target)
-      if (!from || !to || !output || !adapter.hasInput(to.data.kind)) return false
+      if (!from || !to || !output || !adapter.hasInput(to.data.kind))
+        return false
       return adapter.accepts?.(from.data, output, to.data.kind) ?? true
     },
     [api, adapter]
@@ -137,7 +141,8 @@ export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
 
   const onConnect = React.useCallback(
     (c: Connection) => {
-      if (c.sourceHandle) api.getState().connect(c.source, c.sourceHandle, c.target)
+      if (c.sourceHandle)
+        api.getState().connect(c.source, c.sourceHandle, c.target)
     },
     [api]
   )
@@ -146,11 +151,20 @@ export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
     (event: MouseEvent | TouchEvent, state: FinalConnectionState) => {
       setConnecting(false)
       const { fromNode, fromHandle, toNode, isValid } = state
-      if (isValid || !fromNode || !fromHandle?.id || fromHandle.type !== "source") return
+      if (
+        isValid ||
+        !fromNode ||
+        !fromHandle?.id ||
+        fromHandle.type !== "source"
+      )
+        return
       const store = api.getState()
       if (toNode) {
         // Dropped on a step rather than its way in: connect to it anyway.
-        if (toNode.id !== fromNode.id && fits(fromNode.id, fromHandle.id, toNode.id)) {
+        if (
+          toNode.id !== fromNode.id &&
+          fits(fromNode.id, fromHandle.id, toNode.id)
+        ) {
           store.connect(fromNode.id, fromHandle.id, toNode.id)
         }
         return
@@ -158,12 +172,18 @@ export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
       const point = "changedTouches" in event ? event.changedTouches[0] : event
       const bounds = frame.current?.getBoundingClientRect()
       if (!bounds) return
-      const at = flow.screenToFlowPosition({ x: point.clientX, y: point.clientY })
+      const at = flow.screenToFlowPosition({
+        x: point.clientX,
+        y: point.clientY,
+      })
       store.setPending({
         source: fromNode.id,
         output: fromHandle.id,
         at: { x: snap(at.x + 8), y: snap(at.y - DROP_OFFSET.y) },
-        screen: { x: point.clientX - bounds.left, y: point.clientY - bounds.top },
+        screen: {
+          x: point.clientX - bounds.left,
+          y: point.clientY - bounds.top,
+        },
       })
     },
     [api, flow, fits]
@@ -176,7 +196,10 @@ export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
     event.dataTransfer.dropEffect = "copy"
     let edge: string | null = null
     if (adapter.insertable(kind)) {
-      for (const element of document.elementsFromPoint(event.clientX, event.clientY)) {
+      for (const element of document.elementsFromPoint(
+        event.clientX,
+        event.clientY
+      )) {
         const found = element.closest(".react-flow__edge")
         if (found) {
           edge = found.getAttribute("data-id")
@@ -205,7 +228,10 @@ export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
 
   const onKeyDown = (event: React.KeyboardEvent) => {
     const target = event.target as HTMLElement
-    if (target.closest("input, textarea, [contenteditable=true], [role=dialog]")) return
+    if (
+      target.closest("input, textarea, [contenteditable=true], [role=dialog]")
+    )
+      return
     const store = api.getState()
     if (event.key === "Delete" || event.key === "Backspace") {
       const steps = store.nodes.filter((n) => n.selected).map((n) => n.id)
@@ -214,14 +240,20 @@ export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
       event.preventDefault()
       if (steps.length) store.removeSteps(steps)
       for (const id of links) store.removeEdge(id)
-    } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "d") {
+    } else if (
+      (event.metaKey || event.ctrlKey) &&
+      event.key.toLowerCase() === "d"
+    ) {
       const picked = store.nodes.filter((n) => n.selected)
       if (picked.length !== 1) return
       event.preventDefault()
       store.duplicateStep(picked[0].id)
     } else if (event.key === "Escape" && store.pending) {
       store.setPending(null)
-    } else if (event.key === "Enter" && target.classList.contains("react-flow__node")) {
+    } else if (
+      event.key === "Enter" &&
+      target.classList.contains("react-flow__node")
+    ) {
       if (!target.dataset.id) return
       event.preventDefault()
       store.edit(target.dataset.id)
@@ -261,9 +293,13 @@ export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
           }}
           onSelectionDragStart={() => api.getState().checkpoint()}
           onPaneClick={() => api.getState().setPending(null)}
-          onNodeMouseEnter={(_, node) => api.getState().setFocus({ step: node.id })}
+          onNodeMouseEnter={(_, node) =>
+            api.getState().setFocus({ step: node.id })
+          }
           onNodeMouseLeave={() => api.getState().setFocus(null)}
-          onEdgeMouseEnter={(_, edge) => api.getState().setFocus({ edge: edge.id })}
+          onEdgeMouseEnter={(_, edge) =>
+            api.getState().setFocus({ edge: edge.id })
+          }
           onEdgeMouseLeave={() => api.getState().setFocus(null)}
           onNodeClick={(event, node) => {
             // ⌘, Ctrl or ⇧ adds to the selection; a way in or out starts a connection.
@@ -323,7 +359,10 @@ const MARGIN = 32
 /** Where steps stand side by side: the x-extents that overlap, merged, left to right. */
 function columnsOf(nodes: FlowNode[]) {
   const spans = nodes
-    .map((n) => ({ start: n.position.x, end: n.position.x + (n.measured?.width ?? 240) }))
+    .map((n) => ({
+      start: n.position.x,
+      end: n.position.x + (n.measured?.width ?? 240),
+    }))
     .sort((a, b) => a.start - b.start)
   const merged: { start: number; end: number }[] = []
   for (const span of spans) {
@@ -354,14 +393,21 @@ function openingView(
     .filter((n) => kinds[n.data.kind]?.orb !== undefined)
     .sort((a, b) => a.position.x - b.position.x)[0]
   const agentColumn = agent
-    ? columns.findIndex((c) => agent.position.x >= c.start && agent.position.x < c.end)
+    ? columns.findIndex(
+        (c) => agent.position.x >= c.start && agent.position.x < c.end
+      )
     : 0
-  const gapBefore = (i: number) => (i > 0 ? columns[i].start - columns[i - 1].end : Infinity)
+  const gapBefore = (i: number) =>
+    i > 0 ? columns[i].start - columns[i - 1].end : Infinity
   const gapAfter = (i: number) =>
     i < columns.length - 1 ? columns[i + 1].start - columns[i].end : Infinity
-  let pick: { first: number; last: number; zoom: number; left: number } | undefined
+  let pick:
+    { first: number; last: number; zoom: number; left: number } | undefined
   for (let count = columns.length; count >= 1 && !pick; count -= 1) {
-    const first = Math.max(0, Math.min(agentColumn - count + 1, columns.length - count))
+    const first = Math.max(
+      0,
+      Math.min(agentColumn - count + 1, columns.length - count)
+    )
     const last = first + count - 1
     const span = columns[last].end - columns[first].start
     const zoom = Math.min(OPENING_ZOOM.max, (box.width - MARGIN * 2) / span)
@@ -380,10 +426,13 @@ function openingView(
     left: MARGIN,
   }
   const shown = nodes.filter(
-    (n) => n.position.x >= columns[first].start && n.position.x < columns[last].end
+    (n) =>
+      n.position.x >= columns[first].start && n.position.x < columns[last].end
   )
   const top = Math.min(...shown.map((n) => n.position.y))
-  const bottom = Math.max(...shown.map((n) => n.position.y + (n.measured?.height ?? 64)))
+  const bottom = Math.max(
+    ...shown.map((n) => n.position.y + (n.measured?.height ?? 64))
+  )
   // Centre what's shown top to bottom; too tall, start at its top.
   const y =
     (bottom - top) * zoom + MARGIN * 2 <= box.height
@@ -405,13 +454,19 @@ function ZoomControls() {
         aria-label="Zoom"
         className="flex items-center rounded-(--radius-control) border bg-background p-0.5 shadow-(--shadow-raised)"
       >
-        <ZoomButton label="Zoom out" onClick={() => void flow.zoomOut({ duration: duration() })}>
+        <ZoomButton
+          label="Zoom out"
+          onClick={() => void flow.zoomOut({ duration: duration() })}
+        >
           <Icon icon={MinusSignIcon} size={14} />
         </ZoomButton>
         <span className="w-11 text-center text-2xs text-muted-foreground tabular-nums">
           {Math.round(zoom * 100)}%
         </span>
-        <ZoomButton label="Zoom in" onClick={() => void flow.zoomIn({ duration: duration() })}>
+        <ZoomButton
+          label="Zoom in"
+          onClick={() => void flow.zoomIn({ duration: duration() })}
+        >
           <Icon icon="plus" size={14} />
         </ZoomButton>
         <span aria-hidden="true" className="mx-0.5 h-4 w-px bg-border" />
@@ -459,10 +514,11 @@ function EmptyCanvas({ text }: { text: string }) {
         <span className="grid size-10 place-items-center rounded-(--radius-card) border border-dashed text-subtle">
           <Icon icon="plus" size={18} />
         </span>
-        <p className="text-sm font-medium text-foreground">Nothing on the canvas</p>
+        <p className="text-sm font-medium text-foreground">
+          Nothing on the canvas
+        </p>
         <p className="text-xs/[1.6] text-muted-foreground">{text}</p>
       </div>
     </Panel>
   )
 }
-

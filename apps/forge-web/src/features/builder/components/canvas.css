@@ -80,7 +80,8 @@
   min-width: 0;
   min-height: 0;
   border-radius: 9999px;
-  border: 1.5px solid color-mix(in oklch, var(--muted-foreground) 80%, transparent);
+  border: 1.5px solid
+    color-mix(in oklch, var(--muted-foreground) 80%, transparent);
   background: var(--background);
   transition:
     background-color 150ms,
@@ -222,5 +223,50 @@
 @container shell (max-width: 800px) {
   .forge-flow .react-flow__minimap {
     display: none;
+  }
+}
+
+/*
+ * A run followed over the canvas (run-overlay.tsx): the lines it went along
+ * drawn firm, the others quiet, the line into the step at work flowing, and
+ * the step at work breathing.
+ */
+.forge-flow .forge-edge-group.forge-edge-taken .forge-edge {
+  stroke: var(--signal-success);
+  stroke-width: 2;
+}
+.forge-flow .forge-edge-group.forge-edge-taken .forge-edge-arrow {
+  fill: var(--signal-success);
+}
+.forge-flow .forge-edge-group.forge-edge-untaken {
+  opacity: 0.45;
+}
+.forge-flow .forge-edge-group.forge-edge-flowing .forge-edge {
+  stroke: var(--signal-running);
+  stroke-dasharray: 6 5;
+  animation: forge-edge-flow 0.6s linear infinite;
+}
+.forge-flow .forge-edge-group.forge-edge-flowing .forge-edge-arrow {
+  fill: var(--signal-running);
+}
+@keyframes forge-edge-flow {
+  to {
+    stroke-dashoffset: -11;
+  }
+}
+.forge-flow .forge-node-running {
+  animation: forge-node-breathe 1.6s ease-in-out infinite;
+}
+@keyframes forge-node-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px color-mix(in oklch, var(--signal-running) 30%, transparent),
+      var(--shadow-node);
+  }
+  50% {
+    box-shadow:
+      0 0 0 6px color-mix(in oklch, var(--signal-running) 12%, transparent),
+      var(--shadow-node);
   }
 }

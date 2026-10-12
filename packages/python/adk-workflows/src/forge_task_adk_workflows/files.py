@@ -14,8 +14,11 @@ with ADK's ``load_artifacts`` tool. The run's ``state.files`` lists them
 a new session takes its files along (:func:`copy_run_files`).
 
 Wherever the worker keeps artifacts, every LLM agent of a run has
-:func:`file_tools`: ``load_artifacts``, which lists the session's files to the
-model and reads those it asks for, and ``save_file``, which saves a text file
+:func:`file_tools`: ``load_artifacts`` (:class:`LoadRunFiles`, ADK's, told
+plainly that a file's contents follow the call's answer: ADK's own wording,
+"always call load_artifacts … call load_artifacts again", has models load the
+same file over and over), which lists the session's files to the model and
+reads those it asks for, and ``save_file``, which saves a text file
 (a report, a table, JSON) as an artifact of the run's session, for later steps
 to read and for the run's page to offer. A file the run started with can't be
 saved over.
@@ -32,6 +35,7 @@ alike (the admin API's tests compare this one with the format's schema).
 
 from __future__ import annotations
 
+import json
 import mimetypes
 import re
 import unicodedata
@@ -41,6 +45,7 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 from google.adk.artifacts import BaseArtifactService
+from google.adk.models.llm_request import LlmRequest
 from google.adk.tools import FunctionTool, ToolContext
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.load_artifacts_tool import LoadArtifactsTool
@@ -52,6 +57,7 @@ __all__ = [
     "FileRefused",
     "FileType",
     "FilesRule",
+    "LoadRunFiles",
     "RunFile",
     "artifact_service",
     "checked_file",
@@ -373,7 +379,54 @@ def file_tools(inputs: Iterable[str] = ()) -> list[BaseTool]:
     :return: ADK's ``load_artifacts`` (spreadsheets read as tables) and
         ``save_file``.
     """
-    return [LoadArtifactsTool(enable_spreadsheet_parsing=True), FunctionTool(_saver(inputs))]
+    return [LoadRunFiles(enable_spreadsheet_parsing=True), FunctionTool(_saver(inputs))]
+
+
+#: What a model is told of the run's files, with their names.
+FILES_NOTE = (
+    "The run has these files: {names}. To read one, call load_artifacts with its name: its "
+    "contents follow that call's answer, and you answer from them. Load a file once; load it "
+    "again only when you need it after other calls (its contents are shown right after it's "
+    "loaded) or after it was saved anew."
+)
+#: What ``load_artifacts`` answers: the contents follow.
+LOADED = "Loaded: each file's contents follow this answer. Answer from them."
+#: What it answers when it's asked for the same files right after.
+LOADED_AGAIN = (
+    "You loaded these just now, and their contents follow this answer again: answer from them "
+    "now instead of loading them once more."
+)
+# ADK's own note of the files, which LoadRunFiles says plainly instead.
+_ADK_NOTE = "You have a list of artifacts:"
+
+
+class LoadRunFiles(LoadArtifactsTool):
+    """
+    ADK's ``load_artifacts``: the files' names in the model's instructions,
+    and the contents of those it asks for after the call's answer, for that
+    request. Told plainly (:data:`FILES_NOTE`, :data:`LOADED`) so a model
+    answers from them instead of loading them again, and told firmly
+    (:data:`LOADED_AGAIN`) when it asks for the same files twice running.
+    """
+
+    async def run_async(self, *, args: dict[str, Any], tool_context: ToolContext) -> Any:
+        answer = await super().run_async(args=args, tool_context=tool_context)
+        if not isinstance(answer, dict) or "error" in answer:
+            return answer
+        names = sorted(str(name) for name in answer.get("artifact_names") or [])
+        # The files it loaded last, for this invocation only (``temp:``).
+        key = f"temp:forge:loaded:{tool_context.agent_name}"
+        again = tool_context.state.get(key) == names
+        tool_context.state[key] = names
+        return {**answer, "status": LOADED_AGAIN if again else LOADED}
+
+    async def _append_artifacts_to_llm_request(self, *, tool_context: ToolContext, llm_request: LlmRequest) -> None:
+        await super()._append_artifacts_to_llm_request(tool_context=tool_context, llm_request=llm_request)
+        notes: list[str] = llm_request._dynamic_instructions
+        for index, note in enumerate(notes):
+            if note.startswith(_ADK_NOTE):
+                names = await tool_context.list_artifacts()
+                notes[index] = FILES_NOTE.format(names=json.dumps(names, ensure_ascii=False))
 
 
 def _saver(inputs: Iterable[str]) -> Any:

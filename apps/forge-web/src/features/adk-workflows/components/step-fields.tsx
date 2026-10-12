@@ -59,7 +59,10 @@ function useSetter<K extends StepKind>(id: string): Setter<K> {
       updateStep(
         id,
         (step) =>
-          ({ ...step, config: { ...step.config, [field]: value } }) as AgentStep,
+          ({
+            ...step,
+            config: { ...step.config, [field]: value },
+          }) as AgentStep,
         String(field)
       ),
     [id, updateStep]

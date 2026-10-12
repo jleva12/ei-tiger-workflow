@@ -219,7 +219,9 @@ function StepSettings({ node }: { node: FlowNode }) {
           </>
         )}
         <SettingsHint>
-          {readOnly ? (ui.readOnlyHint ?? "Read-only") : "Changes apply as you make them"}
+          {readOnly
+            ? (ui.readOnlyHint ?? "Read-only")
+            : "Changes apply as you make them"}
         </SettingsHint>
         <DialogClose
           render={<Button size="sm" className="max-[600px]:ml-auto" />}

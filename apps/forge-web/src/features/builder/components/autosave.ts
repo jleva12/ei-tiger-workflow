@@ -48,12 +48,21 @@ const comparable = (doc: unknown) =>
   JSON.stringify({ ...(doc as object), created_at: "", updated_at: "" })
 
 /** A saved document as the API keeps it: its revision and when it was saved. */
-export type SavedRecord<Doc> = { id: string; revision: number; updated_at: string; document: Doc }
+export type SavedRecord<Doc> = {
+  id: string
+  revision: number
+  updated_at: string
+  document: Doc
+}
 
 /** How a builder's documents are saved, read back and cached. */
 export type SaveIo<Doc, Rec extends SavedRecord<Doc>> = {
   /** Save the next version, made from `revision`; rejects with an ApiError (409 when saved since). */
-  save: (id: string, body: { document: Doc; revision: number }, options: { keepalive: boolean }) => Promise<Rec>
+  save: (
+    id: string,
+    body: { document: Doc; revision: number },
+    options: { keepalive: boolean }
+  ) => Promise<Rec>
   /** The version the organization has now. */
   fetch: (id: string) => Promise<Rec>
   /** Keep a record the API answered with, where the rest of the app reads it. */
@@ -104,13 +113,19 @@ export function useBuilderAutosave<Doc, Rec extends SavedRecord<Doc>>(
       if (halted || key === saved || key === refused) return
       report({ kind: "saving" })
       try {
-        const record = await ioRef.current.save(id, { document: doc, revision }, { keepalive: false })
+        const record = await ioRef.current.save(
+          id,
+          { document: doc, revision },
+          { keepalive: false }
+        )
         revision = record.revision
         saved = key
         refused = undefined
         attempt = 0
         ioRef.current.cache(record)
-        api.setState({ meta: { ...api.getState().meta, updated_at: record.updated_at } })
+        api.setState({
+          meta: { ...api.getState().meta, updated_at: record.updated_at },
+        })
         report({ kind: "saved", at: Date.now() })
       } catch (caught) {
         const error = toApiError(caught)
@@ -125,11 +140,22 @@ export function useBuilderAutosave<Doc, Rec extends SavedRecord<Doc>>(
           error.status !== 429
         ) {
           refused = key
-          report({ kind: "refused", error: error.message, status: error.status })
+          report({
+            kind: "refused",
+            error: error.message,
+            status: error.status,
+          })
         } else {
           attempt += 1
-          const delay = Math.min(RETRY_MS.most, RETRY_MS.first * 2 ** (attempt - 1))
-          report({ kind: "retrying", error: error.message, next: Date.now() + delay })
+          const delay = Math.min(
+            RETRY_MS.most,
+            RETRY_MS.first * 2 ** (attempt - 1)
+          )
+          report({
+            kind: "retrying",
+            error: error.message,
+            next: Date.now() + delay,
+          })
           clearTimeout(timer)
           timer = setTimeout(() => void save(), delay)
         }
@@ -154,11 +180,16 @@ export function useBuilderAutosave<Doc, Rec extends SavedRecord<Doc>>(
     }
 
     const unsubscribe = api.subscribe((now, before) => {
-      if (now.nodes === before.nodes && now.edges === before.edges && now.meta === before.meta) {
+      if (
+        now.nodes === before.nodes &&
+        now.edges === before.edges &&
+        now.meta === before.meta
+      ) {
         return
       }
       const structural =
-        now.nodes.length !== before.nodes.length || now.edges.length !== before.edges.length
+        now.nodes.length !== before.nodes.length ||
+        now.edges.length !== before.edges.length
       clearTimeout(timer)
       timer = setTimeout(() => void save(), structural ? 0 : PAUSE_MS)
     })
@@ -173,7 +204,8 @@ export function useBuilderAutosave<Doc, Rec extends SavedRecord<Doc>>(
     }
     // Asked before closing when changes can't be saved.
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      if ((halted || refused !== undefined || attempt > 0) && pending()) event.preventDefault()
+      if ((halted || refused !== undefined || attempt > 0) && pending())
+        event.preventDefault()
     }
     window.addEventListener("pagehide", onPageHide)
     window.addEventListener("beforeunload", onBeforeUnload)
@@ -192,7 +224,9 @@ export function useBuilderAutosave<Doc, Rec extends SavedRecord<Doc>>(
       loadTheirs: async () => {
         const record = await current()
         api.getState().replaceDocument(record.document)
-        api.setState({ meta: { ...api.getState().meta, updated_at: record.updated_at } })
+        api.setState({
+          meta: { ...api.getState().meta, updated_at: record.updated_at },
+        })
         revision = record.revision
         saved = comparable(documentOf(api.getState()))
         halted = false

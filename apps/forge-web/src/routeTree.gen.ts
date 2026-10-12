@@ -14,6 +14,7 @@ import { Route as AdminRouteRouteImport } from './routes/admin/route'
 import { Route as AssistantRouteImport } from './routes/assistant'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
+import { Route as AdminConversationsRouteImport } from './routes/admin/conversations'
 import { Route as AdminPermissionsRouteImport } from './routes/admin/permissions'
 import { Route as AdminRolesRouteImport } from './routes/admin/roles'
 import { Route as AdminUsersRouteImport } from './routes/admin/users'
@@ -49,6 +50,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminConversationsRoute = AdminConversationsRouteImport.update({
+  id: '/conversations',
+  path: '/conversations',
   getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminPermissionsRoute = AdminPermissionsRouteImport.update({
@@ -118,6 +124,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AdminRouteRouteWithChildren
   '/assistant': typeof AssistantRoute
   '/settings': typeof SettingsRoute
+  '/admin/conversations': typeof AdminConversationsRoute
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
@@ -135,6 +142,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/assistant': typeof AssistantRoute
   '/settings': typeof SettingsRoute
+  '/admin/conversations': typeof AdminConversationsRoute
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
@@ -154,6 +162,7 @@ export interface FileRoutesById {
   '/admin': typeof AdminRouteRouteWithChildren
   '/assistant': typeof AssistantRoute
   '/settings': typeof SettingsRoute
+  '/admin/conversations': typeof AdminConversationsRoute
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
@@ -174,6 +183,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/assistant'
     | '/settings'
+    | '/admin/conversations'
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
@@ -191,6 +201,7 @@ export interface FileRouteTypes {
     | '/'
     | '/assistant'
     | '/settings'
+    | '/admin/conversations'
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
@@ -209,6 +220,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/assistant'
     | '/settings'
+    | '/admin/conversations'
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
@@ -271,6 +283,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/admin/'
       preLoaderRoute: typeof AdminIndexRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/conversations': {
+      id: '/admin/conversations'
+      path: '/conversations'
+      fullPath: '/admin/conversations'
+      preLoaderRoute: typeof AdminConversationsRouteImport
       parentRoute: typeof AdminRouteRoute
     }
     '/admin/permissions': {
@@ -354,6 +373,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AdminRouteRouteChildren {
+  AdminConversationsRoute: typeof AdminConversationsRoute
   AdminPermissionsRoute: typeof AdminPermissionsRoute
   AdminRolesRoute: typeof AdminRolesRoute
   AdminUsersRoute: typeof AdminUsersRoute
@@ -363,6 +383,7 @@ interface AdminRouteRouteChildren {
 }
 
 const AdminRouteRouteChildren: AdminRouteRouteChildren = {
+  AdminConversationsRoute: AdminConversationsRoute,
   AdminPermissionsRoute: AdminPermissionsRoute,
   AdminRolesRoute: AdminRolesRoute,
   AdminUsersRoute: AdminUsersRoute,

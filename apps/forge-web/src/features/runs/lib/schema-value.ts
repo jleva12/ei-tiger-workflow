@@ -1,6 +1,9 @@
 import * as React from "react"
 
-import { parseJsonSchema, type SchemaProperty } from "@/features/json/lib/json-schema"
+import {
+  parseJsonSchema,
+  type SchemaProperty,
+} from "@/features/json/lib/json-schema"
 
 /*
  * A value a JSON Schema describes, as a person fills it in: the fields its

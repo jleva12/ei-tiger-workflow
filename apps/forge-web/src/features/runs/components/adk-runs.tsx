@@ -74,8 +74,7 @@ export function AdkRunDialog({
             {version === "draft" || version === undefined
               ? "as its draft is saved now"
               : `as version ${version}`}
-            , as you.
-            Follow it under Runs, or on its own page.
+            , as you. Follow it beside the canvas as it goes.
           </>
         ),
         refused: "The run can't start",

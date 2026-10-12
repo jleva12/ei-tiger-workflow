@@ -11,7 +11,7 @@ event can be rebuilt by applying each event's ``state_delta`` in turn.
 
 Each event, in the session's order::
 
-    {"seq", "id", "at", "author", "role", "branch", "path", "step", "steps",
+    {"seq", "id", "invocation_id", "at", "author", "role", "branch", "path", "step", "steps",
      "own", "text", "thought", "calls", "responses", "files", "output",
      "has_output", "output_for", "state_delta", "artifact_delta", "route",
      "transfer_to_agent", "escalate", "error", "usage", "model", "metadata",
@@ -47,7 +47,7 @@ Long strings are cut short (``MAX_TEXT``), and a run with more than
 aren't).
 """
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -89,10 +89,39 @@ def run_trace(session: Session | None, document: dict[str, Any], *, invocation_i
         invocation_id = mine[0].invocation_id if mine else None
     else:
         mine = [event for event in session.events if event.invocation_id == invocation_id]
+    traced = _traced(session, mine, {invocation_id} if invocation_id else set(), infos, loops)
+    return {**traced, "invocation_id": invocation_id or None}
+
+
+def session_trace(session: Session, *, invocations: Collection[str] | None = None) -> dict[str, Any]:
+    """
+    A conversation's trace, as a run's (:func:`run_trace`): every event of
+    an ADK session, each turn's (invocation's) in turn, and the session's
+    state before its first and after its last.
+
+    :param session: The session.
+    :param invocations: Only these invocations' events (the turns one may
+        read); None for every one.
+    :return: ``{"events", "state_before", "state_after", "state",
+        "later_changes", "omitted"}``; ``step`` is None throughout.
+    """
+    mine = [event for event in session.events if invocations is None or event.invocation_id in invocations]
+    turns = {event.invocation_id for event in mine}
+    return _traced(session, mine, turns, {}, set())
+
+
+def _traced(
+    session: Session,
+    mine: list[Event],
+    turns: Collection[str],
+    infos: Mapping[str, Any],
+    loops: set[str],
+) -> dict[str, Any]:
+    # The events listed (the latest MAX_EVENTS of ``mine``), and the state
+    # before and after them, ``turns``' changes applied.
     listed = mine[-MAX_EVENTS:]
     first = listed[0] if listed else None
     last = listed[-1] if listed else None
-
     state = dict(session.state)
     if first is None or last is None:
         before = after = state
@@ -107,12 +136,12 @@ def run_trace(session: Session | None, document: dict[str, Any], *, invocation_i
             before.update(_delta(event))
         after = dict(before)
         for event in session.events[at:]:
-            if event.invocation_id == invocation_id:
+            if event.invocation_id in turns:
                 after.update(_delta(event))
         later = any(
             _delta(event)
             for event in session.events[session.events.index(last) + 1 :]
-            if event.invocation_id != invocation_id
+            if event.invocation_id not in turns
         )
     return {
         "events": [
@@ -123,7 +152,6 @@ def run_trace(session: Session | None, document: dict[str, Any], *, invocation_i
         "state": _clipped(as_data(state)),
         "later_changes": later,
         "omitted": len(mine) - len(listed),
-        "invocation_id": invocation_id or None,
     }
 
 
@@ -145,6 +173,7 @@ def _event(seq: int, event: Event, infos: Mapping[str, Any], loops: set[str]) ->
     return {
         "seq": seq,
         "id": event.id,
+        "invocation_id": event.invocation_id,
         "at": _iso(event.timestamp),
         "author": event.author,
         "role": content.role if content else None,

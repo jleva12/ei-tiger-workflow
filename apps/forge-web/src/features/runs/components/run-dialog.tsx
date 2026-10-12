@@ -80,7 +80,10 @@ function RunForm<T>({
         <DialogTitle>Start a run</DialogTitle>
         <DialogDescription>{words.description}</DialogDescription>
       </DialogHeader>
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4" tabIndex={-1}>
+      <div
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4"
+        tabIndex={-1}
+      >
         <SchemaValueEditor
           value={input}
           title="Input"
@@ -107,12 +110,16 @@ function RunForm<T>({
                   : "Couldn't start the run"
             }
           >
-            {run.error.status === 403 ? words.forbidden.description : run.error.message}
+            {run.error.status === 403
+              ? words.forbidden.description
+              : run.error.message}
           </ErrorCallout>
         )}
       </div>
       <DialogFooter className="border-t border-border px-5 py-3.5">
-        <DialogClose render={<Button variant="outline" type="button" disabled={busy} />}>
+        <DialogClose
+          render={<Button variant="outline" type="button" disabled={busy} />}
+        >
           Cancel
         </DialogClose>
         <Button type="submit" disabled={busy}>
@@ -157,7 +164,10 @@ export function RunDialog<T>({
     onOpenChange(false)
   }
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && !run.isPending && close()}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => !next && !run.isPending && close()}
+    >
       <DialogContent className="flex max-h-[min(44rem,calc(100dvh-4rem))] flex-col gap-0 p-0 sm:max-w-lg">
         <RunForm
           run={run}

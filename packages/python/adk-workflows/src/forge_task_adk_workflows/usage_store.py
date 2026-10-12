@@ -7,7 +7,10 @@ MySQL beside their runs: what its overview reads.
   of its ADK agents, on which model, with its tokens and what they cost.
 - ``usage_invocations``: every invocation of an agent or the assistant (a
   turn of a conversation, from the hosted API, a test in the builder or a
-  workflow): when it started and finished, and whether it succeeded.
+  workflow): when it started and finished, whether it succeeded, and how it
+  came in (``channel``). The assistant's turns asked outside any
+  organization are kept with an empty ``organization_id`` (for the site's
+  audit; no organization's overview counts them).
   Workflow runs are counted from the run store (``adk_runs``).
 
 Each row keeps its UTC ``hour`` too, which the overview groups by and then
@@ -73,6 +76,8 @@ calls = sa.Table(
     sa.Column("failed", sa.Boolean, nullable=False),
     sa.Index("ix_usage_calls_organization", "organization_id", "hour"),
     sa.Index("ix_usage_calls_subject", "organization_id", "kind", "subject_id", "hour"),
+    # A conversation's calls, for its audit (0024conversation_audit).
+    sa.Index("ix_usage_calls_session", "session_id"),
 )
 
 invocations = sa.Table(
@@ -87,6 +92,10 @@ invocations = sa.Table(
     sa.Column("version", sa.String(32), nullable=True),
     sa.Column("session_id", sa.String(128), nullable=True),
     sa.Column("user_id", sa.String(128), nullable=True),
+    # How the turn came in: console (the builder's chat), api (the hosted
+    # run API), a2a, assistant; null before 0024conversation_audit, and for
+    # an agent a workflow runs.
+    sa.Column("channel", sa.String(16), nullable=True),
     # running, succeeded, failed or cancelled.
     sa.Column("status", sa.String(16), nullable=False),
     sa.Column("error", sa.String(500), nullable=True),
@@ -96,6 +105,7 @@ invocations = sa.Table(
     sa.Column("duration_ms", sa.BigInteger, nullable=True),
     sa.Index("ix_usage_invocations_organization", "organization_id", "hour"),
     sa.Index("ix_usage_invocations_subject", "organization_id", "kind", "subject_id", "hour"),
+    sa.Index("ix_usage_invocations_session", "session_id"),
 )
 
 
@@ -169,6 +179,7 @@ class UsageStore:
         version: str | None = None,
         session_id: str | None = None,
         user_id: str | None = None,
+        channel: str | None = None,
     ) -> AsyncIterator[None]:
         """
         An agent's or the assistant's invocation, kept while it runs: it
@@ -177,7 +188,7 @@ class UsageStore:
         """
         invocation_id = uuid.uuid4().hex
         started = self.clock()
-        kept = await self._start(invocation_id, attribution, started, version, session_id, user_id)
+        kept = await self._start(invocation_id, attribution, started, version, session_id, user_id, channel)
         status, error = SUCCEEDED, None
         try:
             yield
@@ -200,6 +211,7 @@ class UsageStore:
         version: str | None,
         session_id: str | None,
         user_id: str | None,
+        channel: str | None = None,
     ) -> bool:
         values = {
             "id": invocation_id,
@@ -210,6 +222,7 @@ class UsageStore:
             "version": _clip(version, 32),
             "session_id": _clip(session_id, 128),
             "user_id": _clip(user_id or who.user_id, 128),
+            "channel": _clip(channel, 16),
             "status": RUNNING,
             "started_at": _naive(started),
             "hour": hour_of(started),

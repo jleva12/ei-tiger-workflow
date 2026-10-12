@@ -88,9 +88,11 @@ def test_the_assistant_counts_for_the_organization_its_page_is_in_if_theirs() ->
     assert found == Attribution(
         ORG, "assistant", "assistant", "Assistant", user_id="user-ada"
     )
-    assert assistant_attribution(page, [{"id": "org-2"}], "user-ada") is None
-    assert assistant_attribution(None, mine, "user-ada") is None
-    assert assistant_attribution({"entities": "x"}, mine, "user-ada") is None
+    # Asked from no organization of theirs: no organization's, for the site's audit.
+    nobody = Attribution("", "assistant", "assistant", "Assistant", user_id="user-ada")
+    assert assistant_attribution(page, [{"id": "org-2"}], "user-ada") == nobody
+    assert assistant_attribution(None, mine, "user-ada") == nobody
+    assert assistant_attribution({"entities": "x"}, mine, "user-ada") == nobody
 
 
 # ------------------------------------------------------------------ reading

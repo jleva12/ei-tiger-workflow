@@ -51,7 +51,7 @@ from forge_task_adk_workflows.run_store import (
     RunStore,
 )
 from forge_task_adk_workflows.runs import MAX_NOTES, STATE_KEY
-from forge_task_adk_workflows.steps import run_steps
+from forge_task_adk_workflows.steps import run_progress
 from forge_task_adk_workflows.trace import run_trace, saved_files
 from google.adk.sessions import BaseSessionService
 from google.adk.sessions import Session as AdkSession
@@ -316,6 +316,9 @@ class AdkRunStep(BaseModel):
     input_from: str | None = None
     #: What it set in the session's state, in order: ``{"key", "value", "at"}``.
     state_changes: list[dict[str, Any]] = []
+    #: A step before it handed on to it (by a way it took): unfinished, it's
+    #: the step the run is on, though it has recorded nothing yet.
+    handed_to: bool = False
 
 
 class AdkRunSteps(BaseModel):
@@ -326,6 +329,8 @@ class AdkRunSteps(BaseModel):
     session_id: str
     #: The sessions the run ran in before it started over, oldest first.
     earlier_sessions: list[str] = Field(default_factory=list)
+    #: The document's edges the run has gone along (their IDs).
+    taken_edges: list[str] = Field(default_factory=list)
 
 
 class AdkRunTrace(BaseModel):
@@ -841,11 +846,14 @@ async def get_adk_run_steps(
     found, document, session_id, before = await _run_session(request, run, earlier)
     # A run that hasn't started has no invocation yet, and so no events of its own.
     invocation = str(_kept(run).get("invocation_id") or "")
-    steps = [
-        AdkRunStep.model_validate(step)
-        for step in run_steps(found, document, invocation_id=invocation)
-    ]
-    return AdkRunSteps(steps=steps, session_id=session_id, earlier_sessions=before)
+    progress = run_progress(found, document, invocation_id=invocation)
+    steps = [AdkRunStep.model_validate(step) for step in progress["steps"]]
+    return AdkRunSteps(
+        steps=steps,
+        session_id=session_id,
+        earlier_sessions=before,
+        taken_edges=progress["taken_edges"],
+    )
 
 
 @router.get("/organizations/{organization_id}/adk-runs/{run_id}/trace")

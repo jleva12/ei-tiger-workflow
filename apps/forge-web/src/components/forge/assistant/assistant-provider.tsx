@@ -216,8 +216,10 @@ const threadComponents = {
  * The conversation and composer with the Forge and ADK parts: welcome, ADK
  * tool cards, agent labels, and the composer's context, model section and
  * `/` commands when they're configured. Render it inside `AssistantProvider`.
+ * `readOnly` shows the conversation without the composer: one that's only
+ * read, e.g. an audit's replay of what was said.
  */
-function AssistantThread() {
+function AssistantThread({ readOnly = false }: { readOnly?: boolean } = {}) {
   const { showModels, commands, composerContext } = useAssistantSettings()
   const hasCommands = Boolean(commands?.length)
   const hasContext = composerContext != null
@@ -233,6 +235,8 @@ function AssistantThread() {
   return (
     <Thread
       components={components}
+      composer={!readOnly}
+      autoFocus={!readOnly}
       placeholder={
         hasCommands ? "Send a message, or type / for commands..." : undefined
       }

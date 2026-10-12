@@ -52,14 +52,23 @@ def test_on_mysql_it_makes_the_usage_stores_tables() -> None:
     dialect = mysql.dialect()
     expected = set()
     for table in metadata.sorted_tables:
-        expected |= statements(str(CreateTable(table).compile(dialect=dialect)))
+        made_then = str(CreateTable(table).compile(dialect=dialect))
+        for column in LATER:
+            made_then = re.sub(rf"\n\t{column} [^\n]*", "", made_then)
+        expected |= statements(made_then)
         for index in table.indexes:
-            expected |= statements(str(CreateIndex(index).compile(dialect=dialect)))
+            if index.name not in LATER_INDEXES:
+                expected |= statements(str(CreateIndex(index).compile(dialect=dialect)))
     made = statements(output.getvalue())
     assert made == expected
     # Microseconds, and a double for dollars.
     assert any("at DATETIME(6) NOT NULL" in line for line in made)
     assert any("cost DOUBLE" in line for line in made)
+
+
+#: The usage store's columns and indexes a later migration added (0024conversation_audit).
+LATER = ("channel",)
+LATER_INDEXES = ("ix_usage_invocations_session", "ix_usage_calls_session")
 
 
 def test_on_sqlite_it_goes_up_and_down() -> None:

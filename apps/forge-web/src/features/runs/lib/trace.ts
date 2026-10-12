@@ -60,6 +60,8 @@ export type TraceEvent = {
   /** Its place among the run's events, from 1. */
   seq: number
   id: string
+  /** The ADK invocation (a turn) it's part of. */
+  invocation_id: string
   at: string
   /** Who wrote it: `user`, the workflow, an agent. */
   author: string

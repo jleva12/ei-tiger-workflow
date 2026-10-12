@@ -1,11 +1,17 @@
 import * as React from "react"
-import { BaseEdge, EdgeLabelRenderer, getSmoothStepPath, type EdgeProps } from "@xyflow/react"
+import {
+  BaseEdge,
+  EdgeLabelRenderer,
+  getSmoothStepPath,
+  type EdgeProps,
+} from "@xyflow/react"
 import { cn } from "cn"
 
 import { Icon } from "@/components/forge/icon"
 import { drawnLength, pathOf } from "@/features/builder/lib/routing"
 import type { Point } from "@/features/builder/lib/types"
 import { useEdgeLook } from "./edge-looks"
+import { useRunOverlay } from "./run-overlay"
 import { useBuilder, type FlowEdge } from "./store"
 
 /** A loop's way back is dashed: 5 on, 4 off. */
@@ -50,6 +56,12 @@ export const StepEdgeView = React.memo(function StepEdgeView({
   const focus = useBuilder((s) => s.focus)
   const look = useEdgeLook(id)
   const route = look?.route
+  // The run followed over the canvas: the lines it went along, and the one
+  // into the step at work moving.
+  const overlay = useRunOverlay()
+  const taken = overlay?.taken.has(id) ?? false
+  const flowing =
+    taken && Boolean(overlay?.live) && overlay?.steps.get(target) === "running"
 
   const drawn = React.useMemo(() => {
     if (route) {
@@ -83,7 +95,15 @@ export const StepEdgeView = React.memo(function StepEdgeView({
       anchor: { x, y },
       dashOffset: 0,
     }
-  }, [route, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition])
+  }, [
+    route,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+  ])
 
   const related = focus
     ? "edge" in focus
@@ -97,7 +117,11 @@ export const StepEdgeView = React.memo(function StepEdgeView({
   // What it's called: its branch, or a loop's way in or back.
   const named = look?.label ?? (data?.branch ? data.label : undefined)
   const showLabel = Boolean(
-    named && route?.label && (route.labelShown || related) && !selected && !dropping
+    named &&
+    route?.label &&
+    (route.labelShown || related) &&
+    !selected &&
+    !dropping
   )
 
   return (
@@ -107,7 +131,9 @@ export const StepEdgeView = React.memo(function StepEdgeView({
           "forge-edge-group",
           `forge-tone-${tone}`,
           faded && "forge-edge-faded",
-          strong && "forge-edge-strong"
+          strong && "forge-edge-strong",
+          overlay && (taken ? "forge-edge-taken" : "forge-edge-untaken"),
+          flowing && "forge-edge-flowing"
         )}
       >
         <BaseEdge
