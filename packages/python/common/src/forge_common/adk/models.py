@@ -373,7 +373,7 @@ class ProviderModels(BaseLlm):
         level = self._levels.pop(id(llm_request), None)
         if level is not None and not target.model.reasoning:
             level = None
-        call = ModelCall(target, level, await self._credential(target))
+        call = ModelCall(target, level, await self.credential(target))
         llm = self._build(call)
         self._prepare(llm_request, call)
         async with aclosing(llm.generate_content_async(llm_request, stream=stream)) as replies:
@@ -419,12 +419,13 @@ class ProviderModels(BaseLlm):
         request.config.thinking_config = None
         _pair_function_call_ids(request.contents)
 
-    async def _credential(self, target: ResolvedModel) -> str:
+    async def credential(self, target: ResolvedModel) -> str:
         """
         Fetches and returns a credential for a given target by determining the authentication
         method based on its configuration. If the authentication method utilizes OAuth2,
         it retrieves the token from an associated token source or creates one if it does
-        not already exist.
+        not already exist. Callers that reach the model themselves (pi, forge_pi_agent)
+        ask here too: one token source per provider, renewed before it expires.
 
         :param target: The resolved target model for which the credential needs to be fetched.
         :type target: ResolvedModel

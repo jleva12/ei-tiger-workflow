@@ -1,5 +1,5 @@
 """
-Actions: HTTP requests, transforms, filters and delays.
+Actions: HTTP requests, Bash commands, transforms, filters and delays.
 
 - ``http``: calls a URL and hands on ``{status, headers, body}`` by its
   Success way. Its URL, query parameters and headers are text with ``{{ }}``
@@ -14,6 +14,17 @@ Actions: HTTP requests, transforms, filters and delays.
   ``steps.<id>.error``. A 2xx whose body doesn't fit its output schema takes
   it too; a body that fits is handed on as its schema has it. With no Error
   way, the run fails.
+- ``bash``: runs its command by bash on the worker's machine, starting in its
+  folder of the run's folder (``support.commands``), and hands on ``{exit_code,
+  stdout, stderr, cwd, truncated}`` by its Success way when it exits with 0.
+  Its command runs as it's written; its environment variables (templates) and
+  ``WORKSPACE`` (the run's folder) are how it reads the run's data. Any other
+  exit code, a folder outside the run's folder or a command that runs past
+  its timeout takes its Error way, handing on nothing, with its error
+  (``{message, exit_code?, stdout, stderr}``) as ``steps.<id>.error``. With no
+  Error way, the run fails; and so does a run on a worker that doesn't run
+  commands, or without a folder (its start doesn't allow a file system). A
+  run tried again runs its command again: write commands that can.
 - ``transform``: hands on what its JSONata expression makes, held to its
   output schema when it has one (coerced; the run fails when it doesn't fit).
 - ``filter``: goes through its list's items (None: none; one value: a list of
@@ -27,6 +38,7 @@ Actions: HTTP requests, transforms, filters and delays.
   until}``) until the timer wakes it (``pauses.due_pauses``).
 """
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
@@ -41,7 +53,7 @@ from google.adk.workflow import FunctionNode
 from pydantic import ValidationError
 
 from forge_task_adk_workflows.graph.data import ERROR_KEY
-from forge_task_adk_workflows.graph.errors import RunFailed
+from forge_task_adk_workflows.graph.errors import AgentBuildError, RunFailed
 from forge_task_adk_workflows.graph.factories.base import (
     BuildContext,
     asked,
@@ -50,15 +62,27 @@ from forge_task_adk_workflows.graph.factories.base import (
     label_of,
     settings_of,
     text,
+    where_of,
 )
 from forge_task_adk_workflows.graph.names import adk_name
 from forge_task_adk_workflows.graph.schemas import held_to, problems, to_model
 from forge_task_adk_workflows.graph.services import RunServices
+from forge_task_adk_workflows.support.commands import (
+    NO_COMMANDS,
+    UNASKED,
+    VARIABLE,
+    WORKSPACE_VARIABLE,
+    Finished,
+    folder_in,
+    last_line,
+    run_command,
+)
 from forge_task_adk_workflows.support.errors import StepFailed
 from forge_task_adk_workflows.support.expressions import TEMPLATE, as_text
 from forge_task_adk_workflows.support.http import MAX_REDIRECTS, RETRYABLE, check_url, parse_body, read_body
 from forge_task_adk_workflows.support.step_settings import (
     UNIT_SECONDS,
+    BashConfig,
     DelayConfig,
     FilterConfig,
     HttpConfig,
@@ -254,6 +278,83 @@ async def _exchange(
         except TimeoutError as error:
             raise StepFailed(f"{url} didn't answer in {seconds:g} seconds") from error
     raise StepFailed(f"{url} redirected more than {MAX_REDIRECTS} times")
+
+
+def bash(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
+    s = settings_of(node, BashConfig)
+    services = ctx.services
+    evaluator = services.evaluator
+    has_error_way = "error" in ctx.connected.get(node["id"], frozenset())
+    seconds = max(1.0, s.timeout_seconds)
+    variables: dict[str, str] = {}
+    for row in s.env:
+        name = row.name.strip()
+        if not VARIABLE.fullmatch(name):
+            raise AgentBuildError(
+                f"{where_of(node)}: its environment variable {name!r} isn't a name bash reads: "
+                "letters, digits and _, not starting with a digit."
+            )
+        if name == WORKSPACE_VARIABLE:
+            raise AgentBuildError(
+                f"{where_of(node)}: {WORKSPACE_VARIABLE} is the run's folder; call its variable something else."
+            )
+        if name in variables:
+            raise AgentBuildError(f"{where_of(node)}: two of its environment variables are called {name}.")
+        variables[name] = row.value
+
+    async def command(data: dict[str, Any], workspace: str) -> dict[str, Any]:
+        cwd = await evaluator.render(s.cwd, data, what="Its folder")
+        folder = await asyncio.to_thread(folder_in, workspace, cwd)
+        env = {**services.command_environment, **UNASKED}
+        for name, value in variables.items():
+            env[name] = await evaluator.render(value, data, what=f"Its {name} variable")
+        env[WORKSPACE_VARIABLE] = workspace
+        finished = await run_command(
+            s.command, cwd=folder, env=env, seconds=seconds, max_bytes=services.max_command_output_bytes
+        )
+        if finished.exit_code != 0:
+            raise StepFailed(
+                _exited(finished),
+                details={"exit_code": finished.exit_code, "stdout": finished.stdout, "stderr": finished.stderr},
+            )
+        return {
+            "exit_code": finished.exit_code,
+            "stdout": finished.stdout,
+            "stderr": finished.stderr,
+            "cwd": str(folder),
+            "truncated": finished.truncated,
+        }
+
+    async def run(adk: Context, node_input: Any) -> Event:
+        if not services.commands:
+            # The run checks this before it starts (runs.AdkRun.run).
+            raise RunFailed(
+                f"{label_of(node)} failed: this worker doesn't run commands: {NO_COMMANDS}", step=node["id"]
+            )
+        workspace = services.workspace
+        if workspace is None:
+            raise RunFailed(
+                f"{label_of(node)} failed: the run has no folder to work in: "
+                "turn on Allow file system on the workflow's start",
+                step=node["id"],
+            )
+        try:
+            output = await command(ctx.data(adk, node_input), workspace)
+        except StepFailed as error:
+            if not has_error_way:
+                raise failed(node, error) from None
+            return Event(route="error", custom_metadata={ERROR_KEY: error.as_error()})  # type: ignore[call-arg]  # ADK's shorthand for actions.route
+        return Event(output=output, route="success")  # type: ignore[call-arg]  # ADK's shorthand for actions.route
+
+    return FunctionNode(name=adk_name(text(node.get("name"))), func=run)
+
+
+def _exited(finished: Finished) -> str:
+    """:return: How a command that failed ended, and the last thing it said."""
+    code = finished.exit_code
+    how = f"It exited with {code}" if code >= 0 else f"It was killed by signal {-code}"
+    said = last_line(finished.stderr) or last_line(finished.stdout)
+    return f"{how}: {said}" if said else how
 
 
 def transform(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:

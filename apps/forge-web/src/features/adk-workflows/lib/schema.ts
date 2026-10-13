@@ -7,6 +7,7 @@ import {
   AGENT_KINDS,
   FORGE_KINDS,
   LLM_TOOL_KINDS,
+  PI_TOOLS,
   SUB_AGENT_ID,
   SUB_AGENT_KINDS,
   type AgentKind,
@@ -111,6 +112,11 @@ const CONFIGS: Record<AgentKind, Record<string, unknown>> = {
       description:
         "The types of files it takes, by their extension; none takes any type.",
     },
+    allow_file_system: {
+      type: "boolean",
+      description:
+        "Whether a run gets a folder of its own on the worker's file system (a mounted volume: <volume>/<organization>/<workflow>/<run>), the same for each of its attempts. Its path is state.workspace, which steps and LLM agents' instructions read, e.g. to clone repositories into {{ state.workspace }}/<name>. A saved workflow it runs that allows one works in the run's folder.",
+    },
     start_over: {
       type: "boolean",
       description:
@@ -180,6 +186,51 @@ const CONFIGS: Record<AgentKind, Record<string, unknown>> = {
         "The fields of its start's input_schema, each a JSONata expression over the run's data. With any filled in, they're its input (an expression that finds nothing leaves its field out); with none, what comes in is.",
     },
   },
+  pi_agent: {
+    folder: {
+      ...text,
+      description:
+        "Where pi works: a template naming a folder in the run's folder (state.workspace), relative to it (backend, {{ item.name }}) or starting with it ({{ state.workspace }}/backend); empty for the run's folder itself. Made when it isn't there; one outside the run's folder fails the step. The workflow's start must allow a file system.",
+    },
+    prompt: {
+      ...text,
+      description:
+        "What pi is asked: a template, where {{ }} puts in the run's data; empty asks it what the node is handed.",
+    },
+    instruction: {
+      ...text,
+      description:
+        "Added to pi's own (coding agent) system prompt: a template.",
+    },
+    tools: {
+      type: "array",
+      items: oneOf(...PI_TOOLS),
+      uniqueItems: true,
+      description:
+        "Pi's built-in tools it may use: read, grep, find and ls read and search; bash runs any command as the worker's user; edit and write change files. None: none at all.",
+    },
+    model: LLM_SETTINGS.model,
+    thinking_level: {
+      ...oneOf("", ...THINKING_LEVELS),
+      description:
+        "How long the model thinks: the level if the model offers it, else the nearest it does. Empty: pi's default.",
+    },
+    output_schema: jsonSchema(
+      "A JSON Schema its answer is held to: pi is told to answer with JSON that fits it, and an answer that doesn't is sent back once. {} leaves it text."
+    ),
+    context_files: {
+      type: "boolean",
+      description:
+        "Whether pi reads AGENTS.md and CLAUDE.md in its folder and the folders above it.",
+    },
+    timeout_seconds: {
+      type: "number",
+      exclusiveMinimum: 0,
+      maximum: 3600,
+      description:
+        "Seconds it may take; then pi is stopped, with the commands it started, and the step fails.",
+    },
+  },
   // Forge's workflow steps: as a forge.workflow/v1 workflow's.
   ...(Object.fromEntries(
     FORGE_KINDS.map((kind) => [kind, STEP_CONFIGS[kind]])
@@ -210,10 +261,13 @@ const HANDS_ON: Record<AgentKind, string> = {
   loop_agent: "Hands on the answer of the sub-agent that answered last.",
   saved:
     "Its inputs, when any is filled in, else what comes in, are the other workflow's input (held to its start's input_schema); it hands on that workflow's result: its End's result.",
+  pi_agent:
+    "Hands on {answer, tool_calls, usage, folder}: answer is pi's last message, JSON held to output_schema when it declares one, else text; tool_calls [{tool, args, is_error}]; usage {input, cached, output, cost} (cost null when the model has no price); folder the absolute path it worked in.",
   human_input: "Hands on the person's answer, held to response_schema.",
   approval:
     "Hands on {approved, decided_by, comment, decided_at} by its approved or rejected way.",
   http: "Hands on {status, headers, body} by its success way, body held to output_schema when it declares one. Its error way hands on nothing; steps.<id>.error is {message, status?, body?, expression?}.",
+  bash: "Runs its command by bash in its folder of the run's folder (the start must allow a file system), its env variables and WORKSPACE (the run's folder) set; hands on {exit_code, stdout, stderr, cwd, truncated} by its success way when it exits with 0. Its error way (another exit code, a folder outside the run's, its timeout) hands on nothing; steps.<id>.error is {message, exit_code?, stdout?, stderr?}.",
   transform:
     "Hands on what its expression makes, held to output_schema when it declares one.",
   filter:

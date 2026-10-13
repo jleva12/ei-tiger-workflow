@@ -140,7 +140,26 @@ test("agents saved with Google's built-in tools open without them", () => {
     "edges[5].target isn't a node; dropped.",
   ])
   assert.equal(read.doc.nodes.some((n) => n.kind === "google_search"), false)
-  assert.equal(model.CHAT_KIND_LIST.some((kind) => ["google_search", "url_context", "code_execution"].includes(kind)), false)
+  assert.equal(model.CHAT_KIND_LIST.some((kind) => ["google_search", "url_context"].includes(kind)), false)
+})
+
+test("a code_execution node is Forge's Code execution tool, not Google's built-in", () => {
+  // Google's built-in shares the name; it opens as Forge's run-code tool, a person not confirming each run.
+  const doc = example()
+  doc.nodes.push({ id: "code", kind: "code_execution", name: "Code execution", config: {}, outputs: [] })
+  doc.edges.push({ id: "c", source: "agent", source_output: "tools", target: "code" })
+  const read = parseChatAgent(doc, { organizationId: ORG })
+  assert.equal(read.ok, true)
+  assert.deepEqual(read.notes, [])
+  assert.deepEqual(read.doc.nodes.find((n) => n.id === "code"), {
+    id: "code",
+    kind: "code_execution",
+    name: "Code execution",
+    config: { confirm: false },
+    outputs: [],
+  })
+  assert.equal(read.doc.edges.some((e) => e.source === "agent" && e.target === "code"), true)
+  assert.equal(model.CHAT_KINDS.code_execution.group, "tools")
 })
 
 test("agents calling each other in a circle, and saved agents and workflows that aren't there", () => {

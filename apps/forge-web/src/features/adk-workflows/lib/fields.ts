@@ -170,6 +170,16 @@ export function agentExpressionSettings(
       : undefined
     return inputSettings(step.config.inputs, schema)
   }
+  if (step.kind === "pi_agent") {
+    // Where pi works (a path, so text), what it's asked and what it's told.
+    return [
+      template("folder", "Its folder", step.config.folder),
+      template("prompt", "Its prompt", step.config.prompt, { forModel: true }),
+      template("instruction", "Its instruction", step.config.instruction, {
+        forModel: true,
+      }),
+    ]
+  }
   return instructions(step)
 }
 

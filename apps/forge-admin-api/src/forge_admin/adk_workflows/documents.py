@@ -75,7 +75,13 @@ ADDED_SETTINGS: dict[str, dict[str, Any]] = {
     "match": {"mode": "first"},
     # 2026-10-07: whether a run may start with files, and of which types.
     # 2026-10-09: whether a run ADK can't carry on starts over.
-    "start": {"allow_files": False, "file_types": [], "start_over": False},
+    # 2026-10-13: whether a run gets a folder on the worker's file system.
+    "start": {
+        "allow_files": False,
+        "file_types": [],
+        "allow_file_system": False,
+        "start_over": False,
+    },
     # 2026-10-09: the organization's credential it signs its requests with.
     # 2026-10-12: its query parameters, by name and value.
     "http": {"credential": "", "query": []},

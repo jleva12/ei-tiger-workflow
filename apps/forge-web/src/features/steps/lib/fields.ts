@@ -48,6 +48,14 @@ export function expressionSettings(step: StepData): ExpressionSetting[] {
         ),
         { key: "body", label: "Body", mode: "expression", text: step.config.body, check: {} },
       ]
+    case "bash":
+      // Its command is run as it's written: it reads these instead.
+      return [
+        template("cwd", "Folder", step.config.cwd),
+        ...step.config.env.map((v) =>
+          template(`env.${v.id}`, `Variable ${v.name || "without a name"}`, v.value)
+        ),
+      ]
     case "transform":
       return [
         { key: "expression", label: "Expression", mode: "expression", text: step.config.expression, check: {} },

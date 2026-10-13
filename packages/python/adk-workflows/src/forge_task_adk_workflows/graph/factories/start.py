@@ -10,6 +10,10 @@ A start that allows files lists the run's in the state too, as ``files``
 (``forge_task_adk_workflows.files.RunFile``: each artifact's ``name``,
 ``media_type``, ``size_bytes``, ``type`` and ``version``), empty when it
 started without any.
+
+A start that allows a file system keeps the run's folder's path in the state
+as ``workspace`` (``forge_task_adk_workflows.workspaces``), a saved agent's
+too: it's the run's. A run without one fails at its start.
 """
 
 from typing import Any
@@ -37,11 +41,15 @@ def start(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
     model = input_model(node)
     top = ctx.top
     misfit = ctx.input_misfit
-    files = (
-        [as_data(file) for file in ctx.services.files] if top and settings_of(node, EntryConfig).allow_files else None
-    )
+    settings = settings_of(node, EntryConfig)
+    files = [as_data(file) for file in ctx.services.files] if top and settings.allow_files else None
+    file_system = settings.allow_file_system
+    workspace = ctx.services.workspace
 
     def run(adk: Context, node_input: Any) -> Any:
+        if file_system and workspace is None:
+            # The run makes its folder before it goes on (runs.AdkRun.run).
+            raise RunFailed("The run has no folder on the worker's file system", step=node["id"])
         value = as_data(node_input)
         if model is not None:
             try:
@@ -52,6 +60,8 @@ def start(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
             adk.state["input"] = value
         if files is not None:
             adk.state["files"] = files
+        if file_system:
+            adk.state["workspace"] = workspace
         return value
 
     return FunctionNode(name=INPUT_NODE, func=run)

@@ -116,44 +116,55 @@ function Setting({
 }
 
 /**
- * An HTTP request's headers: a row each, its name and its value side by
- * side and a bin to remove it. The value is a template, completed and
- * checked like the URL.
+ * Named values: an HTTP request's headers, a Bash step's environment
+ * variables. A row each, its name and its value side by side and a bin to
+ * remove it. The value is a template, completed and checked like the URL.
  */
-function HeaderList({
+function NamedRows({
   id,
+  field,
+  title,
+  noun,
+  namePlaceholder = "Key",
   headers,
   onChange,
 }: {
   id: string
+  /** The setting the rows are: `headers`, `env`. */
+  field: "headers" | "env"
+  title: string
+  /** What one row is: "header". */
+  noun: string
+  namePlaceholder?: string
   headers: HeaderRow[]
   onChange: (headers: HeaderRow[]) => void
 }) {
-  // A header just added: its name takes focus.
+  // A row just added: its name takes focus.
   const [added, setAdded] = React.useState<string>()
   // The name and the bin stand as tall as the value's editor.
   const tall = "h-[2.125rem]"
+  const Noun = noun.charAt(0).toUpperCase() + noun.slice(1)
   const change = (header: HeaderRow, patch: Partial<HeaderRow>) =>
     onChange(headers.map((x) => (x.id === header.id ? { ...x, ...patch } : x)))
   // "Every header needs a name": the ones without turn red.
-  const { issues, invalid, key } = useFieldIssues("headers")
+  const { issues, invalid, key } = useFieldIssues(field)
   return (
     <div
       role="group"
-      aria-label="Headers"
+      aria-label={title}
       data-field={key}
       className="flex flex-col gap-2"
     >
-      <span className="text-xs font-medium text-foreground">Headers</span>
+      <span className="text-xs font-medium text-foreground">{title}</span>
       {headers.map((header) => (
         <div
           key={header.id}
           className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-start gap-1.5"
         >
           <Input
-            aria-label="Header name"
+            aria-label={`${Noun} name`}
             value={header.name}
-            placeholder="Key"
+            placeholder={namePlaceholder}
             spellCheck={false}
             autoComplete="off"
             autoFocus={header.id === added}
@@ -163,8 +174,8 @@ function HeaderList({
           />
           <Setting
             id={id}
-            setting={`headers.${header.id}`}
-            label={`${header.name.trim() || "Header"} value`}
+            setting={`${field}.${header.id}`}
+            label={`${header.name.trim() || Noun} value`}
             labelHidden
             value={header.value}
             placeholder="Value"
@@ -176,7 +187,7 @@ function HeaderList({
             type="button"
             variant="ghost"
             size="icon"
-            aria-label={`Remove ${header.name.trim() || "header"}`}
+            aria-label={`Remove ${header.name.trim() || noun}`}
             onClick={() => onChange(headers.filter((x) => x.id !== header.id))}
             className={cn(tall, "text-muted-foreground hover:text-destructive")}
           >
@@ -189,14 +200,18 @@ function HeaderList({
         variant="outline"
         size="sm"
         onClick={() => {
-          const header = { id: uid("header"), name: "", value: "" }
+          const header = {
+            id: uid(field === "env" ? "env" : "header"),
+            name: "",
+            value: "",
+          }
           setAdded(header.id)
           onChange([...headers, header])
         }}
         className="w-full border-dashed text-muted-foreground"
       >
         <Icon icon="plus" data-icon="inline-start" />
-        Add header
+        Add {noun}
       </Button>
       <IssueMessages issues={issues} />
     </div>
@@ -366,8 +381,11 @@ function HttpFields({ id, config }: Props<"http">) {
         credentials={credentials}
         url={config.url}
       />
-      <HeaderList
+      <NamedRows
         id={id}
+        field="headers"
+        title="Headers"
+        noun="header"
         headers={config.headers}
         onChange={(value) => set("headers", value)}
       />
@@ -422,6 +440,75 @@ function HttpFields({ id, config }: Props<"http">) {
         {Object.keys(config.output_schema).length
           ? "A 2xx response that fits what it returns takes Success; anything else, or no answer, takes Error."
           : "A 2xx response takes Success; anything else, or no answer, takes Error."}
+      </p>
+    </>
+  )
+}
+
+function BashFields({ id, config }: Props<"bash">) {
+  const set = useSetter<"bash">(id)
+  const mono = "font-mono text-[0.9em]"
+  return (
+    <>
+      <TextField
+        issue="command"
+        label="Command"
+        value={config.command}
+        code
+        multiline
+        rows={5}
+        placeholder={'gh repo clone "$REPO" backend'}
+        onChange={(value) => set("command", value)}
+        description={
+          <>
+            bash, run as it&apos;s written: it stops at the first command that
+            fails. It isn&apos;t filled in with{" "}
+            <code className={mono}>{"{{ }}"}</code>, so the run&apos;s data
+            can&apos;t become code: give it a variable below and read it as{" "}
+            <code className={mono}>&quot;$REPO&quot;</code>.{" "}
+            <code className={mono}>$WORKSPACE</code> is the run&apos;s folder.
+          </>
+        }
+      />
+      <Setting
+        id={id}
+        setting="cwd"
+        label="Folder"
+        value={config.cwd}
+        placeholder="The run's folder"
+        onChange={(value) => set("cwd", value)}
+        description={
+          <>
+            Where it runs, in the run&apos;s folder: a path from it, such as{" "}
+            <code className={mono}>backend</code> or{" "}
+            <code className={mono}>{"repos/{{ input.name }}"}</code>; made when
+            it isn&apos;t there. Empty runs it in the run&apos;s folder itself.
+          </>
+        }
+      />
+      <NamedRows
+        id={id}
+        field="env"
+        title="Environment variables"
+        noun="variable"
+        namePlaceholder="NAME"
+        headers={config.env}
+        onChange={(value) => set("env", value)}
+      />
+      <NumberField
+        issue="timeout_seconds"
+        label="Timeout (s)"
+        value={config.timeout_seconds}
+        min={1}
+        onChange={(value) => set("timeout_seconds", value)}
+      />
+      <p className="text-xs/[1.6] text-muted-foreground">
+        Exit code 0 takes Success, handing on its{" "}
+        <code className={mono}>stdout</code>,{" "}
+        <code className={mono}>stderr</code> and{" "}
+        <code className={mono}>exit_code</code>; any other, or running past its
+        timeout, takes Error. A run tried again runs it again, so write commands
+        that can run twice.
       </p>
     </>
   )
@@ -865,6 +952,8 @@ export function StepFields({ id, step }: { id: string; step: StepData }) {
       return <ApprovalFields id={id} config={step.config} />
     case "http":
       return <HttpFields id={id} config={step.config} />
+    case "bash":
+      return <BashFields id={id} config={step.config} />
     case "transform":
       return <TransformFields id={id} config={step.config} />
     case "filter":

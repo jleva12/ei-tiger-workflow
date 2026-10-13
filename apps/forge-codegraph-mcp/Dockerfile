@@ -22,6 +22,7 @@ COPY packages/python/documents/pyproject.toml packages/python/documents/
 COPY packages/python/embeddings/pyproject.toml packages/python/embeddings/
 COPY packages/python/jsonata/pyproject.toml packages/python/jsonata/
 COPY packages/python/mcp-servers/pyproject.toml packages/python/mcp-servers/
+COPY packages/python/pi-agent/pyproject.toml packages/python/pi-agent/
 COPY packages/python/task-sdk/pyproject.toml packages/python/task-sdk/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --package forge-codegraph-mcp --no-install-workspace

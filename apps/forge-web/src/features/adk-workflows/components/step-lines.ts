@@ -25,6 +25,10 @@ export function stepDetail(step: StepData): string {
       return step.config.retries
         ? `${step.config.timeout_seconds} s timeout · ${plural(step.config.retries, "retry")}`
         : `${step.config.timeout_seconds} s timeout`
+    case "bash":
+      return step.config.cwd.trim()
+        ? `In ${step.config.cwd.trim()}`
+        : "In the run's folder"
     case "transform":
       return Object.keys(step.config.output_schema).length
         ? "JSONata, declared output"
@@ -65,6 +69,10 @@ export function stepSummary(step: StepData): NodeSummary | null {
         tag: step.config.method,
         code: step.config.url.trim() || "No URL yet",
       }
+    case "bash":
+      return step.config.command.trim()
+        ? { tag: "$", code: firstLine(step.config.command) }
+        : null
     case "transform":
       return step.config.expression.trim()
         ? { code: firstLine(step.config.expression) }

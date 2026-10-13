@@ -57,6 +57,24 @@ export const CONFIGS: Record<StepKind, Record<string, unknown>> = {
         "One of the organization's credentials, by ID: its auth (an API key, a token, OAuth) goes with each request, and only to the URLs it's for. Empty for none.",
     },
   },
+  bash: {
+    command: {
+      ...text,
+      description:
+        "A bash script, run as it's written (never filled in with {{ }}): it reads the run's data from its environment variables, e.g. gh repo clone \"$REPO\". bash stops at the first command that fails (-e -o pipefail).",
+    },
+    cwd: {
+      ...text,
+      description:
+        "The folder it runs in, a template: a folder of the run's folder (relative, or an absolute path inside it), made when it isn't there; empty for the run's folder itself. One outside it takes the Error way.",
+    },
+    env: {
+      ...listOf({ id: text, name: text, value: text }),
+      description:
+        "Environment variables: each name (letters, digits and _) and its value, a template. WORKSPACE is always the run's folder.",
+    },
+    timeout_seconds: count(1),
+  },
   transform: {
     expression: {
       ...text,

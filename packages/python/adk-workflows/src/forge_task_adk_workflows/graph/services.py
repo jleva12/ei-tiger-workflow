@@ -11,7 +11,8 @@ thinking level its node's settings pick (``model_callbacks``:
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+import shlex
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Self
@@ -24,6 +25,7 @@ from google.adk.models.llm_request import LlmRequest
 from google.genai import types
 
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
+from forge_task_adk_workflows.support.commands import passed_environment
 from forge_task_adk_workflows.support.expressions import Evaluator
 
 if TYPE_CHECKING:
@@ -96,6 +98,18 @@ class RunServices:
     #: The run's runner keeps artifacts (the worker has an artifact service):
     #: its LLM agents read and save files (``files.file_tools``).
     artifacts: bool = False
+    #: The run's folder on the worker's file system (``workspaces``), made,
+    #: which a start that allows a file system keeps in ``state.workspace``;
+    #: None when the run has none.
+    workspace: str | None = None
+    #: Whether Bash steps run their commands here (``commands`` local); off,
+    #: a run with one fails before it starts (``runs.AdkRun``).
+    commands: bool = False
+    #: What every command gets of the worker's environment
+    #: (``support.commands.passed_environment``).
+    command_environment: Mapping[str, str] = field(default_factory=passed_environment)
+    #: The most of a command's stdout, and of its stderr, kept.
+    max_command_output_bytes: int = _DEFAULTS.command_max_output_bytes
     #: Called before each of an LLM agent's tools runs (ADK's
     #: ``before_tool_callback``): the run notes the call durably first, so an
     #: attempt that stops while it runs is answered for it, not run again
@@ -107,6 +121,13 @@ class RunServices:
     credentials: Any = None
     #: The run's organization: whose credentials its steps may use (per run).
     organization_id: str | None = None
+    #: Who the run's model and tool calls are for (``forge_common.adk.usage.Attribution``):
+    #: Pi agent steps record theirs with it, where the worker records usage (per run).
+    attribution: Any = None
+    #: How Pi agent steps start pi (``forge_pi_agent``); None where they're off.
+    pi_command: tuple[str, ...] | None = None
+    #: The most seconds a Pi agent step may take.
+    pi_max_seconds: float = _DEFAULTS.pi_max_seconds
 
     @classmethod
     def of(cls, settings: AdkWorkflowsSettings, **services: Any) -> Self:
@@ -134,6 +155,11 @@ class RunServices:
                 "max_response_bytes": settings.http_max_response_bytes,
                 "inline_delay_seconds": settings.inline_delay_seconds,
                 "max_loop_items": settings.max_loop_items,
+                "commands": settings.commands == "local",
+                "command_environment": passed_environment(settings.tool_environment),
+                "max_command_output_bytes": settings.command_max_output_bytes,
+                "pi_command": tuple(shlex.split(settings.pi_command)) if settings.pi_agent == "local" else None,
+                "pi_max_seconds": settings.pi_max_seconds,
                 "compaction_threshold": (
                     settings.context_compaction_threshold if settings.context_compaction else None
                 ),

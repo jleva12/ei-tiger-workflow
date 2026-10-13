@@ -5,7 +5,7 @@ and returns the ADK node whose function has what it needs closed over (its
 templates, its schemas' Pydantic models, the run's services).
 """
 
-from forge_task_adk_workflows.graph.factories.actions import delay, filter_, http, transform
+from forge_task_adk_workflows.graph.factories.actions import bash, delay, filter_, http, transform
 from forge_task_adk_workflows.graph.factories.agents import (
     llm,
     loop_agent,
@@ -16,6 +16,7 @@ from forge_task_adk_workflows.graph.factories.agents import (
 from forge_task_adk_workflows.graph.factories.base import Body, BuildContext, Factory
 from forge_task_adk_workflows.graph.factories.logic import end, for_each, if_, loop, match, merge, switch
 from forge_task_adk_workflows.graph.factories.people import approval, human_input
+from forge_task_adk_workflows.graph.factories.pi import pi_agent
 from forge_task_adk_workflows.graph.factories.start import start
 
 #: Each kind of node's factory. A start's is its hidden input node.
@@ -26,9 +27,11 @@ FACTORIES: dict[str, Factory] = {
     "parallel": parallel,
     "loop_agent": loop_agent,
     "saved": saved,
+    "pi_agent": pi_agent,
     "approval": approval,
     "human_input": human_input,
     "http": http,
+    "bash": bash,
     "transform": transform,
     "filter": filter_,
     "delay": delay,

@@ -5,7 +5,7 @@ kind's factory (``factories.FACTORIES``), joined by ADK's edges.
 - **Start.** ``START`` leads to the start's hidden input node, which keeps the
   run's input (``factories/start.py``); the graph's own ``input_schema`` is the
   start's, as a Pydantic model, so ADK checks a run's message against it.
-- **Routes.** Every way out of a branching step (HTTP, Approval, If, Switch,
+- **Routes.** Every way out of a branching step (HTTP, Bash, Approval, If, Switch,
   Match, Loop) is its output ID, and its node emits the route of the way it
   takes (a Match taking every rule that holds, a list of them: ADK takes each
   edge whose route is in it); a Merge "any"'s way out is ``next``. Several ways from one node to
@@ -32,7 +32,7 @@ The checks are the builder's: one start, unique ADK names, sub-agent IDs that
 are state keys of their own, settings each kind can run with, edges between
 nodes and outputs the agent has, every node reached from the start, loop
 bodies entered only by their loop, Merge "all"s that can go on, saved agents
-that don't run themselves. A document that doesn't pass is refused with
+that don't run themselves, Pi agents and Bash steps only where the start allows a file system. A document that doesn't pass is refused with
 :class:`AgentBuildError`, naming the node.
 """
 
@@ -78,6 +78,7 @@ KINDS = frozenset(FACTORIES)
 # The ways out of the steps that branch, when they're fixed.
 BRANCHES = {
     "http": ("success", "error"),
+    "bash": ("success", "error"),
     "approval": ("approved", "rejected"),
     "if": ("true", "false"),
     "loop": ("each", "done"),
@@ -235,6 +236,7 @@ class _Agent:
                 f"The agent has {len(starts) or 'no'} start{'s' if len(starts) > 1 else ''}; it needs one."
             )
         self.start = starts[0]
+        _check_file_system(self.nodes, self.start)
         _check_names(self.nodes)
         _check_items(self.nodes)
         self.by_id = {node["id"]: node for node in self.nodes}
@@ -575,6 +577,22 @@ def _check_items(nodes: list[dict[str, Any]]) -> None:
             raise AgentBuildError(
                 f"{where_of(node)}: its item can't be called {name}: that's {READ_NAMES[name]}, "
                 "which the steps reading the item read too; call it something else."
+            )
+
+
+#: The steps that work in the run's folder, and what they do there.
+FOLDER_KINDS = {"pi_agent": "a Pi agent works", "bash": "a Bash step runs its command"}
+
+
+def _check_file_system(nodes: list[dict[str, Any]], start: dict[str, Any]) -> None:
+    """A step that works in the run's folder (a Pi agent, a Bash step): its agent's start must allow a file system."""
+    if config_of(start).get("allow_file_system") is True:
+        return
+    for node in nodes:
+        doing = FOLDER_KINDS.get(text(node.get("kind")))
+        if doing:
+            raise AgentBuildError(
+                f"{where_of(node)}: {doing} in the run's folder: turn on Allow file system on the start."
             )
 
 

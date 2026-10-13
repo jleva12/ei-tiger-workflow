@@ -29,6 +29,7 @@
         },
         "allow_files": false,
         "file_types": [],
+        "allow_file_system": false,
         "start_over": false
       },
       "outputs": [

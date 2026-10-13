@@ -104,6 +104,12 @@ const FIELDS: Record<string, string> = {
  * a merge's mode, or one of the node's own (Forge's steps' as a
  * workflow's). None for the node as a whole.
  */
+/** The kinds of node that work in the run's folder, and what they do there. */
+const FOLDER_KINDS: Record<string, string> = {
+  bash: "A Bash step runs its command",
+  pi_agent: "A Pi agent works",
+}
+
 function fieldOf(code: string): string | undefined {
   if (code.startsWith("field:")) return stepFieldOf(code)
   if (code.startsWith("merge-exclusive-")) return "mode"
@@ -598,6 +604,22 @@ export function validateAgent(
   for (const start of starts) {
     if (incoming.get(start.id)?.length)
       add("error", start.id, "start-in", "Nothing can lead back to the start.")
+  }
+
+  // Steps that work in the run's folder: only a start that allows a file
+  // system gives runs one.
+  const start = starts[0]?.data
+  if (start?.kind === "start" && !start.config.allow_file_system) {
+    for (const step of graph.steps) {
+      const doing = FOLDER_KINDS[step.data.kind]
+      if (doing)
+        add(
+          "error",
+          step.id,
+          "file-system",
+          `${doing} in the run's folder: turn on Allow file system on the start.`
+        )
+    }
   }
 
   // Names: ADK calls every node and sub-agent by its name, once each.

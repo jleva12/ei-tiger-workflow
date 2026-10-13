@@ -25,6 +25,11 @@ What it has:
   (`/organizations/$organizationId/chat-agents/$chatAgentId`): a Google ADK
   agent with its sub-agents and tools. Kept in the browser until the admin
   API stores agents.
+- **The instruction writer**: the ✨ beside an LLM agent's instruction (on
+  both builders) says what the agent should do to the admin API's
+  instruction writer, which writes the instruction for the agent as it's set
+  up: its tools by the names it calls them, its hand-offs and the data it
+  can put in.
 - **Site administration** (`/admin`, site administrators only):
   organizations and their members, users, roles and permissions.
 - **The assistant**: the admin API's Forge agent, in a panel or its own

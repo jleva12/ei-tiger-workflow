@@ -98,9 +98,11 @@
             "parallel",
             "loop_agent",
             "saved",
+            "pi_agent",
             "approval",
             "human_input",
             "http",
+            "bash",
             "transform",
             "filter",
             "delay",
@@ -229,6 +231,22 @@
           "if": {
             "properties": {
               "kind": {
+                "const": "pi_agent"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_pi_agent"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
                 "const": "approval"
               }
             }
@@ -269,6 +287,22 @@
             "properties": {
               "config": {
                 "$ref": "#/$defs/config_http"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "bash"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_bash"
               }
             }
           }
@@ -713,6 +747,7 @@
         "input_schema",
         "allow_files",
         "file_types",
+        "allow_file_system",
         "start_over"
       ],
       "additionalProperties": false,
@@ -752,6 +787,10 @@
           },
           "uniqueItems": true,
           "description": "The types of files it takes, by their extension; none takes any type."
+        },
+        "allow_file_system": {
+          "type": "boolean",
+          "description": "Whether a run gets a folder of its own on the worker's file system (a mounted volume: <volume>/<organization>/<workflow>/<run>), the same for each of its attempts. Its path is state.workspace, which steps and LLM agents' instructions read, e.g. to clone repositories into {{ state.workspace }}/<name>. A saved workflow it runs that allows one works in the run's folder."
         },
         "start_over": {
           "type": "boolean",
@@ -1019,6 +1058,97 @@
         }
       }
     },
+    "config_pi_agent": {
+      "type": "object",
+      "description": "Pi, a coding agent, works in a folder of the run's: reads, searches and, if allowed, runs commands and changes files. Hands on {answer, tool_calls, usage, folder}: answer is pi's last message, JSON held to output_schema when it declares one, else text; tool_calls [{tool, args, is_error}]; usage {input, cached, output, cost} (cost null when the model has no price); folder the absolute path it worked in.",
+      "required": [
+        "folder",
+        "prompt",
+        "instruction",
+        "tools",
+        "model",
+        "thinking_level",
+        "output_schema",
+        "context_files",
+        "timeout_seconds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "folder": {
+          "type": "string",
+          "description": "Where pi works: a template naming a folder in the run's folder (state.workspace), relative to it (backend, {{ item.name }}) or starting with it ({{ state.workspace }}/backend); empty for the run's folder itself. Made when it isn't there; one outside the run's folder fails the step. The workflow's start must allow a file system."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "What pi is asked: a template, where {{ }} puts in the run's data; empty asks it what the node is handed."
+        },
+        "instruction": {
+          "type": "string",
+          "description": "Added to pi's own (coding agent) system prompt: a template."
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "read",
+              "grep",
+              "find",
+              "ls",
+              "bash",
+              "edit",
+              "write"
+            ]
+          },
+          "uniqueItems": true,
+          "description": "Pi's built-in tools it may use: read, grep, find and ls read and search; bash runs any command as the worker's user; edit and write change files. None: none at all."
+        },
+        "model": {
+          "type": "object",
+          "description": "One of the models Forge offers (its model provider configuration's): the provider's key and the model's id. Both empty: the default.",
+          "required": [
+            "provider",
+            "name"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "provider": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        "thinking_level": {
+          "type": "string",
+          "enum": [
+            "",
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "description": "How long the model thinks: the level if the model offers it, else the nearest it does. Empty: pi's default."
+        },
+        "output_schema": {
+          "type": "object",
+          "description": "A JSON Schema its answer is held to: pi is told to answer with JSON that fits it, and an answer that doesn't is sent back once. {} leaves it text."
+        },
+        "context_files": {
+          "type": "boolean",
+          "description": "Whether pi reads AGENTS.md and CLAUDE.md in its folder and the folders above it."
+        },
+        "timeout_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "description": "Seconds it may take; then pi is stopped, with the commands it started, and the step fails."
+        }
+      }
+    },
     "config_approval": {
       "type": "object",
       "description": "The run waits for a person to approve or reject. Hands on {approved, decided_by, comment, decided_at} by its approved or rejected way.",
@@ -1160,6 +1290,55 @@
         "credential": {
           "type": "string",
           "description": "One of the organization's credentials, by ID: its auth (an API key, a token, OAuth) goes with each request, and only to the URLs it's for. Empty for none."
+        }
+      }
+    },
+    "config_bash": {
+      "type": "object",
+      "description": "Runs a shell command in the run's folder and hands on its output. Runs its command by bash in its folder of the run's folder (the start must allow a file system), its env variables and WORKSPACE (the run's folder) set; hands on {exit_code, stdout, stderr, cwd, truncated} by its success way when it exits with 0. Its error way (another exit code, a folder outside the run's, its timeout) hands on nothing; steps.<id>.error is {message, exit_code?, stdout?, stderr?}.",
+      "required": [
+        "command",
+        "cwd",
+        "env",
+        "timeout_seconds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "A bash script, run as it's written (never filled in with {{ }}): it reads the run's data from its environment variables, e.g. gh repo clone \"$REPO\". bash stops at the first command that fails (-e -o pipefail)."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "The folder it runs in, a template: a folder of the run's folder (relative, or an absolute path inside it), made when it isn't there; empty for the run's folder itself. One outside it takes the Error way."
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Environment variables: each name (letters, digits and _) and its value, a template. WORKSPACE is always the run's folder."
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
         }
       }
     },

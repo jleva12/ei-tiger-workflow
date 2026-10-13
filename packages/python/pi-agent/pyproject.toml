@@ -1,0 +1,46 @@
+[project]
+name = "forge-pi-agent"
+version = "0.1.0"
+description = "Pi, the coding agent (pi.dev), driven over its JSON-RPC mode: one pi process per agent, in a folder it's given, with the built-in tools it's allowed, on a model from the shared model_provider.yaml"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    # The model it runs on (forge_common.model_provider.ResolvedModel), written
+    # as pi's models.json.
+    "forge-common[model-provider]",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12.0"]
+build-backend = "uv_build"
+
+# Tests run in the workspace environment against a stand-in pi (forge_pi_agent.fake_pi):
+# make pi-agent-check. FORGE_TEST_PI=1 also runs one prompt on the real pi.
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = ["pi: runs the real pi on a real model (FORGE_TEST_PI=1, with OPENAI_API_KEY)"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "SIM", "RUF"]
+# A prompt's timeout is its own: past it, pi is told to abort before it raises.
+ignore = ["ASYNC109"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ASYNC240"]
+
+[tool.ruff.lint.pycodestyle]
+max-line-length = 120
+
+[tool.ruff.lint.isort]
+known-first-party = ["forge_pi_agent"]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+check_untyped_defs = true

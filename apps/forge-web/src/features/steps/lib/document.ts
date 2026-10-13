@@ -20,6 +20,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const ITEMS: Record<string, Record<string, string>> = {
   headers: { id: "", name: "", value: "" },
   query: { id: "", name: "", value: "" },
+  env: { id: "", name: "", value: "" },
   cases: { id: "", value: "" },
   arms: { id: "", label: "", condition: "" },
 }

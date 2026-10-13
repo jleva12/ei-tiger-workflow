@@ -543,6 +543,8 @@ type Props = {
    * `{name}` shows as one. Without them, `{name}` is plain text.
    */
   args?: readonly TemplateArgument[]
+  /** More of the field's own actions, beside Insert field (an instruction's writer). */
+  actions?: React.ReactNode
 }
 
 /**
@@ -571,6 +573,7 @@ export function ExpressionField({
   issues = [],
   field,
   args,
+  actions,
 }: Props) {
   const host = React.useRef<HTMLDivElement>(null)
   const view = React.useRef<EditorView | null>(null)
@@ -918,19 +921,22 @@ export function ExpressionField({
           {label}
         </FieldLabel>
         {!readOnly && !labelHidden && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            // The editor keeps its cursor: the field goes in where it is.
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={insertField}
-            aria-label={`Insert a field into ${label}`}
-            className="-my-1 text-muted-foreground"
-          >
-            <Icon icon="code" data-icon="inline-start" />
-            Insert field
-          </Button>
+          <div className="flex items-center gap-0.5">
+            {actions}
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              // The editor keeps its cursor: the field goes in where it is.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={insertField}
+              aria-label={`Insert a field into ${label}`}
+              className="-my-1 text-muted-foreground"
+            >
+              <Icon icon="code" data-icon="inline-start" />
+              Insert field
+            </Button>
+          </div>
         )}
       </div>
       <div

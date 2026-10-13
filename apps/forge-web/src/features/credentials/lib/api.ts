@@ -1,4 +1,5 @@
 import {
+  queryOptions,
   useMutation,
   useQuery,
   useQueryClient,
@@ -179,17 +180,15 @@ export type SpecSummary = {
   security: SpecSecurity[]
 }
 
-/**
- * What an OpenAPI tool's spec offers, read by the admin API as the agent's
- * runtime reads it: its operations, named as the agent's tools are. Not
- * asked while there's nothing to read.
- */
-export function useOpenApiSpec(organizationId: string, source: SpecSource) {
-  const ready =
-    source.source === "inline"
-      ? source.spec.trim().length > 0
-      : /^https?:\/\/\S+$/.test(source.url.trim())
-  return useQuery({
+/** Whether there's a spec to read: one pasted, or an http(s) URL. */
+const specReady = (source: SpecSource) =>
+  source.source === "inline"
+    ? source.spec.trim().length > 0
+    : /^https?:\/\/\S+$/.test(source.url.trim())
+
+/** The query that reads a spec: the builders' operation lists and the instruction writer share it. */
+export const openApiSpecQuery = (organizationId: string, source: SpecSource) =>
+  queryOptions({
     queryKey: [
       "openapi-spec",
       organizationId,
@@ -203,9 +202,35 @@ export function useOpenApiSpec(organizationId: string, source: SpecSource) {
         source,
         { signal, silent: true }
       ),
-    enabled: ready && Boolean(organizationId),
+    enabled: specReady(source) && Boolean(organizationId),
     // A spec rarely changes while it's being set up; a URL's is read again on focus.
     staleTime: 60_000,
     retry: false,
   })
+
+/**
+ * What an OpenAPI tool's spec offers, read by the admin API as the agent's
+ * runtime reads it: its operations, named as the agent's tools are. Not
+ * asked while there's nothing to read.
+ */
+export function useOpenApiSpec(organizationId: string, source: SpecSource) {
+  return useQuery(openApiSpecQuery(organizationId, source))
+}
+
+/**
+ * A spec's operations, from the cache when it's been read; undefined when
+ * there's nothing to read or it can't be read.
+ */
+export async function openApiOperations(
+  client: QueryClient,
+  organizationId: string,
+  source: SpecSource
+): Promise<SpecOperation[] | undefined> {
+  const query = openApiSpecQuery(organizationId, source)
+  if (!query.enabled) return undefined
+  try {
+    return (await client.fetchQuery(query)).operations
+  } catch {
+    return undefined
+  }
 }

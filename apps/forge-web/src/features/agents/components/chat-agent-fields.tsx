@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useQueryClient } from "@tanstack/react-query"
 
 import {
   CheckField,
@@ -21,8 +22,10 @@ import {
   type ChatKind,
   type ChatStep,
 } from "@/features/agents/lib/model"
-import { useChatBuilder } from "./chat-agent-store"
+import { chatInstructionBrief } from "./chat-agent-brief"
+import { useChatBuilder, useChatBuilderApi } from "./chat-agent-store"
 import { InputSchemaField } from "./input-schema-field"
+import { InstructionWriter } from "./instruction-writer"
 import { ToolFields, type ToolKind } from "./tool-fields"
 
 /*
@@ -116,15 +119,22 @@ function useChatScope() {
 /**
  * An agent's instruction, a template completed and checked against what
  * the chat sends: the run request, and the state the chat agent declares.
+ * Its ✨ has the instruction writer write it, for the agent as it's set up.
  */
 function InstructionField({
+  id,
   value,
   onChange,
 }: {
+  /** The agent's node. */
+  id: string
   value: string
   onChange: (value: string) => void
 }) {
   const scope = useChatScope()
+  const store = useChatBuilderApi()
+  const client = useQueryClient()
+  const organizationId = useChatBuilder((s) => s.meta.organization_id)
   // Its issues, but for its template's: it checks those itself.
   const { issues, key } = useFieldIssues("instruction")
   return (
@@ -132,6 +142,14 @@ function InstructionField({
       label="Instruction"
       value={value}
       onChange={onChange}
+      actions={
+        <InstructionWriter
+          organizationId={organizationId}
+          value={value}
+          onApply={onChange}
+          brief={() => chatInstructionBrief(store.getState(), id, client)}
+        />
+      }
       mode="template"
       check={{ textual: true }}
       scope={scope}
@@ -174,6 +192,7 @@ function LlmSettings({
         description="Agents read this when they hand off to it, or call it."
       />
       <InstructionField
+        id={id}
         value={config.instruction}
         onChange={(value) => set("instruction", value)}
       />

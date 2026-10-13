@@ -1,4 +1,5 @@
 import {
+  AiProgrammingIcon,
   FlowSquareIcon,
   DistributionIcon,
   LeftToRightListNumberIcon,
@@ -45,6 +46,26 @@ import type { FileTypeId } from "./files"
 export const AGENTS_ICON: IconProp = FlowSquareIcon
 
 export type ModelChoice = { provider: string; name: string }
+
+/**
+ * Pi's built-in tools (pi.dev, packages/python/pi-agent's TOOLS), in the
+ * order a Pi agent's settings list them: reading and searching, then
+ * running commands and changing files.
+ */
+export const PI_TOOLS = [
+  "read",
+  "grep",
+  "find",
+  "ls",
+  "bash",
+  "edit",
+  "write",
+] as const
+
+export type PiTool = (typeof PI_TOOLS)[number]
+
+/** The tools that change nothing: a Pi agent's to start with. */
+export const PI_READ_ONLY_TOOLS: PiTool[] = ["read", "grep", "find", "ls"]
 
 /**
  * The tools an LLM agent may have, set up in its settings: the Agents
@@ -146,6 +167,7 @@ export type SubAgent<K extends SubAgentKind = SubAgentKind> = {
 export const FORGE_KINDS = [
   "approval",
   "http",
+  "bash",
   "transform",
   "filter",
   "delay",
@@ -171,6 +193,11 @@ export type AgentConfigs = {
     allow_files: boolean
     /** The types of files it takes (`files.ts`); none takes any type. */
     file_types: FileTypeId[]
+    /**
+     * Whether a run gets a folder of its own on the worker's file system,
+     * whose path its steps read as `state.workspace`.
+     */
+    allow_file_system: boolean
     /**
      * Whether a run ADK can't carry on where it stopped starts over in a new
      * session, its steps running again; off, it fails and can be resubmitted.
@@ -208,6 +235,30 @@ export type AgentConfigs = {
      */
     inputs: Record<string, string>
   }
+  pi_agent: {
+    /**
+     * Where pi works: a template naming a folder in the run's folder
+     * (`state.workspace`), relative to it or starting with it; empty for
+     * the run's folder itself. Made when it isn't there.
+     */
+    folder: string
+    /** What pi is asked: a template; empty for what the node is handed. */
+    prompt: string
+    /** Added to pi's own system prompt: a template. */
+    instruction: string
+    /** Pi's built-in tools it may use; none for none. */
+    tools: PiTool[]
+    /** One of the models Forge offers; both empty for the default. */
+    model: ModelChoice
+    /** How long the model thinks; empty for pi's default. */
+    thinking_level: ThinkingLevel | ""
+    /** A JSON Schema its answer is held to; `{}` leaves it text. */
+    output_schema: Record<string, unknown>
+    /** Whether pi reads AGENTS.md and CLAUDE.md in its folder and above. */
+    context_files: boolean
+    /** It's stopped after this many seconds. */
+    timeout_seconds: number
+  }
   human_input: {
     /** What the person is asked; `{{ }}` puts in the run's data. */
     message: string
@@ -243,6 +294,7 @@ type AgentKindInfo<K extends AgentKind> = KindInfo & {
 const FORGE_GROUPS: Record<ForgeKind, string> = {
   approval: "people",
   http: "actions",
+  bash: "actions",
   transform: "actions",
   filter: "actions",
   delay: "actions",
@@ -292,6 +344,7 @@ export const AGENT_KINDS: { [K in AgentKind]: AgentKindInfo<K> } = {
       input_schema: {},
       allow_files: false,
       file_types: [],
+      allow_file_system: false,
       start_over: false,
     }),
   },
@@ -352,6 +405,27 @@ export const AGENT_KINDS: { [K in AgentKind]: AgentKindInfo<K> } = {
     idPrefix: "saved",
     defaults: () => ({ agent: "", version: null, inputs: {} }),
   },
+  pi_agent: {
+    label: "Pi agent",
+    group: "agents",
+    icon: AiProgrammingIcon,
+    summary:
+      "Pi, a coding agent, works in a folder of the run's: reads, searches and, if allowed, runs commands and changes files.",
+    keywords:
+      "pi coding agent code explore repository files folder bash shell git clone grep",
+    idPrefix: "pi",
+    defaults: () => ({
+      folder: "",
+      prompt: "",
+      instruction: "",
+      tools: [...PI_READ_ONLY_TOOLS],
+      model: { provider: "", name: "" },
+      thinking_level: "",
+      output_schema: {},
+      context_files: false,
+      timeout_seconds: 600,
+    }),
+  },
   approval: forgeKind("approval"),
   human_input: {
     label: "Human input",
@@ -364,6 +438,7 @@ export const AGENT_KINDS: { [K in AgentKind]: AgentKindInfo<K> } = {
     defaults: () => ({ message: "", response_schema: {} }),
   },
   http: forgeKind("http"),
+  bash: forgeKind("bash"),
   transform: forgeKind("transform"),
   filter: forgeKind("filter"),
   delay: forgeKind("delay"),

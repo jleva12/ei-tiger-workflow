@@ -1,5 +1,6 @@
 import {
   ArrowRightDoubleIcon,
+  CommandLineIcon,
   FilterIcon,
   Flag02Icon,
   FunctionIcon,
@@ -18,8 +19,9 @@ import type { StepOutput } from "@/features/builder/lib/types"
 
 /*
  * The steps a workflow takes beside its agents: a person approving,
- * actions (an HTTP request, a transform, a filter, a delay), logic (if,
- * switch, match, loop, for each, merge) and its ends. Each is a kind from the catalog below,
+ * actions (an HTTP request, a Bash command, a transform, a filter, a
+ * delay), logic (if, switch, match, loop, for each, merge) and its ends.
+ * Each is a kind from the catalog below,
  * with that kind's settings (`config`) and the outputs it can leave by:
  * one `next` for most, a named output per branch for the logic steps.
  * adk-workflows/lib builds its node kinds on these.
@@ -80,6 +82,21 @@ export type StepConfigs = {
      */
     credential: string
   }
+  bash: {
+    /**
+     * bash, run as it's written: never filled in with {{ }}, so the run's
+     * data can't become code. It reads its environment variables instead.
+     */
+    command: string
+    /**
+     * The folder it runs in: a template, a folder of the run's folder (made
+     * when it isn't there), or the run's folder itself when empty.
+     */
+    cwd: string
+    /** Environment variables: each name, and its value, a template. */
+    env: HeaderRow[]
+    timeout_seconds: number
+  }
   transform: {
     /** A JSONata expression: what it hands on. */
     expression: string
@@ -131,6 +148,7 @@ export function outputsOf(step: StepData): StepOutput[] {
     case "end":
       return []
     case "http":
+    case "bash":
       return [
         { id: "success", label: "Success", branch: true },
         { id: "error", label: "Error", branch: true, fallback: true },
@@ -228,6 +246,15 @@ export const STEP_KINDS: { [K in StepKind]: KindInfo<K> } = {
       output_schema: {},
       credential: "",
     }),
+  },
+  bash: {
+    label: "Bash",
+    icon: CommandLineIcon,
+    summary: "Runs a shell command in the run's folder and hands on its output.",
+    keywords:
+      "bash shell command terminal script cli run git gh clone repository npm make",
+    idPrefix: "bash",
+    defaults: () => ({ command: "", cwd: "", env: [], timeout_seconds: 300 }),
   },
   transform: {
     label: "Transform",

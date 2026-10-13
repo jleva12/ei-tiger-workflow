@@ -83,6 +83,11 @@ services:
       HYBRID_ADK_WORKFLOWS__S3_REGION: us-east-1
       HYBRID_ADK_WORKFLOWS__S3_ACCESS_KEY_ID: ${FORGE_S3_ACCESS_KEY_ID:-forge-local}
       HYBRID_ADK_WORKFLOWS__S3_SECRET_ACCESS_KEY: ${FORGE_S3_SECRET_ACCESS_KEY:-local-forge-secret}
+      # Runs' folders, for workflows whose start allows a file system: the
+      # workflow-workspaces volume (the image makes its mount point the worker's).
+      HYBRID_ADK_WORKFLOWS__WORKSPACES: /var/lib/forge-workspaces
+    volumes:
+      - workflow-workspaces:/var/lib/forge-workspaces
     healthcheck:
       test: ["CMD", "forge-async-worker", "worker", "--check", "--queues=adk_workflows"]
       interval: 10s
@@ -128,3 +133,6 @@ services:
       retries: 6
     deploy:
       replicas: ${ASYNC_WORKER_DOCUMENTS_REPLICAS:-1}
+
+volumes:
+  workflow-workspaces:

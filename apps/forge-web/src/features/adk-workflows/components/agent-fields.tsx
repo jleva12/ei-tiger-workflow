@@ -1,6 +1,7 @@
 import { VersionField } from "@/features/builder/components/version-field"
 import * as React from "react"
 import { Delete02Icon } from "@hugeicons/core-free-icons"
+import { useQueryClient } from "@tanstack/react-query"
 import { cn } from "cn"
 
 import {
@@ -60,6 +61,7 @@ import {
   type ToolKind,
   type ToolLookups,
 } from "@/features/agents/components/tool-fields"
+import { InstructionWriter } from "@/features/agents/components/instruction-writer"
 import { CHAT_KINDS } from "@/features/agents/lib/model"
 import type { ExpressionSetting } from "@/features/steps/lib/fields"
 import {
@@ -68,6 +70,7 @@ import {
   isForgeKind,
   namesIn,
   newSubAgent,
+  PI_TOOLS,
   SUB_AGENT_KINDS,
   subAgentAt,
   subAgentsOf,
@@ -79,6 +82,7 @@ import {
   type LlmSettings,
   type LlmTool,
   type LoopSettings,
+  type PiTool,
   type SubAgent,
   type SubAgentKind,
   type TeamSettings,
@@ -96,7 +100,8 @@ import { ExpressionField } from "@/features/builder/components/fields/expression
 import { StepFields } from "@/features/adk-workflows/components/step-fields"
 import { subAgentLine, toolLine } from "./agent-lines"
 import { FileTypesField } from "./file-types-field"
-import { useAgentBuilder } from "./agent-store"
+import { workflowInstructionBrief } from "./agent-brief"
+import { useAgentBuilder, useAgentBuilderApi } from "./agent-store"
 
 /*
  * The settings of each kind of node, as its settings dialog shows them.
@@ -1228,6 +1233,9 @@ function LlmFields({
   path: string[]
 }) {
   const { config, set, patch } = bind
+  const store = useAgentBuilderApi()
+  const client = useQueryClient()
+  const organizationId = useAgentBuilder((s) => s.meta.organization_id)
   return (
     <>
       <TextField
@@ -1248,6 +1256,16 @@ function LlmFields({
         rows={6}
         placeholder="What the agent should do, and how."
         onChange={(value) => set("instruction", value)}
+        actions={
+          <InstructionWriter
+            organizationId={organizationId}
+            value={config.instruction}
+            onApply={(value) => set("instruction", value)}
+            brief={() =>
+              workflowInstructionBrief(store.getState(), id, path, client)
+            }
+          />
+        }
         description={
           <>
             Type {code("{{")} to put in the run&apos;s data as it runs: the
@@ -1536,6 +1554,22 @@ function StartFields({ id, config }: Props<"start">) {
         />
       )}
       <SwitchField
+        issue="allow_file_system"
+        label="Allow file system"
+        checked={config.allow_file_system}
+        onChange={(on) => set("allow_file_system", on)}
+        description={
+          <>
+            Every run gets a folder of its own on the worker&apos;s mounted file
+            system, kept for its retries and pauses. Steps and agent
+            instructions read its path as {code("state.workspace")}: point
+            agents at it, or at a folder in it such as{" "}
+            {code("{{ state.workspace }}/backend")}, to clone repositories and
+            work there.
+          </>
+        }
+      />
+      <SwitchField
         issue="start_over"
         label="Start over when a run can't carry on"
         checked={config.start_over}
@@ -1615,6 +1649,147 @@ function SavedFields({ id, config }: Props<"saved">) {
           }
         />
       ))}
+    </>
+  )
+}
+
+/** Each of pi's built-in tools, as a Pi agent's settings offer it. */
+const PI_TOOL_WORDS: Record<PiTool, { label: string; about: string }> = {
+  read: { label: "Read files", about: "Reads files' contents." },
+  grep: { label: "Search in files", about: "Searches files for text." },
+  find: { label: "Find files", about: "Finds files by name." },
+  ls: { label: "List folders", about: "Lists what's in a folder." },
+  bash: {
+    label: "Run commands",
+    about:
+      "Runs any command in a shell, as the worker's user: clone repositories, build, run tests, install packages.",
+  },
+  edit: { label: "Edit files", about: "Changes parts of files." },
+  write: { label: "Write files", about: "Writes new files, or replaces them." },
+}
+
+/** The pi tools a Pi agent may use: each ticked on or off. */
+function PiToolsField({
+  value,
+  onChange,
+}: {
+  value: PiTool[]
+  onChange: (tools: PiTool[]) => void
+}) {
+  const { issues, invalid, key } = useFieldIssues("tools")
+  // Kept in pi's order, whatever order they were ticked in.
+  const toggle = (tool: PiTool, on: boolean) =>
+    onChange(PI_TOOLS.filter((t) => (t === tool ? on : value.includes(t))))
+  return (
+    <Field data-invalid={invalid || undefined} data-field={key}>
+      <FieldLabel>Tools</FieldLabel>
+      <FieldDescription>
+        What pi may do in its folder. Reading and searching change nothing;
+        running commands can do anything the worker&apos;s user can, so give it
+        only where that&apos;s meant.
+      </FieldDescription>
+      <div className="flex flex-col gap-2 pt-1">
+        {PI_TOOLS.map((tool) => (
+          <CheckField
+            key={tool}
+            label={PI_TOOL_WORDS[tool].label}
+            checked={value.includes(tool)}
+            onChange={(on) => toggle(tool, on)}
+            description={
+              <>
+                {code(tool)}: {PI_TOOL_WORDS[tool].about}
+              </>
+            }
+          />
+        ))}
+      </div>
+      <IssueMessages issues={issues} />
+    </Field>
+  )
+}
+
+function PiAgentFields({ id, config }: Props<"pi_agent">) {
+  const { set, patch } = useNodeBind<"pi_agent">(id, config)
+  return (
+    <>
+      <Setting
+        id={id}
+        setting="folder"
+        label="Folder"
+        value={config.folder}
+        placeholder="The run's folder"
+        onChange={(value) => set("folder", value)}
+        description={
+          <>
+            Where pi works: a folder in the run&apos;s folder, relative to it (
+            {code("backend")}) or starting with {code("{{ state.workspace }}")}.
+            Give each Pi agent of a run its own, e.g.{" "}
+            {code("{{ state.workspace }}/{{ input.repo }}")}. It&apos;s made
+            when it isn&apos;t there; one outside the run&apos;s folder fails
+            the step.
+          </>
+        }
+      />
+      <Setting
+        id={id}
+        setting="prompt"
+        label="Prompt"
+        value={config.prompt}
+        multiline
+        rows={5}
+        placeholder="Find where the login is handled, and explain how it works."
+        onChange={(value) => set("prompt", value)}
+        description={
+          <>
+            What pi is asked. Type {code("{{")} to put in the run&apos;s data.
+            Empty, it&apos;s asked what this node is handed.
+          </>
+        }
+      />
+      <Setting
+        id={id}
+        setting="instruction"
+        label="Instruction"
+        value={config.instruction}
+        multiline
+        rows={3}
+        placeholder="Only ever read: never change a file."
+        onChange={(value) => set("instruction", value)}
+        description="Added to pi's own instructions, which already make it a coding agent."
+      />
+      <PiToolsField
+        value={config.tools}
+        onChange={(tools) => set("tools", tools)}
+      />
+      <ModelFields
+        model={config.model}
+        thinkingLevel={config.thinking_level}
+        onChange={(values, key) => patch(values, key)}
+      />
+      <SchemaField
+        issue="output_schema"
+        label="What it answers"
+        title="The JSON pi answers with"
+        description="Its fields and their types. Pi is told to answer with them and held to them (an answer that doesn't fit is sent back once), and later nodes read them as answer, completed and checked."
+        schema={config.output_schema}
+        onChange={(schema) => set("output_schema", schema)}
+        empty="Not declared: it answers in text."
+        subject={{ one: "answer", many: "answers" }}
+      />
+      <NumberField
+        issue="timeout_seconds"
+        label="Timeout (seconds)"
+        value={config.timeout_seconds}
+        min={1}
+        onChange={(value) => set("timeout_seconds", value)}
+        description="Pi is stopped after this long, with the commands it started, and the step fails. At most an hour."
+      />
+      <CheckField
+        label="Reads AGENTS.md and CLAUDE.md"
+        checked={config.context_files}
+        onChange={(on) => set("context_files", on)}
+        description="The project instructions in its folder and the folders above it."
+      />
     </>
   )
 }
@@ -1768,6 +1943,8 @@ function kindFields(id: string, step: AgentStep) {
       return <TeamNodeFields id={id} config={step.config} kind={step.kind} />
     case "saved":
       return <SavedFields id={id} config={step.config} />
+    case "pi_agent":
+      return <PiAgentFields id={id} config={step.config} />
     case "human_input":
       return <HumanInputFields id={id} config={step.config} />
   }

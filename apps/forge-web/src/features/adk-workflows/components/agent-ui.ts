@@ -31,9 +31,10 @@ function detailOf(step: AgentStep, lookups: AgentLookups): string {
       const input = names.length
         ? `Needs ${plural(names.length, "input field")}`
         : "Takes any input"
-      return step.config.allow_files
+      const files = step.config.allow_files
         ? `${input} · files: ${describeTypes(step.config.file_types)}`
         : input
+      return step.config.allow_file_system ? `${files} · file system` : files
     }
     case "llm": {
       const config = step.config
@@ -74,6 +75,12 @@ function detailOf(step: AgentStep, lookups: AgentLookups): string {
       const name = lookups.agents[step.config.agent]
       return name ? `Runs ${name}` : "No workflow picked"
     }
+    case "pi_agent": {
+      const { tools, folder } = step.config
+      const can = tools.length ? tools.join(", ") : "no tools"
+      const where = folder.trim() ? ` · in ${folder.trim()}` : ""
+      return `${modelLine(step.config, lookups)} · ${can}${where}`
+    }
     case "human_input": {
       const { names } = inputFields(step.config.response_schema)
       return names.length
@@ -100,6 +107,10 @@ function summaryOf(step: AgentStep): NodeSummary | null {
       return step.config.instruction.trim()
         ? { text: step.config.instruction.trim() }
         : null
+    case "pi_agent":
+      return step.config.prompt.trim()
+        ? { text: step.config.prompt.trim() }
+        : { text: "Asks pi what it's handed" }
     case "sequential":
     case "loop_agent":
     case "parallel": {

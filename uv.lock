@@ -25,6 +25,7 @@ members = [
     "forge-embeddings",
     "forge-jsonata",
     "forge-mcp-servers",
+    "forge-pi-agent",
     "forge-task-adk-workflows",
     "forge-task-documents",
     "forge-tasks",
@@ -1693,6 +1694,17 @@ dev = [
 ]
 
 [[package]]
+name = "forge-pi-agent"
+version = "0.1.0"
+source = { editable = "packages/python/pi-agent" }
+dependencies = [
+    { name = "forge-common", extra = ["model-provider"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "forge-common", extras = ["model-provider"], editable = "packages/python/common" }]
+
+[[package]]
 name = "forge-task-adk-workflows"
 version = "0.1.0"
 source = { editable = "packages/python/adk-workflows" }
@@ -1704,6 +1716,7 @@ dependencies = [
     { name = "forge-common", extra = ["adk", "adk-artifacts-s3", "adk-models", "patterns"] },
     { name = "forge-jsonata" },
     { name = "forge-mcp-servers" },
+    { name = "forge-pi-agent" },
     { name = "forge-tasks" },
     { name = "google-adk" },
     { name = "httpx" },
@@ -1721,6 +1734,7 @@ requires-dist = [
     { name = "forge-common", extras = ["adk", "adk-models", "adk-artifacts-s3", "patterns"], editable = "packages/python/common" },
     { name = "forge-jsonata", editable = "packages/python/jsonata" },
     { name = "forge-mcp-servers", editable = "packages/python/mcp-servers" },
+    { name = "forge-pi-agent", editable = "packages/python/pi-agent" },
     { name = "forge-tasks", editable = "packages/python/task-sdk" },
     { name = "google-adk", specifier = ">=2.9.2" },
     { name = "httpx", specifier = ">=0.27" },

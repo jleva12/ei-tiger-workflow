@@ -92,7 +92,13 @@ START_NODE = node(
     "start",
     "start",
     "Start",
-    {"input_schema": {}, "allow_files": False, "file_types": [], "start_over": False},
+    {
+        "input_schema": {},
+        "allow_files": False,
+        "file_types": [],
+        "allow_file_system": False,
+        "start_over": False,
+    },
 )
 
 

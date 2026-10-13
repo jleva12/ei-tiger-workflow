@@ -209,8 +209,16 @@ class SharedInfrastructureTest(unittest.TestCase):
                 "admin-mysql-data",
                 "knowledge-s3-data",
                 "worker-scratch",
+                "workflow-workspaces",
             },
         )
+
+    def test_adk_workflow_runs_folders_are_on_a_volume_the_worker_mounts(self):
+        worker = self.services["async-worker-adk-workflows"]
+        folder = worker["environment"]["HYBRID_ADK_WORKFLOWS__WORKSPACES"]
+        mounts = {(mount["source"], mount["target"]) for mount in worker["volumes"]}
+        self.assertIn(("workflow-workspaces", folder), mounts)
+        self.assertNotIn("volumes", self.services["async-worker-documents"])
 
     def test_the_code_graph_worker_writes_to_the_emulator(self):
         worker = self.services["worker"]

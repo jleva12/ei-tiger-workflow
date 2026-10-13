@@ -65,8 +65,61 @@ const RUN_FILE = t.object(
 )
 
 /**
+ * What a Pi agent hands on (packages/python/adk-workflows, factories/pi.py):
+ * its answer, held to its output schema when it declares one, its tool
+ * calls, its usage and the folder it worked in.
+ */
+export function piOutputType(outputSchema: Record<string, unknown>): DataType {
+  return t.object(
+    {
+      answer: withDescription(
+        declared(outputSchema) ??
+          t.string(
+            "Pi's answer, as text: declare what it answers (its fields) to read parts of it."
+          ),
+        "Pi's answer: its last message."
+      ),
+      tool_calls: t.array(
+        t.object(
+          {
+            tool: t.string(
+              "The tool: read, grep, find, ls, bash, edit or write."
+            ),
+            args: t.object({}, "What pi called it with.", { open: true }),
+            is_error: t.boolean("Whether it failed."),
+          },
+          "One of pi's tool calls.",
+          { required: ["tool", "args", "is_error"] }
+        ),
+        "Pi's tool calls, in order."
+      ),
+      usage: t.object(
+        {
+          input: t.number("Input tokens, cached ones included.", true),
+          cached: t.number(
+            "Input tokens read from the provider's cache.",
+            true
+          ),
+          output: t.number("Output tokens.", true),
+          cost: unionOf([
+            t.number("What it cost, in USD."),
+            t.null("The model has no price."),
+          ]),
+        },
+        "Its model calls' tokens and cost, added up.",
+        { required: ["input", "cached", "output", "cost"] }
+      ),
+      folder: t.string("The folder it worked in: an absolute path."),
+    },
+    "What pi did.",
+    { required: ["answer", "tool_calls", "usage", "folder"] }
+  )
+}
+
+/**
  * The session's state: the run's input (kept as `input`), the files it
- * started with (`files`, when its start allows them), and each LLM
+ * started with (`files`, when its start allows them), its folder on the
+ * worker's file system (`workspace`, when its start allows one), and each LLM
  * sub-agent's answer under its ID (sub-agents aren't nodes, so this is
  * how the agents after them read them). A node's answer is
  * `steps.<id>.output`.
@@ -80,6 +133,10 @@ export function stateType(graph: AgentGraph): DataType {
     keys.files = t.array(
       RUN_FILE,
       "The files the run started with: artifacts of its session."
+    )
+  if (start?.kind === "start" && start.config.allow_file_system)
+    keys.workspace = t.string(
+      "The run's own folder on the worker's file system: an absolute path, the same for each of its attempts. Point agents at it (or a folder in it, e.g. {{ state.workspace }}/backend) to clone repositories and work on files."
     )
   for (const step of graph.steps) {
     for (const { agent } of walkSubAgents(subAgentsOf(step.data))) {
@@ -254,6 +311,8 @@ export function agentTypes(graph: AgentGraph, context: TypeContext = {}) {
             )
           : t.unknown("What the other workflow handed back.")
       }
+      case "pi_agent":
+        return piOutputType(step.config.output_schema)
       case "human_input":
         return (
           declared(step.config.response_schema) ??

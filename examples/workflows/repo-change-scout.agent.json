@@ -1,0 +1,251 @@
+{
+  "format": "forge.agent/v1",
+  "id": "ag_repo_scout",
+  "name": "Repository change scout",
+  "description": "For each repository: clone it (with the worker's GITHUB_TOKEN), have a Pi agent explore it, and say whether the request needs code changes there and where; the repositories are explored in parallel and their findings merged.",
+  "nodes": [
+    {
+      "id": "start",
+      "kind": "start",
+      "name": "Start",
+      "config": {
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "repos",
+            "prompt"
+          ],
+          "properties": {
+            "repos": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              },
+              "description": "The repositories to look at: owner/name on GitHub (acme/billing), or an https clone URL."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "What should be supported: the change or feature each repository is checked for."
+            }
+          }
+        },
+        "allow_files": false,
+        "file_types": [],
+        "allow_file_system": true,
+        "start_over": false
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "each_repo",
+      "kind": "loop",
+      "name": "Each repository",
+      "config": {
+        "items": "input.repos",
+        "item_name": "repo",
+        "max_iterations": 50,
+        "concurrency": 4
+      },
+      "outputs": [
+        "each",
+        "done"
+      ]
+    },
+    {
+      "id": "clone",
+      "kind": "bash",
+      "name": "Clone the repository",
+      "config": {
+        "command": "# Clones the repository ($REPO: owner/name on GitHub, or an https URL) into\n# this step's folder, or brings an earlier clone up to date (a run tried again).\n# The PAT is the worker's GITHUB_TOKEN, when it has one: set it in the worker's\n# environment and allow it with HYBRID_ADK_WORKFLOWS__TOOL_ENVIRONMENT='[\"GITHUB_TOKEN\"]'.\n# Like actions/checkout, it goes in a header for these commands only: never in\n# the URL, .git/config or the output, so the Pi agent never sees it.\ncase \"$REPO\" in\n  https://*) url=\"$REPO\" ;;\n  *) url=\"https://github.com/${REPO%.git}.git\" ;;\nesac\nauth=()\nif [ -n \"${GITHUB_TOKEN:-}\" ]; then\n  basic=$(printf 'x-access-token:%s' \"$GITHUB_TOKEN\" | base64 | tr -d '\\n')\n  auth=(-c \"http.extraHeader=Authorization: Basic $basic\")\nfi\nif [ -d .git ]; then\n  git \"${auth[@]}\" fetch --quiet --depth 1 origin\n  git reset --quiet --hard FETCH_HEAD\nelse\n  git \"${auth[@]}\" clone --quiet --depth 1 \"$url\" .\nfi\ngit log -1 --format='%H %s'",
+        "cwd": "repos/{{ index }}_{{ $replace(repo, /[^A-Za-z0-9._-]+/, \"_\") }}",
+        "env": [
+          {
+            "id": "repo",
+            "name": "REPO",
+            "value": "{{ repo }}"
+          }
+        ],
+        "timeout_seconds": 300
+      },
+      "outputs": [
+        "success",
+        "error"
+      ]
+    },
+    {
+      "id": "explore",
+      "kind": "pi_agent",
+      "name": "Explore the repository",
+      "config": {
+        "folder": "{{ steps.clone.output.cwd }}",
+        "prompt": "You're in a clone of the repository {{ repo }}.\n\nThe request: {{ input.prompt }}\n\nExplore the code to decide whether supporting this request needs changes in this repository. If it does, find where: each file (its path from the repository's root), the function, class or section in it, and what would change there and why. If it doesn't, say why: it's supported already, or it belongs elsewhere. Read the code rather than guess from names.",
+        "instruction": "Only read and search: never change a file. Name files by their path from the repository's root.",
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls"
+        ],
+        "model": {
+          "provider": "",
+          "name": ""
+        },
+        "thinking_level": "",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "needs_change",
+            "summary",
+            "changes"
+          ],
+          "properties": {
+            "needs_change": {
+              "type": "boolean",
+              "description": "Whether this repository's code has to change to support the request."
+            },
+            "summary": {
+              "type": "string",
+              "description": "Why, in two or three sentences: what supports it already, or what's missing."
+            },
+            "changes": {
+              "type": "array",
+              "description": "Where the code would change: none when it needn't.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "file",
+                  "what"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "description": "The file's path from the repository's root."
+                  },
+                  "symbol": {
+                    "type": "string",
+                    "description": "The function, class or section, when there's one."
+                  },
+                  "what": {
+                    "type": "string",
+                    "description": "What would change there, and why."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "context_files": false,
+        "timeout_seconds": 900
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "found",
+      "kind": "transform",
+      "name": "Its findings",
+      "config": {
+        "expression": "{\n  \"repo\": repo,\n  \"cloned\": true,\n  \"commit\": steps.clone.output.stdout,\n  \"needs_change\": previous.answer.needs_change,\n  \"summary\": previous.answer.summary,\n  \"changes\": previous.answer.changes\n}",
+        "output_schema": {}
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "not_cloned",
+      "kind": "transform",
+      "name": "Couldn't clone it",
+      "config": {
+        "expression": "{\n  \"repo\": repo,\n  \"cloned\": false,\n  \"error\": steps.clone.error.message & ($exists(steps.clone.error.stderr) ? \": \" & steps.clone.error.stderr : \"\")\n}",
+        "output_schema": {}
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "merge",
+      "kind": "transform",
+      "name": "Merge the findings",
+      "config": {
+        "expression": "{\n  \"request\": input.prompt,\n  \"repositories\": previous.count,\n  \"need_changes\": [previous.results[needs_change = true].repo],\n  \"no_changes\": [previous.results[needs_change = false].repo],\n  \"not_cloned\": [previous.results[cloned = false]],\n  \"findings\": [previous.results[cloned = true]]\n}",
+        "output_schema": {}
+      },
+      "outputs": [
+        "next"
+      ]
+    },
+    {
+      "id": "done",
+      "kind": "end",
+      "name": "Done",
+      "config": {
+        "outcome": "succeeded",
+        "result": ""
+      },
+      "outputs": []
+    }
+  ],
+  "edges": [
+    {
+      "id": "start:next->each_repo",
+      "source": "start",
+      "source_output": "next",
+      "target": "each_repo"
+    },
+    {
+      "id": "each_repo:each->clone",
+      "source": "each_repo",
+      "source_output": "each",
+      "target": "clone"
+    },
+    {
+      "id": "clone:success->explore",
+      "source": "clone",
+      "source_output": "success",
+      "target": "explore"
+    },
+    {
+      "id": "clone:error->not_cloned",
+      "source": "clone",
+      "source_output": "error",
+      "target": "not_cloned"
+    },
+    {
+      "id": "explore:next->found",
+      "source": "explore",
+      "source_output": "next",
+      "target": "found"
+    },
+    {
+      "id": "found:next->each_repo",
+      "source": "found",
+      "source_output": "next",
+      "target": "each_repo"
+    },
+    {
+      "id": "not_cloned:next->each_repo",
+      "source": "not_cloned",
+      "source_output": "next",
+      "target": "each_repo"
+    },
+    {
+      "id": "each_repo:done->merge",
+      "source": "each_repo",
+      "source_output": "done",
+      "target": "merge"
+    },
+    {
+      "id": "merge:next->done",
+      "source": "merge",
+      "source_output": "next",
+      "target": "done"
+    }
+  ],
+  "layout": {}
+}

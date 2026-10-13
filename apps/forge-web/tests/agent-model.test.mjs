@@ -11,38 +11,79 @@ const server = await createServer({
   root: fileURLToPath(new URL("..", import.meta.url)),
   server: { middlewareMode: true, watch: null },
   optimizeDeps: { noDiscovery: true, include: [] },
-  resolve: { alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) } },
+  resolve: {
+    alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
+  },
 })
 const load = (path) => server.ssrLoadModule(path)
-const { toDocument, toGraph, parseAgent, usesOf } = await load("/src/features/adk-workflows/lib/document.ts")
-const { exampleAgent } = await load("/src/features/adk-workflows/lib/example.ts")
+const { toDocument, toGraph, parseAgent, usesOf } = await load(
+  "/src/features/adk-workflows/lib/document.ts"
+)
+const { exampleAgent } = await load(
+  "/src/features/adk-workflows/lib/example.ts"
+)
 const model = await load("/src/features/adk-workflows/lib/model.ts")
-const { validateAgent } = await load("/src/features/adk-workflows/lib/validate.ts")
-const { agentTypes, stateType } = await load("/src/features/adk-workflows/lib/scope.ts")
-const { resolveExpression, completeField, checkField, stepReferences, typeAt } = await load("/src/features/steps/lib/expressions.ts")
-const { expressionSetting, settingScope } = await load("/src/features/steps/lib/fields.ts")
+const { validateAgent } = await load(
+  "/src/features/adk-workflows/lib/validate.ts"
+)
+const { agentTypes, stateType } = await load(
+  "/src/features/adk-workflows/lib/scope.ts"
+)
+const { resolveExpression, completeField, checkField, stepReferences, typeAt } =
+  await load("/src/features/steps/lib/expressions.ts")
+const { expressionSetting, settingScope } = await load(
+  "/src/features/steps/lib/fields.ts"
+)
 const { typeLabel } = await load("/src/features/steps/lib/types.ts")
-const { AGENT_ADAPTER } = await load("/src/features/adk-workflows/lib/adapter.ts")
-const { createBuilderStore, documentOf } = await load("/src/features/builder/components/store.ts")
+const { AGENT_ADAPTER } = await load(
+  "/src/features/adk-workflows/lib/adapter.ts"
+)
+const { createBuilderStore, documentOf } = await load(
+  "/src/features/builder/components/store.ts"
+)
 const tools = await load("/src/features/adk-workflows/lib/tools.ts")
-const { AGENT_JSON_SCHEMA } = await load("/src/features/adk-workflows/lib/schema.ts")
+const { AGENT_JSON_SCHEMA } = await load(
+  "/src/features/adk-workflows/lib/schema.ts"
+)
 const files = await load("/src/features/adk-workflows/lib/files.ts")
+const { agentExpressionSettings } = await load(
+  "/src/features/adk-workflows/lib/fields.ts"
+)
 await server.close()
 
 const ORG = "org-1"
 const example = () => exampleAgent(ORG)
 const meta = (doc) => ({ ...doc })
-const issuesOf = (doc, context = {}) => validateAgent(toGraph(doc), context).map((i) => i.id)
+const issuesOf = (doc, context = {}) =>
+  validateAgent(toGraph(doc), context).map((i) => i.id)
 
 /** A graph document from nodes `[id, kind, name, config]` and edges `[source, output, target]`. */
 function agent(nodes, edges = []) {
   const steps = nodes.map(([id, kind, name, config = {}]) => {
     const base = model.newNode(kind, [], name)
-    return { id, data: { ...base, config: { ...base.config, ...config } }, position: { x: 0, y: 0 } }
+    return {
+      id,
+      data: { ...base, config: { ...base.config, ...config } },
+      position: { x: 0, y: 0 },
+    }
   })
   return toDocument(
-    { id: "ag_test", name: "Test", description: "", organization_id: ORG, created_at: "", updated_at: "" },
-    { steps, connections: edges.map(([source, output, target]) => ({ source, output, target })) }
+    {
+      id: "ag_test",
+      name: "Test",
+      description: "",
+      organization_id: ORG,
+      created_at: "",
+      updated_at: "",
+    },
+    {
+      steps,
+      connections: edges.map(([source, output, target]) => ({
+        source,
+        output,
+        target,
+      })),
+    }
   )
 }
 
@@ -65,33 +106,63 @@ test("the example reads back whole, and is ready to build", () => {
 
 test("importing drops what doesn't fit and says so", () => {
   const doc = example()
-  doc.nodes.push({ id: "odd", kind: "teleport", name: "Odd", config: {}, outputs: ["next"] })
+  doc.nodes.push({
+    id: "odd",
+    kind: "teleport",
+    name: "Odd",
+    config: {},
+    outputs: ["next"],
+  })
   const team = doc.nodes.find((n) => n.id === "bug_team")
-  team.config.sub_agents.push({ id: "x", kind: "wizard", name: "X", config: {} })
+  team.config.sub_agents.push({
+    id: "x",
+    kind: "wizard",
+    name: "X",
+    config: {},
+  })
   team.config.sub_agents[0].config.max_output_tokens = "lots"
   // Settings since retired go without a word.
   team.config.sub_agents[1].config.output_key = "reply"
   team.config.sub_agents[1].config.temperature = 0.2
   doc.nodes.find((n) => n.id === "customer").config.method = "FETCH"
-  doc.edges.push({ id: "e", source: "triage", source_output: "next", target: "start" })
-  doc.edges.push({ id: "f", source: "route", source_output: "nowhere", target: "billing" })
+  doc.edges.push({
+    id: "e",
+    source: "triage",
+    source_output: "next",
+    target: "start",
+  })
+  doc.edges.push({
+    id: "f",
+    source: "route",
+    source_output: "nowhere",
+    target: "billing",
+  })
   const read = parseAgent(doc, { organizationId: ORG })
   assert.equal(read.ok, true)
   assert.deepEqual(read.notes, [
-    'nodes[1].config.method should be one of GET, POST, PUT, PATCH, DELETE.',
-    'nodes[6].config.sub_agents[0].config.max_output_tokens should be a number, or null.',
+    "nodes[1].config.method should be one of GET, POST, PUT, PATCH, DELETE.",
+    "nodes[6].config.sub_agents[0].config.max_output_tokens should be a number, or null.",
     'nodes[6].config.sub_agents[2].kind "wizard" isn\'t a sub-agent Forge knows; dropped.',
     'nodes[23].kind "teleport" isn\'t a node Forge knows; dropped.',
     "edges[25] leads into the start; dropped.",
     'edges[26].source_output "nowhere" isn\'t an output of route; dropped.',
   ])
-  assert.equal(read.doc.nodes.find((n) => n.id === "customer").config.method, "GET")
+  assert.equal(
+    read.doc.nodes.find((n) => n.id === "customer").config.method,
+    "GET"
+  )
   const kept = read.doc.nodes.find((n) => n.id === "bug_team")
   assert.equal(kept.config.sub_agents.length, 2)
   assert.equal(kept.config.sub_agents[0].config.max_output_tokens, null)
   assert.equal("output_key" in kept.config.sub_agents[1].config, false)
   assert.equal(parseAgent("{", { organizationId: ORG }).ok, false)
-  assert.match(parseAgent({ format: "forge.workflow/v1", nodes: [] }, { organizationId: ORG }).error, /isn't a Forge workflow/)
+  assert.match(
+    parseAgent(
+      { format: "forge.workflow/v1", nodes: [] },
+      { organizationId: ORG }
+    ).error,
+    /isn't a Forge workflow/
+  )
 })
 
 test("names are ADK names, kept apart across nodes and sub-agents", () => {
@@ -100,7 +171,10 @@ test("names are ADK names, kept apart across nodes and sub-agents", () => {
   const steps = toGraph(example()).steps.map((s) => s.data)
   assert.equal(model.newNode("llm", steps, "Writer").name, "Writer 2")
   assert.equal(model.newNode("llm", steps).name, "LLM agent")
-  const copy = model.copyNode(steps.find((s) => s.name === "Bug team"), steps)
+  const copy = model.copyNode(
+    steps.find((s) => s.name === "Bug team"),
+    steps
+  )
   assert.equal(copy.name, "Bug team copy")
   assert.deepEqual(
     copy.config.sub_agents.map((a) => a.name),
@@ -114,12 +188,35 @@ test("the checks find what ADK would refuse and what wouldn't run", () => {
     [
       ["start", "start", "Start"],
       ["a", "llm", "Writer", { instruction: "Write." }],
-      ["b", "sequential", "Team", {
-        sub_agents: [{ id: "s1", kind: "llm", name: "writer", config: { ...model.subAgentDefaults("llm"), instruction: "" } }],
-      }],
+      [
+        "b",
+        "sequential",
+        "Team",
+        {
+          sub_agents: [
+            {
+              id: "s1",
+              kind: "llm",
+              name: "writer",
+              config: { ...model.subAgentDefaults("llm"), instruction: "" },
+            },
+          ],
+        },
+      ],
       ["c", "llm", "User", { instruction: "Hi." }],
       ["d", "parallel", "Empty"],
-      ["e", "switch", "Route", { value: "previous", cases: [{ id: "r1", value: "A" }, { id: "r2", value: "A" }] }],
+      [
+        "e",
+        "switch",
+        "Route",
+        {
+          value: "previous",
+          cases: [
+            { id: "r1", value: "A" },
+            { id: "r2", value: "A" },
+          ],
+        },
+      ],
       ["f", "merge", "Merge", { mode: "any" }],
       ["g", "transform", "Lonely", { expression: "previous" }],
       ["h", "transform", "Around", { expression: "previous" }],
@@ -158,7 +255,9 @@ test("the checks find what ADK would refuse and what wouldn't run", () => {
     "h:cycle",
   ])
   // Each issue about a setting names it, for its field in the settings to show.
-  const fields = Object.fromEntries(validateAgent(toGraph(doc)).map((i) => [i.id, i.field]))
+  const fields = Object.fromEntries(
+    validateAgent(toGraph(doc)).map((i) => [i.id, i.field])
+  )
   assert.deepEqual(
     [
       "a:same-writer",
@@ -172,13 +271,33 @@ test("the checks find what ADK would refuse and what wouldn't run", () => {
       "e:open-r2",
       "f:cycle",
     ].map((id) => fields[id]),
-    ["name", "agents.s1.name", "agents.s1.instruction", "name", "sub_agents", "cases", "url", "item_name", undefined, undefined]
+    [
+      "name",
+      "agents.s1.name",
+      "agents.s1.instruction",
+      "name",
+      "sub_agents",
+      "cases",
+      "url",
+      "item_name",
+      undefined,
+      undefined,
+    ]
   )
   // ADK builds only what the start reaches, and nothing leads back to it.
   doc.edges = doc.edges.filter((e) => e.target !== "i")
-  doc.edges.push({ id: "back", source: "c", source_output: "next", target: "start" })
+  doc.edges.push({
+    id: "back",
+    source: "c",
+    source_output: "next",
+    target: "start",
+  })
   const ids = issuesOf(doc)
-  assert.ok(ids.includes("i:unreached") && ids.includes("j:unreached") && ids.includes("start:start-in"))
+  assert.ok(
+    ids.includes("i:unreached") &&
+      ids.includes("j:unreached") &&
+      ids.includes("start:start-in")
+  )
 })
 
 test("a merge that waits for all can't wait on ways a run takes only one of", () => {
@@ -214,20 +333,40 @@ test("a merge that waits for all can't wait on ways a run takes only one of", ()
     ]
   )
   assert.deepEqual(issuesOf(doc), ["m:merge-exclusive-h"])
-  assert.match(validateAgent(toGraph(doc))[0].message, /different ways out of Fetch/)
+  assert.match(
+    validateAgent(toGraph(doc))[0].message,
+    /different ways out of Fetch/
+  )
   doc.nodes.find((n) => n.id === "m").config.mode = "any"
   assert.deepEqual(issuesOf(doc), [])
 })
 
 test("documents saved before Forge's steps joined read as them", () => {
-  const sub = (id, kind, config) => ({ id, kind, name: id, config: { ...model.subAgentDefaults("llm"), ...config } })
+  const sub = (id, kind, config) => ({
+    id,
+    kind,
+    name: id,
+    config: { ...model.subAgentDefaults("llm"), ...config },
+  })
   const old = {
     format: "forge.agent/v1",
     id: "ag_old",
     name: "Old",
     nodes: [
-      { id: "start", kind: "start", name: "Start", config: { input_schema: {} }, outputs: ["next"] },
-      { id: "fn", kind: "function", name: "Fn", config: { expression: "input" }, outputs: ["next"] },
+      {
+        id: "start",
+        kind: "start",
+        name: "Start",
+        config: { input_schema: {} },
+        outputs: ["next"],
+      },
+      {
+        id: "fn",
+        kind: "function",
+        name: "Fn",
+        config: { expression: "input" },
+        outputs: ["next"],
+      },
       {
         id: "rt",
         kind: "router",
@@ -244,7 +383,16 @@ test("documents saved before Forge's steps joined read as them", () => {
           description: "",
           max_iterations: 2,
           sub_agents: [
-            { id: "inner", kind: "loop", name: "Inner", config: { description: "", max_iterations: 1, sub_agents: [sub("w", "llm", { instruction: "Go." })] } },
+            {
+              id: "inner",
+              kind: "loop",
+              name: "Inner",
+              config: {
+                description: "",
+                max_iterations: 1,
+                sub_agents: [sub("w", "llm", { instruction: "Go." })],
+              },
+            },
           ],
         },
         outputs: ["next"],
@@ -266,7 +414,10 @@ test("documents saved before Forge's steps joined read as them", () => {
     ["start", "transform", "switch", "merge", "loop_agent"]
   )
   assert.deepEqual(byId.fn.config, { expression: "input", output_schema: {} })
-  assert.deepEqual(byId.rt.config, { value: "input.x", cases: [{ id: "a", value: "A" }] })
+  assert.deepEqual(byId.rt.config, {
+    value: "input.x",
+    cases: [{ id: "a", value: "A" }],
+  })
   assert.deepEqual(byId.rt.outputs, ["a", "default"])
   assert.equal(byId.jn.config.mode, "all")
   assert.equal(byId.lp.config.sub_agents[0].kind, "loop_agent")
@@ -278,7 +429,12 @@ test("every kind of node goes to a document and back", () => {
     [
       ["start", "start", "Start"],
       ["wait", "delay", "Wait", { amount: 2, unit: "hours" }],
-      ["rules", "match", "Rules", { arms: [{ id: "big", label: "Big", condition: "input.n > 9" }] }],
+      [
+        "rules",
+        "match",
+        "Rules",
+        { arms: [{ id: "big", label: "Big", condition: "input.n > 9" }] },
+      ],
       ["other", "saved", "Other", { agent: "ag_b" }],
       ["ask", "human_input", "Ask", { message: "Go on?" }],
       ["ok", "approval", "OK?", { timeout_hours: 24 }],
@@ -300,36 +456,74 @@ test("every kind of node goes to a document and back", () => {
   assert.deepEqual(usesOf(doc), ["ag_b"])
   assert.deepEqual(
     doc.nodes.map((n) => n.outputs),
-    [["next"], ["next"], ["big", "otherwise"], ["next"], ["next"], ["approved", "rejected"], []]
+    [
+      ["next"],
+      ["next"],
+      ["big", "otherwise"],
+      ["next"],
+      ["next"],
+      ["approved", "rejected"],
+      [],
+    ]
   )
 })
 
 test("a saved agent can't be itself, gone, or run this one back", () => {
-  const doc = agent([["start", "start", "Start"], ["s", "saved", "Other", { agent: "ag_b" }]], [["start", "next", "s"]])
+  const doc = agent(
+    [
+      ["start", "start", "Start"],
+      ["s", "saved", "Other", { agent: "ag_b" }],
+    ],
+    [["start", "next", "s"]]
+  )
   const agents = new Map([
     ["ag_b", { name: "B", uses: ["ag_c"] }],
     ["ag_c", { name: "C", uses: ["ag_test"] }],
   ])
   assert.deepEqual(issuesOf(doc, { selfId: "ag_test", agents }), ["s:agent"])
-  assert.match(validateAgent(toGraph(doc), { selfId: "ag_test", agents })[0].message, /B runs this workflow/)
-  assert.deepEqual(issuesOf(doc, { selfId: "ag_test", agents: new Map() }), ["s:agent"])
+  assert.match(
+    validateAgent(toGraph(doc), { selfId: "ag_test", agents })[0].message,
+    /B runs this workflow/
+  )
+  assert.deepEqual(issuesOf(doc, { selfId: "ag_test", agents: new Map() }), [
+    "s:agent",
+  ])
   assert.deepEqual(issuesOf(doc, { selfId: "ag_b" }), ["s:agent"])
-  assert.deepEqual(issuesOf(doc, { selfId: "ag_test", agents: new Map([["ag_b", { name: "B", uses: [] }]]) }), [])
+  assert.deepEqual(
+    issuesOf(doc, {
+      selfId: "ag_test",
+      agents: new Map([["ag_b", { name: "B", uses: [] }]]),
+    }),
+    []
+  )
 })
 
 test("expressions read Forge's data: input, previous, steps, a loop's item, and the state", () => {
   const graph = toGraph(example())
   const { scopeOf, outputOf } = agentTypes(graph)
-  const type = (expression, at) => typeLabel(resolveExpression(expression, scopeOf(at)))
+  const type = (expression, at) =>
+    typeLabel(resolveExpression(expression, scopeOf(at)))
   // The switch reads what the merge handed on: each agent's answer by step ID.
-  assert.equal(type("previous.triage.category", "route"), '"BUG" | "BILLING" | "ELSE"')
-  assert.equal(type("previous.sentiment.mood", "route"), '"calm" | "annoyed" | "angry"')
+  assert.equal(
+    type("previous.triage.category", "route"),
+    '"BUG" | "BILLING" | "ELSE"'
+  )
+  assert.equal(
+    type("previous.sentiment.mood", "route"),
+    '"calm" | "annoyed" | "angry"'
+  )
   assert.equal(type("steps.triage.output.summary", "route"), "string")
   // input is the run's, everywhere.
   assert.equal(type("input.customer_id", "sum_up"), "string")
   // An HTTP step's body as declared, and why it failed on its error way.
-  assert.equal(type("steps.customer.output.body.plan", "route"), '"free" | "pro" | "enterprise"')
-  assert.equal(type("steps.customer.error.message", "unknown_customer"), "string")
+  assert.equal(
+    type("steps.customer.output.body.plan", "route"),
+    '"free" | "pro" | "enterprise"'
+  )
+  assert.equal(
+    type("steps.customer.error.message", "unknown_customer"),
+    "string"
+  )
   // A branching step hands on what came in, and keeps the way it took.
   assert.equal(type("previous.send", "send_it"), "boolean")
   assert.deepEqual(Object.keys(outputOf("route").properties), ["branch"])
@@ -348,10 +542,14 @@ test("expressions read Forge's data: input, previous, steps, a loop's item, and 
   ])
   assert.equal(type("state.docs", "sum_up"), "string")
   // A transform's output is what it declares.
-  assert.deepEqual(Object.keys(outputOf("sum_up").properties), ["docs", "forum"])
+  assert.deepEqual(Object.keys(outputOf("sum_up").properties), [
+    "docs",
+    "forum",
+  ])
   // A path that leads nowhere is an issue.
   const doc = example()
-  doc.nodes.find((n) => n.id === "route").config.value = "previous.triage.catgory"
+  doc.nodes.find((n) => n.id === "route").config.value =
+    "previous.triage.catgory"
   assert.deepEqual(issuesOf(doc), ["route:field:value:0"])
 })
 
@@ -360,9 +558,13 @@ test("instructions are templates, checked against what the node can read", () =>
   const triage = doc.nodes.find((n) => n.id === "triage")
   const team = doc.nodes.find((n) => n.id === "bug_team")
   triage.config.instruction = "Read {{ input.mesage }}."
-  team.config.sub_agents[1].config.instruction = "Fix {{ state.reproduce }} for {{ steps.nowhere.output }}."
+  team.config.sub_agents[1].config.instruction =
+    "Fix {{ state.reproduce }} for {{ steps.nowhere.output }}."
   // A step that isn't there is an error; a field the input may not have, a warning.
-  assert.deepEqual(issuesOf(doc), ["bug_team:field:agents.draft_fix.instruction:0", "triage:field:instruction:0"])
+  assert.deepEqual(issuesOf(doc), [
+    "bug_team:field:agents.draft_fix.instruction:0",
+    "triage:field:instruction:0",
+  ])
   assert.deepEqual(
     validateAgent(toGraph(doc)).map((i) => i.field),
     ["agents.draft_fix.instruction", "instruction"]
@@ -371,7 +573,10 @@ test("instructions are templates, checked against what the node can read", () =>
   triage.config.instruction = "Read {triage} and {{ input.message }}."
   team.config.sub_agents[1].config.instruction = "Fix it."
   const found = validateAgent(toGraph(doc))
-  assert.deepEqual(found.map((i) => i.id), ["triage:instruction-braces"])
+  assert.deepEqual(
+    found.map((i) => i.id),
+    ["triage:instruction-braces"]
+  )
   assert.match(found[0].message, /\{\{ state\.triage \}\}/)
   // A sub-agent's ID is where its answer is kept: once each, and never input.
   team.config.sub_agents[1].id = "input"
@@ -410,16 +615,26 @@ test("the builder store edits an agent: new names, copies, and a sub-agent edit 
   const now = Date.now
   Date.now = () => clock
   try {
-    const store = createBuilderStore({ adapter: AGENT_ADAPTER, doc: example(), context: {} })
+    const store = createBuilderStore({
+      adapter: AGENT_ADAPTER,
+      doc: example(),
+      context: {},
+    })
     const s = () => store.getState()
-    const added = s().addStep("llm", { x: 0, y: 0 }, { source: "sum_up", output: "next" })
+    const added = s().addStep(
+      "llm",
+      { x: 0, y: 0 },
+      { source: "sum_up", output: "next" }
+    )
     assert.equal(s().nodes.find((n) => n.id === added).data.name, "LLM agent")
     const again = s().addStep("llm", { x: 0, y: 0 })
     assert.equal(s().nodes.find((n) => n.id === again).data.name, "LLM agent 2")
 
     const copy = s().duplicateStep("polish")
     assert.deepEqual(
-      s().nodes.find((n) => n.id === copy).data.config.sub_agents.map((a) => a.name),
+      s()
+        .nodes.find((n) => n.id === copy)
+        .data.config.sub_agents.map((a) => a.name),
       ["Writer copy", "Critic copy"]
     )
 
@@ -427,7 +642,11 @@ test("the builder store edits an agent: new names, copies, and a sub-agent edit 
     const type = (text) =>
       s().updateStep(
         "polish",
-        (step) => model.updateSubAgent(step, ["writer"], (a) => ({ ...a, config: { ...a.config, instruction: text } })),
+        (step) =>
+          model.updateSubAgent(step, ["writer"], (a) => ({
+            ...a,
+            config: { ...a.config, instruction: text },
+          })),
         "writer:instruction"
       )
     const before = s().past.length
@@ -435,7 +654,10 @@ test("the builder store edits an agent: new names, copies, and a sub-agent edit 
     clock += 300
     type("Write it well")
     assert.equal(s().past.length, before + 1)
-    const writer = () => model.subAgentAt(s().nodes.find((n) => n.id === "polish").data, ["writer"])
+    const writer = () =>
+      model.subAgentAt(s().nodes.find((n) => n.id === "polish").data, [
+        "writer",
+      ])
     assert.equal(writer().config.instruction, "Write it well")
     s().undo()
     assert.equal(
@@ -446,45 +668,93 @@ test("the builder store edits an agent: new names, copies, and a sub-agent edit 
     // A case removed takes its edge with it.
     s().updateStep("route", (step) => ({
       ...step,
-      config: { ...step.config, cases: step.config.cases.filter((c) => c.id !== "bug") },
+      config: {
+        ...step.config,
+        cases: step.config.cases.filter((c) => c.id !== "bug"),
+      },
     }))
-    assert.equal(documentOf(s()).edges.some((e) => e.source_output === "bug"), false)
+    assert.equal(
+      documentOf(s()).edges.some((e) => e.source_output === "bug"),
+      false
+    )
   } finally {
     Date.now = now
   }
 })
 
-
 test("an LLM agent's tools are the Agents builder's, and go to a document and back", () => {
-  const http = { ...tools.newTool("http_tool", []), id: "tool_http", name: "Look up order" }
+  const http = {
+    ...tools.newTool("http_tool", []),
+    id: "tool_http",
+    name: "Look up order",
+  }
   http.config.url = "https://api.example.com/orders/{id}"
   const kb = { ...tools.newTool("knowledge_base", []), id: "tool_kb" }
   kb.config.knowledge_bases = ["kb_hr"]
   const sub = { ...model.newSubAgent("llm", []), id: "drafter" }
   sub.config.instruction = "Draft."
-  sub.config.tools = [{ ...tools.newTool("mcp", []), id: "tool_docs", config: { ...tools.toolDefaults("mcp"), server: "srv_docs" } }]
+  sub.config.tools = [
+    {
+      ...tools.newTool("mcp", []),
+      id: "tool_docs",
+      config: { ...tools.toolDefaults("mcp"), server: "srv_docs" },
+    },
+  ]
   const doc = agent(
     [
       ["start", "start", "Start"],
-      ["a", "llm", "Helper", { instruction: "Help.", tools: [http, kb], sub_agents: [sub] }],
+      [
+        "a",
+        "llm",
+        "Helper",
+        { instruction: "Help.", tools: [http, kb], sub_agents: [sub] },
+      ],
     ],
     [["start", "next", "a"]]
   )
   const read = parseAgent(JSON.stringify(doc), { organizationId: ORG })
   assert.deepEqual(read.notes, [])
   const node = read.doc.nodes.find((n) => n.id === "a")
-  assert.deepEqual(node.config.tools.map((x) => [x.id, x.kind]), [["tool_http", "http_tool"], ["tool_kb", "knowledge_base"]])
-  assert.equal(node.config.sub_agents[0].config.tools[0].config.server, "srv_docs")
-  assert.deepEqual(tools.toolsAt(toGraph(doc).steps[1].data, ["drafter"]).map((x) => x.id), ["tool_docs"])
+  assert.deepEqual(
+    node.config.tools.map((x) => [x.id, x.kind]),
+    [
+      ["tool_http", "http_tool"],
+      ["tool_kb", "knowledge_base"],
+    ]
+  )
+  assert.equal(
+    node.config.sub_agents[0].config.tools[0].config.server,
+    "srv_docs"
+  )
+  assert.deepEqual(
+    tools.toolsAt(toGraph(doc).steps[1].data, ["drafter"]).map((x) => x.id),
+    ["tool_docs"]
+  )
   // A tool kind it doesn't know is dropped, saying so.
   const odd = structuredClone(doc)
-  odd.nodes[1].config.tools.push({ id: "tool_x", kind: "calculator", name: "Sums", config: {} })
-  assert.match(parseAgent(JSON.stringify(odd), { organizationId: ORG }).notes.join(" "), /calculator.*isn't a tool/)
+  odd.nodes[1].config.tools.push({
+    id: "tool_x",
+    kind: "calculator",
+    name: "Sums",
+    config: {},
+  })
+  assert.match(
+    parseAgent(JSON.stringify(odd), { organizationId: ORG }).notes.join(" "),
+    /calculator.*isn't a tool/
+  )
 })
 
 test("tools are checked as the Agents builder checks them, each issue under its tool", () => {
-  const empty = { ...tools.newTool("http_tool", []), id: "tool_http", name: "Look up order" }
-  const kb = { ...tools.newTool("knowledge_base", []), id: "tool_kb", name: "look up order" }
+  const empty = {
+    ...tools.newTool("http_tool", []),
+    id: "tool_http",
+    name: "Look up order",
+  }
+  const kb = {
+    ...tools.newTool("knowledge_base", []),
+    id: "tool_kb",
+    name: "look up order",
+  }
   kb.config.knowledge_bases = ["kb_gone"]
   const sub = { ...model.newSubAgent("llm", []), id: "drafter" }
   sub.config.instruction = "Draft."
@@ -492,18 +762,30 @@ test("tools are checked as the Agents builder checks them, each issue under its 
   const doc = agent(
     [
       ["start", "start", "Start"],
-      ["a", "llm", "Helper", { instruction: "Help.", tools: [empty, kb], sub_agents: [sub] }],
+      [
+        "a",
+        "llm",
+        "Helper",
+        { instruction: "Help.", tools: [empty, kb], sub_agents: [sub] },
+      ],
     ],
     [["start", "next", "a"]]
   )
-  const context = { knowledgeBases: new Map([["kb_hr", { name: "HR", ready: 3 }]]) }
-  const found = Object.fromEntries(validateAgent(toGraph(doc), context).map((i) => [i.id, i.field]))
+  const context = {
+    knowledgeBases: new Map([["kb_hr", { name: "HR", ready: 3 }]]),
+  }
+  const found = Object.fromEntries(
+    validateAgent(toGraph(doc), context).map((i) => [i.id, i.field])
+  )
   assert.equal(found["a:tool-tool_http-url"], "tools.tool_http.url")
   assert.equal(found["a:tool-tool_http-same-name"], "tools.tool_http.name")
   assert.equal(found["a:tool-tool_kb-same-name"], "tools.tool_kb.name")
   assert.ok(Object.values(found).includes("tools.tool_kb.knowledge_bases"))
   // A sub-agent's tools are under its settings.
-  assert.equal(found["a:drafter-tool-tool_docs-url"], "agents.drafter.tools.tool_docs.url")
+  assert.equal(
+    found["a:drafter-tool-tool_docs-url"],
+    "agents.drafter.tools.tool_docs.url"
+  )
 })
 
 test("an LLM node can be an agent from the Agents page, checked against it", () => {
@@ -522,39 +804,91 @@ test("an LLM node can be an agent from the Agents page, checked against it", () 
         name: "Support",
         published: 2,
         hasDraft: false,
-        input: { type: "object", required: ["tier"], properties: { tier: { type: "string" } } },
+        input: {
+          type: "object",
+          required: ["tier"],
+          properties: { tier: { type: "string" } },
+        },
       },
     ],
   ])
   // Its own instruction and tools: the node's aren't asked for.
-  assert.deepEqual(issuesOf(node({ agent: "ca_support", inputs: { tier: "input.tier" } }), { chatAgents }), [])
+  assert.deepEqual(
+    issuesOf(node({ agent: "ca_support", inputs: { tier: "input.tier" } }), {
+      chatAgents,
+    }),
+    []
+  )
   assert.deepEqual(issuesOf(node({ agent: "" }), { chatAgents }), ["a:agent"])
-  assert.deepEqual(issuesOf(node({ agent: "ca_gone" }), { chatAgents }), ["a:agent"])
+  assert.deepEqual(issuesOf(node({ agent: "ca_gone" }), { chatAgents }), [
+    "a:agent",
+  ])
   const fields = (config) =>
-    Object.fromEntries(validateAgent(toGraph(node(config)), { chatAgents }).map((i) => [i.id, i.field]))
-  assert.deepEqual(fields({ agent: "ca_support", version: 3, inputs: { tier: "'pro'" } }), { "a:version": "version" })
-  assert.deepEqual(fields({ agent: "ca_support", version: "draft", inputs: { tier: "'pro'" } }), { "a:version": "version" })
-  assert.deepEqual(fields({ agent: "ca_support" }), { "a:input-tier": "inputs.tier" })
+    Object.fromEntries(
+      validateAgent(toGraph(node(config)), { chatAgents }).map((i) => [
+        i.id,
+        i.field,
+      ])
+    )
+  assert.deepEqual(
+    fields({ agent: "ca_support", version: 3, inputs: { tier: "'pro'" } }),
+    { "a:version": "version" }
+  )
+  assert.deepEqual(
+    fields({
+      agent: "ca_support",
+      version: "draft",
+      inputs: { tier: "'pro'" },
+    }),
+    { "a:version": "version" }
+  )
+  assert.deepEqual(fields({ agent: "ca_support" }), {
+    "a:input-tier": "inputs.tier",
+  })
   // Its message and inputs read the run's data.
-  const bad = fields({ agent: "ca_support", message: "{{ nothing.here }}", inputs: { tier: "input.tier" } })
+  const bad = fields({
+    agent: "ca_support",
+    message: "{{ nothing.here }}",
+    inputs: { tier: "input.tier" },
+  })
   assert.ok(Object.values(bad).includes("message"))
   // It reads back as it was written.
-  const doc = node({ agent: "ca_support", version: 2, message: "Hi", inputs: { tier: "'pro'" } })
+  const doc = node({
+    agent: "ca_support",
+    version: 2,
+    message: "Hi",
+    inputs: { tier: "'pro'" },
+  })
   const read = parseAgent(JSON.stringify(doc), { organizationId: ORG })
   assert.deepEqual(read.notes, [])
   const config = read.doc.nodes[1].config
-  assert.deepEqual([config.source, config.agent, config.version, config.inputs], ["agent", "ca_support", 2, { tier: "'pro'" }])
+  assert.deepEqual(
+    [config.source, config.agent, config.version, config.inputs],
+    ["agent", "ca_support", 2, { tier: "'pro'" }]
+  )
 })
 
 test("the JSON Schema knows an LLM agent's settings and its tools'", () => {
   const llm = AGENT_JSON_SCHEMA.$defs.config_llm
-  assert.deepEqual(Object.keys(llm.properties).sort(), Object.keys(model.AGENT_KINDS.llm.defaults()).sort())
+  assert.deepEqual(
+    Object.keys(llm.properties).sort(),
+    Object.keys(model.AGENT_KINDS.llm.defaults()).sort()
+  )
   const sub = AGENT_JSON_SCHEMA.$defs.sub_config_llm
-  assert.deepEqual(Object.keys(sub.properties).sort(), Object.keys(model.subAgentDefaults("llm")).sort())
-  assert.deepEqual(AGENT_JSON_SCHEMA.$defs.tool.properties.kind.enum, [...model.LLM_TOOL_KINDS])
+  assert.deepEqual(
+    Object.keys(sub.properties).sort(),
+    Object.keys(model.subAgentDefaults("llm")).sort()
+  )
+  assert.deepEqual(AGENT_JSON_SCHEMA.$defs.tool.properties.kind.enum, [
+    ...model.LLM_TOOL_KINDS,
+  ])
   for (const kind of model.LLM_TOOL_KINDS) {
     const config = AGENT_JSON_SCHEMA.$defs[`tool_config_${kind}`]
-    assert.deepEqual(Object.keys(config.properties).sort(), Object.keys(tools.toolDefaults(kind)).sort(), kind)
+    assert.deepEqual(
+      Object.keys(config.properties).sort(),
+      Object.keys(tools.toolDefaults(kind)).sort(),
+      kind
+    )
   }
 })
 
@@ -564,11 +898,17 @@ test("a start can take files: of the types picked, read back, and listed in the 
     input_schema: {},
     allow_files: false,
     file_types: [],
+    allow_file_system: false,
     start_over: false,
   })
   const doc = agent(
     [
-      ["start", "start", "Start", { allow_files: true, file_types: ["pdf", "word"] }],
+      [
+        "start",
+        "start",
+        "Start",
+        { allow_files: true, file_types: ["pdf", "word"] },
+      ],
       ["names", "transform", "Names", { expression: "state.files.name" }],
     ],
     [["start", "next", "names"]]
@@ -576,16 +916,20 @@ test("a start can take files: of the types picked, read back, and listed in the 
   // Types Forge doesn't know are dropped on import, the rest kept.
   doc.nodes[0].config.file_types = ["word", "exe", "pdf", "pdf"]
   const read = parseAgent(doc, { organizationId: ORG })
-  assert.deepEqual(read.notes, ["nodes[0].config.file_types names types Forge doesn't know; dropped."])
+  assert.deepEqual(read.notes, [
+    "nodes[0].config.file_types names types Forge doesn't know; dropped.",
+  ])
   assert.deepEqual(read.doc.nodes[0].config, {
     input_schema: {},
     allow_files: true,
     file_types: ["word", "pdf"],
+    allow_file_system: false,
     start_over: false,
   })
   // Steps read the run's files in the state.
   const graph = toGraph(read.doc)
-  const type = (expression) => typeLabel(resolveExpression(expression, agentTypes(graph).scopeOf("names")))
+  const type = (expression) =>
+    typeLabel(resolveExpression(expression, agentTypes(graph).scopeOf("names")))
   assert.equal(type("state.files[0].name"), "string")
   assert.equal(type("state.files[0].size_bytes"), "number")
   assert.deepEqual(issuesOf(read.doc), [])
@@ -594,8 +938,39 @@ test("a start can take files: of the types picked, read back, and listed in the 
   assert.equal("files" in stateType(toGraph(read.doc)).properties, false)
   // The schema knows the settings and every type.
   const start = AGENT_JSON_SCHEMA.$defs.config_start
-  assert.deepEqual(Object.keys(start.properties).sort(), Object.keys(model.AGENT_KINDS.start.defaults()).sort())
+  assert.deepEqual(
+    Object.keys(start.properties).sort(),
+    Object.keys(model.AGENT_KINDS.start.defaults()).sort()
+  )
   assert.deepEqual(start.properties.file_types.items.enum, files.FILE_TYPE_IDS)
+})
+
+test("a start that allows a file system gives its steps and agents the run's folder", () => {
+  const doc = agent(
+    [
+      ["start", "start", "Start", { allow_file_system: true }],
+      [
+        "where",
+        "transform",
+        "Where",
+        { expression: "state.workspace & '/backend'" },
+      ],
+    ],
+    [["start", "next", "where"]]
+  )
+  const read = parseAgent(doc, { organizationId: ORG })
+  assert.equal(read.doc.nodes[0].config.allow_file_system, true)
+  const graph = toGraph(read.doc)
+  const type = (expression) =>
+    typeLabel(resolveExpression(expression, agentTypes(graph).scopeOf("where")))
+  assert.equal(type("state.workspace"), "string")
+  assert.match(stateType(graph).properties.workspace.description, /own folder/)
+  assert.deepEqual(issuesOf(read.doc), [])
+  // A document from before the setting has none, and a start that doesn't allow one none in its state.
+  delete doc.nodes[0].config.allow_file_system
+  const old = parseAgent(doc, { organizationId: ORG }).doc
+  assert.equal(old.nodes[0].config.allow_file_system, false)
+  assert.equal("workspace" in stateType(toGraph(old)).properties, false)
 })
 
 test("a start's file types say what they take, by extension", () => {
@@ -606,7 +981,10 @@ test("a start's file types say what they take, by extension", () => {
   assert.equal(files.takesFile(rule, "Q3.PDF"), true)
   assert.equal(files.takesFile(rule, "notes.txt"), false)
   assert.equal(files.takesFile(rule, "pdf"), false)
-  assert.equal(files.takesFile({ allowed: true, types: [] }, "anything.bin"), true)
+  assert.equal(
+    files.takesFile({ allowed: true, types: [] }, "anything.bin"),
+    true
+  )
   assert.equal(files.takesFile({ allowed: false, types: [] }, "a.pdf"), false)
 })
 
@@ -623,7 +1001,10 @@ const ISSUES_START = [
           type: "array",
           items: {
             type: "object",
-            properties: { key: { type: "string" }, status: { type: "string", enum: ["open", "closed"] } },
+            properties: {
+              key: { type: "string" },
+              status: { type: "string", enum: ["open", "closed"] },
+            },
           },
         },
         labels: { type: "array", items: { type: "string" } },
@@ -638,7 +1019,12 @@ test("a loop's results are typed by what its body hands back", () => {
     [
       ISSUES_START,
       ["each", "loop", "Each", { items: "input.labels", item_name: "label" }],
-      ["shape", "transform", "Shape", { expression: '{ "name": label, "at": index }' }],
+      [
+        "shape",
+        "transform",
+        "Shape",
+        { expression: '{ "name": label, "at": index }' },
+      ],
       ["after", "transform", "After", { expression: "previous.results.name" }],
     ],
     [
@@ -650,15 +1036,22 @@ test("a loop's results are typed by what its body hands back", () => {
   )
   assert.deepEqual(issuesOf(doc), [])
   const { scopeOf } = agentTypes(toGraph(doc))
-  const type = (expression, at) => typeLabel(resolveExpression(expression, scopeOf(at)))
+  const type = (expression, at) =>
+    typeLabel(resolveExpression(expression, scopeOf(at)))
   assert.equal(type("steps.each.output.results", "after"), "array<object>")
   assert.equal(type("previous.results[0].name", "after"), "string")
   assert.equal(type("previous.results[0].at", "after"), "integer")
   assert.equal(type("previous.count", "after"), "integer")
   // In its own body the loop hasn't handed anything on yet: it isn't there to read.
-  assert.equal(completeField("steps.", 6, "expression", scopeOf("shape")).options.some((o) => o.label === "each"), false)
+  assert.equal(
+    completeField("steps.", 6, "expression", scopeOf("shape")).options.some(
+      (o) => o.label === "each"
+    ),
+    false
+  )
   assert.match(
-    checkField("steps.each.output.results", "expression", scopeOf("shape"))[0].message,
+    checkField("steps.each.output.results", "expression", scopeOf("shape"))[0]
+      .message,
     /hands on once every item has run/
   )
 })
@@ -685,7 +1078,8 @@ test("a loop's results read through an If on the way back, and an empty body han
     ]
   )
   const { scopeOf } = agentTypes(toGraph(doc))
-  const type = (expression, at) => typeLabel(resolveExpression(expression, scopeOf(at)))
+  const type = (expression, at) =>
+    typeLabel(resolveExpression(expression, scopeOf(at)))
   // An If hands on what came into it: the item.
   assert.equal(type("previous.results[0].status", "after"), '"open" | "closed"')
   assert.equal(type("previous.results", "last"), "array<string>")
@@ -695,7 +1089,16 @@ test("a filter keeps a list's items, its condition reading each by name", () => 
   const doc = agent(
     [
       ISSUES_START,
-      ["open", "filter", "Open ones", { items: "input.issues", item_name: "issue", condition: 'issue.status = "open"' }],
+      [
+        "open",
+        "filter",
+        "Open ones",
+        {
+          items: "input.issues",
+          item_name: "issue",
+          condition: 'issue.status = "open"',
+        },
+      ],
       ["keys", "transform", "Keys", { expression: "previous.results.key" }],
     ],
     [
@@ -713,8 +1116,12 @@ test("a filter keeps a list's items, its condition reading each by name", () => 
 
   // What it hands on: the list's items, typed as the list's.
   const { scopeOf, outputOf } = agentTypes(toGraph(doc))
-  assert.deepEqual(Object.keys(outputOf("open").properties), ["count", "results"])
-  const type = (expression, at) => typeLabel(resolveExpression(expression, scopeOf(at)))
+  assert.deepEqual(Object.keys(outputOf("open").properties), [
+    "count",
+    "results",
+  ])
+  const type = (expression, at) =>
+    typeLabel(resolveExpression(expression, scopeOf(at)))
   assert.equal(type("steps.open.output.results", "keys"), "array<object>")
   assert.equal(type("previous.results[0].status", "keys"), '"open" | "closed"')
   assert.equal(type("previous.count", "keys"), "integer")
@@ -725,8 +1132,13 @@ test("a filter keeps a list's items, its condition reading each by name", () => 
   const scope = settingScope(spec, scopeOf("open"))
   assert.equal(typeLabel(resolveExpression("issue", scope)), "object")
   assert.equal(typeLabel(resolveExpression("index", scope)), "integer")
-  assert.equal(typeLabel(resolveExpression("input.labels", scope)), "array<string>")
-  const offered = completeField("issue.", 6, "expression", scope).options.map((o) => o.label)
+  assert.equal(
+    typeLabel(resolveExpression("input.labels", scope)),
+    "array<string>"
+  )
+  const offered = completeField("issue.", 6, "expression", scope).options.map(
+    (o) => o.label
+  )
   assert.deepEqual(offered.slice(0, 2).sort(), ["key", "status"])
   // Its list doesn't read the item.
   assert.equal(scopeOf("open").roots.has("issue"), false)
@@ -736,16 +1148,41 @@ test("a filter's list must be a list, and its condition read real fields", () =>
   const issues = (config) =>
     issuesOf(
       agent(
-        [ISSUES_START, ["f", "filter", "F", { items: "input.issues", condition: "true", ...config }]],
+        [
+          ISSUES_START,
+          [
+            "f",
+            "filter",
+            "F",
+            { items: "input.issues", condition: "true", ...config },
+          ],
+        ],
         [["start", "next", "f"]]
       )
     )
   assert.deepEqual(issues({}), [])
   assert.deepEqual(issues({ items: "input.count" }), ["f:field:items:0"])
-  assert.deepEqual(issues({ condition: "item.stauts = 'open'" }), ["f:field:condition:0"])
-  assert.deepEqual(issues({ items: "", condition: "", item_name: "an item" }), ["f:items", "f:item-name", "f:condition"])
-  const graph = toGraph(agent([ISSUES_START, ["f", "filter", "F", { items: "input.count", condition: "true" }]], [["start", "next", "f"]]))
-  assert.equal(validateAgent(graph)[0].message, "List: It goes through a list; this is integer.")
+  assert.deepEqual(issues({ condition: "item.stauts = 'open'" }), [
+    "f:field:condition:0",
+  ])
+  assert.deepEqual(issues({ items: "", condition: "", item_name: "an item" }), [
+    "f:items",
+    "f:item-name",
+    "f:condition",
+  ])
+  const graph = toGraph(
+    agent(
+      [
+        ISSUES_START,
+        ["f", "filter", "F", { items: "input.count", condition: "true" }],
+      ],
+      [["start", "next", "f"]]
+    )
+  )
+  assert.equal(
+    validateAgent(graph)[0].message,
+    "List: It goes through a list; this is integer."
+  )
 })
 
 test("a filter over a loop's results reads each result as the body handed it back", () => {
@@ -753,8 +1190,18 @@ test("a filter over a loop's results reads each result as the body handed it bac
     [
       ISSUES_START,
       ["each", "loop", "Each", { items: "input.labels", item_name: "label" }],
-      ["shape", "transform", "Shape", { expression: '{ "name": label, "long": $length(label) > 3 }' }],
-      ["long", "filter", "Long ones", { items: "previous.results", condition: "item.long" }],
+      [
+        "shape",
+        "transform",
+        "Shape",
+        { expression: '{ "name": label, "long": $length(label) > 3 }' },
+      ],
+      [
+        "long",
+        "filter",
+        "Long ones",
+        { items: "previous.results", condition: "item.long" },
+      ],
       ["names", "transform", "Names", { expression: "previous.results.name" }],
     ],
     [
@@ -768,18 +1215,36 @@ test("a filter over a loop's results reads each result as the body handed it bac
   assert.deepEqual(issuesOf(doc), [])
   const { scopeOf } = agentTypes(toGraph(doc))
   const step = toGraph(doc).steps.find((s) => s.id === "long").data
-  const scope = settingScope(expressionSetting(step, "condition"), scopeOf("long"))
-  const offered = completeField("item.", 5, "expression", scope).options.map((o) => o.label)
+  const scope = settingScope(
+    expressionSetting(step, "condition"),
+    scopeOf("long")
+  )
+  const offered = completeField("item.", 5, "expression", scope).options.map(
+    (o) => o.label
+  )
   assert.deepEqual(offered.slice(0, 2).sort(), ["long", "name"])
-  assert.equal(typeLabel(resolveExpression("previous.results[0].name", scopeOf("names"))), "string")
+  assert.equal(
+    typeLabel(resolveExpression("previous.results[0].name", scopeOf("names"))),
+    "string"
+  )
 })
 
 test("a for-each runs its steps per item, reading the item, and hands on only the count", () => {
   const doc = agent(
     [
       ISSUES_START,
-      ["each", "for_each", "Each issue", { items: "input.issues", item_name: "issue" }],
-      ["shape", "transform", "Shape", { expression: '{ "key": issue.key, "at": index }' }],
+      [
+        "each",
+        "for_each",
+        "Each issue",
+        { items: "input.issues", item_name: "issue" },
+      ],
+      [
+        "shape",
+        "transform",
+        "Shape",
+        { expression: '{ "key": issue.key, "at": index }' },
+      ],
       ["after", "transform", "After", { expression: "previous.count" }],
     ],
     [
@@ -797,7 +1262,8 @@ test("a for-each runs its steps per item, reading the item, and hands on only th
   assert.deepEqual(read.doc.nodes[1].outputs, ["each", "done"])
 
   const { scopeOf, outputOf } = agentTypes(toGraph(doc))
-  const type = (expression, at) => typeLabel(resolveExpression(expression, scopeOf(at)))
+  const type = (expression, at) =>
+    typeLabel(resolveExpression(expression, scopeOf(at)))
   // Its body reads the item and where it is.
   assert.equal(type("issue.status", "shape"), '"open" | "closed"')
   assert.equal(type("previous.key", "shape"), "string")
@@ -805,7 +1271,10 @@ test("a for-each runs its steps per item, reading the item, and hands on only th
   // Done hands on the count, and nothing of its body's.
   assert.deepEqual(Object.keys(outputOf("each").properties), ["count"])
   assert.equal(type("previous.count", "after"), "integer")
-  assert.equal(scopeOf("after").roots.get("steps").type.properties.shape, undefined)
+  assert.equal(
+    scopeOf("after").roots.get("steps").type.properties.shape,
+    undefined
+  )
   assert.equal(scopeOf("after").roots.has("issue"), false)
 })
 
@@ -816,26 +1285,57 @@ test("a for-each's body never comes back to it, and only Each item leads into it
     ["shape", "transform", "Shape", { expression: "item.key" }],
     ["after", "transform", "After", { expression: "previous.count" }],
   ]
-  const issues = (edges) => issuesOf(agent(steps, [["start", "next", "each"], ...edges]))
+  const issues = (edges) =>
+    issuesOf(agent(steps, [["start", "next", "each"], ...edges]))
   // A way back.
-  assert.deepEqual(issues([["each", "each", "shape"], ["shape", "next", "each"], ["each", "done", "after"]]), [
-    "shape:for-each-back-each",
-  ])
+  assert.deepEqual(
+    issues([
+      ["each", "each", "shape"],
+      ["shape", "next", "each"],
+      ["each", "done", "after"],
+    ]),
+    ["shape:for-each-back-each"]
+  )
   const back = validateAgent(
-    toGraph(agent(steps, [["start", "next", "each"], ["each", "each", "shape"], ["shape", "next", "each"]]))
+    toGraph(
+      agent(steps, [
+        ["start", "next", "each"],
+        ["each", "each", "shape"],
+        ["shape", "next", "each"],
+      ])
+    )
   ).find((i) => i.id === "shape:for-each-back-each")
   assert.match(back.message, /use a Loop to collect each item's result/)
   // Each item straight back to it.
   assert.ok(issues([["each", "each", "each"]]).includes("each:for-each-back"))
   // Done leading into the body.
-  assert.ok(issues([["each", "each", "shape"], ["each", "done", "shape"]]).includes("shape:body-each-each"))
+  assert.ok(
+    issues([
+      ["each", "each", "shape"],
+      ["each", "done", "shape"],
+    ]).includes("shape:body-each-each")
+  )
   // Nothing for each item.
-  const empty = validateAgent(toGraph(agent(steps.slice(0, 2), [["start", "next", "each"]])))
-  assert.equal(empty.find((i) => i.id === "each:open-each").message, "Nothing runs for each item: connect Each item to the steps to run.")
+  const empty = validateAgent(
+    toGraph(agent(steps.slice(0, 2), [["start", "next", "each"]]))
+  )
+  assert.equal(
+    empty.find((i) => i.id === "each:open-each").message,
+    "Nothing runs for each item: connect Each item to the steps to run."
+  )
   // A loop's body is held to the same: only Each item leads into it.
   const loop = agent(
-    [ISSUES_START, ["l", "loop", "L", { items: "input.issues" }], ["x", "transform", "X", { expression: "item" }]],
-    [["start", "next", "l"], ["l", "each", "x"], ["x", "next", "l"], ["start", "next", "x"]]
+    [
+      ISSUES_START,
+      ["l", "loop", "L", { items: "input.issues" }],
+      ["x", "transform", "X", { expression: "item" }],
+    ],
+    [
+      ["start", "next", "l"],
+      ["l", "each", "x"],
+      ["x", "next", "l"],
+      ["start", "next", "x"],
+    ]
   )
   assert.ok(issuesOf(loop).includes("x:body-l-start"))
 })
@@ -855,7 +1355,8 @@ test("steps complete by name, and write their ID", () => {
     ]
   )
   const scope = agentTypes(toGraph(doc)).scopeOf("after")
-  const options = (text) => completeField(text, text.length, "expression", scope)
+  const options = (text) =>
+    completeField(text, text.length, "expression", scope)
   // The list shows each step's name; picking one writes its ID.
   const all = options("steps.")
   assert.equal(all.filtered, true)
@@ -863,13 +1364,22 @@ test("steps complete by name, and write their ID", () => {
   assert.equal(each.display, "Each issue")
   assert.equal(each.note, "for_each_bca7t")
   // What's typed finds a step by a word of its name, or by its ID.
-  assert.deepEqual(options("steps.iss").options.map((o) => o.label), ["for_each_bca7t"])
-  assert.deepEqual(options("steps.for_e").options.map((o) => o.label), ["for_each_bca7t"])
+  assert.deepEqual(
+    options("steps.iss").options.map((o) => o.label),
+    ["for_each_bca7t"]
+  )
+  assert.deepEqual(
+    options("steps.for_e").options.map((o) => o.label),
+    ["for_each_bca7t"]
+  )
   assert.deepEqual(options("steps.zzz").options, [])
   // A step's body isn't readable after it: it isn't offered.
   assert.equal(options("steps.email").options.length, 0)
   // Hovering a step says what it's saved as.
-  assert.equal(typeAt("steps.for_each_bca7t.output", 10, "expression", scope).description, "Saved as steps.for_each_bca7t.")
+  assert.equal(
+    typeAt("steps.for_each_bca7t.output", 10, "expression", scope).description,
+    "Saved as steps.for_each_bca7t."
+  )
 })
 
 test("the steps a field names are found where they're read, by their IDs", () => {
@@ -888,22 +1398,122 @@ test("the steps a field names are found where they're read, by their IDs", () =>
   )
   const scope = agentTypes(toGraph(doc)).scopeOf("after")
   const refs = (text, mode = "expression") =>
-    stepReferences(text, mode, scope).map((r) => [text.slice(r.from, r.to), r.step.name])
-  assert.deepEqual(refs("steps.for_each_bca7t.output.count + 1"), [["for_each_bca7t", "Each issue"]])
+    stepReferences(text, mode, scope).map((r) => [
+      text.slice(r.from, r.to),
+      r.step.name,
+    ])
+  assert.deepEqual(refs("steps.for_each_bca7t.output.count + 1"), [
+    ["for_each_bca7t", "Each issue"],
+  ])
   // In {{ }}, while being typed (no field yet), with spaces.
-  assert.deepEqual(refs("{{ steps.for_each_bca7t }}.count"), [["for_each_bca7t", "Each issue"]])
-  assert.deepEqual(refs("steps . for_each_bca7t"), [["for_each_bca7t", "Each issue"]])
+  assert.deepEqual(refs("{{ steps.for_each_bca7t }}.count"), [
+    ["for_each_bca7t", "Each issue"],
+  ])
+  assert.deepEqual(refs("steps . for_each_bca7t"), [
+    ["for_each_bca7t", "Each issue"],
+  ])
   // Not in a string or comment, not another root's field, not a longer name.
-  assert.deepEqual(refs('"steps.for_each_bca7t" & /* steps.for_each_bca7t */ previous.steps.for_each_bca7t'), [])
+  assert.deepEqual(
+    refs(
+      '"steps.for_each_bca7t" & /* steps.for_each_bca7t */ previous.steps.for_each_bca7t'
+    ),
+    []
+  )
   assert.deepEqual(refs("steps.for_each_bca7t_2"), [])
   // Not a step this one can't read: its underline says why.
   assert.deepEqual(refs("steps.later.output"), [])
   // In a template, only inside {{ }}.
-  assert.deepEqual(refs("Sent steps.for_each_bca7t: {{ steps.for_each_bca7t.output.count }}", "template"), [
-    ["for_each_bca7t", "Each issue"],
-  ])
+  assert.deepEqual(
+    refs(
+      "Sent steps.for_each_bca7t: {{ steps.for_each_bca7t.output.count }}",
+      "template"
+    ),
+    [["for_each_bca7t", "Each issue"]]
+  )
   const text = "Sent {{ steps.for_each_bca7t.output.count }}"
   const [ref] = stepReferences(text, "template", scope)
   assert.equal(ref.from, text.indexOf("for_each_bca7t"))
 })
 
+test("a Pi agent works in a folder of the run's, and hands on what it did", () => {
+  // Read-only tools, the run's folder and pi's defaults to start with.
+  assert.deepEqual(model.newNode("pi_agent", [], "Explore").config, {
+    folder: "",
+    prompt: "",
+    instruction: "",
+    tools: ["read", "grep", "find", "ls"],
+    model: { provider: "", name: "" },
+    thinking_level: "",
+    output_schema: {},
+    context_files: false,
+    timeout_seconds: 600,
+  })
+  const answer = {
+    type: "object",
+    required: ["files"],
+    properties: { files: { type: "array", items: { type: "string" } } },
+  }
+  const doc = agent(
+    [
+      ["start", "start", "Start", { allow_file_system: true }],
+      [
+        "explore",
+        "pi_agent",
+        "Explore",
+        {
+          folder: "{{ state.workspace }}/backend",
+          prompt: "List what's in {{ state.workspace }}",
+          tools: ["read", "bash"],
+        },
+      ],
+      ["typed", "pi_agent", "Typed", { output_schema: answer }],
+      ["after", "transform", "After", { expression: "previous.answer" }],
+    ],
+    [
+      ["start", "next", "explore"],
+      ["explore", "next", "typed"],
+      ["typed", "next", "after"],
+    ]
+  )
+  const read = parseAgent(doc, { organizationId: ORG })
+  assert.deepEqual(read.notes, [])
+  assert.deepEqual(issuesOf(read.doc), [])
+  const graph = toGraph(read.doc)
+  const type = (expression) =>
+    typeLabel(resolveExpression(expression, agentTypes(graph).scopeOf("after")))
+  // Later nodes read its answer (text, or what its output schema declares) and what it did.
+  assert.equal(type("steps.explore.output.answer"), "string")
+  assert.equal(type("steps.explore.output.folder"), "string")
+  assert.equal(type("steps.explore.output.tool_calls[0].tool"), "string")
+  assert.equal(type("steps.explore.output.tool_calls[0].is_error"), "boolean")
+  assert.equal(type("steps.explore.output.usage.input"), "integer")
+  assert.equal(type("previous.answer.files[0]"), "string")
+  // Its folder, prompt and instruction are templates over the run's data.
+  const explore = read.doc.nodes.find((n) => n.id === "explore")
+  assert.deepEqual(
+    agentExpressionSettings({
+      kind: "pi_agent",
+      name: "Explore",
+      config: explore.config,
+    }).map((s) => [s.key, s.mode]),
+    [
+      ["folder", "template"],
+      ["prompt", "template"],
+      ["instruction", "template"],
+    ]
+  )
+  // The schema knows its settings and pi's tools.
+  const schema = AGENT_JSON_SCHEMA.$defs.config_pi_agent
+  assert.deepEqual(
+    Object.keys(schema.properties).sort(),
+    Object.keys(model.AGENT_KINDS.pi_agent.defaults()).sort()
+  )
+  assert.deepEqual(schema.properties.tools.items.enum, [...model.PI_TOOLS])
+  // Tools pi doesn't have are dropped on import, the rest kept in pi's order.
+  doc.nodes[1].config.tools = ["bash", "web", "read", "read"]
+  const imported = parseAgent(doc, { organizationId: ORG })
+  assert.deepEqual(imported.notes, [
+    "nodes[1].config.tools names tools pi doesn't have; dropped.",
+  ])
+  assert.deepEqual(imported.doc.nodes[1].config.tools, ["read", "bash"])
+})

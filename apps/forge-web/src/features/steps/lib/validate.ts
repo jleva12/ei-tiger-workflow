@@ -35,6 +35,43 @@ function itemNameIssue(name: string): string | undefined {
     ? `${name} is ${taken}, which the steps reading the item read too: call the item something else.`
     : undefined
 }
+// A name bash reads as a variable.
+const VARIABLE = /^[A-Za-z_][A-Za-z0-9_]*$/
+/** The variable every Bash step's command reads its run's folder from. */
+export const WORKSPACE_VARIABLE = "WORKSPACE"
+// The run's data written into a command as if it were filled in: it isn't.
+const FILLED_IN = /\{\{\s*(input|previous|steps|state|index)\b/
+
+/** What's wrong with a Bash step's environment variables. */
+function variableIssue(names: string[]): string | undefined {
+  if (names.some((name) => !name)) return "Every variable needs a name."
+  const odd = names.find((name) => !VARIABLE.test(name))
+  if (odd)
+    return `${odd} isn't a name bash reads: letters, digits and _, not starting with a digit.`
+  if (names.includes(WORKSPACE_VARIABLE))
+    return `${WORKSPACE_VARIABLE} is the run's folder; call the variable something else.`
+  const twice = names.find((name, i) => names.indexOf(name) !== i)
+  return twice ? `Two variables are called ${twice}.` : undefined
+}
+
+/**
+ * Whether a folder written out (no {{ }} in it) leads outside the run's
+ * folder: an absolute path (the run's folder isn't known until it runs),
+ * or one whose `..` go above it.
+ */
+export function leavesRunFolder(path: string): boolean {
+  const written = path.trim()
+  if (!written || written.includes("{{")) return false
+  if (written.startsWith("/") || written.startsWith("~")) return true
+  let depth = 0
+  for (const part of written.split("/")) {
+    if (part === "..") depth -= 1
+    else if (part && part !== ".") depth += 1
+    if (depth < 0) return true
+  }
+  return false
+}
+
 // An address: http(s) and no spaces except inside its {{ }} parts, or an
 // expression in {{ }}.
 const URLISH =
@@ -84,6 +121,25 @@ export function settingsIssues(
         "body",
         "A GET request sends no body; pick another method or clear it."
       )
+      break
+    }
+    case "bash": {
+      const c = step.config
+      need(Boolean(c.command.trim()), "command", "Write the command it runs.")
+      const found = c.command.match(FILLED_IN)
+      warn(
+        !found,
+        "command-filled",
+        `The command runs as it's written: ${found?.[0] ?? "{{"} … }} isn't filled in. Give it a variable with that value, and read it as "$NAME".`
+      )
+      need(
+        !leavesRunFolder(c.cwd),
+        "cwd",
+        "Its folder is in the run's folder: give a path from it (backend), or start it with {{ state.workspace }}."
+      )
+      const variables = variableIssue(c.env.map((v) => v.name.trim()))
+      need(!variables, "env", variables ?? "")
+      need(c.timeout_seconds >= 1, "timeout", "Give it at least a second.")
       break
     }
     case "transform":
@@ -202,6 +258,11 @@ const FIELDS: Record<string, string> = {
   query: "query",
   headers: "headers",
   body: "body",
+  command: "command",
+  "command-filled": "command",
+  cwd: "cwd",
+  env: "env",
+  timeout: "timeout_seconds",
   expression: "expression",
   amount: "amount",
   condition: "condition",

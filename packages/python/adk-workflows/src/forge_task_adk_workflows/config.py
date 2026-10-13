@@ -79,6 +79,24 @@ class AdkWorkflowsSettings(BaseModel):
     s3_access_key_id: str | None = None
     s3_secret_access_key: SecretStr | None = None
 
+    # Where runs of workflows whose start allows a file system get a folder
+    # of their own (forge_task_adk_workflows.workspaces):
+    # <workspaces>/<organization>/<workflow>/<run>, which its steps and agents
+    # read as state.workspace. A mounted volume every worker of the queue
+    # reaches (a relative path is from the worker's folder); made when it
+    # isn't there. Unset, such a run fails saying so.
+    workspaces: str | None = None
+    # Where Bash steps run their commands: off (a run with one fails before it
+    # starts), or local: bash on this worker's machine, as the worker's user,
+    # starting in a folder of the run's own, with its network and whatever
+    # its user may read and write. The command gets PATH, HOME, the locale and
+    # the variables tool_environment lists, not the rest of the worker's
+    # environment; it isn't sandboxed, so only for workflows whose authors you
+    # trust with this machine. What it writes to stdout and stderr is kept up
+    # to this many bytes each (the end of it).
+    commands: Literal["off", "local"] = "off"
+    command_max_output_bytes: int = Field(default=1024 * 1024, gt=0)
+
     # LLM agents' tools (the Agents builder's: MCP servers, knowledge bases,
     # HTTP tools, OpenAPI specs, agents, workflows). The key the organization's
     # MCP servers' credentials are encrypted with: the admin API's
@@ -90,15 +108,24 @@ class AdkWorkflowsSettings(BaseModel):
     mcp_timeout: float = Field(default=15.0, gt=0)
     # The variables of this worker's environment that ${NAME} in LLM agents'
     # HTTP and MCP tools (their URLs and headers) and OpenAPI spec URLs may
-    # read: none by default, so a workflow can never send the worker's own
-    # secrets anywhere. Put API keys and tokens in the organization's
-    # credentials instead (the same key decrypts them).
+    # read, and Bash steps' commands get: none by default, so a workflow can
+    # never send the worker's own secrets anywhere. Put API keys and tokens
+    # in the organization's credentials instead (the same key decrypts them).
     tool_environment: list[str] = Field(default_factory=list)
     # Where LLM agents' Code execution tools run the code they send: off (a
     # step whose agent has one fails), or local: ADK's UnsafeLocalCodeExecutor,
     # a new Python process on this worker's machine for each call, with the
     # worker's environment, files and network. Local development only.
     code_execution: Literal["off", "local"] = "off"
+    # Pi agent steps: pi, the coding agent (pi.dev, forge_pi_agent), run on
+    # this worker's machine in the run's folder, with the built-in tools each
+    # step allows, on the steps' models: off (such a step fails) or local. Its
+    # bash tool runs any command as the worker's user. How pi is started (a
+    # command line: pi on PATH, or e.g. "npx -y @earendil-works/pi-coding-agent"),
+    # and the most seconds a step may take, whatever its own timeout.
+    pi_agent: Literal["off", "local"] = "off"
+    pi_command: str = Field(default="pi", min_length=1)
+    pi_max_seconds: float = Field(default=3600.0, gt=0)
     # Seconds a workflow an LLM agent calls as a tool is waited for before
     # the tool answers where it got to.
     workflow_tool_wait: float = Field(default=120.0, gt=0)
@@ -118,6 +145,7 @@ class AdkWorkflowsSettings(BaseModel):
         "default_model",
         "secrets_key",
         "artifacts",
+        "workspaces",
         "s3_endpoint_url",
         "s3_region",
         "s3_access_key_id",

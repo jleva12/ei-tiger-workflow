@@ -34,6 +34,9 @@ __pycache__/
 # run indexes and installed packages.
 .codegraph-work/
 
+# Workflow runs' folders (HYBRID_ADK_WORKFLOWS__WORKSPACES), natively.
+.workflow-workspaces/
+
 # Locally mounted keys never enter Git or build contexts.
 .secrets/
 

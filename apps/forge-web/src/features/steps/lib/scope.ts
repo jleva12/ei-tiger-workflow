@@ -78,6 +78,23 @@ const ERROR = t.object(
   { required: ["message"] }
 )
 
+// What a Bash step's error is: how its command ended, and what it wrote.
+const COMMAND_ERROR = t.object(
+  {
+    message: t.string(
+      "What went wrong: its exit code and the last line it wrote, a folder outside the run's, or its timeout."
+    ),
+    exit_code: t.number(
+      "Its exit code, when it ran to its end: minus the signal's number when one killed it.",
+      true
+    ),
+    stdout: t.string("What it wrote to stdout, when it ran."),
+    stderr: t.string("What it wrote to stderr, when it ran."),
+  },
+  "Why the step took its Error way.",
+  { required: ["message"] }
+)
+
 /** Logic steps that hand on what came into them (a run records their way as their output). */
 const PASS_THROUGH = new Set(["if", "switch", "match"])
 
@@ -188,6 +205,20 @@ export function outputTypeOf(
               description: "The response's body, as declared.",
             }
           : t.unknown("The response's body: parsed when it's JSON, else text."),
+      })
+    case "bash":
+      return t.object({
+        exit_code: t.number("Its exit code: 0, by its Success way.", true),
+        stdout: t.string(
+          "What it wrote to stdout, without its last line ends (the end of it, when it was long)."
+        ),
+        stderr: t.string("What it wrote to stderr (the end of it, when it was long)."),
+        cwd: t.string(
+          "The folder it ran in: an absolute path in the run's folder."
+        ),
+        truncated: t.boolean(
+          "Whether stdout or stderr was longer than the worker keeps: then only its end is."
+        ),
       })
     case "transform":
       // Undeclared, what it makes is worked out from its expression (scopesOf).
@@ -524,7 +555,11 @@ export function scopesFor<S extends BaseStep>(
         kind: step.data.kind,
         mark: rules.markOf(step.data),
         output: outputOf(other),
-        error: canFail ? ERROR : undefined,
+        error: canFail
+          ? step.data.kind === "bash"
+            ? COMMAND_ERROR
+            : ERROR
+          : undefined,
       })
     }
     const roots = new Map<string, Root>()

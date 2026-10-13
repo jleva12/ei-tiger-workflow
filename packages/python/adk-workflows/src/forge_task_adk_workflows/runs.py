@@ -78,6 +78,11 @@ person's answer, the timer), and every retry.
   so its nodes read them there: a run in another session (resubmitted, or
   started over) has them copied to it before it goes on, and a copy that
   failed is finished by its next attempt.
+- **File system.** A run whose start (or a saved workflow's it runs) allows
+  a file system has its folder made before it goes on (``workspaces``),
+  named by its run ID, so every attempt works in the same one.
+  One with a Bash step fails before it starts on a worker that doesn't run
+  commands (``commands`` off).
 """
 
 from __future__ import annotations
@@ -132,6 +137,8 @@ from forge_task_adk_workflows.graph.factories.base import config_of, items, labe
 from forge_task_adk_workflows.graph.names import BODY_KINDS, FINISH_NODE, adk_name, body_name
 from forge_task_adk_workflows.graph.pauses import REQUEST_CONFIRMATION, REQUEST_INPUT, TOOL_CONFIRMATION
 from forge_task_adk_workflows.models import RETRYABLE, UNANSWERED
+from forge_task_adk_workflows.support.commands import NO_COMMANDS
+from forge_task_adk_workflows.workspaces import WorkspaceError, make_workspace, runs_commands, uses_file_system
 from forge_tasks.control import ControlSignal, JobControl
 from forge_tasks.errors import TaskError, TransientError
 from forge_tasks.runner import ok
@@ -167,6 +174,7 @@ NO_ARTIFACTS = (
     "set HYBRID_ADK_WORKFLOWS__ARTIFACTS to where the admin API keeps them "
     "(its FORGE_ADMIN_WORKFLOW_ARTIFACTS), with the S3 service's settings"
 )
+NO_WORKSPACES = "set HYBRID_ADK_WORKFLOWS__WORKSPACES to a folder on a volume every worker reaches"
 
 
 class RunPayload(BaseModel):
@@ -320,12 +328,36 @@ class AdkRun:
             )
         if self.payload.files:
             self.services = self.services.but(files=tuple(self.payload.files))
+        if runs_commands(self.payload.document, self.payload.saved) and not self.services.commands:
+            return JobResult.failed(
+                "The workflow has Bash steps, and this worker doesn't run commands: " + NO_COMMANDS,
+                outcome="failed",
+            )
+        if uses_file_system(self.payload.document, self.payload.saved):
+            if self.settings.workspaces is None:
+                return JobResult.failed(
+                    "The workflow works in a file system, and this worker has none: " + NO_WORKSPACES,
+                    outcome="failed",
+                )
+            try:
+                # The run's own: the same folder for each of its attempts.
+                folder = make_workspace(
+                    self.settings.workspaces,
+                    organization=self.payload.tenant_id,
+                    workflow=self.payload.agent_id,
+                    run=self.control.instance_id or self.payload.session_id,
+                )
+            except WorkspaceError as error:
+                return JobResult.failed(f"The run's file system can't be used: {error}", outcome="failed")
+            self.services = self.services.but(workspace=str(folder))
         agents = self._agents()
         if agents is not None:
             self.services = self.services.but(agents=agents)
         self.services = self.services.but(
             tool_calls=self._note_call,
             organization_id=self.payload.tenant_id,
+            # Whom its model and tool calls are for: Pi agent steps record theirs too.
+            attribution=self._attribution(),
             # Its LLM agents read and save files wherever this worker keeps artifacts.
             artifacts=self.artifacts is not None,
         )
@@ -398,7 +430,11 @@ class AdkRun:
         sink = current_sink()
         if sink is None:
             return plugins
-        attribution = Attribution(
+        return [*plugins, UsagePlugin(sink, self._attribution(), price=price_from(self.services.model))]
+
+    def _attribution(self) -> Attribution:
+        """:return: Whom the run's model and tool calls are for: its organization, its workflow and its member."""
+        return Attribution(
             organization_id=self.payload.tenant_id,
             kind="workflow",
             subject_id=self.payload.agent_id,
@@ -406,7 +442,6 @@ class AdkRun:
             run_id=self.control.instance_id or None,
             user_id=self.payload.run_as,
         )
-        return [*plugins, UsagePlugin(sink, attribution, price=price_from(self.services.model))]
 
     def _succeeded(self, finished: dict[str, Any]) -> JobResult:
         if finished.get("outcome") == "failed":

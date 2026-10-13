@@ -27,6 +27,7 @@ COPY packages/python/documents/pyproject.toml packages/python/documents/
 COPY packages/python/embeddings/pyproject.toml packages/python/embeddings/
 COPY packages/python/jsonata/pyproject.toml packages/python/jsonata/
 COPY packages/python/mcp-servers/pyproject.toml packages/python/mcp-servers/
+COPY packages/python/pi-agent/pyproject.toml packages/python/pi-agent/
 COPY packages/python/task-sdk/pyproject.toml packages/python/task-sdk/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --package forge-async-worker --no-install-workspace
@@ -39,6 +40,7 @@ COPY packages/python/documents/ packages/python/documents/
 COPY packages/python/embeddings/ packages/python/embeddings/
 COPY packages/python/jsonata/ packages/python/jsonata/
 COPY packages/python/mcp-servers/ packages/python/mcp-servers/
+COPY packages/python/pi-agent/ packages/python/pi-agent/
 COPY packages/python/task-sdk/ packages/python/task-sdk/
 COPY apps/forge-async-worker/ apps/forge-async-worker/
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -50,11 +52,15 @@ RUN /app/.venv/bin/forge-async-worker prepare
 FROM python:3.13-slim-bookworm AS runtime
 # Tesseract reads scanned PDF pages (the documents task's OCR); add a
 # tesseract-ocr-<lang> pack per extra language in HYBRID_DOCUMENTS__OCR__LANGUAGES.
+# git and gh are for workflows' Bash steps (HYBRID_ADK_WORKFLOWS__COMMANDS=local):
+# cloning repositories into a run's folder.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tesseract-ocr tesseract-ocr-eng \
+    && apt-get install -y --no-install-recommends ca-certificates tesseract-ocr tesseract-ocr-eng git gh \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 forge \
-    && useradd --uid 10001 --gid forge --no-create-home forge
+    && useradd --uid 10001 --gid forge --no-create-home forge \
+    && mkdir -p /var/lib/forge-workspaces \
+    && chown forge:forge /var/lib/forge-workspaces
 COPY --from=build /app/.venv /app/.venv
 # The tokenizer files prepare fetched, so workers need no egress for them.
 COPY --from=build /opt/forge-async-worker/tiktoken /opt/forge-async-worker/tiktoken

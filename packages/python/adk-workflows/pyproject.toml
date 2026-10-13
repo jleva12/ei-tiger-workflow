@@ -24,6 +24,8 @@ dependencies = [
   "forge-codegraph",
   # The code graph in the worker's Spanner database (forge_codegraph_query)
   "forge-codegraph-query",
+  # Pi agent steps: pi (pi.dev), the coding agent, over its JSON-RPC mode, in the run's folder
+  "forge-pi-agent",
 ]
 
 # Registers the task with the Forge async worker.

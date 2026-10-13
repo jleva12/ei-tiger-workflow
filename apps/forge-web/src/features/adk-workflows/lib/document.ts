@@ -20,6 +20,7 @@ import {
   newNode,
   NODE_ID_PATTERN,
   outputsOf,
+  PI_TOOLS,
   SUB_AGENT_ID,
   subAgentDefaults,
   type AgentConfigs,
@@ -217,7 +218,7 @@ const KIND_ENUMS: Record<string, Record<string, readonly string[]>> = {
   end: { outcome: ["succeeded", "failed"] },
 }
 // Lists of rows, read as a workflow's are.
-const LISTS = new Set(["query", "headers", "cases", "arms"])
+const LISTS = new Set(["query", "headers", "env", "cases", "arms"])
 // Settings that hold a JSON Schema of their own.
 const SCHEMAS = new Set(["input_schema", "output_schema", "response_schema"])
 // Settings that are a number, or null for the model's own.
@@ -278,6 +279,16 @@ function readSettings(
       }
     } else if (key === "sub_agents") {
       config[key] = readSubAgents(value, path, notes, depth + 1)
+    } else if (kind === "pi_agent" && key === "tools") {
+      // Pi's built-in tools, by name, in pi's order.
+      if (Array.isArray(value)) {
+        if (value.some((v) => !(PI_TOOLS as readonly unknown[]).includes(v)))
+          notes.push(`${path} names tools pi doesn't have; dropped.`)
+        config[key] = PI_TOOLS.filter((tool) => value.includes(tool))
+      } else {
+        notes.push(`${path} should be a list of pi's tools.`)
+        config[key] = fallback
+      }
     } else if (key === "tools") {
       config[key] = readTools(value, path, notes)
     } else if (key === "version") {

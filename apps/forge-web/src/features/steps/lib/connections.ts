@@ -22,6 +22,7 @@ export function toneOf(step: StepData, output: StepOutput, index: number): EdgeT
   switch (step.kind) {
     // The second way out is how it went wrong.
     case "http":
+    case "bash":
     case "approval":
       return output.fallback ? "negative" : "positive"
     case "if":
