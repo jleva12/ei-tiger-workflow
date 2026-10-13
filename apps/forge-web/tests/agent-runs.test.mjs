@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { createServer } from "vite"
+import { installNodeCatalog } from "./node-catalog.mjs"
 
 // Running ADK workflows without a browser: the run page's tabs, how its
 // steps read (kinds from the ADK workflow the run started with, names,
@@ -19,6 +20,7 @@ const load = (path) => server.ssrLoadModule(path)
 const runs = await load("/src/features/runs/lib/runs.ts")
 const { exampleAgent } = await load("/src/features/adk-workflows/lib/example.ts")
 const { OPEN_POLL_MS, IDLE_POLL_MS } = await load("/src/features/runs/lib/display.ts")
+await installNodeCatalog(server)
 await server.close()
 
 const doc = exampleAgent("org-1")

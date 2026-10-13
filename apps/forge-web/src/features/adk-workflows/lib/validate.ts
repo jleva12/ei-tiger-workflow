@@ -20,9 +20,9 @@ import {
 } from "@/features/steps/lib/validate"
 import { startInputOf, type AgentDocument, type AgentGraph } from "./document"
 import { agentExpressionSettings } from "./fields"
+import { folderOf, placeLabel } from "./folders"
 import {
   adkName,
-  AGENT_KINDS,
   isForgeKind,
   outputsOf,
   RESERVED_NAMES,
@@ -34,6 +34,7 @@ import {
   type LlmTool,
   type SubAgent,
 } from "./model"
+import { kindInfo } from "./catalog"
 import { agentTypes, type TypeContext } from "./scope"
 
 /*
@@ -108,6 +109,9 @@ const FIELDS: Record<string, string> = {
 const FOLDER_KINDS: Record<string, string> = {
   bash: "A Bash step runs its command",
   pi_agent: "A Pi agent works",
+  git_clone: "A Clone repository step clones",
+  git_branch: "A Create branch step works",
+  git_push: "A Commit and push step works",
 }
 
 function fieldOf(code: string): string | undefined {
@@ -339,6 +343,36 @@ function inputIssues(
 export const startsWithInputs = (config: AgentConfigs["saved"]) =>
   Object.values(config.inputs).some((text) => text.trim())
 
+/**
+ * Where a GitHub step's credential is sent, when its repository is written
+ * out: git's URL for a clone, the API's for a pull request. A push's goes
+ * where its clone came from, which isn't known until it runs.
+ */
+function githubUrl(step: AgentStep): string | undefined {
+  if (step.kind !== "git_clone" && step.kind !== "github_pull_request")
+    return undefined
+  const written = step.config.repository.trim()
+  const short =
+    /^(?:github\.com\/)?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(
+      written
+    )
+  const full =
+    /^(https:\/\/[^/\s{]+)\/([^/\s{]+)\/([^/\s{]+?)(?:\.git)?\/?$/.exec(written)
+  if (step.kind === "git_clone")
+    return short
+      ? `https://github.com/${short[1]}/${short[2]}.git`
+      : full
+        ? written
+        : undefined
+  if (short) return `https://api.github.com/repos/${short[1]}/${short[2]}/pulls`
+  if (!full) return undefined
+  const api =
+    full[1] === "https://github.com"
+      ? "https://api.github.com"
+      : `${full[1]}/api/v3`
+  return `${api}/repos/${full[2]}/${full[3]}/pulls`
+}
+
 /** What's missing or wrong in one node's own settings. */
 function settingsIssues(
   step: AgentStep,
@@ -348,6 +382,15 @@ function settingsIssues(
     return [
       ...stepIssues(step as StepData),
       ...credentialIssues(step.config.credential, step.config.url, context),
+    ]
+  if (
+    step.kind === "git_clone" ||
+    step.kind === "git_push" ||
+    step.kind === "github_pull_request"
+  )
+    return [
+      ...stepIssues(step as StepData),
+      ...credentialIssues(step.config.credential, githubUrl(step), context),
     ]
   if (isForgeKind(step.kind)) return stepIssues(step as StepData)
   const out: Found[] = []
@@ -622,6 +665,25 @@ export function validateAgent(
     }
   }
 
+  // A git step left in the run's folder after a clone into a folder of its
+  // own: it would find no repository there.
+  const steps = new Map(graph.steps.map((s) => [s.id, s.data]))
+  const cloned = graph.steps
+    .filter((s) => s.data.kind === "git_clone")
+    .map((s) => ({ name: s.data.name, place: folderOf(s.id, steps) }))
+    .find(({ place }) => place.parts.length > 0)
+  for (const step of graph.steps) {
+    const data = step.data
+    if (data.kind !== "git_branch" && data.kind !== "git_push") continue
+    if (cloned && !data.config.folder.trim())
+      add(
+        "warning",
+        step.id,
+        "folder-repository",
+        `It works in the run's folder, but ${cloned.name} clones into ${placeLabel(cloned.place)}: use its folder.`
+      )
+  }
+
   // Names: ADK calls every node and sub-agent by its name, once each.
   // Who holds each name: the node, and the setting (its name, a sub-agent's).
   const holders = new Map<string, { step: string; sub?: string }[]>()
@@ -795,7 +857,7 @@ export function validateAgent(
     // A logic step's branch that goes nowhere is a slip; an action's
     // success that goes nowhere is just where the run ends.
     const links = outgoing.get(step.id) ?? []
-    const logic = AGENT_KINDS[step.data.kind].group === "logic"
+    const logic = kindInfo(step.data.kind).group === "logic"
     for (const output of logic ? outputsOf(step.data) : []) {
       if (!output.branch || output.fallback) continue
       if (output.id === "done" || links.some((l) => l.output === output.id))
@@ -917,4 +979,4 @@ export function validateAgent(
 }
 
 /** The label a node's kind goes by. */
-export const kindLabel = (step: AgentStep) => AGENT_KINDS[step.kind].label
+export const kindLabel = (step: AgentStep) => kindInfo(step.kind).label

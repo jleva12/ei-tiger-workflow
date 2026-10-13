@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import jsonata from "jsonata"
 import { createServer } from "vite"
+import { installNodeCatalog } from "./node-catalog.mjs"
 
 // Use the app's existing TS loader without starting a browser or adding a test runtime.
 const server = await createServer({
@@ -18,7 +19,7 @@ const { normalizeReferences } = await server.ssrLoadModule("/src/features/steps/
 const { t, valuesOf } = await server.ssrLoadModule("/src/features/steps/lib/types.ts")
 const { fieldOfCode, settingsIssues, switchIssues } = await server.ssrLoadModule("/src/features/steps/lib/validate.ts")
 const { expressionSetting } = await server.ssrLoadModule("/src/features/steps/lib/fields.ts")
-const { STEP_KINDS } = await server.ssrLoadModule("/src/features/steps/lib/model.ts")
+const { kindInfo } = await installNodeCatalog(server)
 await server.close()
 
 const fixtures = JSON.parse(await readFile(new URL("../../../packages/python/adk-workflows/tests/fixtures/expression-references.json", import.meta.url)))
@@ -121,7 +122,7 @@ test("an HTTP step's query parameters are templates, name and value, and each ne
     kind: "http",
     name: "Search",
     config: {
-      ...STEP_KINDS.http.defaults(),
+      ...kindInfo("http").defaults(),
       url: "https://api.example.com/search",
       query: [
         { id: "q1", name: "{{ input.field }}", value: "{{ input.since }}" },

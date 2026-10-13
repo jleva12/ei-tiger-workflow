@@ -1,17 +1,14 @@
 import { HTTP_METHODS, THINKING_LEVELS } from "@/features/steps/lib/model"
+import { chatKindInfo, KNOWN_CHAT_KINDS } from "./catalog"
 import { CHAT_AGENT_FORMAT } from "./document"
-import {
-  CHAT_KIND_LIST,
-  CHAT_KINDS,
-  HANDS_OFF,
-  TOOLS,
-  type ChatKind,
-} from "./model"
+import { HANDS_OFF, TOOLS, type ChatKind } from "./model"
 
 /*
  * The chat agent format as a JSON Schema (draft 2020-12): what
  * `document.ts` writes, for the JSON tab now and for the admin API to
- * check agents against once it keeps them. Change the two together.
+ * check agents against once it keeps them. Change the two together. Each
+ * kind's settings are described as the node catalog has the kind, so the
+ * schema is made once it's installed.
  */
 
 const text = { type: "string" } as const
@@ -224,7 +221,7 @@ const settings = (
   properties,
 })
 
-export const CHAT_AGENT_JSON_SCHEMA = {
+const FORMAT = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   title: "Forge chat agent",
   description:
@@ -274,7 +271,7 @@ export const CHAT_AGENT_JSON_SCHEMA = {
       required: ["id", "kind", "name", "config", "outputs"],
       properties: {
         id: { $ref: "#/$defs/nodeId" },
-        kind: { enum: CHAT_KIND_LIST },
+        kind: { enum: KNOWN_CHAT_KINDS },
         name: {
           ...text,
           description:
@@ -287,7 +284,7 @@ export const CHAT_AGENT_JSON_SCHEMA = {
           items: text,
         },
       },
-      allOf: CHAT_KIND_LIST.map((kind) => ({
+      allOf: KNOWN_CHAT_KINDS.map((kind) => ({
         if: { properties: { kind: { const: kind } } },
         then: { properties: { config: { $ref: `#/$defs/config_${kind}` } } },
       })),
@@ -303,11 +300,19 @@ export const CHAT_AGENT_JSON_SCHEMA = {
         target: { $ref: "#/$defs/nodeId" },
       },
     },
+  },
+} as const
+
+/** The format's JSON Schema, each kind described as the node catalog has it. */
+export const chatAgentJsonSchema = () => ({
+  ...FORMAT,
+  $defs: {
+    ...FORMAT.$defs,
     ...Object.fromEntries(
-      CHAT_KIND_LIST.map((kind) => [
+      KNOWN_CHAT_KINDS.map((kind) => [
         `config_${kind}`,
-        settings(CONFIGS[kind], CHAT_KINDS[kind].summary),
+        settings(CONFIGS[kind], chatKindInfo(kind).summary),
       ])
     ),
   },
-} as const
+})

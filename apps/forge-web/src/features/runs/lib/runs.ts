@@ -25,11 +25,8 @@ import {
   AGENT_FORMAT,
   type AgentDocument,
 } from "@/features/adk-workflows/lib/document"
-import {
-  AGENT_KINDS,
-  isAgentKind,
-  type AgentKind,
-} from "@/features/adk-workflows/lib/model"
+import { isAgentKind, type AgentKind } from "@/features/adk-workflows/lib/model"
+import { kindInfo } from "@/features/adk-workflows/lib/catalog"
 
 /*
  * Running an organization's workflows. The admin API keeps each run
@@ -551,7 +548,7 @@ export function stepNameOf(
   const node = doc?.nodes.find((found) => found.id === step.id)
   if (node?.name.trim()) return node.name
   const kind = stepKindOf(step, doc)
-  return kind ? AGENT_KINDS[kind].label : step.id
+  return kind ? kindInfo(kind).label : step.id
 }
 
 /* -------------------------------------------------------------------------- */

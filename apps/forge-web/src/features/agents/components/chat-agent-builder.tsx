@@ -55,9 +55,11 @@ import { Spinner } from "@/components/ui/spinner"
 import { toast } from "@/components/ui/toast"
 import { useMyOrganizations, type MyOrganization } from "@/lib/access"
 import {
+  useNodeCatalogs,
   useOrganizationAgents,
   versionChoices,
 } from "@/features/adk-workflows/lib/api"
+import { NodeCatalogGate } from "@/features/adk-workflows/components/node-catalog-gate"
 import { toApiError } from "@/lib/api/index"
 import {
   cacheChatAgent,
@@ -84,7 +86,7 @@ import {
   type ChatAgentDocument,
 } from "@/features/agents/lib/document"
 import { CHAT_AGENTS_ICON } from "@/features/agents/lib/model"
-import { CHAT_AGENT_JSON_SCHEMA } from "@/features/agents/lib/schema"
+import { chatAgentJsonSchema } from "@/features/agents/lib/schema"
 import { usePageContext } from "@/features/assistant/lib/page-context"
 import { useAgentStepModels } from "@/features/steps/lib/models"
 import { ChatAgentDetails } from "./chat-agent-details"
@@ -133,6 +135,8 @@ export function ChatAgentBuilderPage({
   const organization = myOrganizations.data?.find(
     (t) => t.id === organizationId
   )
+  // Loaded beside the agent: the builder opens on them (NodeCatalogGate).
+  useNodeCatalogs()
   // Always the latest on opening: the builder saves from the revision it starts at.
   const agent = useChatAgent(organizationId, organization ? agentId : undefined)
   const pinned = useChatAgentVersion(organizationId, agentId, version)
@@ -268,17 +272,19 @@ export function ChatAgentBuilderPage({
   // A published version, or the agent for someone who can't change it, is read-only.
   const readOnly = version !== undefined || !record.has_draft || !canManage
   return (
-    <OpenChatAgent
-      key={`${version ?? (record.has_draft ? `draft${record.draft_version}` : `v${record.published_version}`)}:${readOnly}`}
-      organization={organization}
-      record={record}
-      viewing={version}
-      readOnly={readOnly}
-      canManage={canManage}
-      onRecord={(next) =>
-        setRecord((kept) => ({ versions: kept?.versions ?? [], ...next }))
-      }
-    />
+    <NodeCatalogGate>
+      <OpenChatAgent
+        key={`${version ?? (record.has_draft ? `draft${record.draft_version}` : `v${record.published_version}`)}:${readOnly}`}
+        organization={organization}
+        record={record}
+        viewing={version}
+        readOnly={readOnly}
+        canManage={canManage}
+        onRecord={(next) =>
+          setRecord((kept) => ({ versions: kept?.versions ?? [], ...next }))
+        }
+      />
+    </NodeCatalogGate>
   )
 }
 
@@ -428,6 +434,8 @@ function Builder({
   const [publishing, setPublishing] = React.useState(false)
   const [discarding, setDiscarding] = React.useState(false)
   const [testing, setTesting] = React.useState(false)
+  // The format, as the node catalog describes its kinds.
+  const schema = React.useMemo(() => chatAgentJsonSchema(), [])
   const [standalone, setStandalone] = React.useState(false)
   const [problems, setProblems] = React.useState<string[]>([])
   const errors = useChatBuilder(
@@ -651,9 +659,7 @@ function Builder({
                   Discard draft v{record.draft_version}…
                 </DropdownMenuItem>
               )}
-            <DropdownMenuItem
-              onClick={() => downloadJson(CHAT_AGENT_JSON_SCHEMA, SCHEMA_FILE)}
-            >
+            <DropdownMenuItem onClick={() => downloadJson(schema, SCHEMA_FILE)}>
               <Icon icon="download" />
               Download the JSON Schema
             </DropdownMenuItem>
@@ -739,7 +745,7 @@ function Builder({
           <div className="absolute inset-0 bg-background">
             <BuilderJson<ChatAgentDocument>
               format={CHAT_AGENT_FORMAT}
-              schema={CHAT_AGENT_JSON_SCHEMA}
+              schema={schema}
               schemaFileName={SCHEMA_FILE}
               fileName={chatAgentFileName}
               about={

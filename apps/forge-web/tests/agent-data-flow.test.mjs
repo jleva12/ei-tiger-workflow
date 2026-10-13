@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { createServer } from "vite"
+import { installNodeCatalog } from "./node-catalog.mjs"
 
 // How data flows between a workflow's nodes, as the builder types it: what
 // each node is handed and hands on, what its fields complete with, and what
@@ -21,6 +22,7 @@ const { validateAgent } = await load("/src/features/adk-workflows/lib/validate.t
 const { agentTypes } = await load("/src/features/adk-workflows/lib/scope.ts")
 const { checkField, completeField, resolveExpression } = await load("/src/features/steps/lib/expressions.ts")
 const { typeLabel } = await load("/src/features/steps/lib/types.ts")
+await installNodeCatalog(server)
 await server.close()
 
 /** A workflow document from nodes `[id, kind, name, config]` and edges `[source, output, target]`. */

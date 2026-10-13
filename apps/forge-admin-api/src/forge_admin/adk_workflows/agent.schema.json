@@ -106,6 +106,10 @@
             "transform",
             "filter",
             "delay",
+            "git_clone",
+            "git_branch",
+            "git_push",
+            "github_pull_request",
             "if",
             "switch",
             "match",
@@ -351,6 +355,70 @@
             "properties": {
               "config": {
                 "$ref": "#/$defs/config_delay"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "git_clone"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_git_clone"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "git_branch"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_git_branch"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "git_push"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_git_push"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "github_pull_request"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_github_pull_request"
               }
             }
           }
@@ -1410,6 +1478,163 @@
         }
       }
     },
+    "config_git_clone": {
+      "type": "object",
+      "description": "Clones a GitHub repository into the run's folder, on a branch or tag. Clones its repository into a folder of the run's folder (the start must allow a file system), signed in by its credential; hands on {folder, repository, url, branch, commit, cloned} by its success way (cloned false when a run tried again found its clone there). Its error way hands on nothing; steps.<id>.error is {message, exit_code?, stderr?}.",
+      "required": [
+        "repository",
+        "ref",
+        "folder",
+        "depth",
+        "credential",
+        "timeout_seconds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string",
+          "description": "A template: owner/name on GitHub, or the repository's https:// URL (GitHub Enterprise too). No other protocol."
+        },
+        "ref": {
+          "type": "string",
+          "description": "A template: the branch or tag checked out; empty for the repository's default branch."
+        },
+        "folder": {
+          "type": "string",
+          "description": "A template: where it's cloned, a folder of the run's folder (relative, or an absolute path inside it); empty for one named after the repository. One already holding a clone of the repository is kept as it is."
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many of the latest commits it gets; 0 for the whole history."
+        },
+        "credential": {
+          "type": "string",
+          "description": "One of the organization's credentials, by ID: a token for https://github.com, which signs git in. Empty for a public repository."
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "config_git_branch": {
+      "type": "object",
+      "description": "Makes a branch in a cloned repository and checks it out. Makes its branch in the repository in its folder (from start, or what's checked out) and checks it out, or checks it out when it's there; hands on {folder, branch, commit, created} by its success way. Its error way hands on nothing; steps.<id>.error is {message, exit_code?, stderr?}.",
+      "required": [
+        "folder",
+        "branch",
+        "start",
+        "timeout_seconds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "folder": {
+          "type": "string",
+          "description": "A template: the cloned repository's folder in the run's folder (steps.<clone id>.output.folder); empty for the run's folder itself."
+        },
+        "branch": {
+          "type": "string",
+          "description": "A template: the branch's name. One already there is checked out as it is."
+        },
+        "start": {
+          "type": "string",
+          "description": "A template: the branch, tag or commit it starts from; empty for what's checked out."
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "config_git_push": {
+      "type": "object",
+      "description": "Commits what changed in a cloned repository and pushes its branch to GitHub. Commits everything that changed in the repository in its folder (when anything did), by its author with its message, and pushes the branch checked out to origin, signed in by its credential; hands on {folder, repository, branch, commit, committed, files} by its success way. Its error way hands on nothing; steps.<id>.error is {message, exit_code?, stderr?}.",
+      "required": [
+        "folder",
+        "message",
+        "author_name",
+        "author_email",
+        "credential",
+        "timeout_seconds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "folder": {
+          "type": "string",
+          "description": "A template: the cloned repository's folder in the run's folder; empty for the run's folder itself."
+        },
+        "message": {
+          "type": "string",
+          "description": "A template: the commit's message, when anything changed (everything that did is committed)."
+        },
+        "author_name": {
+          "type": "string",
+          "description": "A template: who the commit is by; empty for Forge."
+        },
+        "author_email": {
+          "type": "string",
+          "description": "A template: the author's email; empty for forge@localhost."
+        },
+        "credential": {
+          "type": "string",
+          "description": "One of the organization's credentials, by ID: a token for the repository's host (https://github.com), which signs git in for the push."
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "config_github_pull_request": {
+      "type": "object",
+      "description": "Opens a pull request on GitHub from a branch, and hands on its number and link. Opens a pull request on GitHub from head into base (or the default branch), signed in by its credential; hands on {number, url, title, state, draft, head, base, created} by its success way (created false when one was open for head already, which it hands on). Its error way hands on nothing; steps.<id>.error is {message, status?, body?}.",
+      "required": [
+        "repository",
+        "head",
+        "base",
+        "title",
+        "body",
+        "draft",
+        "credential",
+        "timeout_seconds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string",
+          "description": "A template: owner/name on GitHub, or the repository's https:// URL (GitHub Enterprise's API is under its host's /api/v3)."
+        },
+        "head": {
+          "type": "string",
+          "description": "A template: the branch it merges (owner:branch for a fork's)."
+        },
+        "base": {
+          "type": "string",
+          "description": "A template: the branch it merges into; empty for the repository's default branch."
+        },
+        "title": {
+          "type": "string",
+          "description": "A template: its title."
+        },
+        "body": {
+          "type": "string",
+          "description": "A template: its description (Markdown)."
+        },
+        "draft": {
+          "type": "boolean",
+          "description": "Whether it opens as a draft."
+        },
+        "credential": {
+          "type": "string",
+          "description": "One of the organization's credentials, by ID: a token for https://api.github.com that may open pull requests on the repository."
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
     "config_if": {
       "type": "object",
       "description": "Takes one of two ways, on a condition. Hands on what came into it; steps.<id>.output records the way it took: {branch}.",
@@ -1600,7 +1825,7 @@
     },
     "tool_config_mcp": {
       "type": "object",
-      "description": "A tool: The tools of one of the organization's MCP servers, or one by URL.",
+      "description": "A tool: The tools of a remote MCP server: one of the organization's, or one by URL.",
       "required": [
         "server",
         "transport",
@@ -1659,7 +1884,7 @@
     },
     "tool_config_knowledge_base": {
       "type": "object",
-      "description": "A tool: Searches the organization's knowledge bases for passages.",
+      "description": "A tool: Searches the organization's knowledge bases: the documents uploaded to them, by meaning and by their words.",
       "required": [
         "knowledge_bases",
         "description",
@@ -1828,7 +2053,7 @@
     },
     "tool_config_saved_agent": {
       "type": "object",
-      "description": "A tool: An agent from the Agents page, called as a tool.",
+      "description": "A tool: Another of the organization's agents, whole: handed off to, or called as a tool.",
       "required": [
         "agent"
       ],
@@ -1842,7 +2067,7 @@
     },
     "tool_config_adk_workflow": {
       "type": "object",
-      "description": "A tool: Runs another of the organization's workflows and reads its result.",
+      "description": "A tool: One of the organization's workflows, as a tool: the agent runs it with its input and gets its result.",
       "required": [
         "workflow",
         "version"
@@ -1872,7 +2097,7 @@
     },
     "tool_config_code_execution": {
       "type": "object",
-      "description": "A tool: Runs Python the model writes and reads what it printed.",
+      "description": "A tool: Runs Python the model writes, to calculate or transform data, and answers with what it printed.",
       "required": [
         "confirm"
       ],

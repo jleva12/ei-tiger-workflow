@@ -26,7 +26,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type { AgentDocument } from "@/features/adk-workflows/lib/document"
-import { AGENT_KINDS } from "@/features/adk-workflows/lib/model"
+import { kindInfo } from "@/features/adk-workflows/lib/catalog"
 import { downloadBlob } from "@/features/builder/components/utils"
 import {
   downloadAdkRunFile,
@@ -347,7 +347,7 @@ function EventListPane({
     if (event.step !== step) {
       step = event.step
       const shown = label(step)
-      const info = shown.kind && AGENT_KINDS[shown.kind]
+      const info = shown.kind && kindInfo(shown.kind)
       rows.push(
         <li
           key={`step-${event.seq}`}

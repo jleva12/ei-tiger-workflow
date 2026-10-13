@@ -14,7 +14,6 @@ import {
 } from "@/features/steps/lib/types"
 import { toGraph, type AgentDocument, type AgentGraph } from "./document"
 import {
-  AGENT_KINDS,
   isForgeKind,
   outputsOf,
   subAgentsOf,
@@ -22,6 +21,7 @@ import {
   type AgentStep,
   type SubAgent,
 } from "./model"
+import { kindInfo } from "./catalog"
 
 /*
  * What a node's expressions can read when the graph runs, and the type
@@ -326,7 +326,7 @@ export function agentTypes(graph: AgentGraph, context: TypeContext = {}) {
     input: inputType(graph),
     outputTypeOf: outputTypeOfNode,
     outputsOf,
-    markOf: (step) => AGENT_KINDS[step.kind],
+    markOf: (step) => kindInfo(step.kind),
     roots: [
       { name: "state", type: stateType(graph), detail: "The session's state" },
     ],

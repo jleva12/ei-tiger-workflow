@@ -1,7 +1,7 @@
 """
 The settings of a ``forge.agent/v1`` document's Forge step kinds (the start,
-approval, http, bash, transform, filter, delay, if, switch, match, loop,
-for_each, merge and end, and the Pi agent), as their factories read them
+approval, http, bash, the GitHub steps, transform, filter, delay, if, switch,
+match, loop, for_each, merge and end, and the Pi agent), as their factories read them
 (``graph.factories.base.settings_of``). Keys a kind doesn't know are ignored.
 """
 
@@ -70,6 +70,64 @@ class BashConfig(_Config):
     # Environment variables: each name and its value, a template.
     env: list[Header] = Field(default_factory=list)
     timeout_seconds: float = 300
+
+
+class GitCloneConfig(_Config):
+    """A Clone repository step (``graph.factories.github``)."""
+
+    # A template: owner/name on GitHub, or an https:// URL.
+    repository: str = ""
+    # A template: the branch or tag checked out; empty for the default branch.
+    ref: str = ""
+    # A template: a folder of the run's folder; empty for one named after the repository.
+    folder: str = ""
+    # How many of the latest commits it gets; 0 for the whole history.
+    depth: int = Field(default=0, ge=0)
+    # One of the organization's credentials, by ID: signs git in. Empty for none.
+    credential: str = ""
+    timeout_seconds: float = Field(default=300, gt=0)
+
+
+class GitBranchConfig(_Config):
+    """A Create branch step."""
+
+    # A template: the repository's folder in the run's folder; empty for the run's folder.
+    folder: str = ""
+    # A template: the branch's name.
+    branch: str = ""
+    # A template: where it starts (a branch, tag or commit); empty for what's checked out.
+    start: str = ""
+    timeout_seconds: float = Field(default=60, gt=0)
+
+
+class GitPushConfig(_Config):
+    """A Commit and push step."""
+
+    # A template: the repository's folder in the run's folder; empty for the run's folder.
+    folder: str = ""
+    # A template: the commit's message (when anything changed).
+    message: str = ""
+    # Templates: who commits; empty for Forge.
+    author_name: str = ""
+    author_email: str = ""
+    credential: str = ""
+    timeout_seconds: float = Field(default=300, gt=0)
+
+
+class GithubPullRequestConfig(_Config):
+    """An Open pull request step."""
+
+    # Templates: the repository (owner/name, or its https:// URL), the branch
+    # it merges (or owner:branch from a fork) and the one it merges into
+    # (empty for the repository's default branch), its title and body.
+    repository: str = ""
+    head: str = ""
+    base: str = ""
+    title: str = ""
+    body: str = ""
+    draft: bool = False
+    credential: str = ""
+    timeout_seconds: float = Field(default=30, gt=0)
 
 
 class TransformConfig(_Config):

@@ -49,11 +49,10 @@ import {
 } from "@/features/adk-workflows/lib/fields"
 import { sayType } from "@/features/steps/lib/types"
 import {
-  LLM_TOOL_KINDS,
   newTool,
-  TOOL_KINDS,
   toolsAt,
   updateTools,
+  workflowToolKinds,
 } from "@/features/adk-workflows/lib/tools"
 import {
   ToolFields,
@@ -62,11 +61,11 @@ import {
   type ToolLookups,
 } from "@/features/agents/components/tool-fields"
 import { InstructionWriter } from "@/features/agents/components/instruction-writer"
-import { CHAT_KINDS } from "@/features/agents/lib/model"
+import { FolderPlace } from "@/features/adk-workflows/components/folder-place"
+import { chatKindInfo } from "@/features/agents/lib/catalog"
 import type { ExpressionSetting } from "@/features/steps/lib/fields"
 import {
   adkName,
-  AGENT_KINDS,
   isForgeKind,
   namesIn,
   newSubAgent,
@@ -81,12 +80,14 @@ import {
   type AgentStep,
   type LlmSettings,
   type LlmTool,
+  type LlmToolKind,
   type LoopSettings,
   type PiTool,
   type SubAgent,
   type SubAgentKind,
   type TeamSettings,
 } from "@/features/adk-workflows/lib/model"
+import { kindInfo } from "@/features/adk-workflows/lib/catalog"
 import type { StepData } from "@/features/steps/lib/model"
 import {
   FieldIssuesPrefix,
@@ -582,11 +583,11 @@ function SubAgentList({
                 onClick={() => add(kind)}
                 className="items-start"
               >
-                <KindGlyph info={AGENT_KINDS[kind]} size="sm" />
+                <KindGlyph info={kindInfo(kind)} size="sm" />
                 <span className="flex min-w-0 flex-col">
-                  <span>{AGENT_KINDS[kind].label}</span>
+                  <span>{kindInfo(kind).label}</span>
                   <span className="text-2xs text-muted-foreground">
-                    {AGENT_KINDS[kind].summary}
+                    {kindInfo(kind).summary}
                   </span>
                 </span>
               </DropdownMenuItem>
@@ -632,7 +633,7 @@ function SubAgentRow({
   ]
     .flatMap((a) => whole.under(`agents.${a.id}`))
     .sort((a, b) => (a.level === b.level ? 0 : a.level === "error" ? -1 : 1))
-  const info = AGENT_KINDS[agent.kind]
+  const info = kindInfo(agent.kind)
   const card = agentCard(agent.id)
   return (
     <>
@@ -831,7 +832,7 @@ function ToolList({
 }) {
   const { issues: own, key } = useFieldIssues("tools")
   const openTarget = useOpenTarget()
-  const add = (kind: (typeof LLM_TOOL_KINDS)[number]) => {
+  const add = (kind: LlmToolKind) => {
     const tool = newTool(
       kind,
       tools.map((x) => x.name)
@@ -878,17 +879,17 @@ function ToolList({
         <DropdownMenuContent align="start" className="w-72">
           <DropdownMenuGroup>
             <DropdownMenuLabel>A tool that calls…</DropdownMenuLabel>
-            {LLM_TOOL_KINDS.map((kind) => (
+            {workflowToolKinds().map((kind) => (
               <DropdownMenuItem
                 key={kind}
                 onClick={() => add(kind)}
                 className="items-start"
               >
-                <KindGlyph info={CHAT_KINDS[kind]} size="sm" />
+                <KindGlyph info={chatKindInfo(kind)} size="sm" />
                 <span className="flex min-w-0 flex-col">
-                  <span>{TOOL_KINDS[kind].label}</span>
+                  <span>{chatKindInfo(kind).label}</span>
                   <span className="text-2xs text-muted-foreground">
-                    {TOOL_KINDS[kind].summary}
+                    {chatKindInfo(kind).summary}
                   </span>
                 </span>
               </DropdownMenuItem>
@@ -926,14 +927,14 @@ function ToolRow({
   const lookups = useToolLookups()
   const owner = useAgentName(id, path)
   const openTarget = useOpenTarget()
-  const kind = TOOL_KINDS[tool.kind]
+  const kind = chatKindInfo(tool.kind)
   const card = toolCard(tool.id)
   return (
     <>
       <ItemRow
         field={lookup.key(`tools.${tool.id}`)}
         card={card}
-        glyph={<KindGlyph info={CHAT_KINDS[tool.kind]} size="sm" />}
+        glyph={<KindGlyph info={kind} size="sm" />}
         name={tool.name}
         line={`${kind.label} · ${toolLine(tool, lookups)}`}
         issues={lookup.under(`tools.${tool.id}`)}
@@ -1721,14 +1722,19 @@ function PiAgentFields({ id, config }: Props<"pi_agent">) {
         onChange={(value) => set("folder", value)}
         description={
           <>
-            Where pi works: a folder in the run&apos;s folder, relative to it (
-            {code("backend")}) or starting with {code("{{ state.workspace }}")}.
-            Give each Pi agent of a run its own, e.g.{" "}
-            {code("{{ state.workspace }}/{{ input.repo }}")}. It&apos;s made
-            when it isn&apos;t there; one outside the run&apos;s folder fails
-            the step.
+            Where pi starts, and the folder it works on: a path from the
+            run&apos;s folder ({code("backend")}), or an earlier step&apos;s
+            folder, such as a clone&apos;s. Give each Pi agent of a run its own.
+            It&apos;s made when it isn&apos;t there; one outside the run&apos;s
+            folder fails the step.
           </>
         }
+      />
+      <FolderPlace
+        id={id}
+        value={config.folder}
+        verb="Works in"
+        onChange={(value) => set("folder", value)}
       />
       <Setting
         id={id}

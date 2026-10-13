@@ -6,7 +6,7 @@ import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Kbd } from "@/components/ui/kbd"
 import { Textarea } from "@/components/ui/textarea"
-import { AGENT_LIKE } from "@/features/agents/lib/model"
+import { isAgentLike } from "@/features/agents/lib/model"
 import { formatRelative } from "@/lib/format"
 import { useChatBuilder, useChatBuilderApi } from "./chat-agent-store"
 import { IssueList } from "@/features/builder/components/issue-list"
@@ -64,7 +64,7 @@ export function ChatAgentDetails({ children }: { children?: React.ReactNode }) {
   const nodes = useChatBuilder((s) => s.nodes)
   // Its agents (the chat agent, its sub-agents, saved agents); the rest are tools.
   const agents = nodes.filter(
-    (n) => AGENT_LIKE.has(n.data.kind) || n.data.kind === "saved_agent"
+    (n) => isAgentLike(n.data.kind) || n.data.kind === "saved_agent"
   ).length
   const issues = useChatBuilder((s) => s.issues)
   const api = useChatBuilderApi()

@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { createServer } from "vite"
+import { installNodeCatalog } from "./node-catalog.mjs"
 
 // Use the app's existing TS loader without starting a browser or adding a test runtime.
 const server = await createServer({
@@ -21,6 +22,7 @@ const { newNode, outputsOf } = await server.ssrLoadModule("/src/features/adk-wor
 const tidy = (graph, measure) => AGENT_ADAPTER.tidy(graph, measure)
 const meaningsOf = (graph, id) => AGENT_ADAPTER.meaningsOf(graph, id)
 const loopBodies = (graph) => AGENT_ADAPTER.loopBodies(graph)
+await installNodeCatalog(server)
 await server.close()
 
 // Steps as the canvas draws them: a 64px card, and a 28px row per branch

@@ -8,11 +8,9 @@ import {
   type ChatAgentDocument,
   type ChatAgentGraph,
 } from "./document"
+import { chatKindGroups, servedChatKindInfos, servedChatKinds } from "./catalog"
 import {
   accepts,
-  CHAT_GROUPS,
-  CHAT_KIND_LIST,
-  CHAT_KINDS,
   copyNode,
   HANDS_OFF,
   isChatKind,
@@ -32,10 +30,12 @@ const toneOf = (_step: ChatStep, output: StepOutput): EdgeTone =>
   output.id === HANDS_OFF ? "case-2" : "neutral"
 
 /**
- * What the builder kit needs to build a chat agent: its kinds of node, the
- * one chat agent (no way in), which way out takes which kind (only agents
- * are handed off to), its document, its checks and how it's laid out and
- * drawn. It reads no run data, so a node's scope is nothing.
+ * What the builder kit needs to build a chat agent: its kinds of node (the
+ * node catalog's, read as the kit reads them: it's installed before a
+ * builder opens), the one chat agent (no way in), which way out takes which
+ * kind (only agents are handed off to), its document, its checks and how
+ * it's laid out and drawn. It reads no run data, so a node's scope is
+ * nothing.
  */
 export const CHAT_AGENT_ADAPTER: BuilderAdapter<
   ChatStep,
@@ -43,9 +43,15 @@ export const CHAT_AGENT_ADAPTER: BuilderAdapter<
   ChatAgentValidationContext,
   undefined
 > = {
-  kinds: CHAT_KINDS as Record<string, KindInfo>,
-  kindList: CHAT_KIND_LIST,
-  groups: CHAT_GROUPS,
+  get kinds(): Record<string, KindInfo> {
+    return servedChatKindInfos()
+  },
+  get kindList() {
+    return servedChatKinds()
+  },
+  get groups() {
+    return chatKindGroups()
+  },
   isKind: isChatKind,
   newStep: (kind, steps) => newNode(kind, steps),
   nextStepId: nextNodeId,

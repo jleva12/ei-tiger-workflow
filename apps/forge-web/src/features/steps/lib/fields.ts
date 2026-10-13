@@ -56,6 +56,33 @@ export function expressionSettings(step: StepData): ExpressionSetting[] {
           template(`env.${v.id}`, `Variable ${v.name || "without a name"}`, v.value)
         ),
       ]
+    case "git_clone":
+      return [
+        template("repository", "Repository", step.config.repository),
+        template("ref", "Branch or tag", step.config.ref),
+        template("folder", "Folder", step.config.folder),
+      ]
+    case "git_branch":
+      return [
+        template("folder", "Folder", step.config.folder),
+        template("branch", "Branch", step.config.branch),
+        template("start", "Starts from", step.config.start),
+      ]
+    case "git_push":
+      return [
+        template("folder", "Folder", step.config.folder),
+        template("message", "Commit message", step.config.message),
+        template("author_name", "Author", step.config.author_name),
+        template("author_email", "Author's email", step.config.author_email),
+      ]
+    case "github_pull_request":
+      return [
+        template("repository", "Repository", step.config.repository),
+        template("head", "Branch", step.config.head),
+        template("base", "Into", step.config.base),
+        template("title", "Title", step.config.title),
+        template("body", "Description", step.config.body),
+      ]
     case "transform":
       return [
         { key: "expression", label: "Expression", mode: "expression", text: step.config.expression, check: {} },

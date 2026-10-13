@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { createServer } from "vite"
+import { installNodeCatalog } from "./node-catalog.mjs"
 
 // The agent builder's model without a browser: its document, its checks,
 // what its expressions read, how Tidy up lays it out, and its store.
@@ -42,14 +43,16 @@ const { createBuilderStore, documentOf } = await load(
   "/src/features/builder/components/store.ts"
 )
 const tools = await load("/src/features/adk-workflows/lib/tools.ts")
-const { AGENT_JSON_SCHEMA } = await load(
+const { agentJsonSchema } = await load(
   "/src/features/adk-workflows/lib/schema.ts"
 )
 const files = await load("/src/features/adk-workflows/lib/files.ts")
 const { agentExpressionSettings } = await load(
   "/src/features/adk-workflows/lib/fields.ts"
 )
+const { kindInfo } = await installNodeCatalog(server)
 await server.close()
+const AGENT_JSON_SCHEMA = agentJsonSchema()
 
 const ORG = "org-1"
 const example = () => exampleAgent(ORG)
@@ -872,7 +875,7 @@ test("the JSON Schema knows an LLM agent's settings and its tools'", () => {
   const llm = AGENT_JSON_SCHEMA.$defs.config_llm
   assert.deepEqual(
     Object.keys(llm.properties).sort(),
-    Object.keys(model.AGENT_KINDS.llm.defaults()).sort()
+    Object.keys(kindInfo("llm").defaults()).sort()
   )
   const sub = AGENT_JSON_SCHEMA.$defs.sub_config_llm
   assert.deepEqual(
@@ -940,7 +943,7 @@ test("a start can take files: of the types picked, read back, and listed in the 
   const start = AGENT_JSON_SCHEMA.$defs.config_start
   assert.deepEqual(
     Object.keys(start.properties).sort(),
-    Object.keys(model.AGENT_KINDS.start.defaults()).sort()
+    Object.keys(kindInfo("start").defaults()).sort()
   )
   assert.deepEqual(start.properties.file_types.items.enum, files.FILE_TYPE_IDS)
 })
@@ -1506,7 +1509,7 @@ test("a Pi agent works in a folder of the run's, and hands on what it did", () =
   const schema = AGENT_JSON_SCHEMA.$defs.config_pi_agent
   assert.deepEqual(
     Object.keys(schema.properties).sort(),
-    Object.keys(model.AGENT_KINDS.pi_agent.defaults()).sort()
+    Object.keys(kindInfo("pi_agent").defaults()).sort()
   )
   assert.deepEqual(schema.properties.tools.items.enum, [...model.PI_TOOLS])
   // Tools pi doesn't have are dropped on import, the rest kept in pi's order.

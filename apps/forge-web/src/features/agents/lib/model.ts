@@ -1,31 +1,20 @@
-import {
-  AiBrain01Icon,
-  ApiIcon,
-  BookOpen01Icon,
-  Brain01Icon,
-  ChatBotIcon,
-  CommandLineIcon,
-  Globe02Icon,
-  McpServerIcon,
-  Robot01Icon,
-} from "@hugeicons/core-free-icons"
+import { AiBrain01Icon } from "@hugeicons/core-free-icons"
 
 import type { IconProp } from "@/components/forge/icons"
-import {
-  AGENTS_ICON,
-  adkName,
-  type ModelChoice,
-} from "@/features/adk-workflows/lib/model"
-import type {
-  KindGroup,
-  KindInfo,
-  StepOutput,
-} from "@/features/builder/lib/types"
+import { adkName, type ModelChoice } from "@/features/adk-workflows/lib/model"
+import type { StepOutput } from "@/features/builder/lib/types"
 import type {
   HeaderRow,
   HttpMethod,
   ThinkingLevel,
 } from "@/features/steps/lib/model"
+import {
+  chatKindInfo,
+  chatWaysOut,
+  isAgentLike,
+  isHandedTo,
+  isServedChatKind,
+} from "./catalog"
 
 /*
  * A chat agent, as the Agents page builds it: one Google ADK `LlmAgent`
@@ -35,7 +24,9 @@ import type {
  * execution), and
  * the agents it hands off to (sub-agents it transfers the conversation
  * to, or gives a task). A sub-agent has the same two ways out, so a
- * specialist can have tools of its own.
+ * specialist can have tools of its own. What each kind is called, its ways
+ * out, what can be handed off to and what a new one starts with are the
+ * admin API's node catalog's (`catalog.ts`).
  */
 
 export const CHAT_AGENTS_ICON: IconProp = AiBrain01Icon
@@ -195,189 +186,21 @@ export type ChatStep<K extends ChatKind = ChatKind> = {
 export const TOOLS = "tools"
 export const HANDS_OFF = "agents"
 
-// Named ways of their own: each a row on the agent's card.
-const AGENT_OUTPUTS: StepOutput[] = [
-  { id: TOOLS, label: "Tools", branch: true },
-  { id: HANDS_OFF, label: "Hands off to", branch: true },
-]
+/** Whether a kind is one a chat agent can have now: served, and set up here. */
+export const isChatKind = isServedChatKind
 
-/** The agents: the chat agent and its sub-agents. */
-export const AGENT_LIKE = new Set<ChatKind>(["agent", "sub_agent"])
+export { isAgentLike }
 
-/** What can be handed off to: an agent. */
-const HANDED_TO = new Set<ChatKind>(["sub_agent", "saved_agent"])
-
+/** A node's ways out, as its kind's are served: an agent's two, none for the rest. */
 export function outputsOf(step: ChatStep): StepOutput[] {
-  return AGENT_LIKE.has(step.kind) ? AGENT_OUTPUTS : []
+  return chatWaysOut(step.kind)
 }
 
 /** Whether an agent's way out takes a kind: only agents are handed off to. */
 export function accepts(step: ChatStep, output: string, kind: ChatKind) {
-  if (!AGENT_LIKE.has(step.kind) || kind === "agent") return false
-  return output === HANDS_OFF ? HANDED_TO.has(kind) : output === TOOLS
+  if (!isAgentLike(step.kind) || kind === "agent") return false
+  return output === HANDS_OFF ? isHandedTo(kind) : output === TOOLS
 }
-
-/* -------------------------------------------------------------------------- */
-/* Catalog                                                                    */
-/* -------------------------------------------------------------------------- */
-
-export const CHAT_GROUPS: KindGroup[] = [
-  { id: "agent", label: "The agent" },
-  { id: "agents", label: "Agents" },
-  { id: "tools", label: "Tools" },
-]
-
-type ChatKindInfo<K extends ChatKind> = KindInfo & {
-  defaults: () => ChatConfigs[K]
-}
-
-const agentSettings = (): ChatAgentSettings => ({
-  description: "",
-  instruction: "",
-  model: { provider: "", name: "" },
-  thinking_level: "",
-  max_output_tokens: null,
-  ask_person: false,
-})
-
-export const CHAT_KINDS: { [K in ChatKind]: ChatKindInfo<K> } = {
-  agent: {
-    label: "Chat agent",
-    group: "agent",
-    icon: ChatBotIcon,
-    summary:
-      "The agent people chat with: what it's told, its model, what it can call and who it hands off to.",
-    keywords: "chat agent llm root assistant bot",
-    orb: 0,
-    idPrefix: "agent",
-    defaults: () => ({ ...agentSettings(), state_schema: {} }),
-  },
-  sub_agent: {
-    label: "Sub-agent",
-    group: "agents",
-    icon: Robot01Icon,
-    summary:
-      "Another LLM agent: it takes over when handed off to, does a task and hands back, or is a tool the agent calls.",
-    keywords: "sub agent specialist delegate transfer hand off llm",
-    orb: 2,
-    idPrefix: "sub",
-    defaults: () => ({
-      ...agentSettings(),
-      mode: "chat",
-      disallow_transfer_to_parent: false,
-      disallow_transfer_to_peers: false,
-      include_contents: "default",
-    }),
-  },
-  saved_agent: {
-    label: "Saved agent",
-    group: "agents",
-    icon: CHAT_AGENTS_ICON,
-    summary:
-      "Another of the organization's agents, whole: handed off to, or called as a tool.",
-    keywords: "saved agent reuse other existing",
-    idPrefix: "saved",
-    defaults: () => ({ agent: "" }),
-  },
-  memory: {
-    label: "Memory",
-    group: "tools",
-    icon: Brain01Icon,
-    summary:
-      "Recalls what was said in earlier conversations with the same person.",
-    keywords: "memory remember recall history past conversations",
-    idPrefix: "memory",
-    defaults: () => ({ mode: "on_demand" }),
-  },
-  knowledge_base: {
-    label: "Knowledge base",
-    group: "tools",
-    icon: BookOpen01Icon,
-    summary:
-      "Searches the organization's knowledge bases: the documents uploaded to them, by meaning and by their words.",
-    keywords:
-      "knowledge base documents rag retrieval search vector embeddings files pdf",
-    idPrefix: "knowledge",
-    defaults: () => ({ knowledge_bases: [], description: "", max_results: 5 }),
-  },
-  http_tool: {
-    label: "HTTP tool",
-    group: "tools",
-    icon: Globe02Icon,
-    summary: "Calls an HTTP endpoint with arguments the model fills in.",
-    keywords: "http api rest request endpoint function tool webhook",
-    idPrefix: "http",
-    defaults: () => ({
-      description: "",
-      method: "GET",
-      url: "",
-      query: [],
-      headers: [],
-      body: "",
-      parameters: {},
-      credential: "",
-      confirm: false,
-    }),
-  },
-  openapi: {
-    label: "OpenAPI",
-    group: "tools",
-    icon: ApiIcon,
-    summary: "The operations of an OpenAPI spec, each a tool.",
-    keywords: "openapi swagger spec api rest operations",
-    idPrefix: "openapi",
-    defaults: () => ({
-      source: "url",
-      url: "",
-      spec: "",
-      operations: "",
-      credential: "",
-      confirm: false,
-    }),
-  },
-  mcp: {
-    label: "MCP server",
-    group: "tools",
-    icon: McpServerIcon,
-    summary:
-      "The tools of a remote MCP server: one of the organization's, or one by URL.",
-    keywords: "mcp model context protocol server tools remote oauth",
-    idPrefix: "mcp",
-    defaults: () => ({
-      server: "",
-      transport: "streamable_http",
-      url: "",
-      headers: [],
-      tools: "",
-      confirm: false,
-    }),
-  },
-  adk_workflow: {
-    label: "Workflow",
-    group: "tools",
-    icon: AGENTS_ICON,
-    summary:
-      "One of the organization's workflows, as a tool: the agent runs it with its input and gets its result.",
-    keywords: "adk workflow graph tool run process",
-    idPrefix: "workflow",
-    defaults: () => ({ workflow: "", version: null }),
-  },
-  code_execution: {
-    label: "Code execution",
-    group: "tools",
-    icon: CommandLineIcon,
-    summary:
-      "Runs Python the model writes, to calculate or transform data, and answers with what it printed.",
-    keywords: "code execution python run script calculate interpreter sandbox",
-    idPrefix: "code",
-    defaults: () => ({ confirm: false }),
-  },
-}
-
-export const CHAT_KIND_LIST = Object.keys(CHAT_KINDS) as ChatKind[]
-
-export const isChatKind = (value: unknown): value is ChatKind =>
-  typeof value === "string" && Object.hasOwn(CHAT_KINDS, value)
 
 /* -------------------------------------------------------------------------- */
 /* Nodes                                                                      */
@@ -405,7 +228,7 @@ export function nextNodeId(kind: ChatKind, taken: Iterable<string>) {
   if (kind === "agent" && !used.has("agent")) return "agent"
   for (;;) {
     const random = crypto.getRandomValues(new Uint8Array(5))
-    const id = `${CHAT_KINDS[kind].idPrefix}_${Array.from(random, (b) => ID_ALPHABET[b % ID_ALPHABET.length]).join("")}`
+    const id = `${chatKindInfo(kind).idPrefix}_${Array.from(random, (b) => ID_ALPHABET[b % ID_ALPHABET.length]).join("")}`
     if (!used.has(id)) return id
   }
 }
@@ -416,7 +239,7 @@ export function newNode<K extends ChatKind>(
   steps: ChatStep[] = [],
   name?: string
 ): ChatStep<K> {
-  const info = CHAT_KINDS[kind]
+  const info = chatKindInfo(kind)
   return {
     kind,
     name: uniqueName(

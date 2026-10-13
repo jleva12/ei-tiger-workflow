@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { createServer } from "vite"
+import { installNodeCatalog } from "./node-catalog.mjs"
 
 // Workflows with versions, and outside callers: which version a run ran
 // and how it started, what an example call sends, where each version
@@ -20,6 +21,7 @@ const { sampleInput } = await load("/src/features/adk-workflows/lib/samples.ts")
 const { versionChoices } = await load("/src/features/adk-workflows/lib/api.ts")
 const { expiryOf } = await load("/src/features/api-keys/lib/api.ts")
 const { readSettings } = await load("/src/features/agents/lib/document.ts")
+await installNodeCatalog(server)
 await server.close()
 
 test("a run says which version it ran", () => {

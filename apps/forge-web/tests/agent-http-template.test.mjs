@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { createServer } from "vite"
+import { installNodeCatalog } from "./node-catalog.mjs"
 
 // An HTTP tool's URL and body as templates, read as the runtime reads them
 // (forge_agent_runtime.http_templates): what the model is offered, and an
@@ -22,6 +23,7 @@ const { readSettings } = await load("/src/features/agents/lib/document.ts")
 const { exampleChatAgent } = await load("/src/features/agents/lib/example.ts")
 const { toGraph } = await load("/src/features/agents/lib/document.ts")
 const { validateChatAgent } = await load("/src/features/agents/lib/validate.ts")
+await installNodeCatalog(server)
 await server.close()
 
 const tool = (config) => ({

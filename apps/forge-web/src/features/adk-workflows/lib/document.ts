@@ -13,7 +13,6 @@ import {
   uid,
 } from "@/features/steps/lib/model"
 import {
-  AGENT_KINDS,
   isAgentKind,
   isLlmToolKind,
   isSubAgentKind,
@@ -29,8 +28,10 @@ import {
   type LlmTool,
   type SubAgent,
 } from "./model"
+import { chatKindInfo } from "@/features/agents/lib/catalog"
+import { kindInfo } from "./catalog"
 import { isFileType } from "./files"
-import { TOOL_ID, TOOL_KINDS } from "./tools"
+import { TOOL_ID } from "./tools"
 
 /*
  * An agent as JSON: the ADK graph the admin API builds, and where the
@@ -376,7 +377,7 @@ function readTools(value: unknown, path: string, notes: string[]): LlmTool[] {
     const name =
       typeof item.name === "string" && item.name.trim()
         ? item.name
-        : TOOL_KINDS[item.kind].label
+        : chatKindInfo(item.kind).label
     const config = readChatSettings(
       item.kind,
       item.config,
@@ -430,7 +431,7 @@ function readSubAgents(
     const name =
       typeof item.name === "string" && item.name.trim()
         ? item.name
-        : AGENT_KINDS[kind].label
+        : kindInfo(kind).label
     const config = readSettings(
       kind,
       subAgentDefaults(kind) as Record<string, unknown>,
@@ -533,10 +534,10 @@ export function parseAgent(
       name:
         kind !== "start" && typeof item.name === "string" && item.name.trim()
           ? item.name
-          : AGENT_KINDS[kind].label,
+          : kindInfo(kind).label,
       config: readSettings(
         kind,
-        AGENT_KINDS[kind].defaults() as Record<string, unknown>,
+        kindInfo(kind).defaults() as Record<string, unknown>,
         rawConfig,
         `${at}.config`,
         notes,

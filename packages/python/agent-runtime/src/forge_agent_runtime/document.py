@@ -11,7 +11,9 @@ as documents of their own, by ``"<id>@<version>"``.
 
 :func:`load_document` reads one, fills in settings older documents lack, and
 checks it against the format's JSON Schema (``chat_agent.schema.json``,
-generated from the builder) and the rules ADK builds by.
+generated from the builder) and the rules ADK builds by. Its kinds of node,
+their ways out and their settings' defaults are the node catalog's
+(``catalog``).
 """
 
 from __future__ import annotations
@@ -25,8 +27,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 from jsonschema import Draft202012Validator
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from forge_agent_runtime.catalog import CHAT_NODE_CATALOG
 from forge_agent_runtime.http_templates import upgraded_http_tool
 from forge_agent_runtime.names import RESERVED_NAMES, adk_name
 
@@ -35,74 +38,15 @@ FORMAT: Literal["forge.chat_agent/v1"] = "forge.chat_agent/v1"
 TOOLS = "tools"
 HANDS_OFF = "agents"
 
-Kind = Literal[
-    "agent",
-    "sub_agent",
-    "saved_agent",
-    "adk_workflow",
-    "memory",
-    "knowledge_base",
-    "http_tool",
-    "openapi",
-    "mcp",
-    "code_execution",
-]
-AGENT_LIKE = frozenset({"agent", "sub_agent"})
+#: Every kind of node, by name.
+KINDS = frozenset(kind.kind for kind in CHAT_NODE_CATALOG.kinds)
+#: The agents: the chat agent and its sub-agents, each with the two ways out.
+AGENT_LIKE = frozenset(kind.kind for kind in CHAT_NODE_CATALOG.kinds if kind.outputs)
 #: What can be handed off to: an agent.
-HANDED_TO = frozenset({"sub_agent", "saved_agent"})
-
-_LLM: dict[str, Any] = {
-    "description": "",
-    "instruction": "",
-    "model": {"provider": "", "name": ""},
-    "thinking_level": "",
-    "max_output_tokens": None,
-    "ask_person": False,
-}
+HANDED_TO = frozenset(kind.kind for kind in CHAT_NODE_CATALOG.kinds if kind.handed_to)
 
 #: Each kind's settings with nothing set, as the builder makes a new node's.
-DEFAULTS: dict[str, dict[str, Any]] = {
-    "agent": {**_LLM, "state_schema": {}},
-    "sub_agent": {
-        **_LLM,
-        "mode": "chat",
-        "disallow_transfer_to_parent": False,
-        "disallow_transfer_to_peers": False,
-        "include_contents": "default",
-    },
-    "saved_agent": {"agent": ""},
-    "adk_workflow": {"workflow": "", "version": None},
-    "memory": {"mode": "on_demand"},
-    "knowledge_base": {"knowledge_bases": [], "description": "", "max_results": 5},
-    "http_tool": {
-        "description": "",
-        "method": "GET",
-        "url": "",
-        "query": [],
-        "headers": [],
-        "parameters": {},
-        "body": "",
-        "credential": "",
-        "confirm": False,
-    },
-    "openapi": {
-        "source": "url",
-        "url": "",
-        "spec": "",
-        "operations": "",
-        "credential": "",
-        "confirm": False,
-    },
-    "mcp": {
-        "server": "",
-        "transport": "streamable_http",
-        "url": "",
-        "headers": [],
-        "tools": "",
-        "confirm": False,
-    },
-    "code_execution": {"confirm": False},
-}
+DEFAULTS: dict[str, dict[str, Any]] = {kind.kind: kind.defaults for kind in CHAT_NODE_CATALOG.kinds}
 
 
 class DocumentError(ValueError):
@@ -117,10 +61,17 @@ class Node(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     id: str
-    kind: Kind
+    kind: str
     name: str
     config: dict[str, Any]
     outputs: list[str] = Field(default_factory=list)
+
+    @field_validator("kind")
+    @classmethod
+    def _known(cls, kind: str) -> str:
+        if kind not in KINDS:
+            raise ValueError(f"{kind!r} isn't a kind of node Forge knows")
+        return kind
 
     @property
     def adk_name(self) -> str:

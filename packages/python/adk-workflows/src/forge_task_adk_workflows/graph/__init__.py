@@ -1,12 +1,14 @@
 """
 Agents as Google ADK runs them: a ``forge.agent/v1`` document built into one
 ADK ``Workflow`` whose nodes are ADK's agents and Forge's workflow steps, each
-made by its kind's factory (``factories``), reading and handing on data by
+made by its kind's factory (``factories``) and described, for the builder,
+by the node catalog (``catalog``), reading and handing on data by
 Forge's convention (``data``), holding it to JSON Schemas as Pydantic models
 (``schemas``), with the run's services (``services``) and its pauses for the
 timer (``pauses``).
 """
 
+from forge_task_adk_workflows.graph.catalog import NODE_CATALOG, NodeCatalog
 from forge_task_adk_workflows.graph.data import as_data, data_of
 from forge_task_adk_workflows.graph.errors import AgentBuildError, RunFailed
 from forge_task_adk_workflows.graph.factories import FACTORIES, BuildContext
@@ -21,11 +23,13 @@ __all__ = [
     "DEFAULT_MODEL",
     "FACTORIES",
     "KINDS",
+    "NODE_CATALOG",
     "SUB_AGENT_KINDS",
     "AgentBuildError",
     "AgentGraph",
     "BuildContext",
     "ModelCallbacks",
+    "NodeCatalog",
     "Pause",
     "Resolve",
     "RunFailed",

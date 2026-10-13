@@ -15,7 +15,7 @@ import { stronglyConnected } from "@/features/steps/lib/validate"
 import type { ChatAgentGraph } from "./document"
 import { chatScope, declaredState, stateNameProblem } from "./input"
 import {
-  AGENT_LIKE,
+  isAgentLike,
   HANDS_OFF,
   TOOLS,
   type ChatAgentSettings,
@@ -492,7 +492,7 @@ export function validateChatAgent(
   // Names: ADK calls every agent by its name, once each.
   const holders = new Map<string, string[]>()
   for (const step of graph.steps) {
-    if (!AGENT_LIKE.has(step.data.kind)) continue
+    if (!isAgentLike(step.data.kind)) continue
     const key = adkName(step.data.name)
     if (!key)
       add(
@@ -537,7 +537,7 @@ export function validateChatAgent(
     [...outgoing].map(([id, links]) => [
       id,
       links.filter((l) =>
-        AGENT_LIKE.has(byId.get(l.target)?.data.kind ?? "agent")
+        isAgentLike(byId.get(l.target)?.data.kind ?? "agent")
       ),
     ])
   )
@@ -647,7 +647,7 @@ export function validateChatAgent(
       }
     }
 
-    if (AGENT_LIKE.has(data.kind)) {
+    if (isAgentLike(data.kind)) {
       const attached = out
         .filter((l) => l.output === TOOLS)
         .map((l) => byId.get(l.target)?.data)

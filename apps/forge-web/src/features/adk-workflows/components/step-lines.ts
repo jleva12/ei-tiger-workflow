@@ -1,4 +1,6 @@
 import type { NodeSummary } from "@/features/builder/components/ui"
+import { placeLabel, placeOf } from "@/features/adk-workflows/lib/folders"
+import type { AgentStep } from "@/features/adk-workflows/lib/model"
 import type { StepData } from "@/features/steps/lib/model"
 
 /*
@@ -29,6 +31,24 @@ export function stepDetail(step: StepData): string {
       return step.config.cwd.trim()
         ? `In ${step.config.cwd.trim()}`
         : "In the run's folder"
+    case "git_clone": {
+      const ref = step.config.ref.trim()
+      const depth = step.config.depth
+      const into = placeLabel(
+        placeOf(step.config.folder, step as AgentStep, new Map())
+      )
+      return `Into ${into} · ${ref ? `on ${ref}` : "default branch"}${depth > 0 ? ` · last ${plural(depth, "commit")}` : ""}`
+    }
+    case "git_branch":
+      return step.config.start.trim()
+        ? `From ${step.config.start.trim()}`
+        : "From what's checked out"
+    case "git_push":
+      return step.config.folder.trim()
+        ? `In ${step.config.folder.trim()}`
+        : "In the run's folder"
+    case "github_pull_request":
+      return `${step.config.base.trim() ? `Into ${step.config.base.trim()}` : "Into the default branch"}${step.config.draft ? " · draft" : ""}`
     case "transform":
       return Object.keys(step.config.output_schema).length
         ? "JSONata, declared output"
@@ -76,6 +96,22 @@ export function stepSummary(step: StepData): NodeSummary | null {
     case "transform":
       return step.config.expression.trim()
         ? { code: firstLine(step.config.expression) }
+        : null
+    case "git_clone":
+      return step.config.repository.trim()
+        ? { code: step.config.repository.trim() }
+        : null
+    case "git_branch":
+      return step.config.branch.trim()
+        ? { code: step.config.branch.trim() }
+        : null
+    case "git_push":
+      return step.config.message.trim()
+        ? { text: firstLine(step.config.message) }
+        : null
+    case "github_pull_request":
+      return step.config.title.trim()
+        ? { text: step.config.title.trim() }
         : null
     case "filter":
       return step.config.condition.trim()

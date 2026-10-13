@@ -19,8 +19,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
+from forge_agent_runtime.document import KINDS
 from forge_agent_runtime.names import adk_name
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,17 +30,18 @@ from forge_admin.models.knowledge import SYSTEM
 
 logger = logging.getLogger(__name__)
 
-ToolKind = Literal[
-    "memory",
-    "knowledge_base",
-    "http_tool",
-    "openapi",
-    "mcp",
-    "saved_agent",
-    "adk_workflow",
-    "code_execution",
-    "sub_agent",
-]
+#: What an agent can call: any kind on the Agents canvas but the chat agent
+#: (a sub-agent too, as a tool).
+TOOL_KINDS = KINDS - {"agent"}
+
+
+def _tool_kind(kind: str) -> str:
+    if kind not in TOOL_KINDS:
+        raise ValueError(f"{kind!r} isn't a kind of tool Forge knows")
+    return kind
+
+
+ToolKind = Annotated[str, AfterValidator(_tool_kind)]
 
 Short = Annotated[str, StringConstraints(max_length=200)]
 Text = Annotated[str, StringConstraints(max_length=4_000)]

@@ -73,6 +73,7 @@ import {
   saveAgent,
   useAgentLifecycle,
   useAgentVersion,
+  useNodeCatalogs,
   useOrganizationAgents,
   versionChoices,
   type AgentDetail,
@@ -95,7 +96,7 @@ import {
   useOrganizationChatAgents,
 } from "@/features/agents/lib/api"
 import type { AdkRun } from "@/features/runs/lib/runs"
-import { AGENT_JSON_SCHEMA } from "@/features/adk-workflows/lib/schema"
+import { agentJsonSchema } from "@/features/adk-workflows/lib/schema"
 import { toApiError } from "@/lib/api/index"
 import { useScopeAccess } from "@/lib/hierarchy"
 import { usePageContext } from "@/features/assistant/lib/page-context"
@@ -115,6 +116,7 @@ import {
   type ChatAgentChoice,
 } from "./agent-store"
 import { AGENT_UI } from "./agent-ui"
+import { NodeCatalogGate } from "./node-catalog-gate"
 
 const NOUNS = { doc: "Workflow", steps: "nodes" }
 
@@ -140,6 +142,8 @@ export function AgentBuilderPage({
   const organization = myOrganizations.data?.find(
     (t) => t.id === organizationId
   )
+  // Loaded beside the workflow: the builder opens on them (NodeCatalogGate).
+  useNodeCatalogs()
   // Always the latest on opening: the builder saves from the revision it starts at.
   const agent = organizationAgents
     .scope({ organizationId })
@@ -281,17 +285,19 @@ export function AgentBuilderPage({
   // A published version, or the workflow for someone who can't change it, is read-only.
   const readOnly = version !== undefined || !record.has_draft || !canManage
   return (
-    <OpenAgent
-      key={`${version ?? (record.has_draft ? `draft${record.draft_version}` : `v${record.published_version}`)}:${readOnly}`}
-      organization={organization}
-      record={record}
-      viewing={version}
-      readOnly={readOnly}
-      canManage={canManage}
-      onRecord={(next) =>
-        setRecord((kept) => ({ versions: kept?.versions ?? [], ...next }))
-      }
-    />
+    <NodeCatalogGate>
+      <OpenAgent
+        key={`${version ?? (record.has_draft ? `draft${record.draft_version}` : `v${record.published_version}`)}:${readOnly}`}
+        organization={organization}
+        record={record}
+        viewing={version}
+        readOnly={readOnly}
+        canManage={canManage}
+        onRecord={(next) =>
+          setRecord((kept) => ({ versions: kept?.versions ?? [], ...next }))
+        }
+      />
+    </NodeCatalogGate>
   )
 }
 
@@ -457,6 +463,8 @@ function Builder({
   const details = useAgentBuilder((s) => s.details)
   const [importing, setImporting] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
+  // The format, as the node catalog describes its kinds.
+  const schema = React.useMemo(() => agentJsonSchema(), [])
   const [publishing, setPublishing] = React.useState(false)
   const [discarding, setDiscarding] = React.useState(false)
   const [problems, setProblems] = React.useState<string[]>([])
@@ -715,9 +723,7 @@ function Builder({
                 </DropdownMenuItem>
               )}
             <DropdownMenuItem
-              onClick={() =>
-                downloadJson(AGENT_JSON_SCHEMA, "forge-agent.schema.json")
-              }
+              onClick={() => downloadJson(schema, "forge-agent.schema.json")}
             >
               <Icon icon="download" />
               Download the JSON Schema
@@ -853,7 +859,7 @@ function Builder({
           <div className="absolute inset-0 bg-background">
             <BuilderJson<AgentDocument>
               format={AGENT_FORMAT}
-              schema={AGENT_JSON_SCHEMA}
+              schema={schema}
               schemaFileName="forge-agent.schema.json"
               fileName={agentFileName}
               about={

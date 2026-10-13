@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { createServer } from "vite"
+import { installNodeCatalog } from "./node-catalog.mjs"
 
 // A workflow's Bash step: a command run as it's written, in a folder of
 // the run's own, reading the run's data from its environment variables.
@@ -32,10 +33,12 @@ const { expressionSetting, settingScope } = await load(
 )
 const { leavesRunFolder } = await load("/src/features/steps/lib/validate.ts")
 const { typeLabel } = await load("/src/features/steps/lib/types.ts")
-const { AGENT_JSON_SCHEMA } = await load(
+const { agentJsonSchema } = await load(
   "/src/features/adk-workflows/lib/schema.ts"
 )
+const { kindInfo } = await installNodeCatalog(server)
 await server.close()
+const AGENT_JSON_SCHEMA = agentJsonSchema()
 
 const ORG = "org-1"
 
@@ -100,8 +103,8 @@ function cloning(config = {}, { fileSystem = true } = {}) {
 const issuesOf = (doc) => validateAgent(toGraph(doc)).map((i) => i.id)
 
 test("a Bash step is an action with a Success and an Error way, and goes to a document and back", () => {
-  assert.equal(model.AGENT_KINDS.bash.group, "actions")
-  assert.deepEqual(model.AGENT_KINDS.bash.defaults(), {
+  assert.equal(kindInfo("bash").group, "actions")
+  assert.deepEqual(kindInfo("bash").defaults(), {
     command: "",
     cwd: "",
     env: [],
@@ -128,7 +131,7 @@ test("the JSON Schema knows a Bash step's settings", () => {
   const config = AGENT_JSON_SCHEMA.$defs.config_bash
   assert.deepEqual(
     Object.keys(config.properties).sort(),
-    Object.keys(model.AGENT_KINDS.bash.defaults()).sort()
+    Object.keys(kindInfo("bash").defaults()).sort()
   )
   assert.match(
     config.properties.command.description,

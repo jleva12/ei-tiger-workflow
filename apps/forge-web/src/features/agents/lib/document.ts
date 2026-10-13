@@ -9,7 +9,6 @@ import { readList } from "@/features/steps/lib/document"
 import { HTTP_METHODS, THINKING_LEVELS } from "@/features/steps/lib/model"
 import {
   accepts,
-  CHAT_KINDS,
   isChatKind,
   newNode,
   NODE_ID_PATTERN,
@@ -18,6 +17,7 @@ import {
   type ChatKind,
   type ChatStep,
 } from "./model"
+import { chatKindInfo } from "./catalog"
 
 /*
  * A chat agent as JSON: the agent, what's attached to it, and where the
@@ -217,7 +217,7 @@ export function readSettings(
   at: string,
   notes: string[]
 ): Record<string, unknown> {
-  const defaults = CHAT_KINDS[kind].defaults() as Record<string, unknown>
+  const defaults = chatKindInfo(kind).defaults() as Record<string, unknown>
   if (raw === undefined) return defaults
   if (!isRecord(raw)) {
     notes.push(`${at} isn't an object; it has its defaults.`)
@@ -341,7 +341,7 @@ export function parseChatAgent(
       name:
         typeof item.name === "string" && item.name.trim()
           ? item.name
-          : CHAT_KINDS[kind].label,
+          : chatKindInfo(kind).label,
       config: readSettings(kind, item.config, `${at}.config`, notes),
     } as ChatStep
     const node = {

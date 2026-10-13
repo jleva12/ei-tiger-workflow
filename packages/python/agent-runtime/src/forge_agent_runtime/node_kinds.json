@@ -1,0 +1,179 @@
+{
+  "groups": [
+    { "id": "agent", "label": "The agent" },
+    { "id": "agents", "label": "Agents" },
+    { "id": "tools", "label": "Tools" }
+  ],
+  "kinds": [
+    {
+      "kind": "agent",
+      "label": "Chat agent",
+      "group": "agent",
+      "icon": "chat-bot",
+      "summary": "The agent people chat with: what it's told, its model, what it can call and who it hands off to.",
+      "keywords": "chat agent llm root assistant bot",
+      "id_prefix": "agent",
+      "orb": 0,
+      "outputs": [
+        { "id": "tools", "label": "Tools", "branch": true },
+        { "id": "agents", "label": "Hands off to", "branch": true }
+      ],
+      "defaults": {
+        "description": "",
+        "instruction": "",
+        "model": { "provider": "", "name": "" },
+        "thinking_level": "",
+        "max_output_tokens": null,
+        "ask_person": false,
+        "state_schema": {}
+      }
+    },
+    {
+      "kind": "sub_agent",
+      "label": "Sub-agent",
+      "group": "agents",
+      "icon": "robot-01",
+      "summary": "Another LLM agent: it takes over when handed off to, does a task and hands back, or is a tool the agent calls.",
+      "keywords": "sub agent specialist delegate transfer hand off llm",
+      "id_prefix": "sub",
+      "orb": 2,
+      "outputs": [
+        { "id": "tools", "label": "Tools", "branch": true },
+        { "id": "agents", "label": "Hands off to", "branch": true }
+      ],
+      "handed_to": true,
+      "defaults": {
+        "description": "",
+        "instruction": "",
+        "model": { "provider": "", "name": "" },
+        "thinking_level": "",
+        "max_output_tokens": null,
+        "ask_person": false,
+        "mode": "chat",
+        "disallow_transfer_to_parent": false,
+        "disallow_transfer_to_peers": false,
+        "include_contents": "default"
+      }
+    },
+    {
+      "kind": "saved_agent",
+      "label": "Saved agent",
+      "group": "agents",
+      "icon": "ai-brain-01",
+      "summary": "Another of the organization's agents, whole: handed off to, or called as a tool.",
+      "keywords": "saved agent reuse other existing",
+      "id_prefix": "saved",
+      "outputs": [],
+      "handed_to": true,
+      "workflow_tool": true,
+      "defaults": { "agent": "" }
+    },
+    {
+      "kind": "memory",
+      "label": "Memory",
+      "group": "tools",
+      "icon": "brain-01",
+      "summary": "Recalls what was said in earlier conversations with the same person.",
+      "keywords": "memory remember recall history past conversations",
+      "id_prefix": "memory",
+      "outputs": [],
+      "defaults": { "mode": "on_demand" }
+    },
+    {
+      "kind": "knowledge_base",
+      "label": "Knowledge base",
+      "group": "tools",
+      "icon": "book-open-01",
+      "summary": "Searches the organization's knowledge bases: the documents uploaded to them, by meaning and by their words.",
+      "keywords": "knowledge base documents rag retrieval search vector embeddings files pdf",
+      "id_prefix": "knowledge",
+      "outputs": [],
+      "workflow_tool": true,
+      "defaults": { "knowledge_bases": [], "description": "", "max_results": 5 }
+    },
+    {
+      "kind": "http_tool",
+      "label": "HTTP tool",
+      "group": "tools",
+      "icon": "globe-02",
+      "summary": "Calls an HTTP endpoint with arguments the model fills in.",
+      "keywords": "http api rest request endpoint function tool webhook",
+      "id_prefix": "http",
+      "outputs": [],
+      "workflow_tool": true,
+      "defaults": {
+        "description": "",
+        "method": "GET",
+        "url": "",
+        "query": [],
+        "headers": [],
+        "body": "",
+        "parameters": {},
+        "credential": "",
+        "confirm": false
+      }
+    },
+    {
+      "kind": "openapi",
+      "label": "OpenAPI",
+      "group": "tools",
+      "icon": "api",
+      "summary": "The operations of an OpenAPI spec, each a tool.",
+      "keywords": "openapi swagger spec api rest operations",
+      "id_prefix": "openapi",
+      "outputs": [],
+      "workflow_tool": true,
+      "defaults": {
+        "source": "url",
+        "url": "",
+        "spec": "",
+        "operations": "",
+        "credential": "",
+        "confirm": false
+      }
+    },
+    {
+      "kind": "mcp",
+      "label": "MCP server",
+      "group": "tools",
+      "icon": "mcp-server",
+      "summary": "The tools of a remote MCP server: one of the organization's, or one by URL.",
+      "keywords": "mcp model context protocol server tools remote oauth",
+      "id_prefix": "mcp",
+      "outputs": [],
+      "workflow_tool": true,
+      "defaults": {
+        "server": "",
+        "transport": "streamable_http",
+        "url": "",
+        "headers": [],
+        "tools": "",
+        "confirm": false
+      }
+    },
+    {
+      "kind": "adk_workflow",
+      "label": "Workflow",
+      "group": "tools",
+      "icon": "flow-square",
+      "summary": "One of the organization's workflows, as a tool: the agent runs it with its input and gets its result.",
+      "keywords": "adk workflow graph tool run process",
+      "id_prefix": "workflow",
+      "outputs": [],
+      "workflow_tool": true,
+      "defaults": { "workflow": "", "version": null }
+    },
+    {
+      "kind": "code_execution",
+      "label": "Code execution",
+      "group": "tools",
+      "icon": "command-line",
+      "summary": "Runs Python the model writes, to calculate or transform data, and answers with what it printed.",
+      "keywords": "code execution python run script calculate interpreter sandbox",
+      "id_prefix": "code",
+      "outputs": [],
+      "workflow_tool": true,
+      "defaults": { "confirm": false }
+    }
+  ]
+}

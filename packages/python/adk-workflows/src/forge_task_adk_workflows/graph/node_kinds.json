@@ -1,0 +1,404 @@
+{
+  "groups": [
+    { "id": "start", "label": "Start" },
+    { "id": "agents", "label": "Agents" },
+    { "id": "people", "label": "People" },
+    { "id": "actions", "label": "Actions" },
+    { "id": "github", "label": "GitHub" },
+    { "id": "logic", "label": "Logic" },
+    { "id": "finish", "label": "Finish" }
+  ],
+  "kinds": [
+    {
+      "kind": "start",
+      "label": "Start",
+      "group": "start",
+      "icon": "play",
+      "summary": "Where every run starts: what the person or system sends in.",
+      "keywords": "start input begin entry",
+      "id_prefix": "start",
+      "terminal": true,
+      "outputs": [{ "id": "next", "label": "Next" }],
+      "defaults": {
+        "input_schema": {},
+        "allow_files": false,
+        "file_types": [],
+        "allow_file_system": false,
+        "start_over": false
+      }
+    },
+    {
+      "kind": "llm",
+      "label": "LLM agent",
+      "group": "agents",
+      "icon": "robot-01",
+      "summary": "A model works on what comes in with your instruction, and can hand off to its sub-agents.",
+      "keywords": "llm ai model agent prompt instruction gemini delegate transfer",
+      "id_prefix": "agent",
+      "orb": 0,
+      "outputs": [{ "id": "next", "label": "Next" }],
+      "defaults": {
+        "description": "",
+        "instruction": "",
+        "model": { "provider": "", "name": "" },
+        "thinking_level": "",
+        "output_schema": {},
+        "include_contents": "default",
+        "disallow_transfer_to_parent": false,
+        "disallow_transfer_to_peers": false,
+        "max_output_tokens": null,
+        "sub_agents": [],
+        "tools": [],
+        "mode": "single_turn",
+        "source": "inline",
+        "agent": "",
+        "version": null,
+        "message": "",
+        "inputs": {}
+      }
+    },
+    {
+      "kind": "sequential",
+      "label": "Sequential agent",
+      "group": "agents",
+      "icon": "left-to-right-list-number",
+      "summary": "Runs its sub-agents one after another, each seeing what the last did.",
+      "keywords": "sequence pipeline chain steps order team",
+      "id_prefix": "sequential",
+      "outputs": [{ "id": "next", "label": "Next" }],
+      "defaults": { "description": "", "sub_agents": [] }
+    },
+    {
+      "kind": "parallel",
+      "label": "Parallel agent",
+      "group": "agents",
+      "icon": "distribution",
+      "summary": "Runs its sub-agents at the same time, each on its own.",
+      "keywords": "parallel concurrent fan out together team",
+      "id_prefix": "parallel",
+      "outputs": [{ "id": "next", "label": "Next" }],
+      "defaults": { "description": "", "sub_agents": [] }
+    },
+    {
+      "kind": "loop_agent",
+      "label": "Loop agent",
+      "group": "agents",
+      "icon": "repeat",
+      "summary": "Runs its sub-agents in order, again and again, up to a number of passes.",
+      "keywords": "loop repeat iterate refine critique team agent",
+      "id_prefix": "loop_agent",
+      "outputs": [{ "id": "next", "label": "Next" }],
+      "defaults": { "description": "", "sub_agents": [], "max_iterations": 3 }
+    },
+    {
+      "kind": "saved",
+      "label": "Saved workflow",
+      "group": "agents",
+      "icon": "flow-square",
+      "summary": "Runs another of the organization's workflows here, whole.",
+      "keywords": "saved nested reuse subgraph workflow compose other agent",
+      "id_prefix": "saved",
+      "outputs": [{ "id": "next", "label": "Next" }],
+      "defaults": { "agent": "", "version": null, "inputs": {} }
+    },
+    {
+      "kind": "pi_agent",
+      "label": "Pi agent",
+      "group": "agents",
+      "icon": "ai-programming",
+      "summary": "Pi, a coding agent, works in a folder of the run's: reads, searches and, if allowed, runs commands and changes files.",
+      "keywords": "pi coding agent code explore repository files folder bash shell git clone grep",
+      "id_prefix": "pi",
+      "outputs": [{ "id": "next", "label": "Next" }],
+      "defaults": {
+        "folder": "",
+        "prompt": "",
+        "instruction": "",
+        "tools": ["read", "grep", "find", "ls"],
+        "model": { "provider": "", "name": "" },
+        "thinking_level": "",
+        "output_schema": {},
+        "context_files": false,
+        "timeout_seconds": 600
+      }
+    },
+    {
+      "kind": "approval",
+      "label": "Approval",
+      "group": "people",
+      "icon": "user-check-01",
+      "summary": "The run waits for a person to approve or reject.",
+      "keywords": "human review person approve reject handoff sign off",
+      "id_prefix": "approval",
+      "person": true,
+      "outputs": [
+        { "id": "approved", "label": "Approved", "branch": true },
+        { "id": "rejected", "label": "Rejected", "branch": true, "fallback": true }
+      ],
+      "defaults": { "message": "", "approvers": "org:admin", "timeout_hours": 0 }
+    },
+    {
+      "kind": "human_input",
+      "label": "Human input",
+      "group": "people",
+      "icon": "user-question-01",
+      "summary": "Pauses for a person to answer; their answer is what it hands on.",
+      "keywords": "human person input ask question approve pause review",
+      "id_prefix": "human_input",
+      "person": true,
+      "outputs": [{ "id": "next", "label": "Next" }],
+      "defaults": { "message": "", "response_schema": {} }
+    },
+    {
+      "kind": "http",
+      "label": "HTTP request",
+      "group": "actions",
+      "icon": "globe-02",
+      "summary": "Calls a URL and hands on the response.",
+      "keywords": "api rest fetch call url post get webhook",
+      "id_prefix": "http",
+      "outputs": [
+        { "id": "success", "label": "Success", "branch": true },
+        { "id": "error", "label": "Error", "branch": true, "fallback": true }
+      ],
+      "defaults": {
+        "method": "GET",
+        "url": "",
+        "query": [],
+        "headers": [],
+        "body": "",
+        "timeout_seconds": 30,
+        "retries": 0,
+        "output_schema": {},
+        "credential": ""
+      }
+    },
+    {
+      "kind": "bash",
+      "label": "Bash",
+      "group": "actions",
+      "icon": "command-line",
+      "summary": "Runs a shell command in the run's folder and hands on its output.",
+      "keywords": "bash shell command terminal script cli run git gh clone repository npm make",
+      "id_prefix": "bash",
+      "outputs": [
+        { "id": "success", "label": "Success", "branch": true },
+        { "id": "error", "label": "Error", "branch": true, "fallback": true }
+      ],
+      "defaults": { "command": "", "cwd": "", "env": [], "timeout_seconds": 300 }
+    },
+    {
+      "kind": "transform",
+      "label": "Transform",
+      "group": "actions",
+      "icon": "function",
+      "summary": "Reshapes data with a JSONata expression.",
+      "keywords": "map reshape jsonata expression object data",
+      "id_prefix": "transform",
+      "outputs": [{ "id": "next", "label": "Next" }],
+      "defaults": { "expression": "", "output_schema": {} }
+    },
+    {
+      "kind": "filter",
+      "label": "Filter",
+      "group": "actions",
+      "icon": "filter",
+      "summary": "Keeps the items of a list its condition holds for.",
+      "keywords": "filter where keep select drop list array items condition",
+      "id_prefix": "filter",
+      "outputs": [{ "id": "next", "label": "Next" }],
+      "defaults": { "items": "", "item_name": "item", "condition": "" }
+    },
+    {
+      "kind": "delay",
+      "label": "Delay",
+      "group": "actions",
+      "icon": "hourglass",
+      "summary": "Waits a while before going on.",
+      "keywords": "wait sleep pause timer",
+      "id_prefix": "delay",
+      "outputs": [{ "id": "next", "label": "Next" }],
+      "defaults": { "amount": 5, "unit": "minutes" }
+    },
+    {
+      "kind": "git_clone",
+      "label": "Clone repository",
+      "group": "github",
+      "icon": "github",
+      "summary": "Clones a GitHub repository into the run's folder, on a branch or tag.",
+      "keywords": "github git clone checkout repository repo download source code",
+      "id_prefix": "clone",
+      "outputs": [
+        { "id": "success", "label": "Success", "branch": true },
+        { "id": "error", "label": "Error", "branch": true, "fallback": true }
+      ],
+      "defaults": {
+        "repository": "",
+        "ref": "",
+        "folder": "",
+        "depth": 0,
+        "credential": "",
+        "timeout_seconds": 300
+      }
+    },
+    {
+      "kind": "git_branch",
+      "label": "Create branch",
+      "group": "github",
+      "icon": "git-branch-plus",
+      "summary": "Makes a branch in a cloned repository and checks it out.",
+      "keywords": "github git branch create checkout switch new",
+      "id_prefix": "branch",
+      "outputs": [
+        { "id": "success", "label": "Success", "branch": true },
+        { "id": "error", "label": "Error", "branch": true, "fallback": true }
+      ],
+      "defaults": { "folder": "", "branch": "", "start": "", "timeout_seconds": 60 }
+    },
+    {
+      "kind": "git_push",
+      "label": "Commit and push",
+      "group": "github",
+      "icon": "git-commit",
+      "summary": "Commits what changed in a cloned repository and pushes its branch to GitHub.",
+      "keywords": "github git commit push upload save changes branch",
+      "id_prefix": "push",
+      "outputs": [
+        { "id": "success", "label": "Success", "branch": true },
+        { "id": "error", "label": "Error", "branch": true, "fallback": true }
+      ],
+      "defaults": {
+        "folder": "",
+        "message": "",
+        "author_name": "",
+        "author_email": "",
+        "credential": "",
+        "timeout_seconds": 300
+      }
+    },
+    {
+      "kind": "github_pull_request",
+      "label": "Open pull request",
+      "group": "github",
+      "icon": "git-pull-request-create",
+      "summary": "Opens a pull request on GitHub from a branch, and hands on its number and link.",
+      "keywords": "github pull request pr merge review open create",
+      "id_prefix": "pull_request",
+      "outputs": [
+        { "id": "success", "label": "Success", "branch": true },
+        { "id": "error", "label": "Error", "branch": true, "fallback": true }
+      ],
+      "defaults": {
+        "repository": "",
+        "head": "",
+        "base": "",
+        "title": "",
+        "body": "",
+        "draft": false,
+        "credential": "",
+        "timeout_seconds": 30
+      }
+    },
+    {
+      "kind": "if",
+      "label": "If / else",
+      "group": "logic",
+      "icon": "git-fork",
+      "summary": "Takes one of two ways, on a condition.",
+      "keywords": "condition branch boolean true false",
+      "id_prefix": "if",
+      "outputs": [
+        { "id": "true", "label": "True", "branch": true },
+        { "id": "false", "label": "False", "branch": true, "fallback": true }
+      ],
+      "defaults": { "condition": "" }
+    },
+    {
+      "kind": "switch",
+      "label": "Switch",
+      "group": "logic",
+      "icon": "route-02",
+      "summary": "Routes on one value: to the case it equals.",
+      "keywords": "case value equals enum route branch",
+      "id_prefix": "switch",
+      "rows": { "setting": "cases", "label": "value", "empty": "Empty value" },
+      "outputs": [{ "id": "default", "label": "Default", "branch": true, "fallback": true }],
+      "defaults": {
+        "value": "",
+        "cases": [
+          { "id": "case_1", "value": "" },
+          { "id": "case_2", "value": "" }
+        ]
+      }
+    },
+    {
+      "kind": "match",
+      "label": "Match",
+      "group": "logic",
+      "icon": "left-to-right-list-bullet",
+      "summary": "Routes to the first rule whose condition holds, or to every one.",
+      "keywords": "pattern rules guard first condition route all every fan out",
+      "id_prefix": "match",
+      "rows": { "setting": "arms", "label": "label", "empty": "Rule {n}" },
+      "outputs": [{ "id": "otherwise", "label": "Otherwise", "branch": true, "fallback": true }],
+      "defaults": {
+        "arms": [
+          { "id": "rule_1", "label": "", "condition": "" },
+          { "id": "rule_2", "label": "", "condition": "" }
+        ],
+        "mode": "first"
+      }
+    },
+    {
+      "kind": "loop",
+      "label": "Loop",
+      "group": "logic",
+      "icon": "repeat",
+      "summary": "Runs its body once for each item in a list, collecting what each hands back.",
+      "keywords": "for each iterate repeat list items collect results map",
+      "id_prefix": "loop",
+      "outputs": [
+        { "id": "each", "label": "Each item", "branch": true, "body": true },
+        { "id": "done", "label": "Done", "branch": true }
+      ],
+      "defaults": { "items": "", "item_name": "item", "max_iterations": 100, "concurrency": 1 }
+    },
+    {
+      "kind": "for_each",
+      "label": "For each",
+      "group": "logic",
+      "icon": "arrow-right-double",
+      "summary": "Runs its steps once for each item in a list; nothing comes back to it.",
+      "keywords": "for each foreach iterate list items every fan out process",
+      "id_prefix": "for_each",
+      "outputs": [
+        { "id": "each", "label": "Each item", "branch": true, "body": true },
+        { "id": "done", "label": "Done", "branch": true }
+      ],
+      "defaults": { "items": "", "item_name": "item", "max_iterations": 100, "concurrency": 1 }
+    },
+    {
+      "kind": "merge",
+      "label": "Merge",
+      "group": "logic",
+      "icon": "git-merge",
+      "summary": "Waits for the ways coming into it, then goes on as one.",
+      "keywords": "join wait parallel combine",
+      "id_prefix": "merge",
+      "outputs": [{ "id": "next", "label": "Next" }],
+      "defaults": { "mode": "all" }
+    },
+    {
+      "kind": "end",
+      "label": "End",
+      "group": "finish",
+      "icon": "flag-02",
+      "summary": "Finishes the run, as succeeded or failed, with a result.",
+      "keywords": "finish stop return result output fail",
+      "id_prefix": "end",
+      "terminal": true,
+      "outputs": [],
+      "defaults": { "outcome": "succeeded", "result": "" }
+    }
+  ]
+}
