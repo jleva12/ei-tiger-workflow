@@ -1,30 +1,11 @@
-import {
-  ArrowRightDoubleIcon,
-  CommandLineIcon,
-  FilterIcon,
-  Flag02Icon,
-  FunctionIcon,
-  GitForkIcon,
-  GitMergeIcon,
-  Globe02Icon,
-  HourglassIcon,
-  LeftToRightListBulletIcon,
-  RepeatIcon,
-  Route02Icon,
-  UserCheck01Icon,
-} from "@hugeicons/core-free-icons"
-
-import type { IconProp } from "@/components/forge/icons"
-import type { StepOutput } from "@/features/builder/lib/types"
-
 /*
  * The steps a workflow takes beside its agents: a person approving,
  * actions (an HTTP request, a Bash command, a transform, a filter, a
  * delay), logic (if, switch, match, loop, for each, merge) and its ends.
- * Each is a kind from the catalog below,
- * with that kind's settings (`config`) and the outputs it can leave by:
- * one `next` for most, a named output per branch for the logic steps.
- * adk-workflows/lib builds its node kinds on these.
+ * Each has its kind's settings (`config`). What each kind is called, its
+ * ways out and what a new one starts with are the admin API's node
+ * catalog's (adk-workflows/lib/catalog.ts), which adk-workflows/lib builds
+ * its node kinds on.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -97,6 +78,55 @@ export type StepConfigs = {
     env: HeaderRow[]
     timeout_seconds: number
   }
+  /** Clones a repository into a folder of the run's folder. */
+  git_clone: {
+    /** A template: owner/name on GitHub, or an https:// URL. */
+    repository: string
+    /** A template: the branch or tag checked out; empty for its default branch. */
+    ref: string
+    /** A template: a folder of the run's folder; empty for one named after the repository. */
+    folder: string
+    /** How many of the latest commits it gets; 0 for the whole history. */
+    depth: number
+    /** One of the organization's credentials, by ID: signs git in. Empty for none. */
+    credential: string
+    timeout_seconds: number
+  }
+  /** Makes a branch in a cloned repository and checks it out. */
+  git_branch: {
+    /** A template: the repository's folder in the run's folder; empty for the run's folder. */
+    folder: string
+    /** A template: the branch's name. */
+    branch: string
+    /** A template: where it starts; empty for what's checked out. */
+    start: string
+    timeout_seconds: number
+  }
+  /** Commits what changed in a cloned repository and pushes its branch. */
+  git_push: {
+    folder: string
+    /** A template: the commit's message. */
+    message: string
+    /** Templates: who commits; empty for Forge. */
+    author_name: string
+    author_email: string
+    credential: string
+    timeout_seconds: number
+  }
+  /** Opens a pull request on GitHub. */
+  github_pull_request: {
+    /** A template: owner/name, or the repository's https:// URL. */
+    repository: string
+    /** A template: the branch it merges (owner:branch from a fork). */
+    head: string
+    /** A template: the branch it merges into; empty for the default branch. */
+    base: string
+    title: string
+    body: string
+    draft: boolean
+    credential: string
+    timeout_seconds: number
+  }
   transform: {
     /** A JSONata expression: what it hands on. */
     expression: string
@@ -134,233 +164,17 @@ export type StepData<K extends StepKind = StepKind> = {
   [Kind in K]: { kind: Kind; name: string; config: StepConfigs[Kind] }
 }[K]
 
-/* -------------------------------------------------------------------------- */
-/* Outputs                                                                    */
-/* -------------------------------------------------------------------------- */
-
 export { INPUT, type StepOutput } from "@/features/builder/lib/types"
 
-const NEXT: StepOutput[] = [{ id: "next", label: "Next" }]
-
-/** A step's ways out, in the order the canvas lists them. */
-export function outputsOf(step: StepData): StepOutput[] {
-  switch (step.kind) {
-    case "end":
-      return []
-    case "http":
-    case "bash":
-      return [
-        { id: "success", label: "Success", branch: true },
-        { id: "error", label: "Error", branch: true, fallback: true },
-      ]
-    case "approval":
-      return [
-        { id: "approved", label: "Approved", branch: true },
-        { id: "rejected", label: "Rejected", branch: true, fallback: true },
-      ]
-    case "if":
-      return [
-        { id: "true", label: "True", branch: true },
-        { id: "false", label: "False", branch: true, fallback: true },
-      ]
-    case "switch":
-      return [
-        ...step.config.cases.map((c) => ({
-          id: c.id,
-          label: c.value.trim() || "Empty value",
-          branch: true,
-        })),
-        { id: "default", label: "Default", branch: true, fallback: true },
-      ]
-    case "match":
-      return [
-        ...step.config.arms.map((arm, index) => ({
-          id: arm.id,
-          label: arm.label.trim() || `Rule ${index + 1}`,
-          branch: true,
-        })),
-        { id: "otherwise", label: "Otherwise", branch: true, fallback: true },
-      ]
-    case "loop":
-    case "for_each":
-      return [
-        { id: "each", label: "Each item", branch: true, body: true },
-        { id: "done", label: "Done", branch: true },
-      ]
-    default:
-      return NEXT
-  }
-}
-
 /* -------------------------------------------------------------------------- */
-/* Catalog                                                                    */
+/* IDs                                                                        */
 /* -------------------------------------------------------------------------- */
-
-type KindInfo<K extends StepKind> = {
-  label: string
-  icon: IconProp
-  /** One line: what the step does. */
-  summary: string
-  /** Words the library's filter also matches. */
-  keywords: string
-  /** Drawn as a start or finish: an ink tile. */
-  terminal?: boolean
-  /** A person decides here: the warm notice surface. */
-  person?: boolean
-  /** The prefix of a new step's ID. */
-  idPrefix: string
-  defaults: () => StepConfigs[K]
-}
 
 let uidCounter = 0
 /** A short ID for a case, rule, route or header. Unique within the page. */
 export function uid(prefix: string) {
   uidCounter += 1
   return `${prefix}_${Date.now().toString(36).slice(-4)}${uidCounter.toString(36)}`
-}
-
-export const STEP_KINDS: { [K in StepKind]: KindInfo<K> } = {
-  approval: {
-    label: "Approval",
-    icon: UserCheck01Icon,
-    summary: "The run waits for a person to approve or reject.",
-    keywords: "human review person approve reject handoff sign off",
-    person: true,
-    idPrefix: "approval",
-    defaults: () => ({ message: "", approvers: "org:admin", timeout_hours: 0 }),
-  },
-  http: {
-    label: "HTTP request",
-    icon: Globe02Icon,
-    summary: "Calls a URL and hands on the response.",
-    keywords: "api rest fetch call url post get webhook",
-    idPrefix: "http",
-    defaults: () => ({
-      method: "GET",
-      url: "",
-      query: [],
-      headers: [],
-      body: "",
-      timeout_seconds: 30,
-      retries: 0,
-      output_schema: {},
-      credential: "",
-    }),
-  },
-  bash: {
-    label: "Bash",
-    icon: CommandLineIcon,
-    summary: "Runs a shell command in the run's folder and hands on its output.",
-    keywords:
-      "bash shell command terminal script cli run git gh clone repository npm make",
-    idPrefix: "bash",
-    defaults: () => ({ command: "", cwd: "", env: [], timeout_seconds: 300 }),
-  },
-  transform: {
-    label: "Transform",
-    icon: FunctionIcon,
-    summary: "Reshapes data with a JSONata expression.",
-    keywords: "map reshape jsonata expression object data",
-    idPrefix: "transform",
-    defaults: () => ({ expression: "", output_schema: {} }),
-  },
-  filter: {
-    label: "Filter",
-    icon: FilterIcon,
-    summary: "Keeps the items of a list its condition holds for.",
-    keywords: "filter where keep select drop list array items condition",
-    idPrefix: "filter",
-    defaults: () => ({ items: "", item_name: "item", condition: "" }),
-  },
-  delay: {
-    label: "Delay",
-    icon: HourglassIcon,
-    summary: "Waits a while before going on.",
-    keywords: "wait sleep pause timer",
-    idPrefix: "delay",
-    defaults: () => ({ amount: 5, unit: "minutes" }),
-  },
-  if: {
-    label: "If / else",
-    icon: GitForkIcon,
-    summary: "Takes one of two ways, on a condition.",
-    keywords: "condition branch boolean true false",
-    idPrefix: "if",
-    defaults: () => ({ condition: "" }),
-  },
-  switch: {
-    label: "Switch",
-    icon: Route02Icon,
-    summary: "Routes on one value: to the case it equals.",
-    keywords: "case value equals enum route branch",
-    idPrefix: "switch",
-    defaults: () => ({
-      value: "",
-      cases: [
-        { id: uid("case"), value: "" },
-        { id: uid("case"), value: "" },
-      ],
-    }),
-  },
-  match: {
-    label: "Match",
-    icon: LeftToRightListBulletIcon,
-    summary: "Routes to the first rule whose condition holds, or to every one.",
-    keywords: "pattern rules guard first condition route all every fan out",
-    idPrefix: "match",
-    defaults: () => ({
-      arms: [
-        { id: uid("rule"), label: "", condition: "" },
-        { id: uid("rule"), label: "", condition: "" },
-      ],
-      mode: "first",
-    }),
-  },
-  loop: {
-    label: "Loop",
-    icon: RepeatIcon,
-    summary:
-      "Runs its body once for each item in a list, collecting what each hands back.",
-    keywords: "for each iterate repeat list items collect results map",
-    idPrefix: "loop",
-    defaults: () => ({
-      items: "",
-      item_name: "item",
-      max_iterations: 100,
-      concurrency: 1,
-    }),
-  },
-  for_each: {
-    label: "For each",
-    icon: ArrowRightDoubleIcon,
-    summary:
-      "Runs its steps once for each item in a list; nothing comes back to it.",
-    keywords: "for each foreach iterate list items every fan out process",
-    idPrefix: "for_each",
-    defaults: () => ({
-      items: "",
-      item_name: "item",
-      max_iterations: 100,
-      concurrency: 1,
-    }),
-  },
-  merge: {
-    label: "Merge",
-    icon: GitMergeIcon,
-    summary: "Waits for the ways coming into it, then goes on as one.",
-    keywords: "join wait parallel combine",
-    idPrefix: "merge",
-    defaults: () => ({ mode: "all" }),
-  },
-  end: {
-    label: "End",
-    icon: Flag02Icon,
-    summary: "Finishes the run, as succeeded or failed, with a result.",
-    keywords: "finish stop return result output fail",
-    terminal: true,
-    idPrefix: "end",
-    defaults: () => ({ outcome: "succeeded", result: "" }),
-  },
 }
 
 /**

@@ -1,8 +1,9 @@
 // Writes the formats' JSON Schemas where the Python side checks documents
 // against them: the workflow format's (src/features/adk-workflows/lib/schema.ts)
 // to the admin API, and the chat agent format's (src/features/agents/lib/schema.ts)
-// to the agent runtime package. `--check` only compares, and fails when a
-// copy is out of date.
+// to the agent runtime package, each kind described as the node catalogs the
+// admin API serves have it. `--check` only compares, and fails when a copy is
+// out of date.
 //
 //   npm run generate:agent-schema
 import { readFile, writeFile } from "node:fs/promises"
@@ -14,12 +15,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const TARGETS = [
   {
     module: "/src/features/adk-workflows/lib/schema.ts",
-    name: "AGENT_JSON_SCHEMA",
+    name: "agentJsonSchema",
     file: path.resolve(root, "../forge-admin-api/src/forge_admin/adk_workflows/agent.schema.json"),
   },
   {
     module: "/src/features/agents/lib/schema.ts",
-    name: "CHAT_AGENT_JSON_SCHEMA",
+    name: "chatAgentJsonSchema",
     file: path.resolve(
       root,
       "../../packages/python/agent-runtime/src/forge_agent_runtime/chat_agent.schema.json"
@@ -39,10 +40,28 @@ const server = await createServer({
   server: { middlewareMode: true, hmr: false, watch: null },
   resolve: { alias: { "@": path.resolve(root, "src") } },
 })
+// The node catalogs the admin API serves, which the formats' kinds are described by.
+const CATALOGS = [
+  {
+    file: "../../packages/python/adk-workflows/src/forge_task_adk_workflows/graph/node_kinds.json",
+    module: "/src/features/adk-workflows/lib/catalog.ts",
+    install: "installNodeCatalog",
+  },
+  {
+    file: "../../packages/python/agent-runtime/src/forge_agent_runtime/node_kinds.json",
+    module: "/src/features/agents/lib/catalog.ts",
+    install: "installChatNodeCatalog",
+  },
+]
 const schemas = []
 try {
+  for (const catalog of CATALOGS) {
+    const served = JSON.parse(await readFile(path.resolve(root, catalog.file), "utf8"))
+    ;(await server.ssrLoadModule(catalog.module))[catalog.install](served)
+  }
   for (const target of TARGETS) {
-    schemas.push({ ...target, schema: (await server.ssrLoadModule(target.module))[target.name] })
+    const made = (await server.ssrLoadModule(target.module))[target.name]
+    schemas.push({ ...target, schema: typeof made === "function" ? made() : made })
   }
 } finally {
   await server.close()

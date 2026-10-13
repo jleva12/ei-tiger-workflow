@@ -144,7 +144,12 @@ export const AGENT_UI: BuilderUi = {
   // A sub-agent's settings open in place of the node's, its own name with them.
   ownsName: true,
   // The library's groups, readable on the canvas: People and the ends keep their own looks.
-  kindTones: { agents: "agent", actions: "action", logic: "logic" },
+  kindTones: {
+    agents: "agent",
+    actions: "action",
+    github: "action",
+    logic: "logic",
+  },
   kindLabels: true,
   DataSection: AgentDataSection as BuilderUi["DataSection"],
   emptyCanvas:

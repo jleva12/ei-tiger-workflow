@@ -14,6 +14,7 @@ from forge_task_adk_workflows.graph.factories.agents import (
     sequential,
 )
 from forge_task_adk_workflows.graph.factories.base import Body, BuildContext, Factory
+from forge_task_adk_workflows.graph.factories.github import git_branch, git_clone, git_push, github_pull_request
 from forge_task_adk_workflows.graph.factories.logic import end, for_each, if_, loop, match, merge, switch
 from forge_task_adk_workflows.graph.factories.people import approval, human_input
 from forge_task_adk_workflows.graph.factories.pi import pi_agent
@@ -35,6 +36,10 @@ FACTORIES: dict[str, Factory] = {
     "transform": transform,
     "filter": filter_,
     "delay": delay,
+    "git_clone": git_clone,
+    "git_branch": git_branch,
+    "git_push": git_push,
+    "github_pull_request": github_pull_request,
     "if": if_,
     "switch": switch,
     "match": match,

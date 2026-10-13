@@ -9,6 +9,7 @@ import {
   ListEditor,
   NumberField,
   Row,
+  SwitchField,
   TextField,
 } from "@/features/builder/components/fields/basic-fields"
 import { SchemaField } from "@/features/builder/components/fields/schema-field"
@@ -40,6 +41,7 @@ import { IssueMessages } from "@/features/builder/components/fields/field-issues
 import { useFieldIssues } from "@/features/builder/components/fields/field-issues-context"
 import { ExpressionField } from "@/features/builder/components/fields/expression-field"
 import { CredentialField } from "@/features/credentials/components/credential-field"
+import { FolderPlace } from "@/features/adk-workflows/components/folder-place"
 
 /*
  * The settings of each kind of step a workflow shares with Forge's
@@ -479,12 +481,18 @@ function BashFields({ id, config }: Props<"bash">) {
         onChange={(value) => set("cwd", value)}
         description={
           <>
-            Where it runs, in the run&apos;s folder: a path from it, such as{" "}
+            Where it runs: a path from the run&apos;s folder, such as{" "}
             <code className={mono}>backend</code> or{" "}
-            <code className={mono}>{"repos/{{ input.name }}"}</code>; made when
-            it isn&apos;t there. Empty runs it in the run&apos;s folder itself.
+            <code className={mono}>{"repos/{{ input.name }}"}</code>, or an
+            earlier step&apos;s folder; made when it isn&apos;t there.
           </>
         }
+      />
+      <FolderPlace
+        id={id}
+        value={config.cwd}
+        verb="Runs in"
+        onChange={(value) => set("cwd", value)}
       />
       <NamedRows
         id={id}
@@ -510,6 +518,314 @@ function BashFields({ id, config }: Props<"bash">) {
         timeout, takes Error. A run tried again runs it again, so write commands
         that can run twice.
       </p>
+    </>
+  )
+}
+
+// Code in a GitHub step's descriptions, as the text around it.
+const INLINE_CODE = "font-mono text-[0.9em]"
+
+/** Where a GitHub step's credential is sent: a URL's origin, or GitHub's. */
+function gitOrigin(repository: string, api = false) {
+  const written = repository.trim()
+  const match = /^https:\/\/[^/\s{]+/.exec(written)
+  if (match && !written.startsWith("https://github.com"))
+    return api ? `${match[0]}/api/v3` : match[0]
+  return api ? "https://api.github.com" : "https://github.com"
+}
+
+/** What a GitHub step tells about its credential and its ways out. */
+function GitNote({ children }: { children: React.ReactNode }) {
+  return <p className="text-xs/[1.6] text-muted-foreground">{children}</p>
+}
+
+function GitCloneFields({ id, config }: Props<"git_clone">) {
+  const set = useSetter<"git_clone">(id)
+  const organizationId = useBuilder((s) => s.meta.organization_id)
+  const credentials = useBuilder((s) => s.lookups.credentials)
+  return (
+    <>
+      <Setting
+        id={id}
+        setting="repository"
+        label="Repository"
+        value={config.repository}
+        placeholder="acme/backend"
+        onChange={(value) => set("repository", value)}
+        description={
+          <>
+            <code className={INLINE_CODE}>owner/name</code> on GitHub, or the
+            repository&apos;s <code className={INLINE_CODE}>https://</code> URL
+            (GitHub Enterprise too).
+          </>
+        }
+      />
+      <Setting
+        id={id}
+        setting="ref"
+        label="Branch or tag"
+        value={config.ref}
+        placeholder="Its default branch"
+        onChange={(value) => set("ref", value)}
+      />
+      <Setting
+        id={id}
+        setting="folder"
+        label="Folder"
+        value={config.folder}
+        placeholder="Named after the repository"
+        onChange={(value) => set("folder", value)}
+        description={
+          <>
+            A path from the run&apos;s folder, such as{" "}
+            <code className={INLINE_CODE}>backend</code>; empty for a folder
+            named after the repository. A clone of the same repository already
+            there is kept, so a run tried again goes on.
+          </>
+        }
+      />
+      <FolderPlace id={id} value={config.folder} verb="Clones into" />
+      <NumberField
+        issue="depth"
+        label="History (commits)"
+        value={config.depth}
+        min={0}
+        onChange={(value) => set("depth", value)}
+        description="0 clones the whole history; 1 only the latest commit, which is fastest."
+      />
+      <CredentialField
+        organizationId={organizationId}
+        value={config.credential}
+        onChange={(value) => set("credential", value)}
+        credentials={credentials}
+        url={gitOrigin(config.repository)}
+      />
+      <NumberField
+        issue="timeout_seconds"
+        label="Timeout (s)"
+        value={config.timeout_seconds}
+        min={1}
+        onChange={(value) => set("timeout_seconds", value)}
+      />
+      <GitNote>
+        A private repository needs a credential with a token for{" "}
+        <code className={INLINE_CODE}>https://github.com</code>. Success hands
+        on its <code className={INLINE_CODE}>folder</code>,{" "}
+        <code className={INLINE_CODE}>branch</code> and{" "}
+        <code className={INLINE_CODE}>commit</code>; the next git steps work in
+        that folder. The start must allow a file system.
+      </GitNote>
+    </>
+  )
+}
+
+function GitBranchFields({ id, config }: Props<"git_branch">) {
+  const set = useSetter<"git_branch">(id)
+  return (
+    <>
+      <Setting
+        id={id}
+        setting="folder"
+        label="Repository's folder"
+        value={config.folder}
+        placeholder="The run's folder"
+        onChange={(value) => set("folder", value)}
+        description="The cloned repository's folder: pick a clone's below, or give a path from the run's folder."
+      />
+      <FolderPlace
+        id={id}
+        value={config.folder}
+        verb="Works in"
+        onChange={(value) => set("folder", value)}
+      />
+      <Setting
+        id={id}
+        setting="branch"
+        label="Branch"
+        value={config.branch}
+        placeholder="forge/{{ input.ticket }}"
+        onChange={(value) => set("branch", value)}
+        description="Made and checked out; one already there is checked out as it is."
+      />
+      <Setting
+        id={id}
+        setting="start"
+        label="Starts from"
+        value={config.start}
+        placeholder="What's checked out"
+        onChange={(value) => set("start", value)}
+        description="A branch, tag or commit; empty for what's checked out."
+      />
+      <NumberField
+        issue="timeout_seconds"
+        label="Timeout (s)"
+        value={config.timeout_seconds}
+        min={1}
+        onChange={(value) => set("timeout_seconds", value)}
+      />
+    </>
+  )
+}
+
+function GitPushFields({ id, config }: Props<"git_push">) {
+  const set = useSetter<"git_push">(id)
+  const organizationId = useBuilder((s) => s.meta.organization_id)
+  const credentials = useBuilder((s) => s.lookups.credentials)
+  return (
+    <>
+      <Setting
+        id={id}
+        setting="folder"
+        label="Repository's folder"
+        value={config.folder}
+        placeholder="The run's folder"
+        onChange={(value) => set("folder", value)}
+        description="The cloned repository's folder: pick a clone's below, or give a path from the run's folder."
+      />
+      <FolderPlace
+        id={id}
+        value={config.folder}
+        verb="Works in"
+        onChange={(value) => set("folder", value)}
+      />
+      <Setting
+        id={id}
+        setting="message"
+        label="Commit message"
+        value={config.message}
+        multiline
+        rows={3}
+        placeholder="Update the notes for {{ input.ticket }}"
+        onChange={(value) => set("message", value)}
+        description="Everything that changed in the folder is committed with it; nothing changed pushes the branch as it is."
+      />
+      <div className="grid grid-cols-2 gap-2.5">
+        <Setting
+          id={id}
+          setting="author_name"
+          label="Author"
+          value={config.author_name}
+          placeholder="Forge"
+          onChange={(value) => set("author_name", value)}
+        />
+        <Setting
+          id={id}
+          setting="author_email"
+          label="Author's email"
+          value={config.author_email}
+          placeholder="forge@localhost"
+          onChange={(value) => set("author_email", value)}
+        />
+      </div>
+      <CredentialField
+        organizationId={organizationId}
+        value={config.credential}
+        onChange={(value) => set("credential", value)}
+        credentials={credentials}
+        url="https://github.com"
+      />
+      <NumberField
+        issue="timeout_seconds"
+        label="Timeout (s)"
+        value={config.timeout_seconds}
+        min={1}
+        onChange={(value) => set("timeout_seconds", value)}
+      />
+      <GitNote>
+        It pushes the branch checked out (make one with Create branch) to the
+        repository it was cloned from, signed in by a credential with a token
+        for <code className={INLINE_CODE}>https://github.com</code>. Success
+        hands on the <code className={INLINE_CODE}>branch</code> and{" "}
+        <code className={INLINE_CODE}>commit</code> pushed.
+      </GitNote>
+    </>
+  )
+}
+
+function PullRequestFields({ id, config }: Props<"github_pull_request">) {
+  const set = useSetter<"github_pull_request">(id)
+  const organizationId = useBuilder((s) => s.meta.organization_id)
+  const credentials = useBuilder((s) => s.lookups.credentials)
+  return (
+    <>
+      <Setting
+        id={id}
+        setting="repository"
+        label="Repository"
+        value={config.repository}
+        placeholder="{{ steps.push.output.repository }}"
+        onChange={(value) => set("repository", value)}
+        description={
+          <>
+            <code className={INLINE_CODE}>owner/name</code> on GitHub, or the
+            repository&apos;s <code className={INLINE_CODE}>https://</code> URL.
+          </>
+        }
+      />
+      <div className="grid grid-cols-2 gap-2.5">
+        <Setting
+          id={id}
+          setting="head"
+          label="Branch"
+          value={config.head}
+          placeholder="{{ steps.push.output.branch }}"
+          onChange={(value) => set("head", value)}
+        />
+        <Setting
+          id={id}
+          setting="base"
+          label="Into"
+          value={config.base}
+          placeholder="The default branch"
+          onChange={(value) => set("base", value)}
+        />
+      </div>
+      <Setting
+        id={id}
+        setting="title"
+        label="Title"
+        value={config.title}
+        placeholder="Update the notes for {{ input.ticket }}"
+        onChange={(value) => set("title", value)}
+      />
+      <Setting
+        id={id}
+        setting="body"
+        label="Description"
+        value={config.body}
+        multiline
+        rows={5}
+        placeholder="What changed, and why."
+        onChange={(value) => set("body", value)}
+      />
+      <SwitchField
+        label="Draft"
+        checked={config.draft}
+        onChange={(value) => set("draft", value)}
+        description="Opened as a draft: not ready for review yet."
+      />
+      <CredentialField
+        organizationId={organizationId}
+        value={config.credential}
+        onChange={(value) => set("credential", value)}
+        credentials={credentials}
+        url={gitOrigin(config.repository, true)}
+      />
+      <NumberField
+        issue="timeout_seconds"
+        label="Timeout (s)"
+        value={config.timeout_seconds}
+        min={1}
+        onChange={(value) => set("timeout_seconds", value)}
+      />
+      <GitNote>
+        Needs a credential with a token for{" "}
+        <code className={INLINE_CODE}>https://api.github.com</code> that may
+        open pull requests on the repository. Success hands on its{" "}
+        <code className={INLINE_CODE}>number</code> and{" "}
+        <code className={INLINE_CODE}>url</code>; one already open for the
+        branch is the one handed on.
+      </GitNote>
     </>
   )
 }
@@ -954,6 +1270,14 @@ export function StepFields({ id, step }: { id: string; step: StepData }) {
       return <HttpFields id={id} config={step.config} />
     case "bash":
       return <BashFields id={id} config={step.config} />
+    case "git_clone":
+      return <GitCloneFields id={id} config={step.config} />
+    case "git_branch":
+      return <GitBranchFields id={id} config={step.config} />
+    case "git_push":
+      return <GitPushFields id={id} config={step.config} />
+    case "github_pull_request":
+      return <PullRequestFields id={id} config={step.config} />
     case "transform":
       return <TransformFields id={id} config={step.config} />
     case "filter":

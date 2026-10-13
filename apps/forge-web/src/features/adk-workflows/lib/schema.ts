@@ -1,10 +1,11 @@
+import { chatKindInfo } from "@/features/agents/lib/catalog"
 import { CONFIGS as CHAT_CONFIGS } from "@/features/agents/lib/schema"
 import { THINKING_LEVELS } from "@/features/steps/lib/model"
 import { CONFIGS as STEP_CONFIGS } from "@/features/steps/lib/schema"
+import { kindInfo, KNOWN_KINDS } from "./catalog"
 import { AGENT_FORMAT } from "./document"
 import { FILE_TYPE_IDS } from "./files"
 import {
-  AGENT_KINDS,
   FORGE_KINDS,
   LLM_TOOL_KINDS,
   PI_TOOLS,
@@ -13,13 +14,14 @@ import {
   type AgentKind,
   type SubAgentKind,
 } from "./model"
-import { TOOL_ID, TOOL_KINDS } from "./tools"
+import { TOOL_ID } from "./tools"
 
 /*
  * The agent format as a JSON Schema (draft 2020-12): what the admin API
  * checks every agent it saves against (agent.schema.json, written by
  * scripts/generate-agent-schema.mjs). It describes what `document.ts`
- * writes; change the two together.
+ * writes; change the two together. Each kind's settings are described as
+ * the node catalog has the kind, so the schema is made once it's installed.
  */
 
 const text = { type: "string" } as const
@@ -268,6 +270,14 @@ const HANDS_ON: Record<AgentKind, string> = {
     "Hands on {approved, decided_by, comment, decided_at} by its approved or rejected way.",
   http: "Hands on {status, headers, body} by its success way, body held to output_schema when it declares one. Its error way hands on nothing; steps.<id>.error is {message, status?, body?, expression?}.",
   bash: "Runs its command by bash in its folder of the run's folder (the start must allow a file system), its env variables and WORKSPACE (the run's folder) set; hands on {exit_code, stdout, stderr, cwd, truncated} by its success way when it exits with 0. Its error way (another exit code, a folder outside the run's, its timeout) hands on nothing; steps.<id>.error is {message, exit_code?, stdout?, stderr?}.",
+  git_clone:
+    "Clones its repository into a folder of the run's folder (the start must allow a file system), signed in by its credential; hands on {folder, repository, url, branch, commit, cloned} by its success way (cloned false when a run tried again found its clone there). Its error way hands on nothing; steps.<id>.error is {message, exit_code?, stderr?}.",
+  git_branch:
+    "Makes its branch in the repository in its folder (from start, or what's checked out) and checks it out, or checks it out when it's there; hands on {folder, branch, commit, created} by its success way. Its error way hands on nothing; steps.<id>.error is {message, exit_code?, stderr?}.",
+  git_push:
+    "Commits everything that changed in the repository in its folder (when anything did), by its author with its message, and pushes the branch checked out to origin, signed in by its credential; hands on {folder, repository, branch, commit, committed, files} by its success way. Its error way hands on nothing; steps.<id>.error is {message, exit_code?, stderr?}.",
+  github_pull_request:
+    "Opens a pull request on GitHub from head into base (or the default branch), signed in by its credential; hands on {number, url, title, state, draft, head, base, created} by its success way (created false when one was open for head already, which it hands on). Its error way hands on nothing; steps.<id>.error is {message, status?, body?}.",
   transform:
     "Hands on what its expression makes, held to output_schema when it declares one.",
   filter:
@@ -294,7 +304,7 @@ const SUB_CONFIGS: Record<SubAgentKind, Record<string, unknown>> = {
   loop_agent: LOOP,
 }
 
-const kinds = Object.keys(AGENT_KINDS) as AgentKind[]
+const kinds: AgentKind[] = KNOWN_KINDS
 
 const settings = (
   properties: Record<string, unknown>,
@@ -307,7 +317,7 @@ const settings = (
   properties,
 })
 
-export const AGENT_JSON_SCHEMA = {
+const FORMAT = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   title: "Forge agent",
   description:
@@ -432,29 +442,31 @@ export const AGENT_JSON_SCHEMA = {
         target: { $ref: "#/$defs/nodeId" },
       },
     },
+  },
+} as const
+
+/** The format's JSON Schema, each kind described as the node catalog has it. */
+export const agentJsonSchema = () => ({
+  ...FORMAT,
+  $defs: {
+    ...FORMAT.$defs,
     ...Object.fromEntries(
       kinds.map((kind) => [
         `config_${kind}`,
-        settings(
-          CONFIGS[kind],
-          `${AGENT_KINDS[kind].summary} ${HANDS_ON[kind]}`
-        ),
+        settings(CONFIGS[kind], `${kindInfo(kind).summary} ${HANDS_ON[kind]}`),
       ])
     ),
     ...Object.fromEntries(
       LLM_TOOL_KINDS.map((kind) => [
         `tool_config_${kind}`,
-        settings(CHAT_CONFIGS[kind], `A tool: ${TOOL_KINDS[kind].summary}`),
+        settings(CHAT_CONFIGS[kind], `A tool: ${chatKindInfo(kind).summary}`),
       ])
     ),
     ...Object.fromEntries(
       SUB_AGENT_KINDS.map((kind) => [
         `sub_config_${kind}`,
-        settings(
-          SUB_CONFIGS[kind],
-          `A sub-agent: ${AGENT_KINDS[kind].summary}`
-        ),
+        settings(SUB_CONFIGS[kind], `A sub-agent: ${kindInfo(kind).summary}`),
       ])
     ),
   },
-} as const
+})

@@ -95,28 +95,43 @@ class CredentialRefused(StepFailed):
     goes, not signed in with): never retried."""
 
 
+#: What a request to a URL sends besides: headers and query parameters
+#: (a credential's), and whether it's the first hop.
+Sign = Callable[[str, bool], Awaitable[tuple[dict[str, str], dict[str, str]]]]
+
+
+def signer(services: RunServices, credential: str) -> Sign:
+    """
+    :param credential: One of the organization's credentials, by ID; empty for none.
+    :return: What it has a request to a URL send: the first request is
+        refused (:class:`CredentialRefused`) where it may not go; a redirect
+        elsewhere goes without it.
+    """
+
+    async def sign(url: str, first: bool) -> tuple[dict[str, str], dict[str, str]]:
+        if not credential:
+            return {}, {}
+        provider = services.credentials
+        if provider is None:
+            raise CredentialRefused("It uses one of the organization's credentials, which this worker can't use")
+        try:
+            auth = await provider(credential, organization_id=services.organization_id, url=url)
+        except LookupError as error:
+            if first:
+                raise CredentialRefused(str(error)) from None
+            return {}, {}
+        return dict(auth.headers), dict(auth.params)
+
+    return sign
+
+
 def http(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
     s = settings_of(node, HttpConfig)
     body_model = to_model(s.output_schema) if s.output_schema else None
     services = ctx.services
     evaluator = services.evaluator
     has_error_way = "error" in ctx.connected.get(node["id"], frozenset())
-
-    async def sign(url: str, first: bool) -> tuple[dict[str, str], dict[str, str]]:
-        # What the step's credential has a request to ``url`` send: the first
-        # is refused where it may not go; a redirect elsewhere goes without it.
-        if not s.credential:
-            return {}, {}
-        provider = services.credentials
-        if provider is None:
-            raise CredentialRefused("It uses one of the organization's credentials, which this worker can't use")
-        try:
-            auth = await provider(s.credential, organization_id=services.organization_id, url=url)
-        except LookupError as error:
-            if first:
-                raise CredentialRefused(str(error)) from None
-            return {}, {}
-        return dict(auth.headers), dict(auth.params)
+    sign = signer(services, s.credential)
 
     async def query(data: dict[str, Any]) -> list[tuple[str, str]]:
         # Its query parameters, filled in: one whose value is one {{ }} that
@@ -156,7 +171,7 @@ def http(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
             if attempt:
                 await services.sleep(min(2**attempt, 30))
             try:
-                response = await _send(services, s.method, url, headers, sent, seconds=s.timeout_seconds, sign=sign)
+                response = await send(services, s.method, url, headers, sent, seconds=s.timeout_seconds, sign=sign)
             except CredentialRefused:
                 raise
             except StepFailed as error:
@@ -205,16 +220,11 @@ def _whole(template: str) -> str | None:
     return found[0] if len(found) == 1 and TEMPLATE.fullmatch(stripped) else None
 
 
-#: What a request to a URL sends besides: headers and query parameters
-#: (a credential's), and whether it's the first hop.
-Sign = Callable[[str, bool], Awaitable[tuple[dict[str, str], dict[str, str]]]]
-
-
 async def _unsigned(url: str, first: bool) -> tuple[dict[str, str], dict[str, str]]:
     return {}, {}
 
 
-async def _send(
+async def send(
     services: RunServices,
     method: str,
     url: str,
@@ -224,7 +234,14 @@ async def _send(
     seconds: float,
     sign: Sign = _unsigned,
 ) -> dict[str, Any]:
-    # One request, its redirects followed one hop at a time, each checked.
+    """
+    One request, its redirects followed one hop at a time, each checked
+    (``support.http.check_url``) and signed (``sign``): HTTP steps', and the
+    GitHub steps' calls to GitHub's API.
+
+    :return: Its ``{status, headers, body}``, whatever the status.
+    :raises StepFailed: When it gets no answer, or is redirected too often.
+    """
     if services.http is not None:
         return await _exchange(services.http, services, method, url, headers, sent, seconds, sign)
     async with httpx.AsyncClient() as client:

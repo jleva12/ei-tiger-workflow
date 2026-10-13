@@ -95,6 +95,22 @@ const COMMAND_ERROR = t.object(
   { required: ["message"] }
 )
 
+// What a git step's error is: the git command that failed and what it said.
+const GIT_ERROR = t.object(
+  {
+    message: t.string(
+      "What went wrong: the git command that failed and the last thing it said, a repository, folder or branch it can't use, its credential, or its timeout."
+    ),
+    exit_code: t.number("git's exit code, when a git command failed.", true),
+    stderr: t.string("What git wrote to stderr, when a git command failed."),
+  },
+  "Why the step took its Error way.",
+  { required: ["message"] }
+)
+
+/** The steps that run git: their errors are git's. */
+const GIT_KINDS = new Set(["git_clone", "git_branch", "git_push"])
+
 /** Logic steps that hand on what came into them (a run records their way as their output). */
 const PASS_THROUGH = new Set(["if", "switch", "match"])
 
@@ -218,6 +234,50 @@ export function outputTypeOf(
         ),
         truncated: t.boolean(
           "Whether stdout or stderr was longer than the worker keeps: then only its end is."
+        ),
+      })
+    case "git_clone":
+      return t.object({
+        folder: t.string(
+          "Where it's cloned: an absolute path in the run's folder. Give it to the next git step's folder."
+        ),
+        repository: t.string("The repository: owner/name."),
+        url: t.string("The repository's page: https://github.com/owner/name."),
+        branch: t.string("The branch checked out; null when a tag is."),
+        commit: t.string("The commit checked out: its full SHA."),
+        cloned: t.boolean(
+          "false when a run tried again found its clone already there."
+        ),
+      })
+    case "git_branch":
+      return t.object({
+        folder: t.string("The repository's folder: an absolute path."),
+        branch: t.string("The branch, now checked out."),
+        commit: t.string("The commit it's at: its full SHA."),
+        created: t.boolean("false when the branch was there already."),
+      })
+    case "git_push":
+      return t.object({
+        folder: t.string("The repository's folder: an absolute path."),
+        repository: t.string("The repository pushed to: owner/name."),
+        branch: t.string("The branch pushed. Give it to Open pull request."),
+        commit: t.string("The commit pushed: its full SHA."),
+        committed: t.boolean(
+          "Whether anything had changed: false pushes the branch as it was."
+        ),
+        files: t.array(t.string(), "The files the commit changed, by path."),
+      })
+    case "github_pull_request":
+      return t.object({
+        number: t.number("The pull request's number.", true),
+        url: t.string("Its page on GitHub."),
+        title: t.string("Its title."),
+        state: t.string("open, as it's just opened.", { enum: ["open", "closed"] }),
+        draft: t.boolean("Whether it's a draft."),
+        head: t.string("The branch it merges."),
+        base: t.string("The branch it merges into."),
+        created: t.boolean(
+          "false when one was open for the branch already: that one is handed on."
         ),
       })
     case "transform":
@@ -558,7 +618,9 @@ export function scopesFor<S extends BaseStep>(
         error: canFail
           ? step.data.kind === "bash"
             ? COMMAND_ERROR
-            : ERROR
+            : GIT_KINDS.has(step.data.kind)
+              ? GIT_ERROR
+              : ERROR
           : undefined,
       })
     }

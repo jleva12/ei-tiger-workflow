@@ -44,6 +44,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextvars import ContextVar, Token
 from typing import Any
 
+from forge_agent_runtime.catalog import CHAT_NODE_CATALOG
 from forge_agent_runtime.services import ToolValues
 from forge_common.adk import ToolFailure
 from google.adk import Context, Event
@@ -91,10 +92,8 @@ from forge_task_adk_workflows.support.expressions import plain
 # name one: ADK's own default, and the assistant's.
 DEFAULT_MODEL = "gemini-3.5-flash"
 SUB_AGENT_KINDS = frozenset({"llm", "sequential", "parallel", "loop_agent"})
-#: What an LLM agent's tools may be: the Agents builder's kinds.
-TOOL_KINDS = frozenset(
-    {"mcp", "knowledge_base", "http_tool", "openapi", "saved_agent", "adk_workflow", "code_execution"}
-)
+#: What an LLM agent's tools may be: the Agents canvas's kinds a workflow may use.
+TOOL_KINDS = frozenset(kind.kind for kind in CHAT_NODE_CATALOG.kinds if kind.workflow_tool)
 # ADK would have a Workflow instead of a team agent, but a Workflow can't yet
 # be an LLM agent's sub-agent.
 _DEPRECATED = "[A-Za-z]+Agent is deprecated in favor of Workflow"

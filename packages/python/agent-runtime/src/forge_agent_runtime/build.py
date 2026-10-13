@@ -33,8 +33,10 @@ from google.genai import types
 
 from forge_agent_runtime.code_execution import CodeTool
 from forge_agent_runtime.document import (
+    AGENT_LIKE,
     DEFAULTS,
     HANDS_OFF,
+    KINDS,
     TOOLS,
     ChatAgentDocument,
     DocumentError,
@@ -95,19 +97,9 @@ def _operations(value: Any) -> list[str] | None:
     return sorted({form for name in names for form in (name, _snake(name))}) if names else None
 
 
-#: What a tool item may be outside a chat agent's canvas (a workflow's LLM agent's tools).
-TOOL_KINDS = frozenset(
-    {
-        "saved_agent",
-        "adk_workflow",
-        "memory",
-        "knowledge_base",
-        "http_tool",
-        "openapi",
-        "mcp",
-        "code_execution",
-    }
-)
+#: What a tool item may be outside a chat agent's canvas (a workflow's LLM agent's tools):
+#: any kind but an agent, which is only ever on a canvas.
+TOOL_KINDS = KINDS - AGENT_LIKE
 
 
 class _Builder:

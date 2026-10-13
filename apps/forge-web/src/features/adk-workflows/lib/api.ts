@@ -9,6 +9,11 @@ import {
 import type { VersionChoice } from "@/features/builder/components/version-field"
 import { createNestedResource } from "@/lib/api/resource"
 import { api } from "@/lib/api-instance"
+import {
+  installChatNodeCatalog,
+  type ChatNodeCatalog,
+} from "@/features/agents/lib/catalog"
+import { installNodeCatalog, type NodeCatalog } from "./catalog"
 import type { AgentDocument } from "./document"
 
 /*
@@ -247,4 +252,39 @@ export function versionChoices(
       },
     ])
   )
+}
+
+/**
+ * The kinds of node the builders offer, as the admin API serves them: a
+ * workflow's (`catalog.ts`) and the Agents canvas's, whose tools a
+ * workflow's LLM agents have too (agents/lib/catalog.ts). Each is read once,
+ * and installed as it's rendered with, so what renders once both are loaded
+ * reads every kind from them. NodeCatalogGate waits for them.
+ */
+export function useNodeCatalogs() {
+  const workflow = useQuery({
+    queryKey: ["workflow-node-kinds"],
+    queryFn: ({ signal }) =>
+      api.get<NodeCatalog>("/workflow-node-kinds", { signal }),
+    staleTime: Infinity,
+  })
+  const chat = useQuery({
+    queryKey: ["chat-agent-node-kinds"],
+    queryFn: ({ signal }) =>
+      api.get<ChatNodeCatalog>("/chat-agent-node-kinds", { signal }),
+    staleTime: Infinity,
+  })
+  if (workflow.data) installNodeCatalog(workflow.data)
+  if (chat.data) installChatNodeCatalog(chat.data)
+  return {
+    ready: Boolean(workflow.data && chat.data),
+    /** Why one couldn't be loaded; none once both are. */
+    error:
+      (!workflow.data && workflow.error) || (!chat.data && chat.error) || null,
+    /** Tries again whichever failed. */
+    retry: () => {
+      if (workflow.isError) void workflow.refetch()
+      if (chat.isError) void chat.refetch()
+    },
+  }
 }

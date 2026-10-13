@@ -57,7 +57,7 @@ import {
   type ChatAgentDocument,
 } from "@/features/agents/lib/document"
 import { exampleChatAgent } from "@/features/agents/lib/example"
-import { AGENT_LIKE, CHAT_AGENTS_ICON } from "@/features/agents/lib/model"
+import { isAgentLike, CHAT_AGENTS_ICON } from "@/features/agents/lib/model"
 import {
   validateChatAgent,
   type ChatAgentValidationContext,
@@ -65,6 +65,7 @@ import {
 import { formatRelative } from "@/lib/format"
 import { useScopeAccess } from "@/lib/hierarchy"
 import { parseTimestamp } from "@/lib/timestamps"
+import { NodeCatalogGate } from "@/features/adk-workflows/components/node-catalog-gate"
 import { chatAgentFileName } from "./chat-agent-files"
 
 /** A row of the table: one chat agent. */
@@ -101,7 +102,7 @@ const toRow = (
     name: doc.name,
     description: doc.description,
     tools: doc.nodes.filter(
-      (n) => !AGENT_LIKE.has(n.kind) && n.kind !== "saved_agent"
+      (n) => !isAgentLike(n.kind) && n.kind !== "saved_agent"
     ).length,
     agents,
     errors,
@@ -262,15 +263,26 @@ function freshName(base: string, taken: ChatAgentDocument[]) {
  * ADK agent each, with its tools and sub-agents), each opening its
  * builder. New agent starts one with just the agent; the example and an
  * import start from more. Kept in this browser until the admin API keeps
- * them.
+ * them. It opens once the node catalogs are loaded: each agent is read and
+ * checked by its nodes' kinds.
  */
-export function OrganizationChatAgents({
-  organizationId,
-  organizationName,
-}: {
+export function OrganizationChatAgents(props: OrganizationChatAgentsProps) {
+  return (
+    <NodeCatalogGate>
+      <ChatAgentsPage {...props} />
+    </NodeCatalogGate>
+  )
+}
+
+type OrganizationChatAgentsProps = {
   organizationId: string
   organizationName: string
-}) {
+}
+
+function ChatAgentsPage({
+  organizationId,
+  organizationName,
+}: OrganizationChatAgentsProps) {
   const navigate = useNavigate()
   const list = useOrganizationChatAgents(organizationId)
   const { records, agents } = list

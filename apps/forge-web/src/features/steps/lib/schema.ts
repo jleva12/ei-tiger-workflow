@@ -75,6 +75,105 @@ export const CONFIGS: Record<StepKind, Record<string, unknown>> = {
     },
     timeout_seconds: count(1),
   },
+  git_clone: {
+    repository: {
+      ...text,
+      description:
+        "A template: owner/name on GitHub, or the repository's https:// URL (GitHub Enterprise too). No other protocol.",
+    },
+    ref: {
+      ...text,
+      description:
+        "A template: the branch or tag checked out; empty for the repository's default branch.",
+    },
+    folder: {
+      ...text,
+      description:
+        "A template: where it's cloned, a folder of the run's folder (relative, or an absolute path inside it); empty for one named after the repository. One already holding a clone of the repository is kept as it is.",
+    },
+    depth: {
+      ...count(0),
+      description:
+        "How many of the latest commits it gets; 0 for the whole history.",
+    },
+    credential: {
+      ...text,
+      description:
+        "One of the organization's credentials, by ID: a token for https://github.com, which signs git in. Empty for a public repository.",
+    },
+    timeout_seconds: count(1),
+  },
+  git_branch: {
+    folder: {
+      ...text,
+      description:
+        "A template: the cloned repository's folder in the run's folder (steps.<clone id>.output.folder); empty for the run's folder itself.",
+    },
+    branch: {
+      ...text,
+      description:
+        "A template: the branch's name. One already there is checked out as it is.",
+    },
+    start: {
+      ...text,
+      description:
+        "A template: the branch, tag or commit it starts from; empty for what's checked out.",
+    },
+    timeout_seconds: count(1),
+  },
+  git_push: {
+    folder: {
+      ...text,
+      description:
+        "A template: the cloned repository's folder in the run's folder; empty for the run's folder itself.",
+    },
+    message: {
+      ...text,
+      description:
+        "A template: the commit's message, when anything changed (everything that did is committed).",
+    },
+    author_name: {
+      ...text,
+      description: "A template: who the commit is by; empty for Forge.",
+    },
+    author_email: {
+      ...text,
+      description:
+        "A template: the author's email; empty for forge@localhost.",
+    },
+    credential: {
+      ...text,
+      description:
+        "One of the organization's credentials, by ID: a token for the repository's host (https://github.com), which signs git in for the push.",
+    },
+    timeout_seconds: count(1),
+  },
+  github_pull_request: {
+    repository: {
+      ...text,
+      description:
+        "A template: owner/name on GitHub, or the repository's https:// URL (GitHub Enterprise's API is under its host's /api/v3).",
+    },
+    head: {
+      ...text,
+      description:
+        "A template: the branch it merges (owner:branch for a fork's).",
+    },
+    base: {
+      ...text,
+      description:
+        "A template: the branch it merges into; empty for the repository's default branch.",
+    },
+    title: { ...text, description: "A template: its title." },
+    body: { ...text, description: "A template: its description (Markdown)." },
+    draft: { type: "boolean", description: "Whether it opens as a draft." },
+    credential: {
+      ...text,
+      description:
+        "One of the organization's credentials, by ID: a token for https://api.github.com that may open pull requests on the repository.",
+    },
+    timeout_seconds: count(1),
+  },
   transform: {
     expression: {
       ...text,

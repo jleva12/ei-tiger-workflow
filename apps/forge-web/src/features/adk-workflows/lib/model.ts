@@ -1,31 +1,17 @@
-import {
-  AiProgrammingIcon,
-  FlowSquareIcon,
-  DistributionIcon,
-  LeftToRightListNumberIcon,
-  PlayIcon,
-  RepeatIcon,
-  Robot01Icon,
-  UserQuestion01Icon,
-} from "@hugeicons/core-free-icons"
+import { FlowSquareIcon } from "@hugeicons/core-free-icons"
 
 import type { IconProp } from "@/components/forge/icons"
 // Types only: the Agents builder's model imports this one's values.
 import type { ChatConfigs } from "@/features/agents/lib/model"
-import type {
-  KindGroup,
-  KindInfo,
-  StepOutput,
-} from "@/features/builder/lib/types"
+import type { StepOutput } from "@/features/builder/lib/types"
 import {
-  outputsOf as stepOutputsOf,
   slugify,
-  STEP_KINDS,
   uid,
   type StepConfigs,
-  type StepData,
   type ThinkingLevel,
 } from "@/features/steps/lib/model"
+import { isWorkflowTool } from "@/features/agents/lib/catalog"
+import { isServedKind, kindInfo, waysOutOf } from "./catalog"
 import type { FileTypeId } from "./files"
 
 /*
@@ -40,7 +26,9 @@ import type { FileTypeId } from "./files"
  * branching step by one of its ways out. Sub-agents aren't drawn: they're
  * set up in their agent's settings, and can have sub-agents of their own.
  * The builder edits this model; `document.ts` writes it as the agent's JSON,
- * and the admin API builds every node into an ADK node (agent_graph).
+ * and the admin API builds every node into an ADK node (agent_graph). What
+ * each kind is called, its library group, its ways out and what a new one
+ * starts with are the admin API's node catalog's (`catalog.ts`).
  */
 
 export const AGENTS_ICON: IconProp = FlowSquareIcon
@@ -70,7 +58,10 @@ export const PI_READ_ONLY_TOOLS: PiTool[] = ["read", "grep", "find", "ls"]
 /**
  * The tools an LLM agent may have, set up in its settings: the Agents
  * builder's tool kinds, with their settings (`ChatConfigs`). An agent from
- * the Agents page is used as a tool (`saved_agent`), a workflow too.
+ * the Agents page is used as a tool (`saved_agent`), a workflow too. These
+ * are the ones its settings are written for (the format's); which of them
+ * it's offered, in what order and called what, is the Agents canvas's node
+ * catalog's (`workflow_tool`).
  */
 export const LLM_TOOL_KINDS = [
   "mcp",
@@ -84,8 +75,10 @@ export const LLM_TOOL_KINDS = [
 
 export type LlmToolKind = (typeof LLM_TOOL_KINDS)[number]
 
+/** Whether a kind is a tool an LLM agent may have now: served for workflows, and set up here. */
 export const isLlmToolKind = (value: unknown): value is LlmToolKind =>
-  (LLM_TOOL_KINDS as readonly unknown[]).includes(value)
+  (LLM_TOOL_KINDS as readonly unknown[]).includes(value) &&
+  isWorkflowTool(value as string)
 
 /** One of an LLM agent's tools. */
 export type LlmTool<K extends LlmToolKind = LlmToolKind> = {
@@ -161,8 +154,8 @@ export type SubAgent<K extends SubAgentKind = SubAgentKind> = {
 }[K]
 
 /**
- * Forge's steps a workflow takes as they are: their kinds, settings
- * and ways out come from steps/lib/model.ts.
+ * Forge's steps a workflow takes as they are: their kinds and settings
+ * come from steps/lib/model.ts, and their settings fields from step-fields.
  */
 export const FORGE_KINDS = [
   "approval",
@@ -171,6 +164,10 @@ export const FORGE_KINDS = [
   "transform",
   "filter",
   "delay",
+  "git_clone",
+  "git_branch",
+  "git_push",
+  "github_pull_request",
   "if",
   "switch",
   "match",
@@ -275,186 +272,11 @@ export type AgentStep<K extends AgentKind = AgentKind> = {
 }[K]
 
 /* -------------------------------------------------------------------------- */
-/* Catalog                                                                    */
+/* Kinds                                                                      */
 /* -------------------------------------------------------------------------- */
 
-export const AGENT_GROUPS: KindGroup[] = [
-  { id: "start", label: "Start" },
-  { id: "agents", label: "Agents" },
-  { id: "people", label: "People" },
-  { id: "actions", label: "Actions" },
-  { id: "logic", label: "Logic" },
-  { id: "finish", label: "Finish" },
-]
-
-type AgentKindInfo<K extends AgentKind> = KindInfo & {
-  defaults: () => AgentConfigs[K]
-}
-
-const FORGE_GROUPS: Record<ForgeKind, string> = {
-  approval: "people",
-  http: "actions",
-  bash: "actions",
-  transform: "actions",
-  filter: "actions",
-  delay: "actions",
-  if: "logic",
-  switch: "logic",
-  match: "logic",
-  loop: "logic",
-  for_each: "logic",
-  merge: "logic",
-  end: "finish",
-}
-
-/** A Forge step kind as the library shows it: as the workflow builder does. */
-function forgeKind<K extends ForgeKind>(kind: K): AgentKindInfo<K> {
-  const { defaults, ...info } = STEP_KINDS[kind]
-  return {
-    ...info,
-    group: FORGE_GROUPS[kind],
-    defaults: defaults as () => AgentConfigs[K],
-  }
-}
-
-const llmSettings = (): LlmSettings => ({
-  description: "",
-  instruction: "",
-  model: { provider: "", name: "" },
-  thinking_level: "",
-  output_schema: {},
-  include_contents: "default",
-  disallow_transfer_to_parent: false,
-  disallow_transfer_to_peers: false,
-  max_output_tokens: null,
-  sub_agents: [],
-  tools: [],
-})
-
-export const AGENT_KINDS: { [K in AgentKind]: AgentKindInfo<K> } = {
-  start: {
-    label: "Start",
-    group: "start",
-    icon: PlayIcon,
-    summary: "Where every run starts: what the person or system sends in.",
-    keywords: "start input begin entry",
-    terminal: true,
-    idPrefix: "start",
-    defaults: () => ({
-      input_schema: {},
-      allow_files: false,
-      file_types: [],
-      allow_file_system: false,
-      start_over: false,
-    }),
-  },
-  llm: {
-    label: "LLM agent",
-    group: "agents",
-    icon: Robot01Icon,
-    summary:
-      "A model works on what comes in with your instruction, and can hand off to its sub-agents.",
-    keywords: "llm ai model agent prompt instruction gemini delegate transfer",
-    orb: 0,
-    idPrefix: "agent",
-    defaults: () => ({
-      ...llmSettings(),
-      mode: "single_turn",
-      source: "inline",
-      agent: "",
-      version: null,
-      message: "",
-      inputs: {},
-    }),
-  },
-  sequential: {
-    label: "Sequential agent",
-    group: "agents",
-    icon: LeftToRightListNumberIcon,
-    summary:
-      "Runs its sub-agents one after another, each seeing what the last did.",
-    keywords: "sequence pipeline chain steps order team",
-    idPrefix: "sequential",
-    defaults: () => ({ description: "", sub_agents: [] }),
-  },
-  parallel: {
-    label: "Parallel agent",
-    group: "agents",
-    icon: DistributionIcon,
-    summary: "Runs its sub-agents at the same time, each on its own.",
-    keywords: "parallel concurrent fan out together team",
-    idPrefix: "parallel",
-    defaults: () => ({ description: "", sub_agents: [] }),
-  },
-  loop_agent: {
-    label: "Loop agent",
-    group: "agents",
-    icon: RepeatIcon,
-    summary:
-      "Runs its sub-agents in order, again and again, up to a number of passes.",
-    keywords: "loop repeat iterate refine critique team agent",
-    idPrefix: "loop_agent",
-    defaults: () => ({ description: "", sub_agents: [], max_iterations: 3 }),
-  },
-  saved: {
-    label: "Saved workflow",
-    group: "agents",
-    icon: AGENTS_ICON,
-    summary: "Runs another of the organization's workflows here, whole.",
-    keywords: "saved nested reuse subgraph workflow compose other agent",
-    idPrefix: "saved",
-    defaults: () => ({ agent: "", version: null, inputs: {} }),
-  },
-  pi_agent: {
-    label: "Pi agent",
-    group: "agents",
-    icon: AiProgrammingIcon,
-    summary:
-      "Pi, a coding agent, works in a folder of the run's: reads, searches and, if allowed, runs commands and changes files.",
-    keywords:
-      "pi coding agent code explore repository files folder bash shell git clone grep",
-    idPrefix: "pi",
-    defaults: () => ({
-      folder: "",
-      prompt: "",
-      instruction: "",
-      tools: [...PI_READ_ONLY_TOOLS],
-      model: { provider: "", name: "" },
-      thinking_level: "",
-      output_schema: {},
-      context_files: false,
-      timeout_seconds: 600,
-    }),
-  },
-  approval: forgeKind("approval"),
-  human_input: {
-    label: "Human input",
-    group: "people",
-    icon: UserQuestion01Icon,
-    summary: "Pauses for a person to answer; their answer is what it hands on.",
-    keywords: "human person input ask question approve pause review",
-    person: true,
-    idPrefix: "human_input",
-    defaults: () => ({ message: "", response_schema: {} }),
-  },
-  http: forgeKind("http"),
-  bash: forgeKind("bash"),
-  transform: forgeKind("transform"),
-  filter: forgeKind("filter"),
-  delay: forgeKind("delay"),
-  if: forgeKind("if"),
-  switch: forgeKind("switch"),
-  match: forgeKind("match"),
-  loop: forgeKind("loop"),
-  for_each: forgeKind("for_each"),
-  merge: forgeKind("merge"),
-  end: forgeKind("end"),
-}
-
-export const AGENT_KIND_LIST = Object.keys(AGENT_KINDS) as AgentKind[]
-
-export const isAgentKind = (value: unknown): value is AgentKind =>
-  typeof value === "string" && Object.hasOwn(AGENT_KINDS, value)
+/** Whether a kind is one a workflow can have now: served, and set up here. */
+export const isAgentKind = isServedKind
 
 /** The kinds a sub-agent can be, in the order its menu lists them. */
 export const SUB_AGENT_KINDS: SubAgentKind[] = [
@@ -467,28 +289,42 @@ export const SUB_AGENT_KINDS: SubAgentKind[] = [
 export const isSubAgentKind = (value: unknown): value is SubAgentKind =>
   typeof value === "string" && (SUB_AGENT_KINDS as string[]).includes(value)
 
+/** What only an LLM node has, not an LLM sub-agent. */
+const LLM_NODE_ONLY = [
+  "mode",
+  "source",
+  "agent",
+  "version",
+  "message",
+  "inputs",
+] as const satisfies readonly Exclude<
+  keyof AgentConfigs["llm"],
+  keyof LlmSettings
+>[]
+
 /** A sub-agent's settings: its kind's, without what only a node has. */
 export function subAgentDefaults<K extends SubAgentKind>(
   kind: K
 ): SubAgentConfigs[K] {
-  if (kind === "llm") return llmSettings() as SubAgentConfigs[K]
-  const defaults = AGENT_KINDS[kind].defaults() as SubAgentConfigs[K]
-  return defaults
+  if (kind !== "llm")
+    return kindInfo(kind).defaults() as unknown as SubAgentConfigs[K]
+  const settings: Partial<AgentConfigs["llm"]> = kindInfo("llm").defaults()
+  for (const key of LLM_NODE_ONLY) delete settings[key]
+  return settings as SubAgentConfigs[K]
 }
 
 /* -------------------------------------------------------------------------- */
 /* Outputs                                                                    */
 /* -------------------------------------------------------------------------- */
 
-const NEXT: StepOutput[] = [{ id: "next", label: "Next" }]
-
 /**
- * A node's ways out, in the order the canvas lists them: a Forge step's are
- * a workflow step's (Success / Error, True / False, a loop's Each item and
- * Done, none for an End); an ADK agent's, `next`.
+ * A node's ways out, in the order the canvas lists them, as its kind's are
+ * served: Success / Error, True / False, a case or rule each and the way
+ * for the rest, a loop's Each item and Done, none for an End; `next` for
+ * the rest.
  */
 export function outputsOf(step: AgentStep): StepOutput[] {
-  return isForgeKind(step.kind) ? stepOutputsOf(step as StepData) : NEXT
+  return waysOutOf(step.kind, step.config)
 }
 
 /** The Forge steps a run can wait at: a person deciding, or time passing. */
@@ -584,7 +420,7 @@ const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 export function nextNodeId(kind: AgentKind, taken: Iterable<string>) {
   const used = new Set(taken)
   if (kind === "start" && !used.has("start")) return "start"
-  const prefix = AGENT_KINDS[kind].idPrefix
+  const prefix = kindInfo(kind).idPrefix
   for (;;) {
     const random = crypto.getRandomValues(new Uint8Array(5))
     const id = `${prefix}_${Array.from(random, (b) => ID_ALPHABET[b % ID_ALPHABET.length]).join("")}`
@@ -598,7 +434,7 @@ export function newNode<K extends AgentKind>(
   steps: AgentStep[] = [],
   name?: string
 ): AgentStep<K> {
-  const info = AGENT_KINDS[kind]
+  const info = kindInfo(kind)
   return {
     kind,
     name:
@@ -614,7 +450,7 @@ export function newSubAgent<K extends SubAgentKind>(
   kind: K,
   taken: Iterable<string>
 ): SubAgent<K> {
-  const base = kind === "llm" ? "Sub-agent" : AGENT_KINDS[kind].label
+  const base = kind === "llm" ? "Sub-agent" : kindInfo(kind).label
   return {
     id: uid("sub"),
     kind,

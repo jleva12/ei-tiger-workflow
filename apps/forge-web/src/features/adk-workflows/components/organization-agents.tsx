@@ -82,6 +82,7 @@ import { formatRelative } from "@/lib/format"
 import { useScopeAccess } from "@/lib/hierarchy"
 import { parseTimestamp } from "@/lib/timestamps"
 import { agentFileName } from "./agent-files"
+import { NodeCatalogGate } from "./node-catalog-gate"
 
 /** A row of the table: one agent. */
 type AgentRow = {
@@ -275,22 +276,33 @@ function freshName(base: string, taken: AgentDocument[]) {
  * Workflow starts one from its start; the example and an import start
  * from more. The organization keeps them (the admin API, in MongoDB), so
  * everyone in it sees and reuses the same ones. Runs lists their runs by
- * status, each opening its own page.
+ * status, each opening its own page. It opens once the node catalog is
+ * loaded: each workflow is read and checked by its nodes' kinds.
  */
-export function OrganizationAgents({
-  organizationId,
-  organizationName,
-  tab,
-  onTabChange,
-  onOpenRun,
-}: {
+export function OrganizationAgents(props: OrganizationAgentsProps) {
+  return (
+    <NodeCatalogGate>
+      <AgentsPage {...props} />
+    </NodeCatalogGate>
+  )
+}
+
+type OrganizationAgentsProps = {
   organizationId: string
   organizationName: string
   tab: AgentsTab
   onTabChange: (tab: AgentsTab) => void
   /** Open a run's page (its ID). */
   onOpenRun: (taskId: string) => void
-}) {
+}
+
+function AgentsPage({
+  organizationId,
+  organizationName,
+  tab,
+  onTabChange,
+  onOpenRun,
+}: OrganizationAgentsProps) {
   const navigate = useNavigate()
   const list = useOrganizationAgents(organizationId)
   // Also on Overview, for the tab's count.

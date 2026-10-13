@@ -110,6 +110,9 @@ class RunServices:
     command_environment: Mapping[str, str] = field(default_factory=passed_environment)
     #: The most of a command's stdout, and of its stderr, kept.
     max_command_output_bytes: int = _DEFAULTS.command_max_output_bytes
+    #: The protocols the GitHub steps' git may use for a repository
+    #: (``support.git``): HTTPS; a test adds ``file`` for a local one.
+    git_protocols: tuple[str, ...] = ("https",)
     #: Called before each of an LLM agent's tools runs (ADK's
     #: ``before_tool_callback``): the run notes the call durably first, so an
     #: attempt that stops while it runs is answered for it, not run again

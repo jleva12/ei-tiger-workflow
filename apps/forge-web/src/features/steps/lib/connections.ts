@@ -1,11 +1,6 @@
-import {
-  CASE_TONES,
-  meaningsFor,
-  type ConnectionMeaning,
-  type EdgeTone,
-} from "@/features/builder/lib/connections"
+import { CASE_TONES, type EdgeTone } from "@/features/builder/lib/connections"
 import type { StepGraph } from "./document"
-import { BODY_KINDS, outputsOf, type StepData, type StepOutput } from "./model"
+import { BODY_KINDS, type StepData, type StepOutput } from "./model"
 
 /*
  * What a workflow's connections mean, for drawing them: the tone each way
@@ -23,6 +18,10 @@ export function toneOf(step: StepData, output: StepOutput, index: number): EdgeT
     // The second way out is how it went wrong.
     case "http":
     case "bash":
+    case "git_clone":
+    case "git_branch":
+    case "git_push":
+    case "github_pull_request":
     case "approval":
       return output.fallback ? "negative" : "positive"
     case "if":
@@ -37,9 +36,13 @@ export function toneOf(step: StepData, output: StepOutput, index: number): EdgeT
 
 /**
  * Each loop's (and for-each's) body, by its ID: the steps its Each item
- * way reaches before coming back to it (as the runner reads it).
+ * way (its body way, of `outputsOf`) reaches before coming back to it (as
+ * the runner reads it).
  */
-export function loopBodies(graph: StepGraph): Map<string, Set<string>> {
+export function loopBodies(
+  graph: StepGraph,
+  outputsOf: (step: StepData) => StepOutput[]
+): Map<string, Set<string>> {
   const targets = new Map<string, string[]>()
   for (const c of graph.connections) {
     const list = targets.get(c.source)
@@ -63,15 +66,4 @@ export function loopBodies(graph: StepGraph): Map<string, Set<string>> {
     bodies.set(step.id, body)
   }
   return bodies
-}
-
-/**
- * What each connection means, by the builder's edge ID. `edgeId` names a
- * connection the way the builder does.
- */
-export function meaningsOf(
-  graph: StepGraph,
-  edgeId: (c: StepGraph["connections"][number]) => string
-): Map<string, ConnectionMeaning> {
-  return meaningsFor(graph, edgeId, { outputsOf, toneOf, loopBodies })
 }

@@ -22,7 +22,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { AgentDocument } from "@/features/adk-workflows/lib/document"
-import { AGENT_KINDS } from "@/features/adk-workflows/lib/model"
+import { kindInfo } from "@/features/adk-workflows/lib/catalog"
 import { StatusNotice } from "@/features/runs/components/adk-run-page"
 import { runStatusDisplay } from "@/features/runs/lib/display"
 import { reachedSteps, runProgress } from "@/features/runs/lib/progress"
@@ -158,7 +158,7 @@ function StepRow({
   onShow: () => void
 }) {
   const kind = stepKindOf(step, doc)
-  const info = kind && AGENT_KINDS[kind]
+  const info = kind && kindInfo(kind)
   const took = stepDurationMs(step)
   const since = time(step.started_at)
   const timing =

@@ -29,7 +29,7 @@ import asyncio
 import os
 import re
 import signal
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -147,10 +147,29 @@ async def run_command(
     :raises StepFailed: When it can't start, or doesn't finish in time (with
         what it wrote by then).
     """
+    return await run_program((*BASH, command), cwd=cwd, env=env, seconds=seconds, max_bytes=max_bytes)
+
+
+async def run_program(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    seconds: float,
+    max_bytes: int,
+) -> Finished:
+    """
+    Run a program with its arguments as they are (no shell), to its end, as
+    :func:`run_command` runs bash: in a process group of its own, stopped
+    past its time, the end of what it wrote kept.
+
+    :param argv: The program, found on ``env``'s PATH, and its arguments.
+    :return: How it ended, whatever its exit code.
+    :raises StepFailed: When it can't start, or doesn't finish in time.
+    """
     try:
         process = await asyncio.create_subprocess_exec(
-            *BASH,
-            command,
+            *argv,
             cwd=cwd,
             env=dict(env),
             stdin=asyncio.subprocess.DEVNULL,
@@ -160,9 +179,9 @@ async def run_command(
             start_new_session=True,
         )
     except FileNotFoundError:
-        raise StepFailed("bash isn't on this worker's PATH") from None
+        raise StepFailed(f"{argv[0]} isn't on this worker's PATH") from None
     except (OSError, ValueError) as error:
-        raise StepFailed(f"Its command can't start: {getattr(error, 'strerror', None) or error}") from None
+        raise StepFailed(f"{argv[0]} can't start: {getattr(error, 'strerror', None) or error}") from None
     out, err = _End(max_bytes), _End(max_bytes)
     reading = asyncio.ensure_future(asyncio.gather(out.read(process.stdout), err.read(process.stderr)))
     timed_out = False

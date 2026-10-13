@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { createServer } from "vite"
+import { installNodeCatalog } from "./node-catalog.mjs"
 
 // The Agents page's model without a browser: a chat agent's document, what
 // can be attached where, its checks, and the builder store holding it.
@@ -20,9 +21,11 @@ const model = await load("/src/features/agents/lib/model.ts")
 const { validateChatAgent } = await load("/src/features/agents/lib/validate.ts")
 const input = await load("/src/features/agents/lib/input.ts")
 const { CHAT_AGENT_ADAPTER } = await load("/src/features/agents/lib/adapter.ts")
-const { CHAT_AGENT_JSON_SCHEMA } = await load("/src/features/agents/lib/schema.ts")
+const { chatAgentJsonSchema } = await load("/src/features/agents/lib/schema.ts")
 const { createBuilderStore, documentOf } = await load("/src/features/builder/components/store.ts")
+const catalog = await installNodeCatalog(server)
 await server.close()
+const CHAT_AGENT_JSON_SCHEMA = chatAgentJsonSchema()
 
 const ORG = "org-1"
 const example = () => exampleChatAgent(ORG)
@@ -140,7 +143,7 @@ test("agents saved with Google's built-in tools open without them", () => {
     "edges[5].target isn't a node; dropped.",
   ])
   assert.equal(read.doc.nodes.some((n) => n.kind === "google_search"), false)
-  assert.equal(model.CHAT_KIND_LIST.some((kind) => ["google_search", "url_context"].includes(kind)), false)
+  assert.equal(catalog.servedChatKinds().some((kind) => ["google_search", "url_context"].includes(kind)), false)
 })
 
 test("a code_execution node is Forge's Code execution tool, not Google's built-in", () => {
@@ -159,7 +162,7 @@ test("a code_execution node is Forge's Code execution tool, not Google's built-i
     outputs: [],
   })
   assert.equal(read.doc.edges.some((e) => e.source === "agent" && e.target === "code"), true)
-  assert.equal(model.CHAT_KINDS.code_execution.group, "tools")
+  assert.equal(catalog.chatKindInfo("code_execution").group, "tools")
 })
 
 test("agents calling each other in a circle, and saved agents and workflows that aren't there", () => {
@@ -213,10 +216,10 @@ test("Tidy up lays the agent out first, what it calls and hands off to after it"
 })
 
 test("the JSON Schema knows every kind", () => {
-  assert.deepEqual(CHAT_AGENT_JSON_SCHEMA.$defs.node.properties.kind.enum, model.CHAT_KIND_LIST)
-  for (const kind of model.CHAT_KIND_LIST) {
+  assert.deepEqual(CHAT_AGENT_JSON_SCHEMA.$defs.node.properties.kind.enum, catalog.KNOWN_CHAT_KINDS)
+  for (const kind of catalog.KNOWN_CHAT_KINDS) {
     const config = CHAT_AGENT_JSON_SCHEMA.$defs[`config_${kind}`]
-    assert.deepEqual(Object.keys(config.properties).sort(), Object.keys(model.CHAT_KINDS[kind].defaults()).sort(), kind)
+    assert.deepEqual(Object.keys(config.properties).sort(), Object.keys(catalog.chatKindInfo(kind).defaults()).sort(), kind)
   }
 })
 

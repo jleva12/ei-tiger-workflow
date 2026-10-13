@@ -72,6 +72,32 @@ export function leavesRunFolder(path: string): boolean {
   return false
 }
 
+// A repository as the GitHub steps take one: owner/name (on GitHub), or an
+// https:// URL.
+const REPOSITORY =
+  /^(?:(?:github\.com\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+|https:\/\/\S+)$/
+
+/** What's wrong with a repository written out (no {{ }} in it). */
+function repositoryIssue(value: string): string | undefined {
+  const written = value.trim()
+  if (!written) return "Give the repository: owner/name on GitHub, or its https:// URL."
+  if (written.includes("{{") || REPOSITORY.test(written)) return undefined
+  return written.startsWith("git@") || written.startsWith("ssh://")
+    ? "Give its https:// URL: the GitHub steps sign in over HTTPS, not SSH."
+    : "Give owner/name on GitHub, or the repository's https:// URL."
+}
+
+// What git won't take in a branch's name, written out (no {{ }} in it).
+const NOT_A_BRANCH = /\s|\.\.|[~^:?*[\\]|^[-/]|\/$|\.lock$|@\{|^@$/
+
+/** What's wrong with a branch's name written out. */
+function branchIssue(value: string, what: string): string | undefined {
+  const written = value.trim()
+  if (!written) return `Give ${what}.`
+  if (written.includes("{{") || !NOT_A_BRANCH.test(written)) return undefined
+  return `${written} isn't a name git takes for a branch: no spaces, .., ~ ^ : ? * [ or \\, and not starting with - or /.`
+}
+
 // An address: http(s) and no spaces except inside its {{ }} parts, or an
 // expression in {{ }}.
 const URLISH =
@@ -139,6 +165,81 @@ export function settingsIssues(
       )
       const variables = variableIssue(c.env.map((v) => v.name.trim()))
       need(!variables, "env", variables ?? "")
+      need(c.timeout_seconds >= 1, "timeout", "Give it at least a second.")
+      break
+    }
+    case "git_clone": {
+      const c = step.config
+      const repository = repositoryIssue(c.repository)
+      need(!repository, "repository", repository ?? "")
+      need(
+        !leavesRunFolder(c.folder),
+        "folder",
+        "Its folder is in the run's folder: give a path from it (backend), or leave it empty for one named after the repository."
+      )
+      need(
+        Number.isInteger(c.depth) && c.depth >= 0,
+        "depth",
+        "Give how many of the latest commits it gets, or 0 for all of them."
+      )
+      need(c.timeout_seconds >= 1, "timeout", "Give it at least a second.")
+      break
+    }
+    case "git_branch": {
+      const c = step.config
+      const branch = branchIssue(c.branch, "the branch's name")
+      need(!branch, "branch", branch ?? "")
+      need(
+        !leavesRunFolder(c.folder),
+        "folder",
+        "Its folder is in the run's folder: give the clone's folder, such as {{ steps.clone.output.folder }}."
+      )
+      need(c.timeout_seconds >= 1, "timeout", "Give it at least a second.")
+      break
+    }
+    case "git_push": {
+      const c = step.config
+      need(
+        Boolean(c.message.trim()),
+        "message",
+        "Write the commit's message."
+      )
+      need(
+        !leavesRunFolder(c.folder),
+        "folder",
+        "Its folder is in the run's folder: give the clone's folder, such as {{ steps.clone.output.folder }}."
+      )
+      warn(
+        !c.author_email.trim() ||
+          c.author_email.includes("{{") ||
+          c.author_email.includes("@"),
+        "author-email",
+        "That isn't an email address."
+      )
+      warn(
+        Boolean(c.credential),
+        "credential",
+        "Without a credential, GitHub refuses the push: pick one with a token for https://github.com."
+      )
+      need(c.timeout_seconds >= 1, "timeout", "Give it at least a second.")
+      break
+    }
+    case "github_pull_request": {
+      const c = step.config
+      const repository = repositoryIssue(c.repository)
+      need(!repository, "repository", repository ?? "")
+      const head = branchIssue(c.head.replace(/^[^:\s]+:/, ""), "the branch it merges")
+      need(!head, "head", head ?? "")
+      if (c.base.trim()) {
+        const base = branchIssue(c.base, "the branch it merges into")
+        need(!base, "base", base ?? "")
+      }
+      need(Boolean(c.title.trim()), "title", "Give the pull request a title.")
+      need(
+        Boolean(c.credential),
+        "credential",
+        "GitHub opens pull requests only for someone signed in: pick a credential with a token for https://api.github.com."
+      )
       need(c.timeout_seconds >= 1, "timeout", "Give it at least a second.")
       break
     }
@@ -259,6 +360,16 @@ const FIELDS: Record<string, string> = {
   headers: "headers",
   body: "body",
   command: "command",
+  repository: "repository",
+  folder: "folder",
+  "folder-repository": "folder",
+  depth: "depth",
+  branch: "branch",
+  "author-email": "author_email",
+  credential: "credential",
+  head: "head",
+  base: "base",
+  title: "title",
   "command-filled": "command",
   cwd: "cwd",
   env: "env",

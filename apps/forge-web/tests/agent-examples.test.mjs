@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { createServer } from "vite"
+import { installNodeCatalog } from "./node-catalog.mjs"
 
 // The example workflows (examples/workflows at the repository's root) import
 // into the builder as they are: nothing dropped, nothing to fix.
@@ -28,6 +29,7 @@ const { resolveExpression } = await load(
   "/src/features/steps/lib/expressions.ts"
 )
 const { typeLabel } = await load("/src/features/steps/lib/types.ts")
+await installNodeCatalog(server)
 await server.close()
 
 const EXAMPLES = new URL("../../../examples/workflows/", import.meta.url)

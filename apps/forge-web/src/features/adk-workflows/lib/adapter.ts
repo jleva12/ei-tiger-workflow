@@ -15,10 +15,8 @@ import {
   type AgentDocument,
   type AgentGraph,
 } from "./document"
+import { kindGroups, servedKindInfos, servedKinds } from "./catalog"
 import {
-  AGENT_GROUPS,
-  AGENT_KIND_LIST,
-  AGENT_KINDS,
   copyNode,
   isAgentKind,
   newNode,
@@ -37,15 +35,18 @@ import {
 // way's tone are found as in a workflow (a Loop agent runs its
 // sub-agents inside itself: no body on the canvas).
 const loopBodies = (graph: AgentGraph) =>
-  stepLoopBodies(graph as unknown as StepGraph)
+  stepLoopBodies(graph as unknown as StepGraph, (step) =>
+    outputsOf(step as AgentStep)
+  )
 
 const toneOf = (step: AgentStep, output: StepOutput, index: number): EdgeTone =>
   stepToneOf(step as StepData, output, index)
 
 /**
- * What the builder kit needs to build an agent: its kinds of node, the
- * one start (no way in; not in between two others), its document, its
- * checks and how it's laid out and drawn.
+ * What the builder kit needs to build an agent: its kinds of node (the
+ * node catalog's, read as the kit reads them: it's installed before a
+ * builder opens), the one start (no way in; not in between two others),
+ * its document, its checks and how it's laid out and drawn.
  */
 export const AGENT_ADAPTER: BuilderAdapter<
   AgentStep,
@@ -53,9 +54,15 @@ export const AGENT_ADAPTER: BuilderAdapter<
   AgentValidationContext,
   Scope
 > = {
-  kinds: AGENT_KINDS as Record<string, KindInfo>,
-  kindList: AGENT_KIND_LIST,
-  groups: AGENT_GROUPS,
+  get kinds(): Record<string, KindInfo> {
+    return servedKindInfos()
+  },
+  get kindList() {
+    return servedKinds()
+  },
+  get groups() {
+    return kindGroups()
+  },
   isKind: isAgentKind,
   newStep: (kind, steps) => newNode(kind, steps),
   nextStepId: nextNodeId,

@@ -73,7 +73,8 @@ import {
 } from "@/components/ui/tooltip"
 import type { MyOrganization } from "@/lib/access"
 import type { AgentDocument } from "@/features/adk-workflows/lib/document"
-import { AGENT_KINDS } from "@/features/adk-workflows/lib/model"
+import { useNodeCatalogs } from "@/features/adk-workflows/lib/api"
+import { kindInfo } from "@/features/adk-workflows/lib/catalog"
 import {
   adkApprovePermission,
   eventTitle,
@@ -762,7 +763,7 @@ function Step({
   onTrace?: (stepId: string) => void
 }) {
   const kind = stepKindOf(step, doc)
-  const info = kind && AGENT_KINDS[kind]
+  const info = kind && kindInfo(kind)
   const shown = stepStatusOf(step.status)
   const hasOutput = step.output !== null && step.output !== undefined
   const hasInput = step.input !== null && step.input !== undefined
@@ -1321,6 +1322,8 @@ export function AdkRunPage({
   const detail = useAdkRun(organization.id, runId)
   const run = detail.data
   const doc = useRunDocument(organization.id, run)
+  // Its steps are shown by their kinds: it opens once they're loaded too.
+  const catalogs = useNodeCatalogs()
   // The step the Trace tab's timeline is narrowed to.
   const [traceStep, setTraceStep] = React.useState<string>()
   const reference = shortId(runId)
@@ -1352,7 +1355,7 @@ export function AdkRunPage({
     view: { tab },
   })
 
-  if (!run || !shown) {
+  if (!run || !shown || !catalogs.ready) {
     if (detail.error?.status === 404) {
       return (
         <PageEmpty
@@ -1382,6 +1385,20 @@ export function AdkRunPage({
           }
         >
           {detail.error.message}
+        </ErrorCallout>
+      )
+    }
+    if (catalogs.error) {
+      return (
+        <ErrorCallout
+          title="Couldn't load the kinds of node"
+          action={
+            <Button variant="outline" size="sm" onClick={catalogs.retry}>
+              Retry
+            </Button>
+          }
+        >
+          {catalogs.error.message}
         </ErrorCallout>
       )
     }

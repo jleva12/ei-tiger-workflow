@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import { createServer } from "vite"
+import { installNodeCatalog } from "./node-catalog.mjs"
 
 // API credentials in the builders, without a browser: where one is sent (as
 // the runtime decides), and what the checks say about the credential an HTTP
@@ -27,6 +28,7 @@ const flow = {
   model: await load("/src/features/adk-workflows/lib/model.ts"),
   tools: await load("/src/features/adk-workflows/lib/tools.ts"),
 }
+await installNodeCatalog(server)
 await server.close()
 
 const ORG = "org-1"

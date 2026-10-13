@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input"
 import { adkName } from "@/features/adk-workflows/lib/model"
 import { chatScope } from "@/features/agents/lib/input"
 import {
-  AGENT_LIKE,
+  isAgentLike,
   type ChatAgentSettings,
   type ChatConfigs,
   type ChatKind,
@@ -62,7 +62,7 @@ function NodeName({ id, step }: { id: string; step: ChatStep }) {
   const nameId = React.useId()
   const name = adkName(step.name)
   const { issues, invalid, key } = useFieldIssues("name")
-  const said = AGENT_LIKE.has(step.kind) ? (
+  const said = isAgentLike(step.kind) ? (
     name ? (
       <>ADK calls it {code(name)}.</>
     ) : (

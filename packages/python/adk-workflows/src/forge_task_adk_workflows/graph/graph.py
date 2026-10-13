@@ -48,6 +48,7 @@ from google.adk.models import BaseLlm
 from google.adk.workflow import START, BaseNode, Edge
 from pydantic import PrivateAttr, ValidationError
 
+from forge_task_adk_workflows.graph.catalog import NODE_CATALOG
 from forge_task_adk_workflows.graph.data import INPUT_NODE, Scope, StepInfo
 from forge_task_adk_workflows.graph.errors import AgentBuildError, RunFailed
 from forge_task_adk_workflows.graph.factories import FACTORIES, Body, BuildContext
@@ -75,15 +76,6 @@ from forge_task_adk_workflows.graph.services import ModelCallbacks, Resolve, Run
 from forge_task_adk_workflows.graph.uses import bare_id
 
 KINDS = frozenset(FACTORIES)
-# The ways out of the steps that branch, when they're fixed.
-BRANCHES = {
-    "http": ("success", "error"),
-    "bash": ("success", "error"),
-    "approval": ("approved", "rejected"),
-    "if": ("true", "false"),
-    "loop": ("each", "done"),
-    "for_each": ("each", "done"),
-}
 # A sub-agent's ID: an LLM sub-agent's answer is kept in the state under it.
 SUB_AGENT_ID = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 # Steps that can pause a run: a loop whose body has one runs its items one at
@@ -152,20 +144,16 @@ def build_agent(
 
 
 def outputs_of(node: dict[str, Any]) -> list[str]:
-    """:return: A node's ways out, by ID, in order."""
-    kind = node.get("kind")
-    config = config_of(node)
-    if kind == "end":
-        return []
-    if kind in BRANCHES:
-        return list(BRANCHES[kind])
-    if kind == "switch":
-        cases = [text(case.get("id")) for case in items(config.get("cases"))]
-        return [*(case for case in cases if case), "default"]
-    if kind == "match":
-        arms = [text(arm.get("id")) for arm in items(config.get("arms"))]
-        return [*(arm for arm in arms if arm), "otherwise"]
-    return ["next"]
+    """:return: A node's ways out, by ID, in order: its kind's (``NODE_CATALOG``),
+    after one per row of its settings for a kind whose rows are ways out."""
+    kind = NODE_CATALOG.find(node.get("kind"))
+    if kind is None:
+        return ["next"]
+    rows = []
+    if kind.rows is not None:
+        found = items(config_of(node).get(kind.rows.setting))
+        rows = [text(row.get("id")) for row in found if isinstance(row, dict)]
+    return [*(row for row in rows if row), *(output.id for output in kind.outputs)]
 
 
 def _routed(node: dict[str, Any]) -> bool:
@@ -581,11 +569,17 @@ def _check_items(nodes: list[dict[str, Any]]) -> None:
 
 
 #: The steps that work in the run's folder, and what they do there.
-FOLDER_KINDS = {"pi_agent": "a Pi agent works", "bash": "a Bash step runs its command"}
+FOLDER_KINDS = {
+    "pi_agent": "a Pi agent works",
+    "bash": "a Bash step runs its command",
+    "git_clone": "a Clone repository step clones",
+    "git_branch": "a Create branch step works",
+    "git_push": "a Commit and push step works",
+}
 
 
 def _check_file_system(nodes: list[dict[str, Any]], start: dict[str, Any]) -> None:
-    """A step that works in the run's folder (a Pi agent, a Bash step): its agent's start must allow a file system."""
+    """A step that works in the run's folder (a Pi agent, a Bash step, a git step): its agent's start must allow a file system."""
     if config_of(start).get("allow_file_system") is True:
         return
     for node in nodes:
