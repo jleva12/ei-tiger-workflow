@@ -10,6 +10,8 @@ are and what they may use here:
   (``forge_admin.mcp_servers``), with their credentials.
 - :class:`OrganizationWorkflows`: the workflows an agent calls as tools,
   started on the async worker and waited for.
+- ``OrganizationSkills`` (``forge_admin.skills.vault``): the skills its
+  Skills tools name, from the organization's vault as they are now.
 """
 
 import logging
@@ -70,6 +72,7 @@ from forge_admin.knowledge.search import KnowledgeSearch
 from forge_admin.knowledge.tools import OrganizationKnowledgeBases
 from forge_admin.mcp_servers.toolset import mcp_toolset
 from forge_admin.overview.recording import AgentUsage
+from forge_admin.skills.vault import OrganizationSkills, SkillStamps
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +81,18 @@ WORKFLOW_WAIT = 120.0
 
 
 class MongoAgentSource:
-    """Agents by ID from the chat agent store, at the version a reference names."""
+    """
+    Agents by ID from the chat agent store, at the version a reference names.
 
-    def __init__(self, store: ChatAgentStore) -> None:
+    :param skill_stamps: When the skills an agent uses last changed: part of
+        its cache key, so a skill changed in the vault is used from the next turn.
+    """
+
+    def __init__(
+        self, store: ChatAgentStore, skill_stamps: SkillStamps | None = None
+    ) -> None:
         self.store = store
+        self.skill_stamps = skill_stamps
 
     async def get(self, ref: AgentRef) -> ResolvedAgent:
         record = await self.store.find(ref.agent_id)
@@ -116,6 +127,12 @@ class MongoAgentSource:
             document = parse_document(raw)
         except DocumentError as error:
             raise BuildError(str(error)) from error
+        if self.skill_stamps is not None:
+            stamp = await self.skill_stamps(
+                record.get("organization_id") or raw.get("organization_id"), raw
+            )
+            if stamp:
+                key = f"{key}#skills:{stamp}"
         return ResolvedAgent(document, version, key)  # type: ignore[arg-type]
 
 
@@ -295,10 +312,11 @@ def create_executor(
         knowledge_bases=OrganizationKnowledgeBases(
             sessions, knowledge_search, codegraph
         ),
+        skills=OrganizationSkills(sessions),
     )
     models = models or chat_agent_models(settings)
     return AgentExecutor(
-        MongoAgentSource(store),
+        MongoAgentSource(store, SkillStamps(sessions)),
         models=models,
         sessions=DatabaseSessionService(db_engine=engine),
         artifacts=InMemoryArtifactService(),

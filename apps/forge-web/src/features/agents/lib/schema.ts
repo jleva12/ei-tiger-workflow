@@ -201,6 +201,20 @@ export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
     },
     confirm: bool,
   },
+  skills: {
+    skills: {
+      type: "array",
+      items: text,
+      uniqueItems: true,
+      description:
+        "The organization's skills it has, by ID (its skills vault): the model is told each one's name and description and loads one when a task calls for it.",
+    },
+    run_scripts: {
+      ...bool,
+      description:
+        "The model may run the skills' scripts, where the runtime runs code; otherwise it reads a script and follows it itself.",
+    },
+  },
   code_execution: {
     confirm: {
       ...bool,
@@ -257,6 +271,12 @@ const FORMAT = {
       type: "object",
       description:
         'The saved agents it uses, each a chat agent document of its own, by "<id>@<version>": what an exported agent needs to run on its own.',
+      additionalProperties: { type: "object" },
+    },
+    skills: {
+      type: "object",
+      description:
+        "The skills its Skills tools (and its saved agents') use, by ID, each with its name, description, instructions and files: what an exported agent needs to run on its own.",
       additionalProperties: { type: "object" },
     },
   },

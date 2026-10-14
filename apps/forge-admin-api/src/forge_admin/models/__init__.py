@@ -25,6 +25,7 @@ from forge_admin.models.knowledge import (
     KnowledgeDocument,
 )
 from forge_admin.models.mcp_servers import McpOAuthFlow, McpServer
+from forge_admin.models.skills import Skill, SkillCreatorJob
 from forge_admin.models.users import User
 
 __all__ = [
@@ -48,5 +49,7 @@ __all__ = [
     "Permission",
     "PermissionGroupLink",
     "Role",
+    "Skill",
+    "SkillCreatorJob",
     "User",
 ]

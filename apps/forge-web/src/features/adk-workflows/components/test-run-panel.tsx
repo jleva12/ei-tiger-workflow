@@ -27,6 +27,7 @@ import { StatusNotice } from "@/features/runs/components/adk-run-page"
 import { runStatusDisplay } from "@/features/runs/lib/display"
 import { reachedSteps, runProgress } from "@/features/runs/lib/progress"
 import {
+  calledWithTitle,
   eventTitle,
   failureTitle,
   isFailureEvent,
@@ -169,8 +170,6 @@ function StepRow({
           ? formatDuration(Math.max(0, now - since))
           : "now"
         : undefined
-  const error = stepErrorOf(step.error)
-  const hasOutput = step.output !== null && step.output !== undefined
   return (
     <li>
       <button
@@ -198,20 +197,124 @@ function StepRow({
           </span>
         )}
       </button>
-      {selected && (error || hasOutput) && (
-        <div className="mt-1 mb-2 flex flex-col gap-1.5 pl-8">
-          {error && (
-            <p className="text-2xs wrap-anywhere text-destructive">
-              {error.message}
-            </p>
-          )}
-          {hasOutput && (
-            <JsonView value={step.output} className="max-h-60 text-3xs" />
-          )}
-        </div>
-      )}
+      {selected && <StepDetail step={step} kind={kind} doc={doc} />}
     </li>
   )
+}
+
+/** A value a step had, under a small heading. */
+function Detail({ title, value }: { title: string; value: unknown }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="text-3xs font-medium text-muted-foreground">
+        {title}
+      </span>
+      <JsonView value={value} className="max-h-60 text-3xs" />
+    </div>
+  )
+}
+
+/**
+ * What a selected step did, to debug it from the panel: why it failed (and
+ * what the error carries), what it was handed, what it worked out and sent,
+ * the tools its agents called (and what went wrong for each that failed),
+ * and what it handed on.
+ */
+function StepDetail({
+  step,
+  kind,
+  doc,
+}: {
+  step: AdkRunStep
+  kind: string | undefined
+  doc: AgentDocument | undefined
+}) {
+  const error = stepErrorOf(step.error)
+  const has = (value: unknown) => value !== null && value !== undefined
+  const calls = step.calls ?? []
+  if (
+    !error &&
+    !has(step.input) &&
+    !has(step.called_with) &&
+    !has(step.output) &&
+    calls.length === 0
+  )
+    return null
+  return (
+    <div className="mt-1 mb-2 flex min-w-0 flex-col gap-2 pl-8">
+      {error && (
+        <p className="text-2xs wrap-anywhere text-destructive">
+          {step.status === "failed"
+            ? error.message
+            : `Took its Error way: ${error.message}`}
+          {error.code && (
+            <code className="ml-1.5 text-3xs text-muted-foreground">
+              {error.code}
+            </code>
+          )}
+        </p>
+      )}
+      {error && has(error.more) && (
+        <Detail title="Error details" value={error.more} />
+      )}
+      {has(step.input) && (
+        <Detail
+          title={
+            step.input_from
+              ? `Input, from ${stepNameOf({ id: step.input_from, name: "", kind: "" }, doc)}`
+              : "Input"
+          }
+          value={step.input}
+        />
+      )}
+      {has(step.called_with) && (
+        <Detail title={calledWithTitle(kind)} value={step.called_with} />
+      )}
+      {calls.length > 0 && (
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="text-3xs font-medium text-muted-foreground">
+            {calls.length === 1 ? "1 tool call" : `${calls.length} tool calls`}
+          </span>
+          {calls.map((call) => (
+            <div key={call.id} className="flex min-w-0 flex-col gap-0.5">
+              <span className="flex min-w-0 items-center gap-1.5 text-2xs">
+                <code className="min-w-0 truncate text-foreground">
+                  {call.name}
+                </code>
+                <span
+                  className={cn(
+                    "shrink-0",
+                    call.status === "failed"
+                      ? "text-destructive"
+                      : "text-muted-foreground"
+                  )}
+                >
+                  {CALL_STATUS[call.status] ?? call.status}
+                </span>
+              </span>
+              {call.error && (
+                <p className="text-3xs wrap-anywhere text-destructive">
+                  {call.error}
+                </p>
+              )}
+              <JsonView
+                value={{ sent: call.args, answered: call.response }}
+                className="max-h-40 text-3xs"
+              />
+            </div>
+          ))}
+        </div>
+      )}
+      {has(step.output) && <Detail title="Output" value={step.output} />}
+    </div>
+  )
+}
+
+const CALL_STATUS: Record<string, string> = {
+  done: "answered",
+  failed: "failed",
+  waiting: "waits to be allowed",
+  running: "calling",
 }
 
 /**

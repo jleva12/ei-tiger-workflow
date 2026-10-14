@@ -657,7 +657,8 @@
             "openapi",
             "saved_agent",
             "adk_workflow",
-            "code_execution"
+            "code_execution",
+            "skills"
           ]
         },
         "name": {
@@ -777,6 +778,22 @@
             "properties": {
               "config": {
                 "$ref": "#/$defs/tool_config_code_execution"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "skills"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/tool_config_skills"
               }
             }
           }
@@ -1265,7 +1282,7 @@
     },
     "config_http": {
       "type": "object",
-      "description": "Calls a URL and hands on the response. Hands on {status, headers, body} by its success way, body held to output_schema when it declares one. Its error way hands on nothing; steps.<id>.error is {message, status?, body?, expression?}.",
+      "description": "Calls a URL and hands on the response; a status of its own (404, 401, 4xx) can take a way of its own. Hands on {status, headers, body} by its success way, body held to output_schema when it declares one. Its error way hands on nothing; steps.<id>.error is {message, status?, body?, expression?}.",
       "required": [
         "method",
         "url",
@@ -1275,7 +1292,8 @@
         "timeout_seconds",
         "retries",
         "output_schema",
-        "credential"
+        "credential",
+        "statuses"
       ],
       "additionalProperties": false,
       "properties": {
@@ -1358,6 +1376,26 @@
         "credential": {
           "type": "string",
           "description": "One of the organization's credentials, by ID: its auth (an API key, a token, OAuth) goes with each request, and only to the URLs it's for. Empty for none."
+        },
+        "statuses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "codes"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "codes": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Ways out of their own, before Success and Error, each by its id: the first whose codes (404, \"401, 403\", 4xx, 500-599, apart by commas or spaces) hold the response's status is taken, handing on the response, not retried. One no edge leaves ends the run's way there, without failing."
         }
       }
     },
@@ -2106,6 +2144,29 @@
         "confirm": {
           "type": "boolean",
           "description": "A person confirms each run, seeing the code, before it runs."
+        }
+      }
+    },
+    "tool_config_skills": {
+      "type": "object",
+      "description": "A tool: Skills from the organization's vault: instructions and files the agent loads when a task calls for one.",
+      "required": [
+        "skills",
+        "run_scripts"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true,
+          "description": "The organization's skills it has, by ID (its skills vault): the model is told each one's name and description and loads one when a task calls for it."
+        },
+        "run_scripts": {
+          "type": "boolean",
+          "description": "The model may run the skills' scripts, where the runtime runs code; otherwise it reads a script and follows it itself."
         }
       }
     },

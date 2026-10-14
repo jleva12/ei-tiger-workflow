@@ -72,6 +72,8 @@ const ERROR = t.object(
     body: t.unknown(
       "The response's body, when it answered: a status that isn't 2xx, or a body that doesn't fit what it returns."
     ),
+    method: t.string("The request's method, when it answered with a status that isn't 2xx."),
+    url: t.string("The URL it sent the request to, when it answered with a status that isn't 2xx."),
     expression: t.string("The expression that failed, when one did."),
   },
   "Why the step took its Error way.",
@@ -196,6 +198,16 @@ const eachOf = (step: BaseStep) =>
     ? (step as unknown as { config: EachConfig }).config
     : undefined
 
+/** What an HTTP request hands on: its response, with `body`. */
+const httpResponse = (body: DataType): DataType =>
+  t.object({
+    status: t.number("The response's HTTP status.", true),
+    headers: t.object({}, "The response's headers, by lowercase name.", {
+      open: true,
+    }),
+    body,
+  })
+
 /** What a step hands on, as far as its settings say. */
 export function outputTypeOf(
   step: StepData,
@@ -210,18 +222,14 @@ export function outputTypeOf(
         decided_at: t.string("When.", { format: "date-time" }),
       })
     case "http":
-      return t.object({
-        status: t.number("The response's HTTP status.", true),
-        headers: t.object({}, "The response's headers, by lowercase name.", {
-          open: true,
-        }),
-        body: Object.keys(step.config.output_schema).length
+      return httpResponse(
+        Object.keys(step.config.output_schema).length
           ? {
               ...fromJsonSchema(step.config.output_schema),
               description: "The response's body, as declared.",
             }
-          : t.unknown("The response's body: parsed when it's JSON, else text."),
-      })
+          : t.unknown("The response's body: parsed when it's JSON, else text.")
+      )
     case "bash":
       return t.object({
         exit_code: t.number("Its exit code: 0, by its Success way.", true),
@@ -477,6 +485,10 @@ export function scopesFor<S extends BaseStep>(
         `Nothing: ${source.data.name} took its Error way. Why is in steps.${source.id}.error.`
       )
     }
+    // An HTTP request's status way hands on the response, its body not the
+    // one a success declares.
+    if (source.data.kind === "http" && link.output !== "success")
+      return httpResponse(t.unknown("The response's body: parsed when it's JSON, else text."))
     // If, Switch and Match hand on what came into them.
     if (PASS_THROUGH.has(source.data.kind))
       return previousOf(source.id) ?? t.unknown()
@@ -521,10 +533,14 @@ export function scopesFor<S extends BaseStep>(
     reading.add(id)
     let type: DataType
     try {
-      // Ways from one step hand on the same, but for its Each item and Error ways.
+      // Ways from one step hand on the same, but for its Each item and Error
+      // ways, and an HTTP request's status ways.
       const ways = new Map<string, { source: string; output: string }>()
       for (const link of links) {
-        const special = link.output === "each" || link.output === "error"
+        const special =
+          link.output === "each" ||
+          link.output === "error" ||
+          (byId.get(link.source)?.data.kind === "http" && link.output !== "success")
         ways.set(`${link.source}:${special ? link.output : ""}`, link)
       }
       const types = [...ways.values()].map(handedOn)

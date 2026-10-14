@@ -15,8 +15,11 @@ export function toneOf(step: StepData, output: StepOutput, index: number): EdgeT
   if (output.body) return "loop"
   if (!output.branch) return "neutral"
   switch (step.kind) {
-    // The second way out is how it went wrong.
+    // A status way of its own is a case; then Success and Error.
     case "http":
+      if (output.id !== "success" && !output.fallback) return CASE_TONES[index % CASE_TONES.length]
+      return output.fallback ? "negative" : "positive"
+    // The second way out is how it went wrong.
     case "bash":
     case "git_clone":
     case "git_branch":

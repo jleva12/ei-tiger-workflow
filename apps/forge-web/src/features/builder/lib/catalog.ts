@@ -22,6 +22,7 @@ import {
   HourglassIcon,
   LeftToRightListBulletIcon,
   LeftToRightListNumberIcon,
+  MagicWand01Icon,
   McpServerIcon,
   PlayIcon,
   RepeatIcon,
@@ -116,6 +117,7 @@ const ICONS: Record<string, IconProp> = {
   "git-commit": GitCommitIcon,
   "git-pull-request-create": GitPullRequestCreateIcon,
   "flag-02": Flag02Icon,
+  "magic-wand-01": MagicWand01Icon,
 }
 
 function infoOf(kind: CatalogKind): CatalogKindInfo {

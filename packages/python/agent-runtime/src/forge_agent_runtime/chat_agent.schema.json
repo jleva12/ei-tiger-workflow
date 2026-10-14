@@ -83,6 +83,13 @@
       "additionalProperties": {
         "type": "object"
       }
+    },
+    "skills": {
+      "type": "object",
+      "description": "The skills its Skills tools (and its saved agents') use, by ID, each with its name, description, instructions and files: what an exported agent needs to run on its own.",
+      "additionalProperties": {
+        "type": "object"
+      }
     }
   },
   "$defs": {
@@ -115,7 +122,8 @@
             "openapi",
             "mcp",
             "adk_workflow",
-            "code_execution"
+            "code_execution",
+            "skills"
           ]
         },
         "name": {
@@ -290,6 +298,22 @@
             "properties": {
               "config": {
                 "$ref": "#/$defs/config_code_execution"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "skills"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_skills"
               }
             }
           }
@@ -786,6 +810,29 @@
         "confirm": {
           "type": "boolean",
           "description": "A person confirms each run, seeing the code, before it runs."
+        }
+      }
+    },
+    "config_skills": {
+      "type": "object",
+      "description": "Skills from the organization's vault: instructions and files the agent loads when a task calls for one.",
+      "required": [
+        "skills",
+        "run_scripts"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true,
+          "description": "The organization's skills it has, by ID (its skills vault): the model is told each one's name and description and loads one when a task calls for it."
+        },
+        "run_scripts": {
+          "type": "boolean",
+          "description": "The model may run the skills' scripts, where the runtime runs code; otherwise it reads a script and follows it itself."
         }
       }
     }

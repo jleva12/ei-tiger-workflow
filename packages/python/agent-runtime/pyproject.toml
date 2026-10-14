@@ -23,7 +23,8 @@ dependencies = [
     # and MCP tools' results held to their output schemas so (forge_common.mcp)
     "forge-common[adk,adk-models,mcp,patterns]",
     "forge-jsonata",                  # instructions' {{ }} templates are JSONata
-    "google-adk>=2.9.2",
+    # Skills tools: SkillToolset's eager discovery (skills.skill_toolset)
+    "google-adk>=2.10.0",
     "httpx>=0.28",
     "jsonschema>=4.23",
     # MCP tools: ADK's McpToolset exists only with it; 2.x's results check is
@@ -31,6 +32,7 @@ dependencies = [
     "mcp>=2.3.0,<3",
     "pydantic>=2.11",
     "pydantic-settings>=2.6",
+    "pyyaml>=6.0",                    # skills' SKILL.md frontmatter
 ]
 
 [project.optional-dependencies]

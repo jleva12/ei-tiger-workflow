@@ -186,9 +186,27 @@ test("an Error way hands on nothing: why is in the step's error", () => {
   const scope = agentTypes(toGraph(doc)).scopeOf("oops")
   assert.equal(label(scope.roots.get("previous").type), "null")
   assert.match(scope.roots.get("previous").type.description, /steps\.fetch\.error/)
-  assert.deepEqual(labels(scope, "steps.fetch.error."), ["message", "status", "body", "expression"])
+  assert.deepEqual(labels(scope, "steps.fetch.error."), ["message", "status", "body", "method", "url", "expression"])
   assert.match(problems(scope, "steps.fetch.error.reason")[0], /has no reason/)
   assert.match(problems(scope, "previous.status")[0], /null/)
+})
+
+test("an HTTP request's status way hands on the response, its body not the one a success declares", () => {
+  const [id, kind, name, config] = FETCH
+  const doc = agent(
+    [
+      ["start", "start", "Start"],
+      [id, kind, name, { ...config, statuses: [{ id: "gone", codes: "404" }] }],
+      ["missing", "transform", "Missing", { expression: "previous.body" }],
+      ["found", "transform", "Found", { expression: "previous.body" }],
+    ],
+    [["start", "next", "fetch"], ["fetch", "gone", "missing"], ["fetch", "success", "found"]]
+  )
+  assert.deepEqual(issues(doc), [])
+  const types = agentTypes(toGraph(doc))
+  assert.equal(typeIn(types.scopeOf("missing"), "previous.status"), "integer")
+  assert.equal(typeIn(types.scopeOf("missing"), "previous.body"), "any")
+  assert.notEqual(typeIn(types.scopeOf("found"), "previous.body"), "any")
 })
 
 test("a merge holds what each way in handed on: an If's, what came into it", () => {

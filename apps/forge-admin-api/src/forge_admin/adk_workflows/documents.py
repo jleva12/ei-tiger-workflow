@@ -84,7 +84,8 @@ ADDED_SETTINGS: dict[str, dict[str, Any]] = {
     },
     # 2026-10-09: the organization's credential it signs its requests with.
     # 2026-10-12: its query parameters, by name and value.
-    "http": {"credential": "", "query": []},
+    # 2026-10-14: ways out of their own for the statuses each names.
+    "http": {"credential": "", "query": [], "statuses": []},
 }
 # The same for sub-agents, in a node's settings.
 ADDED_SUB_AGENT_SETTINGS: dict[str, dict[str, Any]] = {"llm": {"tools": []}}

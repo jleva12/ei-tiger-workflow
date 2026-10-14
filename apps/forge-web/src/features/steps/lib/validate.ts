@@ -2,6 +2,7 @@ import type { IssueLevel } from "@/features/builder/lib/types"
 import { resolveExpression } from "./expressions"
 import type { StepData } from "./model"
 import type { Scope } from "./scope"
+import { readStatuses, shadowed } from "./statuses"
 import { oneOf, valuesOf } from "./types"
 
 /*
@@ -147,6 +148,26 @@ export function settingsIssues(
         "body",
         "A GET request sends no body; pick another method or clear it."
       )
+      // Each status way names statuses, and some no earlier way takes first.
+      const earlier: [number, number][][] = []
+      for (const way of c.statuses ?? []) {
+        if (!way.codes.trim()) {
+          need(false, "status-empty", "Every status way needs the statuses that take it.")
+          continue
+        }
+        const read = readStatuses(way.codes)
+        if ("problem" in read) {
+          need(false, "status-codes", `Status way ${way.codes.trim()}: ${read.problem}`)
+          continue
+        }
+        const taken = shadowed(earlier, read.ranges)
+        warn(
+          taken.length === 0,
+          "status-twice",
+          `Status way ${way.codes.trim()}: an earlier way takes ${taken.length === 1 ? taken[0] : `${taken[0]}…${taken[taken.length - 1]}`} first.`
+        )
+        earlier.push(read.ranges)
+      }
       break
     }
     case "bash": {
@@ -381,6 +402,9 @@ const FIELDS: Record<string, string> = {
   cases: "cases",
   "case-empty": "cases",
   "case-twice": "cases",
+  "status-empty": "statuses",
+  "status-codes": "statuses",
+  "status-twice": "statuses",
   arms: "arms",
   "arm-empty": "arms",
   items: "items",

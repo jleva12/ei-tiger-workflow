@@ -37,6 +37,7 @@ import {
   type AdkRunDetail,
 } from "@/features/runs/lib/runs"
 import {
+  calledWith,
   eventKinds,
   eventSummary,
   gapMs,
@@ -465,6 +466,7 @@ function Inspector({
     [event.state_delta]
   )
   const step = label(event.step)
+  const sent = calledWith(event)
   const answered = new Map(
     trace.events.flatMap((each) =>
       each.responses.map((response) => [response.id, each.seq] as const)
@@ -552,6 +554,18 @@ function Inspector({
           <ErrorCallout title={event.error.code || "It failed"}>
             {event.error.message || "No message was recorded."}
           </ErrorCallout>
+        </Part>
+      )}
+
+      {sent !== undefined && (
+        <Part
+          title="Called with"
+          meta={<CopyButton value={json(sent)} label="Copy" size="xs" />}
+        >
+          <p className="text-xs text-muted-foreground">
+            What the step worked out and sent, kept before it sent it.
+          </p>
+          <ValueTree value={sent} openDepth={2} className="max-h-80" />
         </Part>
       )}
 

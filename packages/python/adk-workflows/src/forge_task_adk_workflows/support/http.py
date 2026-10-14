@@ -17,7 +17,9 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import re
 import socket
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -29,6 +31,8 @@ from forge_task_adk_workflows.support.errors import StepFailed
 MAX_REDIRECTS = 5
 #: Statuses worth trying again.
 RETRYABLE = {408, 425, 429, 500, 502, 503, 504}
+#: How a status way's codes may be written: ``404``, ``4xx``, ``500-599``.
+_CODE = re.compile(r"^(?:([1-5])xx|([1-5]\d\d)(?:-([1-5]\d\d))?)$", re.IGNORECASE)
 
 
 def _refused(address: str) -> bool:
@@ -97,3 +101,30 @@ def parse_body(raw: bytes, content_type: str) -> Any:
         except json.JSONDecodeError:
             return text
     return text
+
+
+def statuses_of(codes: str) -> Callable[[int], bool]:
+    """
+    :param codes: HTTP statuses, as a status way names them: each a status
+        (``404``), a class (``4xx``) or a range (``500-599``), apart by commas
+        or spaces.
+    :return: Whether a status is one of them.
+    :raises ValueError: When one isn't a status, saying which.
+    """
+    ranges: list[tuple[int, int]] = []
+    for token in re.split(r"[\s,]+", codes.strip()):
+        if not token:
+            continue
+        found = _CODE.match(token)
+        if found is None:
+            raise ValueError(f"{token!r} isn't a status (404), a class (4xx) or a range (500-599)")
+        klass, low, high = found.groups()
+        if klass:
+            ranges.append((int(klass) * 100, int(klass) * 100 + 99))
+        elif high and int(high) < int(low):
+            raise ValueError(f"{token!r} ends before it starts")
+        else:
+            ranges.append((int(low), int(high or low)))
+    if not ranges:
+        raise ValueError("it names no status")
+    return lambda status: any(low <= status <= high for low, high in ranges)

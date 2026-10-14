@@ -165,6 +165,23 @@ test("a node's ways out are its kind's, a case or rule each before them", () => 
     { id: "success", label: "Success", branch: true },
     { id: "error", label: "Error", branch: true, fallback: true },
   ])
+  // An HTTP request's status ways, each named by its statuses, before Success and Error.
+  assert.deepEqual(
+    ways("http", {
+      statuses: [
+        { id: "gone", codes: "404" },
+        { id: "denied", codes: " 401, 403 " },
+        { id: "blank", codes: "" },
+      ],
+    }),
+    [
+      { id: "gone", label: "404", branch: true },
+      { id: "denied", label: "401, 403", branch: true },
+      { id: "blank", label: "Status way 3", branch: true },
+      { id: "success", label: "Success", branch: true },
+      { id: "error", label: "Error", branch: true, fallback: true },
+    ]
+  )
   assert.deepEqual(ways("loop"), [
     { id: "each", label: "Each item", branch: true, body: true },
     { id: "done", label: "Done", branch: true },

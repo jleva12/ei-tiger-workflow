@@ -11,7 +11,8 @@ once and the run carries what the worker needs:
   repositories with a code graph, which the worker searches, and how they
   connect;
 - MCP servers: that they're the organization's (the worker connects to them
-  itself, with their credentials, as they're kept then).
+  itself, with their credentials, as they're kept then);
+- skills: each whole, as it is when the run starts.
 """
 
 from collections.abc import Sequence
@@ -26,6 +27,7 @@ from forge_admin.knowledge.designs import designs_of
 from forge_admin.knowledge.graph import searchable
 from forge_admin.models import KnowledgeBase, McpServer
 from forge_admin.models.knowledge import RAG, SYSTEM
+from forge_admin.skills.vault import bundles_of
 
 
 class RunResources:
@@ -84,7 +86,9 @@ class RunResources:
             if found is None:
                 raise LookupError(f"{name} has no version {number}")
             document = found["document"]
-        bundled, _notes = await bundle(store, self.organization_id, document)
+        bundled, _notes = await bundle(
+            store, self.organization_id, document, skills=self.skills
+        )
         return bundled
 
     async def knowledge_bases(self, ids: Sequence[str]) -> dict[str, dict[str, Any]]:
@@ -125,6 +129,11 @@ class RunResources:
                 snapshot[kb.id]["connections"] = designs[kb.id]["connections"]
                 snapshot[kb.id]["design"] = designs[kb.id]
         return snapshot
+
+    async def skills(self, ids: Sequence[str]) -> dict[str, Any]:
+        """:return: Those of the IDs that are the organization's skills, whole, by ID."""
+        async with self.sessions() as session:
+            return await bundles_of(session, self.organization_id, ids)
 
     async def mcp_servers(self, ids: Sequence[str]) -> set[str]:
         """:return: Those of the IDs that are the organization's MCP servers."""

@@ -807,6 +807,7 @@ function useToolLookups(): ToolLookups {
       knowledgeBases: lookups.knowledgeBases,
       mcpServers: lookups.mcpServers,
       credentials: lookups.credentials,
+      skills: lookups.skills,
     }),
     [lookups]
   )

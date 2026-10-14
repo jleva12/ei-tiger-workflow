@@ -61,7 +61,7 @@ class DraftRead(BaseModel):
     model: str
 
 
-def _model(request: Request) -> BaseLlm:
+def assistant_model(request: Request) -> BaseLlm:
     """
     The assistant's models, or the model its agent runs on (a test's).
 
@@ -105,7 +105,7 @@ async def write_instruction(
         it takes too long.
     """
     await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
-    model = _model(request)
+    model = assistant_model(request)
     state = request.app.state
     found = await resolve(
         body.brief,

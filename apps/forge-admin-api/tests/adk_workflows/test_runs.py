@@ -214,6 +214,7 @@ def test_a_run_is_kept_with_its_documents_session_and_member_and_queued() -> Non
         "saved": {"ag_leaf000001": leaf},
         "chat_agents": {},
         "knowledge_bases": {},
+        "skills": {},
         "input": {"n": 1},
         "files": [],
         "session_id": session_id,

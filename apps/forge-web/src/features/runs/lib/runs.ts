@@ -383,6 +383,13 @@ export type AdkRunStep = {
   /** What it was handed (its `previous`), and the step that handed it on; absent from older APIs. */
   input?: unknown
   input_from?: string | null
+  /**
+   * What it worked out and sent, kept before it sent it (so it's there
+   * though the step failed): a saved workflow's inputs, an Agents-page
+   * agent's `{message, inputs}`, an HTTP request's `{method, url, headers
+   * (names), body}`. Null for other steps; absent from older APIs.
+   */
+  called_with?: unknown
   /** What it set in the session's state, in order; absent from older APIs. */
   state_changes?: AdkStateChange[]
   /**
@@ -406,7 +413,26 @@ export type AdkToolCall = {
   status: "done" | "failed" | "waiting" | "running"
   /** What it answered; a long answer as `{truncated}`. */
   response: unknown
+  /** What a failed call's answer says went wrong (a tool's reason, a workflow run's error); absent from older APIs. */
+  error?: string | null
   at: string | null
+}
+
+/** How a step's `called_with` is titled, by its kind. */
+export function calledWithTitle(kind: string | undefined) {
+  if (kind === "saved") return "Started its workflow with"
+  if (kind === "llm") return "Asked its agent"
+  if (kind === "http") return "Request sent"
+  return "Called with"
+}
+
+/** The run a call started: a workflow an LLM agent called as a tool. */
+export function callRunId(call: Pick<AdkToolCall, "response">) {
+  const response = call.response
+  if (!response || typeof response !== "object" || Array.isArray(response))
+    return undefined
+  const id = (response as Record<string, unknown>).run_id
+  return typeof id === "string" && id ? id : undefined
 }
 
 /** A run's steps, read from its ADK session. */
@@ -497,8 +523,20 @@ export function stepErrorOf(error: unknown): StepError | undefined {
           : "It failed",
   }
   if (named) found.code = named
-  if (keys.length)
-    found.more = keys.length === 1 && keys[0] === "body" ? rest.body : rest
+  // An HTTP request's method and URL are in its message already.
+  const telling = keys.filter(
+    (key) =>
+      !(
+        (key === "method" || key === "url") &&
+        typeof rest[key] === "string" &&
+        found.message.includes(rest[key] as string)
+      )
+  )
+  if (telling.length)
+    found.more =
+      telling.length === 1 && telling[0] === "body"
+        ? rest.body
+        : Object.fromEntries(telling.map((key) => [key, rest[key]]))
   return found
 }
 

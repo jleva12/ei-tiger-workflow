@@ -36,6 +36,7 @@ from forge_admin.api.routes import (
     permission_groups,
     permissions,
     roles,
+    skills,
     users,
 )
 from forge_admin.api.server import ApiServer
@@ -58,6 +59,7 @@ ROUTERS = [
     knowledge_repositories.router,
     mcp_servers.router,
     api_credentials.router,
+    skills.router,
     openapi_specs.router,
     instruction_writer.router,
     code_graph.router,

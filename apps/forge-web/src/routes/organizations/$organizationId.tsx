@@ -13,6 +13,7 @@ import { OrganizationAgents } from "@/features/adk-workflows/components/organiza
 import { OrganizationChatAgents } from "@/features/agents/components/organization-chat-agents"
 import { OrganizationMcpServers } from "@/features/mcp-servers/components/organization-mcp-servers"
 import { OrganizationCredentials } from "@/features/credentials/components/organization-credentials"
+import { OrganizationSkills } from "@/features/skills/components/organization-skills"
 import { OrganizationApiKeys } from "@/features/api-keys/components/organization-api-keys"
 import { OrganizationKnowledge } from "@/features/knowledge/components/organization-knowledge"
 import { OrganizationMembers } from "@/features/admin/components/organization-members"
@@ -128,6 +129,9 @@ export const Route = createFileRoute("/organizations/$organizationId")({
       ...(view === "credentials" &&
         typeof search.credential === "string" &&
         search.credential && { credential: search.credential }),
+      ...(view === "skills" &&
+        typeof search.skill === "string" &&
+        search.skill && { skill: search.skill }),
       ...(view === "conversations" && conversationSearch(search)),
       ...(view === "knowledge" &&
         repositories && {
@@ -150,6 +154,7 @@ function OrganizationWorkspacePage() {
     agentRunTab = "overview",
     mcpServer,
     credential,
+    skill,
     knowledgeTab,
     repository,
     q,
@@ -386,6 +391,18 @@ function OrganizationWorkspacePage() {
           onOpenCredential={(id) =>
             void navigate({
               search: (prev) => ({ ...prev, credential: id }),
+              replace: true,
+            })
+          }
+        />
+      ) : view === "skills" ? (
+        <OrganizationSkills
+          organizationId={organizationId}
+          organizationName={organization.name}
+          openSkill={skill}
+          onOpenSkill={(id) =>
+            void navigate({
+              search: (prev) => ({ ...prev, skill: id }),
               replace: true,
             })
           }

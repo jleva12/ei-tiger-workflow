@@ -4,6 +4,7 @@ import {
   FlowSquareIcon,
   Key01Icon,
   LockKeyIcon,
+  MagicWand01Icon,
   McpServerIcon,
 } from "@hugeicons/core-free-icons"
 
@@ -23,7 +24,9 @@ import type { AdkRunTab } from "@/features/runs/lib/runs"
  * /organizations/$organizationId/chat-agents/$chatAgentId), MCP servers
  * (the remote MCP servers its agents use as tools, each opening in a dialog),
  * Credentials (what its HTTP steps and its agents' HTTP and OpenAPI tools
- * sign in to APIs with, each opening in a dialog), Knowledge bases (each opening its own page, and, as its second tab, the
+ * sign in to APIs with, each opening in a dialog), Skills vault (the
+ * skills its agents load when a task calls for one, each opening in a
+ * dialog), Knowledge bases (each opening its own page, and, as its second tab, the
  * GitHub repositories it ingests into the code graph, each opening in a side
  * panel), Members (who holds which role in it; its admins change them) and API keys
  * (what outside apps send to call its agents and workflows). Overview is
@@ -42,6 +45,10 @@ export const WORKSPACE_VIEWS = {
   // API credentials: keys, tokens and OAuth sign-ins, each sent only to the
   // URLs it names.
   credentials: { label: "Credentials", icon: LockKeyIcon },
+  // The skills vault: skills (a SKILL.md and its files) its agents load
+  // when a task calls for one, each opening in a dialog; written, uploaded,
+  // imported from GitHub or written by the skill creator.
+  skills: { label: "Skills vault", icon: MagicWand01Icon },
   // Each knowledge base opens its own page, at
   // /organizations/$organizationId/knowledge/$knowledgeBaseId.
   // Its Code repositories tab lists the GitHub repositories it ingests into
@@ -65,7 +72,7 @@ export const WORKSPACE_SECTIONS: { title: string; views: WorkspaceView[] }[] = [
   },
   {
     title: "Integrations",
-    views: ["mcp-servers", "credentials", "knowledge"],
+    views: ["mcp-servers", "credentials", "skills", "knowledge"],
   },
   { title: "Settings", views: ["config", "api-keys"] },
 ]
@@ -96,6 +103,8 @@ export type WorkspaceSearch = {
   mcpServer?: string
   /** On Credentials, the credential open in its dialog (its ID). */
   credential?: string
+  /** On the skills vault, the skill open in its dialog (its ID). */
+  skill?: string
   /** Knowledge bases' tab: Code repositories; the knowledge bases when absent. */
   knowledgeTab?: "repositories"
   /** On Code repositories, the repository open in its side panel (its ID). */

@@ -25,7 +25,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstra
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from forge_admin.models import KnowledgeBase, McpServer
+from forge_admin.models import KnowledgeBase, McpServer, Skill
 from forge_admin.models.knowledge import SYSTEM
 
 logger = logging.getLogger(__name__)
@@ -150,6 +150,8 @@ class Resolved:
     knowledge_bases: dict[str, KnowledgeBase] = field(default_factory=dict)
     agents: dict[str, SavedAgent] = field(default_factory=dict)
     workflows: dict[str, Workflow] = field(default_factory=dict)
+    #: Its skills, by ID: name and description.
+    skills: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
 def _ids(values: Iterable[object]) -> set[str]:
@@ -204,6 +206,21 @@ async def resolve(
         document = await _document(chat_agents, organization_id, agent_id)
         if document is not None:
             found.agents[agent_id] = _saved_agent(document)
+    skills = _ids(
+        skill
+        for t in brief.tools
+        if t.kind == "skills"
+        for skill in _list(t.config.get("skills"))
+    )
+    if skills:
+        rows = await session.execute(
+            select(Skill.id, Skill.name, Skill.description).where(
+                Skill.organization_id == organization_id, Skill.id.in_(skills)
+            )
+        )
+        found.skills = {
+            skill_id: (name, description) for skill_id, name, description in rows
+        }
     flows = _ids(
         t.config.get("workflow") for t in brief.tools if t.kind == "adk_workflow"
     )
@@ -455,6 +472,27 @@ def _tool_lines(tool: BriefTool, found: Resolved) -> list[str]:
                 + (f" Its input: {args}." if args else "")
                 + " It answers with the workflow's result."
             ]
+        case "skills":
+            named = [
+                found.skills[str(skill)]
+                for skill in _list(c.get("skills"))
+                if str(skill) in found.skills
+            ]
+            lines = [
+                "- Skills, loaded with `load_skill(skill_name)` when a task matches one "
+                "(their names and descriptions are in its instruction by themselves), "
+                "their files read with `load_skill_resource(skill_name, file_path)`"
+                + (
+                    "; their scripts run with `run_skill_script`:"
+                    if c.get("run_scripts")
+                    else ":"
+                )
+            ]
+            lines += [
+                f"  - `{name}`: {_clip(description, 300)}"
+                for name, description in named
+            ] or ["  - None chosen yet."]
+            return lines
         case "code_execution":
             name = _called(tool.name, "run_code")
             return [

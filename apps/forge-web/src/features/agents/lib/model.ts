@@ -169,6 +169,21 @@ export type ChatConfigs = {
     /** A person confirms each run, seeing the code, before it runs. */
     confirm: boolean
   }
+  /**
+   * Skills from the organization's vault (the Skills page): the model is
+   * told each one's name and description, and loads its instructions and
+   * files when a task calls for it (ADK's SkillToolset). An agent's Skills
+   * nodes are one set of skills.
+   */
+  skills: {
+    /** The organization's skills, by ID. */
+    skills: string[]
+    /**
+     * The model may run the skills' scripts, where the runtime runs code;
+     * otherwise it reads a script and follows it itself.
+     */
+    run_scripts: boolean
+  }
 }
 
 export type ChatKind = keyof ChatConfigs

@@ -28,13 +28,14 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 import httpx
 from forge_agent_runtime import (
     BuildError,
+    BundledSkills,
     RequestAuth,
     RuntimeServices,
     StateRefused,
@@ -62,16 +63,19 @@ from google.adk import Context, Event
 from google.adk.agents import BaseAgent, LlmAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.agents.readonly_context import ReadonlyContext
+from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.load_artifacts_tool import LoadArtifactsTool
+from google.adk.tools.skill_toolset import ListSkillsTool, LoadSkillResourceTool, LoadSkillTool
+from google.adk.tools.tool_context import ToolContext
 from google.adk.tools.transfer_to_agent_tool import TransferToAgentTool
 from google.adk.workflow import BaseNode, FunctionNode
 from google.genai import types
 
 from forge_task_adk_workflows.files import file_tools
-from forge_task_adk_workflows.graph.data import as_data
+from forge_task_adk_workflows.graph.data import CALLED_WITH_KEY, as_data
 from forge_task_adk_workflows.graph.errors import RunFailed
 from forge_task_adk_workflows.support.errors import StepFailed
 
@@ -87,7 +91,15 @@ _GOING = frozenset({"queued", "running", "waiting"})
 #: What the IDs of the runs a run's calls start are made in (:func:`child_run_id`).
 _CHILDREN = uuid.UUID("5f0e6a2c-8f53-4c3e-9a4e-0d7b3c1f2a61")
 #: Tools that only read: calling one again does nothing it didn't.
-_READING = (KnowledgeBaseTool, SystemDesignTool, LoadArtifactsTool, TransferToAgentTool)
+_READING = (
+    KnowledgeBaseTool,
+    SystemDesignTool,
+    LoadArtifactsTool,
+    TransferToAgentTool,
+    ListSkillsTool,
+    LoadSkillTool,
+    LoadSkillResourceTool,
+)
 #: HTTP methods that only read.
 _READING_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
@@ -134,6 +146,7 @@ class AgentServices:
     :ivar chat_agents: The agents from the Agents page the run carries, by reference (per run).
     :ivar knowledge_bases: The knowledge bases it carries: name, description and
         kind, and a graph one's repositories, by ID (per run).
+    :ivar skills: The skills its LLM agents' Skills tools use, whole, by ID (per run).
     :ivar workflows: Runs the workflows its LLM agents call (per run).
     :ivar opened: The toolsets the run built: closed when it stops.
     """
@@ -147,6 +160,7 @@ class AgentServices:
     organization_id: str | None = None
     chat_agents: Mapping[str, dict[str, Any]] = field(default_factory=dict)
     knowledge_bases: Mapping[str, dict[str, Any]] = field(default_factory=dict)
+    skills: Mapping[str, dict[str, Any]] = field(default_factory=dict)
     workflows: Any = None
     opened: list[BaseToolset] = field(default_factory=list)
 
@@ -157,6 +171,7 @@ class AgentServices:
         chat_agents: Mapping[str, dict[str, Any]],
         knowledge_bases: Mapping[str, dict[str, Any]],
         workflows: Any = None,
+        skills: Mapping[str, dict[str, Any]] | None = None,
     ) -> "AgentServices":
         """:return: These services for one run: what it carries, and nothing opened yet."""
         return replace(
@@ -164,6 +179,7 @@ class AgentServices:
             organization_id=organization_id,
             chat_agents=dict(chat_agents),
             knowledge_bases=dict(knowledge_bases),
+            skills=dict(skills or {}),
             workflows=workflows,
             opened=[],
         )
@@ -174,11 +190,12 @@ class AgentServices:
         return {f"{doc.get('id')}@{doc.get('version')}": doc for doc in self.chat_agents.values()}
 
     def tool_services(self) -> RuntimeServices:
-        """:return: The runtime's services for this run's tools: its knowledge bases and workflows."""
+        """:return: The runtime's services for this run's tools: its knowledge bases, workflows and skills."""
         return replace(
             self.runtime,
             knowledge_bases=SnapshotKnowledgeBases(self.knowledge_bases, self.search, self.code),
             workflows=self.workflows,
+            skills=BundledSkills(self.skills),
         )
 
     def keep(self, built: Sequence[Any]) -> None:
@@ -387,6 +404,13 @@ class LazyToolset(BaseToolset):
                 tools.append(item)
         return tools
 
+    async def process_llm_request(self, *, tool_context: ToolContext, llm_request: LlmRequest) -> None:
+        # What a built toolset adds to the request besides its tools: a Skills
+        # tool's guidance and its skills' names and descriptions.
+        for item in self._built or []:
+            if isinstance(item, BaseToolset):
+                await item.process_llm_request(tool_context=tool_context, llm_request=llm_request)
+
     async def close(self) -> None:
         for item in self._built or []:
             if isinstance(item, BaseToolset):
@@ -424,11 +448,33 @@ def failing_model_errors(label: str, step: str | None) -> Callable[..., None]:
 
     def check(callback_context: CallbackContext, llm_response: LlmResponse) -> None:
         if llm_response.error_code and not llm_response.partial:
-            code = getattr(llm_response.error_code, "value", llm_response.error_code)
-            said = f": {llm_response.error_message}" if llm_response.error_message else ""
-            raise RunFailed(f"{label} failed: its model answered with an error ({code}){said}", step=step)
+            raise RunFailed(f"{label} failed: {model_error(llm_response)}", step=step)
 
     return check
+
+
+#: What the model error codes that don't say so themselves mean, and what to try.
+MODEL_ERRORS = {
+    "MALFORMED_FUNCTION_CALL": "it called a tool with arguments that aren't a JSON object. Most often its "
+    "answer was cut off at its output token limit (raise its max output tokens), or the model can't follow "
+    "the tool's parameters (simplify them, or try another model)",
+    "MAX_TOKENS": "its answer was cut off at its output token limit: raise its max output tokens",
+}
+
+
+def model_error(llm_response: LlmResponse) -> str:
+    """
+    :return: A model's error answer, readably: its code, what it said, what
+        the code means, and how many tokens it had answered with (``its model
+        answered with an error (MAX_TOKENS) after 1,024 output tokens: ...``).
+    """
+    code = str(getattr(llm_response.error_code, "value", llm_response.error_code))
+    usage = llm_response.usage_metadata
+    tokens = usage.candidates_token_count if usage is not None else None
+    after = f" after {tokens:,} output tokens" if tokens else ""
+    said = f": {llm_response.error_message}" if llm_response.error_message else ""
+    meaning = MODEL_ERRORS.get(code)
+    return f"its model answered with an error ({code}){after}{said}" + (f". That means {meaning}" if meaning else "")
 
 
 def fail_model_errors(agent: BaseAgent, check: Callable[..., None]) -> None:
@@ -563,7 +609,7 @@ def agent_node(
                 built.append(agent)
             return built[0]
 
-    async def run(adk: Context, node_input: Any) -> Any:
+    async def node(adk: Context, node_input: Any) -> AsyncGenerator[Event]:
         agents: AgentServices | None = getattr(services, "agents", None)
         if agents is None:
             raise fail("agents from the Agents page can't run on this worker")
@@ -605,11 +651,11 @@ def agent_node(
             return None
 
         running = agent.clone(update={"before_agent_callback": set_state})
+        # What it asks its agent, kept before the agent runs: the run page
+        # shows it, though the agent fail.
+        yield Event(custom_metadata={CALLED_WITH_KEY: {"message": text, "inputs": as_data(checked)}})
         answer = await adk.run_node(running, node_input=text, run_id="agent", use_sub_branch=True)
-        return parse(answer) if isinstance(answer, str) else as_data(answer)
-
-    async def node(adk: Context, node_input: Any) -> Event:
-        return Event(output=await run(adk, node_input))
+        yield Event(output=parse(answer) if isinstance(answer, str) else as_data(answer))
 
     return FunctionNode(name=name, func=node, rerun_on_resume=True)
 

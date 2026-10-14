@@ -84,7 +84,8 @@
             }
           }
         },
-        "credential": ""
+        "credential": "",
+        "statuses": []
       },
       "outputs": [
         "success",
@@ -348,7 +349,8 @@
         "timeout_seconds": 30,
         "retries": 0,
         "output_schema": {},
-        "credential": ""
+        "credential": "",
+        "statuses": []
       },
       "outputs": [
         "success",

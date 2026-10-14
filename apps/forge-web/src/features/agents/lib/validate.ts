@@ -58,6 +58,8 @@ export type ChatAgentValidationContext = {
    * a person signs in with is signed in.
    */
   credentials?: Map<string, CredentialLookup>
+  /** The organization's skills, by ID, for the Skills tools: their names. */
+  skills?: Map<string, { name: string }>
 }
 
 type Found = [code: string, level: IssueLevel, message: string, field?: string]
@@ -258,6 +260,22 @@ function settingsIssues(
       }
       // Where its calls go is the spec's servers': only whether it's there.
       out.push(...credentialIssues(c.credential, undefined, context))
+      break
+    }
+    case "skills": {
+      const c = step.config
+      if (!c.skills.length) {
+        out.push(["skills", "error", "Pick the skills it has.", "skills"])
+      }
+      // Unknown until they load: a pick isn't called deleted meanwhile.
+      if (context.skills && c.skills.some((id) => !context.skills?.has(id))) {
+        out.push([
+          "skills-gone",
+          "error",
+          "A skill it has was deleted from the vault: untick it, or pick another.",
+          "skills",
+        ])
+      }
       break
     }
     case "knowledge_base": {

@@ -5,7 +5,7 @@ in the run's ADK session, read from the session's events.
 One entry per node of the document, in the document's order::
 
     {"id", "name", "kind", "status", "output", "error", "started_at", "finished_at", "calls",
-     "input", "input_from", "state_changes", "handed_to"}
+     "input", "input_from", "called_with", "state_changes", "handed_to"}
 
 - ``status``:
   - ``done``: it handed on its output (``error`` too when it took its Error
@@ -21,15 +21,23 @@ One entry per node of the document, in the document's order::
   Switch / Match's ``{"branch"}`` (a Match taking every rule that holds,
   ``{"branches"}``), a loop's ``{count, results}``, a saved
   agent's result. A step run more than once (in a loop's body) shows its last.
+  A saved workflow's step that failed says so: ``In its workflow, <its
+  step's failure>``.
 - ``calls``: the tools its LLM agents called (theirs, and those of the agent
   from the Agents page it is): ``{"id", "agent", "name", "args", "status",
-  "response", "at"}``, ``status`` ``done``, ``failed`` (the tool answered an
-  error, or a person refused it), ``waiting`` (for a person to confirm it) or
-  ``running``; a long response cut short.
+  "response", "error", "at"}``, ``status`` ``done``, ``failed`` (the tool
+  answered an error, or a person refused it), ``waiting`` (for a person to
+  confirm it) or ``running``; a long response cut short. ``error`` is what a
+  failed call's answer says went wrong (a tool's reason, a workflow run's
+  error), else None.
 - ``input`` / ``input_from``: what it was handed (its ``previous``) and the
   step that handed it on: the output of the step before it that handed on last
   before it started (through a logic step, what that step was handed). None
   for the start, a step not reached, or a loop body's first step (its item).
+- ``called_with``: what it worked out and sent, as it recorded it before
+  sending (``CALLED_WITH_KEY``): a saved workflow's inputs, the message and
+  inputs an agent from the Agents page was asked with, an HTTP request's
+  ``{method, url, headers (names), body}``; its last. None for any other.
 - ``state_changes``: what its events (and those of what runs inside it) set in
   the session's state, in order: ``{"key", "value", "at"}``.
 - ``started_at`` / ``finished_at``: when a step before it handed on to it (the
@@ -58,7 +66,7 @@ from typing import Any
 from google.adk.events import Event
 from google.adk.sessions import Session
 
-from forge_task_adk_workflows.graph.data import INPUT_NODE, LOGIC, StepInfo, _record, as_data
+from forge_task_adk_workflows.graph.data import CALLED_WITH_KEY, INPUT_NODE, LOGIC, StepInfo, _record, as_data
 from forge_task_adk_workflows.graph.factories.agents import answer_parser
 from forge_task_adk_workflows.graph.factories.base import config_of, items, text
 from forge_task_adk_workflows.graph.names import BODY_KINDS, adk_name, body_name
@@ -92,6 +100,8 @@ class _Seen:
     confirming: set[str] = field(default_factory=set)
     #: What it changed in the session's state, in order: ``{"key", "value", "at"}``.
     changes: list[dict[str, Any]] = field(default_factory=list)
+    #: What it sent, as it recorded it (``CALLED_WITH_KEY``).
+    called_with: Any = None
     #: The way it took, as its last event said (a branching step's output ID,
     #: or a list of them); None for a step whose every way is taken.
     route: Any = None
@@ -158,11 +168,17 @@ def run_progress(
         path = event.node_info.path or ""
         when = event.timestamp
         at = steps_on(path, infos, loops)
-        for step, _ in at:
+        for step, own in at:
             seen[step].saw(when)
             if event.error_code or event.error_message:
                 seen[step].failed_at = when
-                seen[step].error = {"message": event.error_message or event.error_code, "code": event.error_code}
+                message = event.error_message or event.error_code
+                if not own and by_id[step].kind == "saved":
+                    message = f"In its workflow, {message}"
+                seen[step].error = {"message": message, "code": event.error_code}
+        recorded = (event.custom_metadata or {}).get(CALLED_WITH_KEY)
+        if recorded is not None and at and at[-1][1]:
+            seen[at[-1][0]].called_with = as_data(recorded)
         for call in event.get_function_calls():
             if call.name in (REQUEST_INPUT, REQUEST_CONFIRMATION) and call.id in asked:
                 for step, _ in at:
@@ -211,6 +227,7 @@ def run_progress(
             "calls": list(seen[node["id"]].calls.values()),
             "input": handed_in[node["id"]][1],
             "input_from": handed_in[node["id"]][0],
+            "called_with": seen[node["id"]].called_with,
             "state_changes": seen[node["id"]].changes,
             "handed_to": node["id"] in handed_to,
         }
@@ -324,6 +341,7 @@ def _calls(event: Event, chain: list[tuple[str, bool]], seen: Mapping[str, _Seen
             "args": as_data(call.args or {}),
             "status": RUNNING,
             "response": None,
+            "error": None,
             "at": _iso(event.timestamp),
         }
     for response in event.get_function_responses():
@@ -332,6 +350,7 @@ def _calls(event: Event, chain: list[tuple[str, bool]], seen: Mapping[str, _Seen
             continue
         answered = as_data(response.response)
         called["status"] = FAILED if _is_error(answered) else DONE
+        called["error"] = _call_error(answered) if called["status"] == FAILED else None
         called["response"] = _shortened(answered)
 
 
@@ -340,6 +359,22 @@ def _is_error(response: Any) -> bool:
     return isinstance(response, dict) and (
         "error" in response or response.get("status") in ("error", "failed") or response.get("ok") is False
     )
+
+
+def _call_error(response: Any) -> str | None:
+    # What a failed call's answer says went wrong: a guarded tool's reason, a
+    # workflow run's error ({message, ...}), an MCP tool's error text.
+    if not isinstance(response, dict):
+        return None
+    for key in ("reason", "error", "message"):
+        found = response.get(key)
+        if isinstance(found, dict):
+            found = found.get("message") or json.dumps(found, ensure_ascii=False, default=str)
+        if isinstance(found, str) and found.strip():
+            return found if len(found) <= MAX_RESPONSE else f"{found[:MAX_RESPONSE]}…"
+    if response.get("status") in ("failed", "error"):
+        return f"It ended {response['status']}"
+    return None
 
 
 def _shortened(value: Any) -> Any:

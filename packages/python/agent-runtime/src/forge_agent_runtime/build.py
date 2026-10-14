@@ -55,6 +55,7 @@ from forge_agent_runtime.openapi import (
 )
 from forge_agent_runtime.refs import AgentRef
 from forge_agent_runtime.services import RequestAuth, RuntimeServices
+from forge_agent_runtime.skills import SkillBundle, skill_toolset
 from forge_agent_runtime.templating import instruction_provider
 from forge_agent_runtime.tools import (
     GuardedTools,
@@ -120,6 +121,8 @@ class _Builder:
         self.http = http
         self.organization_id = doc.organization_id if doc is not None else organization_id
         self.dependencies = doc.dependencies if doc is not None else dict(dependencies or {})
+        # The skills it carries, by ID; the rest are the organization's, found by services.skills.
+        self.skills = doc.skills if doc is not None else {}
         # The saved agents being built around this one: one using itself would never end.
         self.chain = (*chain, doc.id) if doc is not None else chain
 
@@ -129,8 +132,14 @@ class _Builder:
         name = node.adk_name
         what = f"{node.name}'s instruction"
         tools: list[Any] = []
+        skills = [target for target in self.doc.targets(node.id, TOOLS) if target.kind == "skills"]
         for target in self.doc.targets(node.id, TOOLS):
-            tools.extend(await self.tool(target))
+            if target.kind != "skills":
+                tools.extend(await self.tool(target))
+        if skills:
+            # ADK's skill tools (load_skill, …) are an agent's once: its Skills
+            # nodes are one toolset of all their skills.
+            tools.append(await self.skill_tools(skills))
         sub_agents: list[Any] = [await self.handed(target) for target in self.doc.targets(node.id, HANDS_OFF)]
         options: dict[str, Any] = {}
         template = str(config.get("instruction") or "")
@@ -182,7 +191,9 @@ class _Builder:
         for key, raw in self.dependencies.items():
             if key.split("@", 1)[0] == agent_id:
                 try:
-                    return parse_document({**raw, "dependencies": self.dependencies})
+                    # Its skills are carried with the agent using it.
+                    carried = {**self.skills, **(raw.get("skills") or {})}
+                    return parse_document({**raw, "dependencies": self.dependencies, "skills": carried})
                 except DocumentError as exc:
                     raise BuildError(f"{node.name!r} uses {agent_id}, which can't be built: {exc}") from exc
         if self.services.resolve_agent is None:
@@ -271,7 +282,62 @@ class _Builder:
                     raise BuildError(f"{node.name!r} runs code, and code execution is off here.")
                 runs = CodeTool(name=adk_name(node.name) or "run_code", executor=executor)
                 return [GuardedTools([runs], confirm=bool(config.get("confirm")), timeout_seconds=guarded)]
+            case "skills":
+                return [await self.skill_tools([node])]
         raise BuildError(f"{node.name!r} ({node.kind}) can't be a tool.")
+
+    async def skill_tools(self, nodes: list[Node]) -> BaseToolset:
+        """
+        One toolset of the skills these Skills nodes name: ADK's
+        ``SkillToolset``, which tells the model each skill's name and
+        description and has it load one when a task calls for it. Their
+        scripts run where one of them says so and code execution is on.
+        """
+        ids: list[str] = []
+        for node in nodes:
+            for skill_id in node.config.get("skills") or []:
+                if skill_id and str(skill_id) not in ids:
+                    ids.append(str(skill_id))
+        names = ", ".join(repr(node.name) for node in nodes)
+        if not ids:
+            raise BuildError(f"{names} doesn't say which skills the agent has.")
+        bundles = await self._skills(ids, names)
+        seen: dict[str, str] = {}
+        for bundle in bundles:
+            if bundle.name in seen:
+                raise BuildError(
+                    f"{names} has two skills called {bundle.name!r}: the model tells them apart by name."
+                )
+            seen[bundle.name] = bundle.name
+        executor = None
+        if any(node.config.get("run_scripts") for node in nodes):
+            executor = self.services.code_executor
+            if executor is None:
+                raise BuildError(f"{names} runs its skills' scripts, and code execution is off here.")
+        return skill_toolset(bundles, code_executor=executor)
+
+    async def _skills(self, ids: list[str], names: str) -> list[SkillBundle]:
+        """:return: The skills by ID: those the document carries, then the organization's."""
+        carried = {skill_id: self.skills[skill_id] for skill_id in ids if skill_id in self.skills}
+        rest = [skill_id for skill_id in ids if skill_id not in carried]
+        found: dict[str, SkillBundle] = {}
+        try:
+            for skill_id, raw in carried.items():
+                found[skill_id] = SkillBundle.model_validate(raw)
+        except ValueError as exc:
+            raise BuildError(f"{names}: a skill it carries isn't one: {exc}") from exc
+        if rest:
+            library = self.services.skills
+            if library is None:
+                raise BuildError(
+                    f"{names} uses the organization's skills, which only the hosted runtime has."
+                )
+            try:
+                looked_up = await library(rest, organization_id=self.organization_id)
+            except LookupError as exc:
+                raise BuildError(f"{names}: {exc}") from exc
+            found.update(zip(rest, looked_up, strict=True))
+        return [found[skill_id] for skill_id in ids]
 
     async def openapi(self, node: Node) -> OpenAPIToolset:
         config = node.config

@@ -47,6 +47,14 @@ export type ChatLookups = {
   knowledgeBases: Record<string, KnowledgeBaseLookup>
   /** The organization's API credentials, by ID. */
   credentials: Record<string, CredentialLookup>
+  /** The organization's skills (its skills vault), by ID. */
+  skills: Record<string, SkillLookup>
+}
+
+/** A skill of the vault, as a Skills tool node shows it. */
+export type SkillLookup = {
+  name: string
+  description: string
 }
 
 /** A knowledge base, as a knowledge base tool node shows it. */

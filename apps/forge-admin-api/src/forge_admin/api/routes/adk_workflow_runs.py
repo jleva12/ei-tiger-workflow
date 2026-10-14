@@ -309,11 +309,16 @@ class AdkRunStep(BaseModel):
     started_at: str | None = None
     finished_at: str | None = None
     #: The tools its LLM agents called: ``{"id", "agent", "name", "args",
-    #: "status", "response", "at"}``.
+    #: "status", "response", "error", "at"}`` (``error``: what a failed
+    #: call's answer says went wrong).
     calls: list[dict[str, Any]] = []
     #: What it was handed (its ``previous``), and the step that handed it on.
     input: Any = None
     input_from: str | None = None
+    #: What it worked out and sent, kept before it sent it: a saved
+    #: workflow's inputs, an Agents-page agent's message and inputs, an HTTP
+    #: request (``{method, url, headers (names), body}``); null for others.
+    called_with: Any = None
     #: What it set in the session's state, in order: ``{"key", "value", "at"}``.
     state_changes: list[dict[str, Any]] = []
     #: A step before it handed on to it (by a way it took): unfinished, it's

@@ -621,6 +621,57 @@ async def test_a_saved_workflow_started_with_its_inputs_pauses_and_resumes(sessi
     assert "Confirm (confirm) finished" not in w.control.said()
 
 
+ORDERS = agent(
+    [
+        START_NODE,
+        node("fetch", "http", {"url": "https://api.example.com/orders/1"}, name="Fetch"),
+        end("done", "previous"),
+    ],
+    [("start", "next", "fetch"), ("fetch", "success", "done")],
+    agent_id="ag_inner00003",
+    name="Orders",
+)
+
+
+@pytest.mark.parametrize("inputs", [{}, {"order": '"A1"'}], ids=["handed-on", "with-inputs"])
+async def test_a_step_failing_in_a_saved_workflow_fails_the_run_at_the_node_that_runs_it(
+    sessions: DatabaseSessionService, inputs: dict[str, str]
+) -> None:
+    w = worker(sessions, answer=lambda request: httpx.Response(404, json={"message": "No such order"}))
+    nesting = line(
+        node("nested", "saved", {"agent": "ag_inner00003", "inputs": inputs}, name="Ask inside"),
+        end("done", "steps.nested.output"),
+    )
+
+    result = await w.run(payload(nesting, {}, saved={"ag_inner00003": ORDERS}))
+
+    assert result.status is JobStatus.FAILED
+    # The run's own step, not the workflow's (whose IDs aren't the run's), and where in it, and why.
+    assert result.detail["step"] == "nested"
+    assert result.error == (
+        "Ask inside (nested) failed in its workflow Orders (ag_inner00003): Fetch (fetch) failed: "
+        "GET https://api.example.com/orders/1 answered 404 Not Found: No such order"
+    )
+
+
+async def test_an_error_a_step_raises_fails_the_run_naming_the_step_and_its_status(
+    sessions: DatabaseSessionService,
+) -> None:
+    def missing() -> errors.ClientError:
+        return errors.ClientError(404, {"error": {"message": "models/gemini-9 is not found"}})
+
+    w = worker(sessions, model=ScriptedLlm(turns=[missing()]))
+    document = line(node("triage", "llm", llm_config()), end("done"))
+
+    result = await w.run(payload(document, {}))
+
+    assert result.status is JobStatus.FAILED
+    assert result.detail["step"] == "triage"
+    assert (
+        result.error == "The run failed: Triage (triage) failed: ClientError (HTTP 404): models/gemini-9 is not found"
+    )
+
+
 async def test_a_saved_workflow_the_run_has_no_snapshot_of_fails_it(sessions: DatabaseSessionService) -> None:
     w = worker(sessions)
 
@@ -894,7 +945,9 @@ async def test_a_step_that_fails_once_the_run_carried_on_fails_it_without_starti
     result = await w.run(run)
 
     assert result.status is JobStatus.FAILED
-    assert result.error == "The run failed: ClientError: permission denied"
+    # Named by the step it happened in, and the HTTP status the model's API answered.
+    assert result.error == "The run failed: Triage (triage) failed: ClientError (HTTP 403): permission denied"
+    assert result.detail["step"] == "triage"
     assert await w.session_ids() == [SESSION]
     assert len(w.sent) == 1
 
@@ -917,7 +970,7 @@ async def test_a_failed_run_restarted_carries_on_from_the_step_that_failed(sessi
 
     failed = await w.run(run)
     assert failed.status is JobStatus.FAILED
-    assert failed.error == "B (b) failed: It answered 404"
+    assert failed.error == 'B (b) failed: POST https://api.example.com/b answered 404 Not Found: {"ok": true}'
 
     # The task restarted (the same task: its control, its session).
     down[0] = False
@@ -971,7 +1024,8 @@ async def test_a_failed_way_runs_again_when_its_run_is_retried_after_another_way
     w = worker(sessions, answer=answer)
     run = payload(racing(node("slow", "http", {"method": "POST", "url": "https://api.example.com/b"})), {})
     failed = await w.run(run)
-    assert failed.status is JobStatus.FAILED and failed.error == "Slow (slow) failed: It answered 404"
+    assert failed.status is JobStatus.FAILED
+    assert failed.error == 'Slow (slow) failed: POST https://api.example.com/b answered 404 Not Found: {"ok": true}'
 
     down[0] = False  # fixed, then the run is retried
     result = await w.run(run)
@@ -1472,3 +1526,15 @@ async def test_a_note_that_cant_be_written_is_counted_with_what_the_run_keeps(
     assert result.detail["outcome"] == "succeeded" and len(tried) >= 2
     # Its last note too, after its last checkpoint: what the run keeps as it ends has it.
     assert w.control.load(STATE_KEY)["notes_lost"] == len(tried)
+
+
+def test_an_error_adk_wraps_is_named_by_the_one_the_step_raised() -> None:
+    from google.adk.workflow._errors import DynamicNodeFailError
+
+    raised = errors.ClientError(404, {"error": {"message": "no such model"}})
+    wrapped = DynamicNodeFailError(message="Dynamic node steps failed", error=raised, error_node_path="steps@1")
+
+    refused = runs._classified(wrapped)
+
+    assert str(refused) == "ClientError (HTTP 404): no such model"
+    assert isinstance(runs._classified(errors.ServerError(503, {"error": {"message": "busy"}})), TransientError)

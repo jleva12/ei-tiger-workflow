@@ -39,6 +39,7 @@ from forge_agent_runtime.services import (
     RuntimeServices,
     WorkflowRunner,
 )
+from forge_agent_runtime.skills import BundledSkills, SkillBundle, SkillError, SkillFile, SkillLibrary
 from forge_agent_runtime.tools import http_client
 
 __all__ = [
@@ -50,6 +51,7 @@ __all__ = [
     "AgentServerSettings",
     "AgentSource",
     "BuildError",
+    "BundledSkills",
     "ChatAgentDocument",
     "CodeExecution",
     "CredentialProvider",
@@ -65,6 +67,10 @@ __all__ = [
     "RunObserver",
     "RunRequest",
     "RuntimeServices",
+    "SkillBundle",
+    "SkillError",
+    "SkillFile",
+    "SkillLibrary",
     "StateRefused",
     "TOOL_KINDS",
     "WorkflowRunner",

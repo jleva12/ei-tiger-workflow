@@ -36,6 +36,7 @@ def test_the_document_reads_its_kinds_from_the_catalog() -> None:
         "mcp",
         "adk_workflow",
         "code_execution",
+        "skills",
     } == KINDS
     assert {"agent", "sub_agent"} == AGENT_LIKE
     assert {"sub_agent", "saved_agent"} == HANDED_TO

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from google.adk.tools.tool_context import ToolContext
 
     from forge_agent_runtime.document import ChatAgentDocument
+    from forge_agent_runtime.skills import SkillLibrary
 
 
 class AgentResolver(Protocol):
@@ -197,6 +198,9 @@ class RuntimeServices:
     :ivar code_executor: Runs the code agents' Code execution tools are sent
         (``forge_agent_runtime.code_execution``); without it, agents running
         code don't build.
+    :ivar skills: Finds the organization's skills its Skills tools name by
+        ID (``forge_agent_runtime.skills``); without it, only those a
+        document carries (its ``skills``) are found.
     """
 
     environment: Mapping[str, str] = field(default_factory=lambda: os.environ)
@@ -215,6 +219,7 @@ class RuntimeServices:
     tool_values: ToolValues | None = None
     ask_person: bool = True
     code_executor: BaseCodeExecutor | None = None
+    skills: SkillLibrary | None = None
 
     def but(self, **changes: Any) -> RuntimeServices:
         """:return: These services with some changed."""

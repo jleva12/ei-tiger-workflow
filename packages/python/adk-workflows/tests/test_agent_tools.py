@@ -19,6 +19,7 @@ import pytest
 from forge_agent_runtime import RuntimeServices, code_executor
 from forge_common.adk.models import ProviderModels
 from google.adk.artifacts import InMemoryArtifactService
+from google.adk.models.llm_response import LlmResponse
 from google.adk.sessions import DatabaseSessionService
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.function_tool import FunctionTool
@@ -32,6 +33,7 @@ from forge_task_adk_workflows.graph.agent_tools import (
     RunWorkflows,
     SnapshotKnowledgeBases,
     child_run_id,
+    model_error,
 )
 from forge_task_adk_workflows.graph.errors import AgentBuildError
 from forge_task_adk_workflows.graph.graph import build_agent
@@ -246,6 +248,55 @@ async def test_an_llm_agent_runs_code_and_reads_what_it_printed(sessions: Databa
     off = await with_tools(sessions, llm).run(payload(document, {}).model_copy(update={"session_id": "other"}))
     assert off.status is JobStatus.FAILED
     assert "tool 'Calculate'" in str(off.error) and "code execution is off" in str(off.error)
+
+
+PLAYBOOK = {
+    "name": "refund-playbook",
+    "description": "How to handle a refund request. Use when someone asks for their money back.",
+    "instructions": "1. Check the order is under 30 days old.\n2. Read references/policy.md.",
+    "files": [{"path": "references/policy.md", "content": "Refunds within 30 days."}],
+}
+
+
+async def test_an_llm_agent_loads_a_skill_the_run_carries(sessions: DatabaseSessionService) -> None:
+    llm = ScriptedLlm(
+        turns=[
+            [call("load_skill", skill_name="refund-playbook")],
+            [call("load_skill_resource", skill_name="refund-playbook", file_path="references/policy.md")],
+            [text("Refunds within 30 days.")],
+        ]
+    )
+    w = with_tools(sessions, llm)
+    skills = tool("tool_skills", "skills", "Skills", skills=["sk_refunds"])
+    document = line(node("helper", "llm", llm_config(tools=[skills])), end("done", "steps.helper.output"))
+
+    result = await w.run(payload(document, {}, skills={"sk_refunds": PLAYBOOK}))
+
+    assert result.status is JobStatus.OK, result.detail
+    assert result.detail["result"] == "Refunds within 30 days."
+    # The model was told the skill from the start, by its name and description.
+    instruction = str(llm.requests[0].config.system_instruction)
+    assert "refund-playbook" in instruction and "money back" in instruction
+    loaded = llm.requests[1].contents[-1].parts[0].function_response.response  # type: ignore[index, union-attr]
+    assert "Check the order is under 30 days old" in json.dumps(loaded)
+    read = llm.requests[2].contents[-1].parts[0].function_response.response  # type: ignore[index, union-attr]
+    assert "Refunds within 30 days." in json.dumps(read)
+
+    # A skill the run doesn't carry (deleted since) fails the step, saying so.
+    llm.turns = [[text("unused")]]
+    gone = await with_tools(sessions, llm).run(payload(document, {}).model_copy(update={"session_id": "other"}))
+    assert gone.status is JobStatus.FAILED
+    assert "tool 'Skills'" in str(gone.error) and "no skill sk_refunds" in str(gone.error)
+
+
+def test_an_llm_agent_has_one_skills_tool_naming_its_skills() -> None:
+    empty = tool("tool_skills", "skills", "Skills", skills=[])
+    with pytest.raises(AgentBuildError, match="choose the skills it has"):
+        build_agent(line(node("helper", "llm", llm_config(tools=[empty])), end("done", "'ok'")))
+    one = tool("tool_a", "skills", "Skills", skills=["sk_a"])
+    two = tool("tool_b", "skills", "More skills", skills=["sk_b"])
+    with pytest.raises(AgentBuildError, match="one Skills tool"):
+        build_agent(line(node("helper", "llm", llm_config(tools=[one, two])), end("done", "'ok'")))
 
 
 async def test_a_knowledge_base_tool_searches_what_the_run_carries(sessions: DatabaseSessionService) -> None:
@@ -498,6 +549,11 @@ async def test_an_agent_from_the_agents_page_is_sent_its_message_and_inputs(sess
     assert str(asked.config.system_instruction).startswith("Help member-1, a pro customer.")
     said = [part.text for content in asked.contents for part in content.parts or [] if part.text]
     assert said == ["Ada asks: Where is A1?"]
+    # The run page shows what it asked its agent with.
+    run = payload(document, {}, chat_agents={"ca_support": chat_agent()})
+    session = await sessions.get_session(app_name=APP_NAME, user_id=run.run_as, session_id=run.session_id)
+    support = next(step for step in run_steps(session, document) if step["id"] == "support")
+    assert support["called_with"] == {"message": "Ada asks: Where is A1?", "inputs": {"tier": "pro"}}
 
     # Inputs its schema doesn't take fail the step, saying why.
     refused = line(
@@ -733,7 +789,7 @@ async def test_a_call_cut_off_by_a_stop_is_answered_before_the_model_is_asked_ag
     assert w.control.load(STATE_KEY)["calls"] == {}
     session = await sessions.get_session(app_name=APP_NAME, user_id=run.run_as, session_id=run.session_id)
     helper = next(step for step in run_steps(session, document) if step["id"] == "helper")
-    assert [(made["id"], made["status"]) for made in helper["calls"]] == [(cut_off, "failed")]
+    assert [(made["id"], made["status"], made["error"]) for made in helper["calls"]] == [(cut_off, "failed", CUT_OFF)]
 
 
 async def test_a_call_cut_off_in_an_agent_seeing_only_its_turn_is_answered_when_made_again(
@@ -1007,3 +1063,22 @@ async def test_a_called_workflows_input_its_start_cant_resolve_a_reference_for_i
         "only references within the schema are read"
     )
     assert children.started == []
+
+
+def test_a_model_error_says_what_its_code_means_and_how_far_it_got() -> None:
+    malformed = LlmResponse(
+        error_code=types.FinishReason.MALFORMED_FUNCTION_CALL,
+        error_message="Arguments for the following function calls were not a valid JSON object: run_orders",
+        usage_metadata=types.GenerateContentResponseUsageMetadata(candidates_token_count=4096),
+    )
+    said = model_error(malformed)
+    assert said.startswith(
+        "its model answered with an error (MALFORMED_FUNCTION_CALL) after 4,096 output tokens: "
+        "Arguments for the following function calls were not a valid JSON object: run_orders. "
+        "That means it called a tool with arguments that aren't a JSON object."
+    )
+    assert "output token limit" in said
+    # A code that says what it is reads as it is.
+    assert model_error(LlmResponse(error_code="SAFETY", error_message="Blocked")) == (
+        "its model answered with an error (SAFETY): Blocked"
+    )

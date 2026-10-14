@@ -68,6 +68,8 @@ export type AgentValidationContext = {
   knowledgeBases?: ChatAgentValidationContext["knowledgeBases"]
   /** The organization's API credentials, for HTTP steps and tools. */
   credentials?: ChatAgentValidationContext["credentials"]
+  /** The organization's skills, for the Skills tools. */
+  skills?: ChatAgentValidationContext["skills"]
 }
 
 /** An agent from the Agents page, as a workflow's checks see it. */
@@ -171,6 +173,7 @@ function toolsIssues(
     mcpServers: context.mcpServers,
     knowledgeBases: context.knowledgeBases,
     credentials: context.credentials,
+    skills: context.skills,
   } satisfies ChatAgentValidationContext
   const named = new Map<string, string[]>()
   for (const each of tools) {
@@ -203,6 +206,15 @@ function toolsIssues(
       const name = adkName(each.name)
       if (name) named.set(name, [...(named.get(name) ?? []), each.id])
     }
+  }
+  const skills = tools.filter((each) => each.kind === "skills")
+  for (const each of skills.slice(1)) {
+    out.push([
+      `tool-${each.id}-skills-twice`,
+      "error",
+      "An agent has one Skills tool: put all its skills in the first.",
+      `${prefix}tools.${each.id}.skills`,
+    ])
   }
   for (const [name, ids] of named) {
     if (ids.length < 2) continue
