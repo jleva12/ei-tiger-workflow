@@ -11,7 +11,7 @@
 # suggested.
 #
 # Toolsets (assistant/forge.py registers them): access, administration,
-# knowledge and code. Each
+# knowledge, code and workflows. Each
 # is held by a specialist agent of the same name, which the supervisor is
 # offered on the screens that name its toolset. `- name` with `tools` gives the specialist only
 # those tools, by the names the model sees. Instructions go to the supervisor
@@ -120,12 +120,71 @@ screens:
         label: at a glance
         prompt: List this organization's knowledge bases, what each holds and how many of their documents are searchable.
 
+  # -- The workflow builder ------------------------------------------------------
+
+  - name: workflow-builder
+    title: Workflow builder
+    when:
+      route: /organizations/$organizationId_/agents/$agentId
+    toolsets: [workflows]
+    # Planning a workflow and wiring its data takes some thought.
+    thinking_level: medium
+    instructions: |
+      The person is building one of their organization's ADK workflows on
+      its canvas: the organization is the page's organizationId parameter
+      and the workflow its agentId parameter (also the adk_workflow on the
+      page). "This workflow", "it" and "here" mean that one. A node they
+      selected is in focus (a workflow_node, by its id): "this step" or
+      "this node" is it. A version search parameter means they're looking at
+      a published version, which never changes: edits go to its draft.
+      Hand every request to understand, design, build, change, check, test
+      or debug the workflow to the workflow builder specialist, with the
+      organization's and the workflow's IDs, the node in focus, and the
+      person's whole goal in their words: it reads the workflow itself, and
+      the person sees its changes on the canvas as it makes them. Many of
+      the people building workflows aren't technical: answer in plain
+      words. The specialist reports in two parts, "For the person" and
+      "Details": answer from the first, in its words, and keep the details
+      (node ids, expressions such as steps.x.output.y, JSON, settings) to
+      yourself unless the person asks for them; here that comes before
+      keeping the specialist's IDs. Name steps as the canvas shows them
+      ("Look up the customer"), and say where data comes from in words
+      ("the number of stars, straight from GitHub"). End with what's left
+      for them to do, if anything.
+    prompts:
+      - title: Build it with me
+        label: from what it should do
+        prompt: Help me build this workflow. Ask me what it should do, propose the steps in plain words, then build them on the canvas.
+      - title: Explain this workflow
+        label: step by step
+        prompt: Explain what this workflow does, step by step, in plain words, and what each step uses from the steps before it.
+      - title: Will it run?
+        label: check and fix it
+        prompt: Check this workflow. Will it run? Fix anything that's wrong or missing, then tell me what you changed.
+      - title: Test it
+        label: with sample input
+        prompt: Test-run this workflow's draft with a realistic sample input and tell me what each step did.
+      - title: Handle failures
+        label: errors and retries
+        prompt: Make this workflow handle failures well, such as an API that answers an error or a step that fails. Propose what should happen, then build it.
+      - title: Why did it fail?
+        label: the last run
+        prompt: Look at this workflow's latest run. If it failed, explain why in plain words and offer to fix the workflow.
+
   # -- The rest of the organization's workspace ---------------------------------
 
   - name: organization
     title: Organization workspace
     when:
       route: /organizations/$organizationId
+    toolsets:
+      - name: workflows
+        tools:
+          - list_workflows
+          - get_workflow
+          - describe_node_kinds
+          - list_workflow_runs
+          - get_workflow_run
     instructions: |
       The person is in their organization's workspace: its ADK workflows (the
       page without a view; an agentRun search parameter is one run's page, by
@@ -133,10 +192,13 @@ screens:
       page names it as an adk_run), its agents (view chat-agents), the audit
       of its agents' and assistant's conversations, for its admins (view
       conversations), its
-      knowledge bases (view knowledge) and its members (view config). No
-      specialist reads or changes ADK workflows, their runs or agents yet:
-      say so, and point the person to the page that has them. The knowledge
-      specialist reads and searches the organization's knowledge bases.
+      knowledge bases (view knowledge) and its members (view config). The
+      workflow builder specialist reads the organization's ADK workflows and
+      their runs here, and explains why a run failed; it builds and changes
+      a workflow on the workflow's own page (its canvas): point the person
+      there to build one. No specialist reads or changes the agents from the
+      Agents page yet. The knowledge specialist reads and searches the
+      organization's knowledge bases.
 
   # -- Administration ----------------------------------------------------------
 

@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from forge_admin.adk_workflows.runs import check_publishable
+from forge_admin.adk_workflows.runs import check_publishable, check_runnable
 from forge_admin.adk_workflows.versioned_store import versioned
 from forge_admin.adk_workflows.versions import (
     WorkflowGone,
@@ -186,3 +186,17 @@ def test_a_published_version_runs_only_what_doesnt_change(store: Store) -> None:
         )
     )
     assert no_start == ["It has no start."]
+
+
+def test_a_draft_runs_what_changes_but_not_what_isnt_there(store: Store) -> None:
+    # What a run (the assistant's check) refuses, rather than a publish.
+    find = workflow_finder(store, ORG)  # type: ignore[arg-type]
+
+    def problems(*nodes: dict[str, Any]) -> list[str]:
+        return asyncio.run(check_runnable(document("ag_new00000001", *nodes), find))
+
+    assert problems(saved("a", "ag_both000001", "draft"), saved("b", "ag_draft00001")) == []
+    [missing] = problems(saved("a", "ag_both000001", 9))
+    assert "no version 9" in missing
+    [gone] = problems(saved("a", "ag_nothing001"))
+    assert "ag_nothing001" in gone

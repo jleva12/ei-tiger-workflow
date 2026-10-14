@@ -36,7 +36,7 @@ from forge_admin.adk_workflows.documents import (
     AgentStore,
 )
 from forge_admin.adk_workflows.resources import RunResources
-from forge_admin.adk_workflows.runs import check_publishable
+from forge_admin.adk_workflows.runs import check_publishable, check_runnable
 from forge_admin.adk_workflows.versioned_store import VersionState, status_of
 from forge_admin.adk_workflows.versions import workflow_finder
 from forge_admin.api.routes.common import NodeId, Session, name_of
@@ -361,6 +361,63 @@ async def save_agent(
     except PyMongoError as error:
         raise _unavailable(error) from None
     return _read(_found(record))
+
+
+class AgentCheck(BaseModel):
+    """Whether an agent's current document (its draft, while it has one) can
+    run, and be published."""
+
+    #: The revision checked.
+    revision: int
+    #: Why it can't run yet; empty when it can. The build stops at its first
+    #: problem, so there may be more than the one named.
+    problems: list[str]
+    #: Why it can't be published yet, besides; empty when it can.
+    publish_problems: list[str]
+
+
+@router.get("/organizations/{organization_id}/agents/{agent_id}/check")
+async def check_agent(
+    organization_id: NodeId,
+    agent_id: AgentId,
+    request: Request,
+    user: CurrentUser,
+    session: Session,
+    enforcer: Enforcer,
+) -> AgentCheck:
+    """
+    Check whether the agent's current document can run, and be published:
+    what a run or a publish would refuse it for, without doing either.
+    \f
+    :raises HTTPException: 403 without organizations:read in the organization;
+        404 when the organization has no such agent; 503 when MongoDB isn't
+        set up or isn't answering.
+    """
+    await authorize(
+        session, enforcer, user, "organizations:read", Scope(Level.ORG, organization_id)
+    )
+    store = agent_store(request)
+    resources = RunResources(
+        organization_id,
+        chat_agents=getattr(request.app.state, "chat_agents", None),
+        sessions=request.app.state.sessionmaker,
+    )
+    try:
+        record = _found(await store.get(organization_id, agent_id))
+        find = workflow_finder(store, organization_id)
+        problems = await check_runnable(record["document"], find, resources)
+        publish = (
+            await check_publishable(record["document"], find, resources)
+            if record.get("has_draft")
+            else []
+        )
+    except PyMongoError as error:
+        raise _unavailable(error) from None
+    return AgentCheck(
+        revision=int(record.get("revision") or 0),
+        problems=problems,
+        publish_problems=[problem for problem in publish if problem not in problems],
+    )
 
 
 @router.post("/organizations/{organization_id}/agents/{agent_id}/publish")

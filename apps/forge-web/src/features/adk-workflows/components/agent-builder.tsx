@@ -99,7 +99,11 @@ import type { AdkRun } from "@/features/runs/lib/runs"
 import { agentJsonSchema } from "@/features/adk-workflows/lib/schema"
 import { toApiError } from "@/lib/api/index"
 import { useScopeAccess } from "@/lib/hierarchy"
-import { usePageContext } from "@/features/assistant/lib/page-context"
+import {
+  usePageContext,
+  usePageFocus,
+} from "@/features/assistant/lib/page-context"
+import { useWorkflowChanges } from "@/features/assistant/lib/workflow-changes"
 import { useAgentStepModels } from "@/features/steps/lib/models"
 import { AdkRunDialog, AdkRunsMenu } from "@/features/runs/components/adk-runs"
 import { AgentDetails } from "./agent-details"
@@ -195,7 +199,26 @@ export function AgentBuilderPage({
   usePageContext({
     entities: [
       { kind: "organization", id: organizationId, label: organization?.name },
+      {
+        kind: "adk_workflow",
+        id: agentId,
+        label: agent.data?.document.name,
+        detail:
+          version !== undefined
+            ? `published version ${version}`
+            : agent.data?.has_draft
+              ? "draft"
+              : agent.data?.status,
+      },
     ],
+  })
+  // The assistant started a draft of a workflow open with none: open it.
+  useWorkflowChanges(organizationId, agentId, () => {
+    if (!record || record.has_draft || version !== undefined) return
+    void agent.refetch().then((found) => {
+      if (found.data?.has_draft)
+        setRecord((kept) => ({ ...found.data, versions: kept?.versions ?? [] }))
+    })
   })
 
   if (
@@ -485,6 +508,39 @@ function Builder({
     "forge.agents.detailsWidth"
   )
   const saving = useAgentAutosave(organization.id, record)
+  const selectedNode = useAgentBuilder((s) => selectedStep(s))
+  // The node they selected is what "this step" means to the assistant.
+  usePageFocus(
+    selectedNode
+      ? {
+          kind: "workflow_node",
+          id: selectedNode.id,
+          label: selectedNode.data.name,
+          detail: selectedNode.data.kind,
+        }
+      : null
+  )
+  // A draft the assistant saved shows here at once, as one step undo takes back.
+  useWorkflowChanges(organization.id, record.id, (change) => {
+    if (readOnly) return
+    void (async () => {
+      // The person's own edits are saved first; if theirs meet the
+      // assistant's, the conflict asks them which to keep.
+      const at = await saving.flush()
+      if (at === null || at >= change.revision) return
+      await saving.loadTheirs()
+      requestAnimationFrame(() => api.getState().requestFit())
+      toast.add({
+        title: "The assistant changed this workflow",
+        description: change.done.slice(0, 4).join(". ") || undefined,
+        type: "success",
+        actionProps: {
+          children: "Undo",
+          onClick: () => api.getState().undo(),
+        },
+      })
+    })()
+  })
   const scoped = organizationAgents.scope({ organizationId: organization.id })
   const make = scoped.useCreate({
     meta: { errorTitle: "Couldn't duplicate the workflow" },
