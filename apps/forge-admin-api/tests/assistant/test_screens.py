@@ -30,7 +30,12 @@ from scripted_llm import (
     sse_events,
 )
 
-from forge_admin.assistant import forge, knowledge_tools, language_models
+from forge_admin.assistant import (
+    forge,
+    knowledge_tools,
+    language_models,
+    workflow_tools,
+)
 from forge_admin.assistant.page_context import PAGE_CONTEXT, PageContext
 from forge_admin.assistant.screens import (
     STICKY,
@@ -75,7 +80,13 @@ def bundled(settings: Settings) -> Screens:
 def test_the_bundled_screens_name_only_what_exists(settings: Settings) -> None:
     # Loading checks every toolset and tool it names against the real ones.
     screens = bundled(settings)
-    assert set(screens.toolsets) == {"access", "administration", "knowledge", "code"}
+    assert set(screens.toolsets) == {
+        "access",
+        "administration",
+        "knowledge",
+        "code",
+        "workflows",
+    }
     names = [screen.name for screen in screens.config.screens]
     # The catch-all organization screen comes after every other organization screen.
     organization = names.index("organization")
@@ -93,7 +104,6 @@ BUILDER = "/organizations/$organizationId_/agents/$agentId"
         (page(), ["organization"], "some"),
         (page("chat-agents"), ["organization"], "some"),
         (page("config"), ["organization-config", "organization"], "all"),
-        (page(route=BUILDER), [], "some"),
     ],
 )
 def test_the_bundled_screens_match_the_organization_workspace(
@@ -105,8 +115,32 @@ def test_the_bundled_screens_match_the_organization_workspace(
     assert ("all" if resolved.toolsets["access"] is None else "some") == access
     # Asking what the documents say works everywhere; retrying and
     # re-indexing them only on the knowledge base pages.
-    assert set(resolved.toolsets) == {"access", "knowledge", "code"}
+    assert set(resolved.toolsets) - {"workflows"} == {"access", "knowledge", "code"}
     assert resolved.toolsets["knowledge"] == set(knowledge_tools.READ_TOOLS)
+    # The organization's workflows and runs are read in its workspace; they're
+    # built on a workflow's own page.
+    if "organization" in screens:
+        assert resolved.toolsets["workflows"] == set(workflow_tools.READ_TOOLS) - {
+            "list_building_blocks"
+        }
+    else:
+        assert "workflows" not in resolved.toolsets
+    assert len(resolved.prompts) <= 6
+
+
+def test_the_workflow_builder_page_has_every_workflow_tool(settings: Settings) -> None:
+    resolved = bundled(settings).resolve(context(page(route=BUILDER)))
+
+    assert [screen.name for screen in resolved.screens] == ["workflow-builder"]
+    assert resolved.toolsets["workflows"] is None
+    assert resolved.toolsets["knowledge"] == set(knowledge_tools.READ_TOOLS)
+    assert resolved.thinking_level == "medium"
+    [instruction] = resolved.instructions
+    assert "agentId parameter" in instruction and "workflow_node" in instruction
+    assert [prompt.title for prompt in resolved.prompts][:2] == [
+        "Build it with me",
+        "Explain this workflow",
+    ]
     assert len(resolved.prompts) <= 6
 
 

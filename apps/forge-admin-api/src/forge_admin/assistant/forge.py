@@ -4,7 +4,7 @@ A supervisor talks with the person. It has no tools of its own: it hands
 each request to a specialist, an agent with one toolset (the access tools in
 ``access_tools.py``, the administration tools in ``admin_tools.py``, the
 knowledge base tools in ``knowledge_tools.py``, the code graph's tools in
-``code_tools.py``), and
+``code_tools.py``, the workflow builder's in ``workflow_tools.py``), and
 answers from what the specialist reports. With a few tools
 each, the specialists pick the right one more reliably than one agent
 offered all of them. Each specialist runs as an ADK
@@ -43,6 +43,7 @@ from forge_admin.assistant import (
     knowledge_tools,
     language_models,
     screens,
+    workflow_tools,
 )
 from forge_admin.assistant.page_context import describe_page
 from forge_admin.assistant.person import PERSON, describe_person
@@ -456,6 +457,29 @@ def toolsets(settings: Settings, app: FastAPI | None = None) -> list[AssistantTo
                 "affect, exact source, what an ingestion changed, and how "
                 "repositories, services and systems connect. The same tools as the "
                 "code graph MCP server."
+            ),
+        ),
+        AssistantToolset(
+            name="workflows",
+            title="Workflow builder",
+            description=(
+                "Reads your organization's ADK workflows and builds them with you: "
+                "adds and connects nodes, sets their settings and input and output "
+                "fields, checks what would stop a run, and test-runs the draft. It "
+                "changes drafts only, which you see on the canvas and can undo; a "
+                "test run asks you first."
+            ),
+            toolset=workflow_tools.toolset(app) if app is not None else None,
+            instruction=workflow_tools.INSTRUCTION,
+            tools=workflow_tools.TOOL_NAMES,
+            delegate=(
+                "Workflow builder: an organization's ADK workflows; explaining what "
+                "one does, designing one for a goal, and building it on its draft "
+                "(adding, changing, removing and connecting nodes; their settings, "
+                "agents, tools, input and output schemas; the run's input fields), "
+                "checking why it wouldn't run, test-running it, and explaining "
+                "its runs and their errors. Hand it the whole goal, in the "
+                "person's words, with the workflow's ID."
             ),
         ),
     ]

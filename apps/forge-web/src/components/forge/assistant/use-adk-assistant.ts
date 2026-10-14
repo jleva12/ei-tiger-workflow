@@ -103,6 +103,14 @@ export type UseAdkAssistantOptions = Omit<
    * the key if it checks the state it's sent.
    */
   suggestFollowUps?: FollowUpsOption
+  /**
+   * Sees each event of a run as it streams in, before the thread shows it:
+   * the agent's and its sub-agents' messages, tool calls and tool results
+   * (`content.parts[].functionResponse`), as the ADK server sent them. For
+   * side effects of what the agent did, e.g. reloading a record a tool
+   * changed. Not called for a conversation's history as it loads.
+   */
+  onEvent?: (event: AdkEvent) => void
 }
 
 /**
@@ -124,6 +132,7 @@ export function useAdkAssistant({
   defaultThinkingLevel,
   modelStateDelta = defaultModelStateDelta,
   suggestFollowUps,
+  onEvent,
   ...options
 }: UseAdkAssistantOptions) {
   // Headers may change (a refreshed token) without rebuilding the transport:
@@ -178,12 +187,14 @@ export function useAdkAssistant({
   const toStateDeltaRef = useRef(modelStateDelta)
   const runStateRef = useRef(runState)
   const followUpsRef = useRef(suggestFollowUps)
+  const onEventRef = useRef(onEvent)
   useEffect(() => {
     const { model, thinkingLevel } = modelSettings
     selectionRef.current = modelsShown ? { model, thinkingLevel } : undefined
     toStateDeltaRef.current = modelStateDelta
     runStateRef.current = runState
     followUpsRef.current = suggestFollowUps
+    onEventRef.current = onEvent
   })
   const send = useCallback<AdkStreamCallback>(
     async function* (messages, config) {
@@ -191,7 +202,7 @@ export function useAdkAssistant({
       try {
         const state = runStateRef.current?.()
         const followUps = followUpsRequest(followUpsRef.current)
-        yield* await connection.stream(
+        const events = await connection.stream(
           messages,
           selection || state || followUps
             ? {
@@ -205,6 +216,15 @@ export function useAdkAssistant({
               }
             : config
         )
+        for await (const event of events) {
+          try {
+            onEventRef.current?.(event)
+          } catch (error) {
+            // A watcher's mistake never stops the reply.
+            console.error("onEvent failed", error)
+          }
+          yield event
+        }
       } catch (error) {
         // Stop aborts the run; that isn't a failure to show.
         if (config.abortSignal.aborted) throw error

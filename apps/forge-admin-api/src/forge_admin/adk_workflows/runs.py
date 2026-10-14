@@ -502,13 +502,34 @@ async def check_publishable(
             )
     if problems:
         return problems
+    return await check_runnable(document, find, resources)
+
+
+async def check_runnable(
+    document: dict[str, Any],
+    find: FindAgent,
+    resources: "RunResources | None" = None,
+) -> list[str]:
+    """
+    Whether a workflow's document can run as it is (its draft too): it has a
+    start, the workflows it runs are there, it builds, and what its LLM
+    agents use is the organization's. The build stops at its first problem,
+    so a document may have more than the one named.
+
+    :param document: The document.
+    :param find: Finds the organization's workflows (``versions.workflow_finder``).
+    :param resources: The organization's agents, knowledge bases and MCP servers.
+    :return: Why it can't run yet; none when it can.
+    """
+    if start_schema(document) is None:
+        return ["It has no start."]
     try:
         saved = await saved_documents(document, find)
         check_builds(document, saved)
         await used_resources([document, *saved.values()], resources)
     except AdkRunError as error:
-        problems.append(str(error))
-    return problems
+        return [str(error)]
+    return []
 
 
 async def queue_run(queue: Embedding, run_id: str) -> None:

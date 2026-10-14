@@ -26,6 +26,8 @@ export type PageEntityKind =
   | "user"
   | "role"
   | "adk_run"
+  | "adk_workflow"
+  | "workflow_node"
   | "knowledge_base"
   | "knowledge_document"
 

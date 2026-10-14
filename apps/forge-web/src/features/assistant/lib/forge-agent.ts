@@ -17,6 +17,10 @@ import {
   type PageContext,
 } from "@/features/assistant/lib/page-context"
 import { apiAuthHeaders } from "@/lib/api-instance"
+import {
+  announceWorkflowChange,
+  workflowChangesOf,
+} from "@/features/assistant/lib/workflow-changes"
 import { useUserPreferences } from "@/lib/user-preferences"
 import { useWorkspaceScopeApi } from "@/app/workspace-scope"
 
@@ -206,6 +210,11 @@ export function useForgeAgent(
           defaultThinkingLevel: savedLevel || undefined,
           // A few questions to ask next, above the composer after each reply.
           suggestFollowUps: true,
+          // A workflow draft it saved shows on that workflow's canvas at once.
+          onEvent: (event) => {
+            for (const change of workflowChangesOf(event))
+              announceWorkflowChange(change)
+          },
         }
       : { stream: notConnected }
   )
