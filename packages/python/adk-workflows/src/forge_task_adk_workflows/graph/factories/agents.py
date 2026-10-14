@@ -74,6 +74,7 @@ from forge_task_adk_workflows.graph.data import PRIVATE_STATE, as_data
 from forge_task_adk_workflows.graph.errors import AgentBuildError, RunFailed
 from forge_task_adk_workflows.graph.factories.base import (
     BuildContext,
+    called_with,
     config_of,
     failed,
     items,
@@ -205,7 +206,7 @@ def saved(node: dict[str, Any], ctx: BuildContext) -> BaseNode:
         return graph
     evaluator = ctx.services.evaluator
 
-    async def run(adk: Context, node_input: Any) -> Any:
+    async def run(adk: Context, node_input: Any) -> AsyncGenerator[Any]:
         known = ctx.data(adk, node_input)
         started: dict[str, Any] = {}
         try:
@@ -215,9 +216,12 @@ def saved(node: dict[str, Any], ctx: BuildContext) -> BaseNode:
                     started[key] = value
         except StepFailed as error:
             raise failed(node, error) from None
+        # What it starts its workflow with, kept before the workflow runs: the
+        # run page shows it, though the workflow refuse it or fail.
+        yield called_with(started)
         # Its start holds them to its input, as it would what came in.
         handed = await adk.run_node(graph, node_input=started, run_id="workflow", use_sub_branch=True)
-        return as_data(handed)
+        yield as_data(handed)
 
     return FunctionNode(name=name, func=run, rerun_on_resume=True)
 
@@ -297,11 +301,15 @@ def _tools(config: dict[str, Any], where: str, ctx: BuildContext, step: str | No
             "adk_workflow": ("workflow", "choose the workflow it runs"),
             "knowledge_base": ("knowledge_bases", "choose the knowledge bases it searches"),
             "http_tool": ("url", "give the URL it calls"),
+            "skills": ("skills", "choose the skills it has"),
         }.get(kind)
         if needs is not None and not settings.get(needs[0]):
             raise AgentBuildError(f"{at}: {needs[1]}.")
         if kind == "mcp" and not (settings.get("server") or settings.get("url")):
             raise AgentBuildError(f"{at}: choose one of the organization's MCP servers, or give its URL.")
+        if kind == "skills" and any(other.tool.get("kind") == "skills" for other in tools):
+            # ADK's skill tools (load_skill, …) are an agent's once.
+            raise AgentBuildError(f"{at}: an agent has one Skills tool; put all its skills in it.")
         tools.append(LazyToolset(tool, where=at, step=step, services=ctx.services, values=_tool_values(ctx)))
     return tools
 

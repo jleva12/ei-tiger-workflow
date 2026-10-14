@@ -10,11 +10,16 @@ import {
 } from "@/features/credentials/lib/display"
 import { useOrganizationKnowledgeBases } from "@/features/knowledge/lib/api"
 import { useOrganizationMcpServers } from "@/features/mcp-servers/lib/api"
-import type { KnowledgeBaseLookup, McpServerLookup } from "./chat-agent-store"
+import { useOrganizationSkills } from "@/features/skills/lib/api"
+import type {
+  KnowledgeBaseLookup,
+  McpServerLookup,
+  SkillLookup,
+} from "./chat-agent-store"
 
 /*
- * The organization's MCP servers, knowledge bases and API credentials, as
- * tools pick them (their names, an MCP server's tools, where a credential
+ * The organization's MCP servers, knowledge bases, API credentials and
+ * skills, as tools pick them (their names, an MCP server's tools, where a credential
  * may go) and as their checks see them (whether a server or a credential is
  * signed in to, how many of a knowledge base's documents are searchable):
  * for the Agents builder's tool nodes, a workflow's LLM agents' tools and
@@ -32,6 +37,7 @@ export type ToolChecks = {
     { name: string; kind: "rag" | "system"; ready: number }
   >
   credentials?: Map<string, CredentialLookup>
+  skills?: Map<string, { name: string }>
 }
 
 export function useToolLookups(organizationId: string): {
@@ -39,6 +45,7 @@ export function useToolLookups(organizationId: string): {
     mcpServers: Record<string, McpServerLookup>
     knowledgeBases: Record<string, KnowledgeBaseLookup>
     credentials: Record<string, CredentialLookup>
+    skills: Record<string, SkillLookup>
   }
   checks: ToolChecks
 } {
@@ -46,7 +53,9 @@ export function useToolLookups(organizationId: string): {
   const knowledgeBases = useOrganizationKnowledgeBases(organizationId)
   const credentialList = useOrganizationCredentials(organizationId)
   const methods = useCredentialAuthMethods()
+  const skillList = useOrganizationSkills(organizationId)
   return React.useMemo(() => {
+    const skills = skillList.data ?? []
     const servers = mcpServers.data ?? []
     const bases = knowledgeBases.data ?? []
     const methodNames = Object.fromEntries(
@@ -79,6 +88,12 @@ export function useToolLookups(organizationId: string): {
           ])
         ),
         credentials: Object.fromEntries(credentials),
+        skills: Object.fromEntries(
+          skills.map((s) => [
+            s.id,
+            { name: s.name, description: s.description },
+          ])
+        ),
       },
       checks: {
         mcpServers: mcpServers.isSuccess
@@ -110,6 +125,9 @@ export function useToolLookups(organizationId: string): {
         credentials: credentialList.isSuccess
           ? new Map(credentials)
           : undefined,
+        skills: skillList.isSuccess
+          ? new Map(skills.map((s) => [s.id, { name: s.name }]))
+          : undefined,
       },
     }
   }, [
@@ -120,5 +138,7 @@ export function useToolLookups(organizationId: string): {
     credentialList.data,
     credentialList.isSuccess,
     methods.data,
+    skillList.data,
+    skillList.isSuccess,
   ])
 }

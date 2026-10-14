@@ -37,6 +37,10 @@ from forge_task_adk_workflows.support.expressions import plain
 INPUT_NODE = "__input__"
 #: Where a step's error rides on the event of its Error way.
 ERROR_KEY = "forge_error"
+#: Where a step that works out what it sends (a saved workflow's inputs, an
+#: agent's message, an HTTP request) records it, on an event of its own
+#: before it sends it: the run page shows it, even when the step fails.
+CALLED_WITH_KEY = "forge_called_with"
 #: Session state keys Forge keeps for itself, out of ``state``.
 PRIVATE_STATE = "forge:"
 #: Logic steps: they hand on what came in, and record the way they took.

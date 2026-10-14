@@ -40,8 +40,9 @@ Actions: HTTP requests, Bash commands, transforms, filters and delays.
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from datetime import datetime, timedelta
+from http import HTTPStatus
 from typing import Any
 from urllib.parse import urljoin
 
@@ -57,6 +58,7 @@ from forge_task_adk_workflows.graph.errors import AgentBuildError, RunFailed
 from forge_task_adk_workflows.graph.factories.base import (
     BuildContext,
     asked,
+    called_with,
     failed,
     interrupt_id,
     label_of,
@@ -79,7 +81,14 @@ from forge_task_adk_workflows.support.commands import (
 )
 from forge_task_adk_workflows.support.errors import StepFailed
 from forge_task_adk_workflows.support.expressions import TEMPLATE, as_text
-from forge_task_adk_workflows.support.http import MAX_REDIRECTS, RETRYABLE, check_url, parse_body, read_body
+from forge_task_adk_workflows.support.http import (
+    MAX_REDIRECTS,
+    RETRYABLE,
+    check_url,
+    parse_body,
+    read_body,
+    statuses_of,
+)
 from forge_task_adk_workflows.support.step_settings import (
     UNIT_SECONDS,
     BashConfig,
@@ -132,6 +141,11 @@ def http(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
     evaluator = services.evaluator
     has_error_way = "error" in ctx.connected.get(node["id"], frozenset())
     sign = signer(services, s.credential)
+    ways = _status_ways(node, s)
+
+    def way_for(status: int) -> str | None:
+        # The first status way whose codes hold it.
+        return next((way for way, holds in ways if holds(status)), None)
 
     async def query(data: dict[str, Any]) -> list[tuple[str, str]]:
         # Its query parameters, filled in: one whose value is one {{ }} that
@@ -152,7 +166,8 @@ def http(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
             )
         return pairs
 
-    async def request(data: dict[str, Any]) -> dict[str, Any]:
+    async def prepared(data: dict[str, Any]) -> tuple[str, dict[str, str], dict[str, Any]]:
+        # Its URL, headers and body, filled in.
         url = with_query((await evaluator.render(s.url, data, what="Its URL")).strip(), await query(data))
         headers = {
             header.name.strip(): await evaluator.render(header.value, data, what=f"Its {header.name} header")
@@ -166,6 +181,10 @@ def http(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
                 sent["json"] = body
             elif body is not None:
                 sent["content"] = body if isinstance(body, str) else json.dumps(body)
+        return url, headers, sent
+
+    async def request(url: str, headers: dict[str, str], sent: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        # Its response, and the way it takes: a status way's, else Success.
         last: StepFailed | None = None
         for attempt in range(1 + max(0, s.retries)):
             if attempt:
@@ -179,6 +198,11 @@ def http(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
                 if error.status is None or error.status in RETRYABLE:
                     continue
                 raise
+            way = way_for(response["status"])
+            if way is not None:
+                # A status with a way of its own is an answer: not retried, nor
+                # held to what a success returns.
+                return response, way
             if 200 <= response["status"] < 300:
                 if body_model is not None:
                     try:
@@ -190,27 +214,90 @@ def http(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
                             status=response["status"],
                             details={"body": response["body"]},
                         ) from None
-                return response
+                return response, "success"
             last = StepFailed(
-                f"It answered {response['status']}",
+                answered(s.method, url, response["status"], response["body"]),
                 status=response["status"],
-                details={"body": response["body"]},
+                details={"body": response["body"], "method": s.method, "url": url},
             )
             if response["status"] not in RETRYABLE:
                 break
         assert last is not None
         raise last
 
-    async def run(adk: Context, node_input: Any) -> Event:
+    async def run(adk: Context, node_input: Any) -> AsyncGenerator[Event]:
         try:
-            response = await request(ctx.data(adk, node_input))
+            url, headers, sent = await prepared(ctx.data(adk, node_input))
+            # The request, kept before it's sent (its headers by name: their
+            # values may sign it): the run page shows it, though it fail.
+            shown: dict[str, Any] = {"method": s.method, "url": url}
+            if headers:
+                shown["headers"] = sorted(headers)
+            if sent:
+                shown["body"] = sent.get("json", sent.get("content"))
+            yield called_with(shown)
+            response, way = await request(url, headers, sent)
         except StepFailed as error:
             if not has_error_way:
                 raise failed(node, error) from None
-            return Event(route="error", custom_metadata={ERROR_KEY: error.as_error()})  # type: ignore[call-arg]  # ADK's shorthand for actions.route
-        return Event(output=response, route="success")  # type: ignore[call-arg]  # ADK's shorthand for actions.route
+            yield Event(route="error", custom_metadata={ERROR_KEY: error.as_error()})  # type: ignore[call-arg]  # ADK's shorthand for actions.route
+            return
+        yield Event(output=response, route=way)  # type: ignore[call-arg]  # ADK's shorthand for actions.route
 
     return FunctionNode(name=adk_name(text(node.get("name"))), func=run)
+
+
+def _status_ways(node: dict[str, Any], s: HttpConfig) -> list[tuple[str, Callable[[int], bool]]]:
+    """
+    :return: An HTTP step's status ways, in order: each one's ID and whether
+        a status is one of its codes.
+    :raises AgentBuildError: When one names no status, or names what isn't one.
+    """
+    ways: list[tuple[str, Callable[[int], bool]]] = []
+    for index, way in enumerate(s.statuses, 1):
+        if not way.codes.strip():
+            raise AgentBuildError(f"{where_of(node)}: give its status way {index} the statuses that take it.")
+        try:
+            ways.append((way.id, statuses_of(way.codes)))
+        except ValueError as error:
+            raise AgentBuildError(f"{where_of(node)}: its status way {way.codes.strip()!r}: {error}.") from None
+    return ways
+
+
+#: The most of a response's body an HTTP failure's message quotes.
+SAID_CHARS = 300
+#: The fields an API's error body says what went wrong in, most telling first.
+_SAYING = ("message", "error_description", "detail", "error", "title", "errors")
+
+
+def answered(method: str, url: str, status: int, body: Any) -> str:
+    """
+    How an HTTP failure reads: the request, the status (and its phrase), and
+    what the API said, cut short: ``GET https://x/y answered 404 Not Found:
+    No such customer``. The whole body is the error's ``body``.
+    """
+    try:
+        phrase = f" {HTTPStatus(status).phrase}"
+    except ValueError:
+        phrase = ""
+    said = _said(body)
+    return f"{method} {url} answered {status}{phrase}" + (f": {said}" if said else "")
+
+
+def _said(body: Any) -> str:
+    # What an error's body says: its message field (APIs' usual ones), else
+    # the body itself, as text, on one line.
+    if isinstance(body, dict):
+        for key in _SAYING:
+            found = body.get(key)
+            if found not in (None, "", [], {}):
+                body = found
+                break
+    if isinstance(body, dict) and isinstance(body.get("message"), str):
+        body = body["message"]
+    said = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False, default=str) if body else ""
+    said = " ".join(said.split())
+    return said if len(said) <= SAID_CHARS else f"{said[:SAID_CHARS]}…"
 
 
 def _whole(template: str) -> str | None:

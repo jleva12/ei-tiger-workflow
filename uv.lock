@@ -1372,6 +1372,7 @@ dependencies = [
     { name = "mcp" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyyaml" },
 ]
 
 [package.optional-dependencies]
@@ -1418,12 +1419,13 @@ requires-dist = [
     { name = "forge-common", extras = ["adk-artifacts-s3"], marker = "extra == 'artifacts-s3'", editable = "packages/python/common" },
     { name = "forge-common", extras = ["adk-memory"], marker = "extra == 'memory-atlas'", editable = "packages/python/common" },
     { name = "forge-jsonata", editable = "packages/python/jsonata" },
-    { name = "google-adk", specifier = ">=2.9.2" },
+    { name = "google-adk", specifier = ">=2.10.0" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "jsonschema", specifier = ">=4.23" },
     { name = "mcp", specifier = ">=2.3.0,<3" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "pydantic-settings", specifier = ">=2.6" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'server'", specifier = ">=2.0" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },
 ]

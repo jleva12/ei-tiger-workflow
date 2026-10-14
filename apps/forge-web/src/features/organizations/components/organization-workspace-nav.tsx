@@ -16,7 +16,7 @@ import {
 /**
  * An organization workspace's sub nav: Overview on top, then its sections:
  * Workflows and agents (Workflows, Agents), Integrations (MCP servers,
- * Credentials, Knowledge bases, with Code repositories as its second tab) and Settings: Members, for those who may see them, and API
+ * Credentials, Skills vault, Knowledge bases, with Code repositories as its second tab) and Settings: Members, for those who may see them, and API
  * keys, for those who manage them. Render it anywhere in the page: it goes
  * in the shell's pinned `ShellSidebarHeader`.
  */

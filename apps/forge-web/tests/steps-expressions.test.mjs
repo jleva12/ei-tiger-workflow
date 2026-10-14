@@ -19,6 +19,7 @@ const { normalizeReferences } = await server.ssrLoadModule("/src/features/steps/
 const { t, valuesOf } = await server.ssrLoadModule("/src/features/steps/lib/types.ts")
 const { fieldOfCode, settingsIssues, switchIssues } = await server.ssrLoadModule("/src/features/steps/lib/validate.ts")
 const { expressionSetting } = await server.ssrLoadModule("/src/features/steps/lib/fields.ts")
+const { readStatuses, holds } = await server.ssrLoadModule("/src/features/steps/lib/statuses.ts")
 const { kindInfo } = await installNodeCatalog(server)
 await server.close()
 
@@ -142,4 +143,33 @@ test("an HTTP step's query parameters are templates, name and value, and each ne
   )
   assert.equal(fieldOfCode("query"), "query")
   assert.equal(fieldOfCode("field:query.q1.name:0"), "query.q1.name")
+})
+
+test("an HTTP request's status ways read as the runner reads them, and say what's wrong", () => {
+  const read = readStatuses("404 401,403  5XX 418-420")
+  assert.deepEqual(
+    [200, 401, 403, 404, 405, 417, 418, 420, 421, 500, 599].filter((status) => holds(read.ranges, status)),
+    [401, 403, 404, 418, 420, 500, 599]
+  )
+  assert.deepEqual(readStatuses("404, nope"), { problem: '"nope" isn\'t a status (404), a class (4xx) or a range (500-599).' })
+  assert.deepEqual(readStatuses("599-500"), { problem: '"599-500" ends before it starts.' })
+  assert.deepEqual(readStatuses(" , "), { problem: "It names no status." })
+
+  const step = (statuses) => ({
+    id: "read",
+    kind: "http",
+    name: "Read",
+    config: { ...kindInfo("http").defaults(), url: "https://api.example.com/x", statuses },
+  })
+  const issues = (statuses) => settingsIssues(step(statuses)).filter(([code]) => code.startsWith("status-"))
+  assert.deepEqual(issues([{ id: "a", codes: "404" }, { id: "b", codes: "401, 403" }]), [])
+  assert.deepEqual(issues([{ id: "a", codes: "" }]), [["status-empty", "error", "Every status way needs the statuses that take it."]])
+  assert.deepEqual(issues([{ id: "a", codes: "40x" }]), [
+    ["status-codes", "error", 'Status way 40x: "40x" isn\'t a status (404), a class (4xx) or a range (500-599).'],
+  ])
+  // An earlier way takes a status first: this one never does for it.
+  assert.deepEqual(issues([{ id: "a", codes: "4xx" }, { id: "b", codes: "404" }]), [
+    ["status-twice", "warning", "Status way 404: an earlier way takes 404 first."],
+  ])
+  assert.equal(fieldOfCode("status-codes"), "statuses")
 })

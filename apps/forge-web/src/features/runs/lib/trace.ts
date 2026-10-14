@@ -126,6 +126,7 @@ export type AdkRunTrace = {
 
 /** What an event did, as the trace filters and tags it. */
 export type TraceKind =
+  | "sent"
   | "message"
   | "thought"
   | "call"
@@ -139,6 +140,7 @@ export type TraceKind =
 
 export const TRACE_KINDS: Record<TraceKind, { label: string; tone: ChipTone }> =
   {
+    sent: { label: "Called with", tone: "outline" },
     message: { label: "Message", tone: "neutral" },
     thought: { label: "Thought", tone: "outline" },
     call: { label: "Tool call", tone: "notice" },
@@ -159,10 +161,23 @@ const present = (value: unknown) =>
   value !== undefined &&
   !(Array.isArray(value) && value.length === 0)
 
+/**
+ * Where a step that works out what it sends (a saved workflow's inputs, an
+ * agent's message, an HTTP request) records it, on an event of its own.
+ */
+export const CALLED_WITH_KEY = "forge_called_with"
+
+/** What a step recorded it sent, on this event; undefined when it's not that event. */
+export const calledWith = (event: Pick<TraceEvent, "metadata">) =>
+  event.metadata && CALLED_WITH_KEY in event.metadata
+    ? event.metadata[CALLED_WITH_KEY]
+    : undefined
+
 /** What an event did, in the order the trace tags it. */
 export function eventKinds(event: TraceEvent): TraceKind[] {
   const kinds: TraceKind[] = []
   if (event.error) kinds.push("error")
+  if (calledWith(event) !== undefined) kinds.push("sent")
   if (event.text) kinds.push("message")
   if (event.thought) kinds.push("thought")
   if (event.calls.some((call) => PAUSE_CALLS.has(call.name ?? "")))
@@ -187,6 +202,8 @@ export function eventSummary(event: TraceEvent): string {
   const response = event.responses[0]
   if (response) return `Answers ${response.name ?? "a call"}`
   if (event.has_output) return `Hands on ${preview(event.output)}`
+  const sent = calledWith(event)
+  if (sent !== undefined) return `Called with ${preview(sent)}`
   const keys = Object.keys(event.state_delta)
   if (keys.length) return `Sets ${keys.join(", ")}`
   if (present(event.route)) return `Takes ${preview(event.route)}`

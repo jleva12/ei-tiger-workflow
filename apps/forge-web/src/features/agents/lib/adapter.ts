@@ -110,5 +110,6 @@ export const CHAT_AGENT_ADAPTER: BuilderAdapter<
     mcpServers: {},
     knowledgeBases: {},
     credentials: {},
+    skills: {},
   }),
 }

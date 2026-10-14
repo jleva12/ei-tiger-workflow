@@ -107,5 +107,6 @@ export const AGENT_ADAPTER: BuilderAdapter<
     mcpServers: {},
     knowledgeBases: {},
     credentials: {},
+    skills: {},
   }),
 }

@@ -34,7 +34,11 @@ import type { CredentialLookup } from "@/features/credentials/lib/display"
 import { OpenApiOperations } from "./openapi-operations"
 import { HTTP_METHODS, uid, type HeaderRow } from "@/features/steps/lib/model"
 import type { Scope } from "@/features/steps/lib/scope"
-import type { KnowledgeBaseLookup, McpServerLookup } from "./chat-agent-store"
+import type {
+  KnowledgeBaseLookup,
+  McpServerLookup,
+  SkillLookup,
+} from "./chat-agent-store"
 
 /*
  * The settings of each kind of tool, as the Agents builder's settings dialog
@@ -58,6 +62,7 @@ export type ToolKind =
   | "openapi"
   | "mcp"
   | "code_execution"
+  | "skills"
 
 /** What a tool may pick from: the organization's, by ID. */
 export type ToolLookups = {
@@ -70,6 +75,8 @@ export type ToolLookups = {
   mcpServers: Record<string, McpServerLookup>
   /** API credentials: what HTTP and OpenAPI tools sign in with. */
   credentials: Record<string, CredentialLookup>
+  /** Skills from the organization's skills vault. */
+  skills: Record<string, SkillLookup>
 }
 
 /** A tool's settings, and how to change them: each change one step of undo by its key. */
@@ -197,6 +204,121 @@ function CodeExecutionFields({
         checked={config.confirm}
         onChange={(on) => set("confirm", on)}
         description={confirmAbout}
+      />
+    </>
+  )
+}
+
+function SkillsFields({ config, set, lookups }: ToolProps<"skills">) {
+  const known = lookups.skills
+  const groupId = React.useId()
+  const { issues, key } = useFieldIssues("skills")
+  const [filter, setFilter] = React.useState("")
+  // A pick that's gone keeps its place, so it can be unticked.
+  const gone = config.skills.filter((id) => !known[id])
+  const toggle = (id: string, on: boolean) =>
+    set(
+      "skills",
+      on
+        ? [...config.skills.filter((x) => x !== id), id]
+        : config.skills.filter((x) => x !== id)
+    )
+  const words = filter.trim().toLowerCase()
+  const entries = Object.entries(known)
+    .filter(
+      ([, skill]) =>
+        !words ||
+        skill.name.includes(words) ||
+        skill.description.toLowerCase().includes(words)
+    )
+    .sort(([, a], [, b]) => a.name.localeCompare(b.name))
+  const total = Object.keys(known).length
+  return (
+    <>
+      <div
+        role="group"
+        aria-labelledby={`${groupId}-label`}
+        data-field={key}
+        className="flex flex-col gap-2"
+      >
+        <span
+          id={`${groupId}-label`}
+          className="flex items-baseline justify-between gap-2 text-xs font-medium text-foreground"
+        >
+          Skills it has
+          <span className="font-normal text-muted-foreground tabular-nums">
+            {config.skills.length} of {total} picked
+          </span>
+        </span>
+        {total > 6 && (
+          <Input
+            aria-label="Find a skill"
+            placeholder="Find a skill"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+          />
+        )}
+        {entries.length + gone.length > 0 ? (
+          <div
+            className="flex max-h-72 flex-col gap-1 overflow-y-auto rounded-(--radius-item) border p-2.5"
+            tabIndex={0}
+          >
+            {entries.map(([id, skill]) => (
+              <Field key={id} orientation="horizontal" className="items-start">
+                <Checkbox
+                  id={`${groupId}-${id}`}
+                  className="mt-0.5"
+                  checked={config.skills.includes(id)}
+                  onCheckedChange={(on) => toggle(id, Boolean(on))}
+                />
+                <FieldLabel
+                  htmlFor={`${groupId}-${id}`}
+                  className="flex min-w-0 flex-1 flex-col items-start gap-0.5 font-normal"
+                >
+                  <span className="font-mono text-xs">{skill.name}</span>
+                  <span className="line-clamp-2 text-2xs text-muted-foreground">
+                    {skill.description}
+                  </span>
+                </FieldLabel>
+              </Field>
+            ))}
+            {gone.map((id) => (
+              <Field key={id} orientation="horizontal" className="items-center">
+                <Checkbox
+                  id={`${groupId}-${id}`}
+                  checked
+                  onCheckedChange={(on) => toggle(id, Boolean(on))}
+                />
+                <FieldLabel
+                  htmlFor={`${groupId}-${id}`}
+                  className="font-normal text-muted-foreground"
+                >
+                  Deleted skill
+                </FieldLabel>
+              </Field>
+            ))}
+          </div>
+        ) : (
+          <FieldDescription>
+            {total
+              ? "No skill matches."
+              : "The organization has no skills yet: add them on the Skills vault page (write, upload, import from GitHub, or the AI skill creator)."}
+          </FieldDescription>
+        )}
+        <FieldDescription>
+          The agent is told each skill&apos;s name and description, and loads
+          its instructions ({code("load_skill")}) and files (
+          {code("load_skill_resource")}) when a task matches. Skills are read as
+          the vault has them: a change reaches agents from their next turn, and
+          workflows from their next run.
+        </FieldDescription>
+        <IssueMessages issues={issues} />
+      </div>
+      <CheckField
+        label="It may run the skills' scripts"
+        checked={config.run_scripts}
+        onChange={(on) => set("run_scripts", on)}
+        description="Scripts (scripts/…) run on the server's own machine, unsandboxed, only where code execution is turned on: in local development. Otherwise the agent reads a script and follows it itself."
       />
     </>
   )
@@ -951,6 +1073,8 @@ export function ToolFields<K extends ToolKind>({
           {...(props as unknown as ToolProps<"code_execution">)}
         />
       )
+    case "skills":
+      return <SkillsFields {...(props as unknown as ToolProps<"skills">)} />
   }
   return null
 }

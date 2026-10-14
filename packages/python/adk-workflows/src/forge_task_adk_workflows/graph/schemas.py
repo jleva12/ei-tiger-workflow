@@ -36,7 +36,7 @@ one model.
 import json
 import keyword
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import lru_cache
 from typing import Annotated, Any, Literal, Union
 
@@ -58,6 +58,8 @@ from pydantic_core import PydanticCustomError
 DEFAULT_NAME = "Data"
 # The most problems a refusal names.
 MAX_PROBLEMS = 5
+# The most of the value a problem is about a refusal quotes, as JSON.
+MAX_GOT = 80
 _NAME = re.compile(r"[^A-Za-z0-9_]+")
 
 
@@ -97,14 +99,27 @@ def problems(error: ValidationError, what: str) -> str:
     """
     :param error: Why data didn't fit.
     :param what: What the data is, for a problem at its top.
-    :return: Its first few problems, each with where (``items/0/qty: ...``).
+    :return: Its first few problems, each with where and what it got
+        (``items/0/qty: Input should be a valid integer (got "two")``).
     """
     found = [
-        f"{'/'.join(str(part) for part in problem['loc']) or what}: {problem['msg']}"
+        f"{'/'.join(str(part) for part in problem['loc']) or what}: {problem['msg']}{_got(problem)}"
         for problem in error.errors()[:MAX_PROBLEMS]
     ]
     more = error.error_count() - len(found)
     return "; ".join(found) + (f"; and {more} more" if more > 0 else "")
+
+
+def _got(problem: Mapping[str, Any]) -> str:
+    # The value a problem is about, cut short: a missing field's is the
+    # object it's missing from, which says nothing more.
+    if problem.get("type") == "missing" or "input" not in problem:
+        return ""
+    try:
+        got = json.dumps(problem["input"], ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        got = repr(problem["input"])
+    return f" (got {got if len(got) <= MAX_GOT else got[:MAX_GOT] + '…'})"
 
 
 def _adapter(schema_type: Any) -> TypeAdapter[Any]:

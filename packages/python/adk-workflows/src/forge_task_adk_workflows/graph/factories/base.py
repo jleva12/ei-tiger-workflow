@@ -4,11 +4,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from google.adk import Context, Workflow
+from google.adk import Context, Event, Workflow
 from google.adk.workflow import BaseNode
 from pydantic import BaseModel, ValidationError
 
-from forge_task_adk_workflows.graph.data import Scope, data_of
+from forge_task_adk_workflows.graph.data import CALLED_WITH_KEY, Scope, as_data, data_of
 from forge_task_adk_workflows.graph.errors import AgentBuildError, RunFailed
 from forge_task_adk_workflows.graph.schemas import problems
 from forge_task_adk_workflows.graph.services import RunServices
@@ -111,6 +111,16 @@ def settings_of[T: BaseModel](node: dict[str, Any], model: type[T]) -> T:
 def failed(node: dict[str, Any], error: StepFailed) -> RunFailed:
     """:return: The run's failure at a step that failed with nowhere to go."""
     return RunFailed(f"{label_of(node)} failed: {error.message}", step=node.get("id"))
+
+
+def called_with(value: Any) -> Event:
+    """
+    :param value: What a step works out and sends: a saved workflow's
+        inputs, an agent's message, an HTTP request.
+    :return: The event a step records it on (``CALLED_WITH_KEY``), before
+        it sends it: it hands on nothing, so the step goes on.
+    """
+    return Event(custom_metadata={CALLED_WITH_KEY: as_data(value)})
 
 
 def interrupt_id(node: dict[str, Any], ctx: Context) -> str:

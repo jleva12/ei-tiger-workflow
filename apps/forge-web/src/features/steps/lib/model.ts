@@ -17,6 +17,12 @@ export type DelayUnit = "seconds" | "minutes" | "hours" | "days"
 
 /** A header, or a query parameter, of an HTTP request: its name and its value. */
 export type HeaderRow = { id: string; name: string; value: string }
+/**
+ * A way out of an HTTP request of its own, for the statuses it names
+ * (`codes`: `404`, `401, 403`, `4xx`, `500-599`): taken instead of Success
+ * or Error, handing on the response.
+ */
+export type StatusWay = { id: string; codes: string }
 /** A case of a switch: the value that sends the run its way. */
 export type SwitchCase = { id: string; value: string }
 /** A rule of a match: its label and the condition that takes it. */
@@ -62,6 +68,12 @@ export type StepConfigs = {
      * how it signs its requests, sent only to the URLs it's for. Empty for none.
      */
     credential: string
+    /**
+     * Ways out of their own, before Success and Error: the first whose codes
+     * hold the response's status is taken (not retried). One nothing leads
+     * on from ends the run's way there, quietly.
+     */
+    statuses: StatusWay[]
   }
   bash: {
     /**

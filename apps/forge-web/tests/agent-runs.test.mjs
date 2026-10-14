@@ -127,6 +127,31 @@ test("a step's error: why it failed the run, or the error it took its Error way 
     more: { extra: 1, body: "x" },
   })
   assert.deepEqual(runs.stepErrorOf({}), { message: "It failed" })
+  // Its method and URL, which its message says, aren't more to look into.
+  const url = "https://api.example.com/customers/40"
+  assert.deepEqual(
+    runs.stepErrorOf({
+      message: `GET ${url} answered 404 Not Found: No such customer`,
+      status: 404,
+      body: { detail: "No such customer" },
+      method: "GET",
+      url,
+    }),
+    {
+      message: `GET ${url} answered 404 Not Found: No such customer`,
+      code: "HTTP 404",
+      more: { detail: "No such customer" },
+    }
+  )
+})
+
+test("a step's call to send is titled by its kind, and a workflow call names its run", () => {
+  assert.equal(runs.calledWithTitle("saved"), "Started its workflow with")
+  assert.equal(runs.calledWithTitle("http"), "Request sent")
+  assert.equal(runs.calledWithTitle("transform"), "Called with")
+  assert.equal(runs.callRunId({ response: { run_id: "r-1", status: "failed" } }), "r-1")
+  assert.equal(runs.callRunId({ response: { status: "failed", reason: "x" } }), undefined)
+  assert.equal(runs.callRunId({ response: null }), undefined)
 })
 
 test("a paused run waits for a person's answer or, otherwise, a decision", () => {

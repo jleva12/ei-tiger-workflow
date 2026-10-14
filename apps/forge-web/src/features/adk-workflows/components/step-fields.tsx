@@ -438,14 +438,55 @@ function HttpFields({ id, config }: Props<"http">) {
         empty="Not declared: later steps can't be checked against the response's body."
         subject={{ one: "response", many: "responses" }}
       />
+      <ListEditor
+        issue="statuses"
+        label="Ways by status"
+        items={config.statuses ?? []}
+        onChange={(value) => set("statuses", value)}
+        make={() => ({ id: uid("status"), codes: "" })}
+        addLabel="Add a status way"
+        ordered
+        renderItem={(item, change, index) => ({
+          head: (
+            <Input
+              aria-label={`Status way ${index + 1}`}
+              value={item.codes}
+              placeholder={STATUS_EXAMPLES[index % STATUS_EXAMPLES.length]}
+              onChange={(event) => change({ codes: event.target.value })}
+              className={cn(bare, CODE)}
+            />
+          ),
+        })}
+        description={
+          <>
+            Each is a way out of its own, taken instead of Success or Error when
+            the response&apos;s status is one it names:{" "}
+            <code className="font-mono text-[0.9em]">404</code>,{" "}
+            <code className="font-mono text-[0.9em]">401, 403</code>,{" "}
+            <code className="font-mono text-[0.9em]">4xx</code> or{" "}
+            <code className="font-mono text-[0.9em]">500-599</code>; the first
+            that names it wins. It hands on the response (
+            <code className="font-mono text-[0.9em]">previous.status</code>,{" "}
+            <code className="font-mono text-[0.9em]">previous.body</code>) and
+            isn&apos;t retried. Leave one unconnected to skip that status: the
+            run&apos;s way ends there, without failing.
+          </>
+        }
+      />
       <p className="text-xs/[1.6] text-muted-foreground">
-        {Object.keys(config.output_schema).length
-          ? "A 2xx response that fits what it returns takes Success; anything else, or no answer, takes Error."
-          : "A 2xx response takes Success; anything else, or no answer, takes Error."}
+        {(config.statuses?.length
+          ? "A status with a way of its own takes it. "
+          : "") +
+          (Object.keys(config.output_schema).length
+            ? "A 2xx response that fits what it returns takes Success; anything else, or no answer, takes Error."
+            : "A 2xx response takes Success; anything else, or no answer, takes Error.")}
       </p>
     </>
   )
 }
+
+/** What a new status way's codes field suggests, in turn. */
+const STATUS_EXAMPLES = ["404", "401, 403", "4xx", "500-599"]
 
 function BashFields({ id, config }: Props<"bash">) {
   const set = useSetter<"bash">(id)

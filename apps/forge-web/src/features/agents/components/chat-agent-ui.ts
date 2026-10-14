@@ -47,6 +47,13 @@ function detailOf(step: ChatStep, lookups: ChatLookups): string {
       return step.config.confirm ? "Asks before calling" : "Calls it directly"
     case "code_execution":
       return step.config.confirm ? "Asks before running" : "Runs it directly"
+    case "skills": {
+      const picked = step.config.skills
+      if (!picked.length) return "No skill picked"
+      return picked.length === 1
+        ? (lookups.skills[picked[0]]?.name ?? "Deleted skill")
+        : `${picked.length} skills`
+    }
     case "openapi":
       return step.config.source === "url"
         ? hostOf(step.config.url) || "Spec from a URL"
@@ -93,6 +100,12 @@ function summaryOf(step: ChatStep): NodeSummary | null {
         : { text: `Up to ${step.config.max_results} passages a search` }
     case "code_execution":
       return { text: "Python the model writes, run on the server" }
+    case "skills":
+      return {
+        text: step.config.run_scripts
+          ? "Each loaded when a task matches it; may run its scripts"
+          : "Each loaded when a task matches it",
+      }
     case "mcp":
       if (step.config.server)
         return step.config.tools.trim()
@@ -119,7 +132,8 @@ export const CHAT_AGENT_UI: BuilderUi = {
   kindTones: { agents: "agent", tools: "action" },
   // The one agent a chat runs: where every conversation starts.
   badgeOf: (step) => (step.kind === "agent" ? "Entry point" : null),
-  readOnlyHint: "Published versions never change: start a new version to edit it",
+  readOnlyHint:
+    "Published versions never change: start a new version to edit it",
   emptyCanvas:
     "Add the chat agent from the library, then drag tools and agents onto its ways out.",
   ready: "The agent and everything attached to it are set up.",

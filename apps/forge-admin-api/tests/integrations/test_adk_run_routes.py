@@ -441,6 +441,7 @@ def test_a_run_starts_queued_with_its_job_as_its_adk_workflow_is_saved(
         "saved": {SHIP: SHIPPING},
         "chat_agents": {},
         "knowledge_bases": {},
+        "skills": {},
         "input": {"n": 1},
         "files": [],
         "session_id": run["session_id"],

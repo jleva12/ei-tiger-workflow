@@ -16,6 +16,7 @@ Reading needs ``organizations:read`` in the organization; anything else needs
 """
 
 import logging
+from collections.abc import Sequence
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path, Request, Response, status
@@ -23,6 +24,7 @@ from forge_agent_runtime import (
     AgentExecutor,
     BuildError,
     DocumentError,
+    SkillBundle,
     build_app,
     parse_document,
 )
@@ -32,7 +34,7 @@ from pymongo.errors import PyMongoError
 
 from forge_admin.api.routes.common import NodeId, Session, name_of
 from forge_admin.auth.access import CurrentUser, Enforcer, Level, Scope, authorize
-from forge_admin.chat_agents.bundle import bundle
+from forge_admin.chat_agents.bundle import FindSkills, bundle
 from forge_admin.chat_agents.standalone import (
     model_provider_yaml,
     standalone_document,
@@ -48,8 +50,21 @@ from forge_admin.chat_agents.store import (
     status_of,
 )
 from forge_admin.db.audit import UtcDateTime
+from forge_admin.skills.vault import bundles_of
 
 logger = logging.getLogger(__name__)
+
+
+def skill_finder(request: Request, organization_id: str) -> FindSkills:
+    """Finds the organization's skills, for an agent's export to bundle."""
+    sessions = request.app.state.sessionmaker
+
+    async def find(ids: Sequence[str]) -> dict[str, SkillBundle]:
+        async with sessions() as session:
+            return await bundles_of(session, organization_id, ids)
+
+    return find
+
 
 router = APIRouter(tags=["chat agents"])
 
@@ -496,7 +511,12 @@ async def export_version(
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, "The agent has no such version"
             )
-        document, notes = await bundle(store, organization_id, found["document"])
+        document, notes = await bundle(
+            store,
+            organization_id,
+            found["document"],
+            skills=skill_finder(request, organization_id),
+        )
     except PyMongoError as error:
         raise _unavailable(error) from None
     if notes:
@@ -552,7 +572,13 @@ async def _standalone(
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, f"The agent has no {missing}"
             )
-        bundled, notes = await bundle(store, organization_id, document, hosted=False)
+        bundled, notes = await bundle(
+            store,
+            organization_id,
+            document,
+            hosted=False,
+            skills=skill_finder(request, organization_id),
+        )
     except PyMongoError as error:
         raise _unavailable(error) from None
     try:

@@ -172,6 +172,7 @@ def test_a_paused_run_shows_what_ran_and_the_step_that_waits(tmp_path: Path) -> 
         "calls": [],
         "input": None,
         "input_from": None,
+        "called_with": None,
         "state_changes": [],
         "handed_to": False,
     }
@@ -276,7 +277,14 @@ def test_a_step_that_took_its_error_way_is_done_with_its_error(tmp_path: Path) -
     steps = steps_of(ran, document)
     assert statuses(steps) == {"start": "done", "read": "done", "ok": "not_reached", "oops": "done"}
     assert steps["read"]["output"] is None
-    assert steps["read"]["error"] == {"message": "It answered 404", "status": 404, "body": "gone"}
+    assert steps["read"]["error"] == {
+        "message": "GET https://api.example.com/x answered 404 Not Found: gone",
+        "status": 404,
+        "body": "gone",
+        "method": "GET",
+        "url": "https://api.example.com/x",
+    }
+    assert steps["read"]["called_with"] == {"method": "GET", "url": "https://api.example.com/x"}
 
 
 def test_a_loops_body_steps_show_their_last_item_and_the_loop_its_results(tmp_path: Path) -> None:
@@ -391,6 +399,82 @@ def test_a_saved_agent_started_with_its_inputs_is_still_one_step(tmp_path: Path)
     assert statuses(steps) == {"start": "done", "check": "done", "after": "done"}
     assert steps["check"]["output"] == 41
     assert steps["after"]["output"] == 41
+
+
+def test_a_saved_agent_shows_what_it_started_its_workflow_with_and_where_in_it_it_failed(tmp_path: Path) -> None:
+    def missing(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "No such customer 40"})
+
+    inner = agent(
+        [
+            node("start", "start", {"input_schema": {}}),
+            # The same ID as the node that runs it: IDs are the document's own.
+            node("check", "http", {"url": "https://api.example.com/customers/{{ input.n }}"}, name="Look up"),
+            end("finish", "previous"),
+        ],
+        [("start", "next", "check"), ("check", "success", "finish")],
+        agent_id="ag_inner00001",
+        name="Customer",
+    )
+    outer = agent(
+        [
+            ANY_START,
+            node("check", "saved", {"agent": "ag_inner00001", "inputs": {"n": "input.m * 10"}}, name="Check"),
+            transform("after", "previous"),
+        ],
+        [("start", "next", "check"), ("check", "next", "after")],
+    )
+    services = RunServices(
+        http=httpx.AsyncClient(transport=httpx.MockTransport(missing)), allowed_hosts=("api.example.com",)
+    )
+    ran = asyncio.run(Sessions(tmp_path).run(outer, {"m": 4}, services=services, resolve={"ag_inner00001": inner}.get))
+    steps = steps_of(ran, outer)
+    assert statuses(steps) == {"start": "done", "check": "failed", "after": "not_reached"}
+    # What came in, and what it worked out and started its workflow with.
+    assert (steps["check"]["input_from"], steps["check"]["input"]) == ("start", {"m": 4})
+    assert steps["check"]["called_with"] == {"n": 40}
+    assert steps["check"]["error"] == {
+        "message": "In its workflow, Look up (check) failed: "
+        "GET https://api.example.com/customers/40 answered 404 Not Found: No such customer 40",
+        "code": "RunFailed",
+    }
+    assert steps["start"]["called_with"] is None
+
+
+def test_a_status_a_saved_agent_skips_hands_its_response_back(tmp_path: Path) -> None:
+    def missing(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "No such customer"})
+
+    inner = agent(
+        [
+            node("start", "start", {"input_schema": {}}),
+            node(
+                "fetch",
+                "http",
+                {"url": "https://api.example.com/customers/1", "statuses": [{"id": "gone", "codes": "404"}]},
+            ),
+            end("finish", "previous.body"),
+        ],
+        [("start", "next", "fetch"), ("fetch", "success", "finish")],
+        agent_id="ag_inner00001",
+        name="Customer",
+    )
+    outer = agent(
+        [ANY_START, node("check", "saved", {"agent": "ag_inner00001"}, name="Check"), transform("after", "previous")],
+        [("start", "next", "check"), ("check", "next", "after")],
+    )
+    services = RunServices(
+        http=httpx.AsyncClient(transport=httpx.MockTransport(missing)), allowed_hosts=("api.example.com",)
+    )
+    ran = asyncio.run(Sessions(tmp_path).run(outer, {}, services=services, resolve={"ag_inner00001": inner}.get))
+    assert ran.raised is None
+    steps = steps_of(ran, outer)
+    assert statuses(steps) == {"start": "done", "check": "done", "after": "done"}
+    # Its way ended at the skipped status, handing back the response.
+    assert (steps["after"]["output"]["status"], steps["after"]["output"]["body"]) == (
+        404,
+        {"detail": "No such customer"},
+    )
 
 
 def test_logic_steps_record_their_way_and_an_llms_answer_its_schema(tmp_path: Path) -> None:

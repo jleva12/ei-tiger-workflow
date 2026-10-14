@@ -5,9 +5,11 @@ entry point), its sub-agents and its tools, each with its settings
 (``config``); ``edges`` join an agent's way out (``tools`` or ``agents``) to
 what it calls or hands off to. ``layout`` is the builder's and ignored here.
 
-An exported agent may carry two more fields: ``version`` (the published
-version it is, or ``"draft"``) and ``dependencies``, the saved agents it uses
-as documents of their own, by ``"<id>@<version>"``.
+An exported agent may carry three more fields: ``version`` (the published
+version it is, or ``"draft"``), ``dependencies``, the saved agents it uses
+as documents of their own, by ``"<id>@<version>"``, and ``skills``, the
+skills its Skills tools (and its saved agents') use, by ID
+(``forge_agent_runtime.skills.SkillBundle``).
 
 :func:`load_document` reads one, fills in settings older documents lack, and
 checks it against the format's JSON Schema (``chat_agent.schema.json``,
@@ -106,6 +108,8 @@ class ChatAgentDocument(BaseModel):
     version: int | Literal["draft"] | None = None
     #: The saved agents it uses, by "<id>@<version>", for running it on its own.
     dependencies: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    #: The skills its Skills tools use, by ID, each a ``SkillBundle``'s JSON, for running it on its own.
+    skills: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
     def node(self, node_id: str) -> Node:
         return next(node for node in self.nodes if node.id == node_id)

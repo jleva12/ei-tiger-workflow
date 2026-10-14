@@ -44,6 +44,15 @@ class Header(_Config):
     value: str = ""
 
 
+class StatusWay(_Config):
+    """A way out of an HTTP step for the statuses it names (``codes``:
+    ``404``, ``401, 403``, ``4xx``, ``500-599``), taken instead of Success or
+    Error when the response's status is one of them."""
+
+    id: str
+    codes: str = ""
+
+
 class HttpConfig(_Config):
     method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
     url: str = ""
@@ -58,6 +67,10 @@ class HttpConfig(_Config):
     # One of the organization's credentials, by ID: signs its requests, sent
     # only to the URLs it's for. Empty for none.
     credential: str = ""
+    # Ways out of their own for the statuses each names, before Success and
+    # Error: the first whose codes hold the response's status is taken,
+    # handing on the response; it isn't retried.
+    statuses: list[StatusWay] = Field(default_factory=list)
 
 
 class BashConfig(_Config):

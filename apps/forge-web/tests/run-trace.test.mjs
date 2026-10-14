@@ -104,6 +104,12 @@ test("each event is tagged with what it did, and says it in a line", () => {
   // A question for a person is a pause, not a tool call.
   const asks = event(6, { calls: [{ id: "q", name: "adk_request_input", args: {} }] })
   assert.deepEqual(trace.eventKinds(asks), ["pause"])
+  // What a step worked out and sent, kept before it sent it.
+  const sends = event(7, { metadata: { forge_called_with: { n: 40 } } })
+  assert.deepEqual(trace.eventKinds(sends), ["sent"])
+  assert.equal(trace.eventSummary(sends), 'Called with {"n":40}')
+  assert.deepEqual(trace.calledWith(sends), { n: 40 })
+  assert.equal(trace.calledWith(start), undefined)
 })
 
 test("the filters keep a step's events, a kind's, or those with the text", () => {

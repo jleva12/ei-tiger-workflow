@@ -109,6 +109,7 @@ from google.adk.artifacts import BaseArtifactService
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, Session
+from google.adk.workflow._errors import DynamicNodeFailError
 from google.genai import types
 from pydantic import BaseModel, Field
 
@@ -136,6 +137,7 @@ from forge_task_adk_workflows.graph.data import ERROR_KEY
 from forge_task_adk_workflows.graph.factories.base import config_of, items, label_of, text
 from forge_task_adk_workflows.graph.names import BODY_KINDS, FINISH_NODE, adk_name, body_name
 from forge_task_adk_workflows.graph.pauses import REQUEST_CONFIRMATION, REQUEST_INPUT, TOOL_CONFIRMATION
+from forge_task_adk_workflows.graph.uses import agent_ref
 from forge_task_adk_workflows.models import RETRYABLE, UNANSWERED
 from forge_task_adk_workflows.support.commands import NO_COMMANDS
 from forge_task_adk_workflows.workspaces import WorkspaceError, make_workspace, runs_commands, uses_file_system
@@ -156,6 +158,8 @@ MAX_NOTES = 400
 #: when it can't (its workflow starting over), before it fails.
 MAX_RECOVERIES = 10
 MAX_RESTARTS = 3
+#: The most of an unexpected error's message a run's failure keeps.
+MAX_ERROR = 1500
 #: The longest ADK session ID (DatabaseSessionService's column).
 MAX_SESSION_ID = 128
 #: What a call its worker's stop cut off is answered, as a guarded tool's
@@ -202,6 +206,11 @@ class RunPayload(BaseModel):
         default_factory=dict,
         description="The organization's knowledge bases its LLM agents search, by ID: each one's name and description",
     )
+    skills: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description="The organization's skills its LLM agents' Skills tools use, by ID: each whole "
+        "(forge_agent_runtime.SkillBundle), as it was when the run started",
+    )
     input: Any = None
     files: list[RunFile] = Field(
         default_factory=list,
@@ -232,9 +241,11 @@ class _Refused(Exception):
     :ivar began: Whether its invocation got going (ADK handed on any of its
         events) first: a step failed, rather than ADK refusing to carry the
         invocation on. A step that raises hands on its error event first.
+    :ivar step: The run's step it happened in, when it was one.
     """
 
     began = False
+    step: str | None = None
 
 
 class AdkRun:
@@ -382,7 +393,9 @@ class AdkRun:
             )
         except _Refused as refused:
             await self._note(f"The run failed: {refused}")
-            return JobResult.failed(f"The run failed: {refused}"[:2000], outcome="failed", session_id=self.session_id)
+            return JobResult.failed(
+                f"The run failed: {refused}"[:2000], outcome="failed", step=refused.step, session_id=self.session_id
+            )
         finally:
             await _closed("its runner", runner.close())
             if agents is not None:
@@ -404,6 +417,7 @@ class AdkRun:
             organization_id=self.payload.tenant_id,
             chat_agents=self.payload.chat_agents,
             knowledge_bases=self.payload.knowledge_bases,
+            skills=self.payload.skills,
             workflows=RunWorkflows(
                 self.payload.model_dump(mode="json"),
                 run_id=self.control.instance_id,
@@ -598,6 +612,8 @@ class AdkRun:
         )
         noted: set[str] = set()
         began = False
+        # Where the last error happened: ADK records a step's error before the run raises it.
+        failed_at: str | None = None
         limit = asyncio.timeout(self.settings.run_timeout)
         try:
             async with limit:
@@ -606,14 +622,19 @@ class AdkRun:
                         event = await anext(events)
                     except StopAsyncIteration:
                         break
-                    except (RunFailed, ControlSignal):
+                    except ControlSignal:
                         raise
+                    except RunFailed as failure:
+                        raise self._placed(failure, failed_at) from None
                     except Exception as error:
                         failure = _classified(error)
                         if isinstance(failure, _Refused):
                             failure.began = began
+                            failure = self._placed_refused(failure, failed_at)
                         raise failure from error
                     began = True
+                    if event.error_code or event.error_message:
+                        failed_at = event.node_info.path or failed_at
                     await self._progress(event, noted)
         except TimeoutError:
             if limit.expired():
@@ -623,6 +644,52 @@ class AdkRun:
             raise
         finally:
             await _closed("its events", events.aclose())
+
+    def _placed(self, failure: RunFailed, path: str | None) -> RunFailed:
+        """
+        A step's failure as the run's: at the run's own step it happened in.
+        A saved workflow's step that failed is its node's failure (its step's
+        ID is the workflow's, not the run's), saying where in it.
+
+        :param path: Where its error event says it happened.
+        """
+        found = self.steps.around(path) if path else None
+        if found is None:
+            return failure
+        label, node = found
+        step = text(node.get("id")) or None
+        own = path is not None and self.steps.label(path) is not None
+        if node.get("kind") == "saved" and not own:
+            workflow = self._saved_name(node)
+            return RunFailed(
+                f"{label} failed in its workflow {workflow}: {failure.message}", result=failure.result, step=step
+            )
+        if failure.step == step or (own and failure.step is not None):
+            return failure
+        return RunFailed(failure.message, result=failure.result, step=step)
+
+    def _placed_refused(self, refused: _Refused, path: str | None) -> _Refused:
+        # An error a step raised (a model's, a library's), named by the run's step it happened in.
+        found = self.steps.around(path) if path else None
+        if found is None:
+            return refused
+        label, node = found
+        where = (
+            f"{label} failed in its workflow {self._saved_name(node)}"
+            if node.get("kind") == "saved" and path is not None and self.steps.label(path) is None
+            else f"{label} failed"
+        )
+        placed = _Refused(f"{where}: {refused}")
+        placed.began = refused.began
+        placed.step = text(node.get("id")) or None
+        return placed
+
+    def _saved_name(self, node: dict[str, Any]) -> str:
+        # A saved workflow's node's workflow, by name: "Look up (ag_x@3)".
+        config = config_of(node)
+        ref = agent_ref(text(config.get("agent")), config.get("version"))
+        name = text((self.payload.saved.get(ref) or {}).get("name"))
+        return f"{name} ({ref})" if name else ref
 
     async def _progress(self, event: Event, noted: set[str]) -> None:
         for response in event.get_function_responses():
@@ -1238,19 +1305,46 @@ def _seconds_until(due: datetime | None, now: datetime) -> int | None:
 
 def _classified(error: Exception) -> Exception:
     """What an error that stopped a run means for it: try again later
-    (:class:`TransientError`), or the run can't go on (:class:`_Refused`)."""
-    message = str(getattr(error, "message", "") or error)[:500] or type(error).__name__
+    (:class:`TransientError`), or the run can't go on (:class:`_Refused`).
+    It's named by its root: what an error ADK wraps a step's in
+    (``DynamicNodeFailError``) wraps, with its HTTP status when it has one."""
+    error = _root(error)
+    message = str(getattr(error, "message", "") or error)[:MAX_ERROR] or type(error).__name__
+    status = _status_of(error)
+    kind = f"{type(error).__name__} (HTTP {status})" if status is not None else type(error).__name__
     if _transient(error):
-        return TransientError(f"The run can't go on for now ({type(error).__name__}): {message}")
+        return TransientError(f"The run can't go on for now ({kind}): {message}")
     log.warning("adk_workflows: a run stopped: %s", message, exc_info=error)
-    return _Refused(f"{type(error).__name__}: {message}")
+    return _Refused(f"{kind}: {message}")
+
+
+def _root(error: Exception) -> Exception:
+    # The error a step raised, out of what ADK wraps it in on its way up.
+    seen: set[int] = set()
+    while isinstance(error, DynamicNodeFailError) and id(error) not in seen:
+        seen.add(id(error))
+        error = error.error
+    return error
+
+
+def _status_of(error: BaseException) -> int | None:
+    # An HTTP status an error carries: an API client's (``status_code``), genai's
+    # (``code``), or its response's.
+    for found in (
+        getattr(error, "status_code", None),
+        getattr(error, "code", None),
+        getattr(getattr(error, "response", None), "status_code", None),
+    ):
+        if isinstance(found, int) and not isinstance(found, bool) and 100 <= found <= 599:
+            return found
+    return None
 
 
 def _transient(error: BaseException) -> bool:
     if isinstance(error, TaskError):
         return not error.permanent
-    status = getattr(error, "code", None) or getattr(error, "status_code", None)
-    if isinstance(status, int) and not isinstance(status, bool) and (status in RETRYABLE or status >= 500):
+    status = _status_of(error)
+    if status is not None and (status in RETRYABLE or status >= 500):
         return True
     if isinstance(error, httpx.TransportError | ConnectionError | TimeoutError | socket.gaierror):
         return True

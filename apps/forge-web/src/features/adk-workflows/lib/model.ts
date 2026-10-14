@@ -71,6 +71,7 @@ export const LLM_TOOL_KINDS = [
   "saved_agent",
   "adk_workflow",
   "code_execution",
+  "skills",
 ] as const satisfies readonly (keyof ChatConfigs)[]
 
 export type LlmToolKind = (typeof LLM_TOOL_KINDS)[number]

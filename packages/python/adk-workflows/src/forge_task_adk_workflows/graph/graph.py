@@ -21,7 +21,9 @@ kind's factory (``factories.FACTORIES``), joined by ADK's edges.
   hidden finish that collects them all: an End's ``{outcome, result}``, or,
   from any other ending, a success with what it handed on. When ways run at
   once (a Match taking every rule that holds, a step leading to several),
-  each that ends is one of the run's endings.
+  each that ends is one of the run's endings. An HTTP step's status way that
+  leads nowhere is an ending too: a status it skips ends its way there,
+  handing on the response, while its other ways lead on.
 - **Merges.** A Merge "all" is a ``JoinNode``, which goes on only once every
   node into it has; ways in from different ways out of one branching step
   would never all come (or, from a Match taking every rule that holds, not
@@ -352,23 +354,37 @@ class _Agent:
         loop: str | None,
     ) -> list[Edge]:
         # The graph's endings, led to its hidden ending nodes: ADK takes one
-        # ending with an output.
+        # ending with an output. A step nothing leads on from ends its way
+        # whichever way it takes; an HTTP step's status way nothing leads on
+        # from ends its way too (it's skipped), the others leading on.
         leading = {source for source, _ in ways}
-        ends = [step for step in built if step in members and step not in leading]
+        ends: dict[str, Any] = {step: None for step in built if step in members and step not in leading}
+        for step in built:
+            if step in members and step in leading and (left := self._open_status_ways(step, ways)):
+                ends[step] = left[0] if len(left) == 1 else left
         if not ends:
             return []
         if loop is not None:
             sink = stop()
-            return [Edge(from_node=built[step], to_node=sink) for step in ends]
+            return [Edge(from_node=built[step], to_node=sink, route=route) for step, route in ends.items()]
         # Each ending tagged with its step on the way, so the finish can
         # collect every way that ended.
         collector = finish(top=self.top)
         edges = []
-        for step in ends:
+        for step, route in ends.items():
             tag = ending(ending_name(built[step].name), self.by_id[step])
-            edges.append(Edge(from_node=built[step], to_node=tag))
+            edges.append(Edge(from_node=built[step], to_node=tag, route=route))
             edges.append(Edge(from_node=tag, to_node=collector))
         return edges
+
+    def _open_status_ways(self, step: str, ways: dict[tuple[str, str], list[str]]) -> list[str]:
+        # An HTTP step's status ways nothing leads on from, by ID.
+        node = self.by_id[step]
+        if node.get("kind") != "http":
+            return []
+        taken = {output for (source, _), outputs in ways.items() if source == step for output in outputs}
+        found = items(config_of(node).get("statuses"))
+        return [way for row in found if isinstance(row, dict) and (way := text(row.get("id"))) and way not in taken]
 
     @staticmethod
     def _route(node: dict[str, Any], outputs: list[str]) -> Any:

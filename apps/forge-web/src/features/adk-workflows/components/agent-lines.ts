@@ -75,5 +75,11 @@ export function toolLine(tool: LlmTool, lookups: ToolLookups): string {
         : "No workflow yet"
     case "code_execution":
       return tool.config.confirm ? "Asks before running" : "Python"
+    case "skills":
+      return tool.config.skills.length
+        ? tool.config.skills
+            .map((id) => lookups.skills[id]?.name ?? "a deleted one")
+            .join(", ")
+        : "No skill yet"
   }
 }

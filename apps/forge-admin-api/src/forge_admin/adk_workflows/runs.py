@@ -216,12 +216,15 @@ class PreparedRun:
         call, by reference (``ca_x``, ``ca_x@3``, ``ca_x@draft``).
     :ivar knowledge_bases: The knowledge bases they search: name and description, by ID.
     :ivar files: The files it starts with, held to its start; saved as it starts.
+    :ivar skills: The skills their Skills tools use, each whole
+        (``forge_agent_runtime.SkillBundle``'s JSON), by ID.
     """
 
     saved: dict[str, dict[str, Any]]
     chat_agents: dict[str, dict[str, Any]] = field(default_factory=dict)
     knowledge_bases: dict[str, dict[str, str]] = field(default_factory=dict)
     files: list[CheckedFile] = field(default_factory=list)
+    skills: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 async def prepare_run(
@@ -255,25 +258,29 @@ async def prepare_run(
         raise AdkRunError(str(error)) from None
     saved = await saved_documents(document, find)
     check_builds(document, saved)
-    chat_agents, knowledge_bases = await used_resources(
+    chat_agents, knowledge_bases, skills = await used_resources(
         [document, *saved.values()], resources
     )
-    return PreparedRun(saved, chat_agents, knowledge_bases, checked)
+    return PreparedRun(saved, chat_agents, knowledge_bases, checked, skills)
 
 
 async def used_resources(
     documents: list[dict[str, Any]], resources: "RunResources | None"
-) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, str]]]:
+) -> tuple[
+    dict[str, dict[str, Any]], dict[str, dict[str, str]], dict[str, dict[str, Any]]
+]:
     """
     What the documents' LLM agents use from the organization, checked.
 
-    :return: The agents from the Agents page, by reference, and the
-        knowledge bases, by ID.
+    :return: The agents from the Agents page, by reference, the knowledge
+        bases, by ID, and the skills their Skills tools use, whole, by ID
+        (those of the agents from the Agents page are bundled with them).
     :raises AdkRunError: One isn't the organization's, or can't be had (naming the node).
     """
     agents: list[AgentUse] = []
     knowledge: dict[str, str] = {}
     servers: dict[str, str] = {}
+    skills: dict[str, str] = {}
     for document in documents:
         agents.extend(agents_in(document))
         for tool in tools_in(document):
@@ -286,11 +293,14 @@ async def used_resources(
                     knowledge.setdefault(str(kb), tool.where)
             elif tool.kind == "mcp" and tool.config.get("server"):
                 servers.setdefault(str(tool.config["server"]), tool.where)
-    if not (agents or knowledge or servers):
-        return {}, {}
+            elif tool.kind == "skills":
+                for skill in tool.config.get("skills") or []:
+                    skills.setdefault(str(skill), tool.where)
+    if not (agents or knowledge or servers or skills):
+        return {}, {}, {}
     if resources is None:
         where = (agents[0].where if agents else None) or next(
-            iter({**knowledge, **servers}.values())
+            iter({**knowledge, **servers, **skills}.values())
         )
         raise AdkRunError(f"{where}: what it uses isn't set up here")
     chat_agents: dict[str, dict[str, Any]] = {}
@@ -315,7 +325,18 @@ async def used_resources(
             raise AdkRunError(
                 f"{where}: the organization has no MCP server {server}: pick another"
             )
-    return chat_agents, found
+    bundles = await resources.skills(list(skills)) if skills else {}
+    for skill, where in skills.items():
+        if skill not in bundles:
+            raise AdkRunError(
+                f"{where}: the organization has no skill {skill}: it was deleted; "
+                "pick another"
+            )
+    return (
+        chat_agents,
+        found,
+        {key: bundle.model_dump(mode="json") for key, bundle in bundles.items()},
+    )
 
 
 async def start_adk_run(
@@ -381,6 +402,7 @@ async def start_adk_run(
         "saved": prepared.saved,
         "chat_agents": prepared.chat_agents,
         "knowledge_bases": prepared.knowledge_bases,
+        "skills": prepared.skills,
         "input": input,
         "files": [file.model_dump(mode="json") for file in files],
         "session_id": session_id,

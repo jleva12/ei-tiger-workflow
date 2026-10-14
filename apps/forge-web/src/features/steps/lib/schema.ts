@@ -56,6 +56,11 @@ export const CONFIGS: Record<StepKind, Record<string, unknown>> = {
       description:
         "One of the organization's credentials, by ID: its auth (an API key, a token, OAuth) goes with each request, and only to the URLs it's for. Empty for none.",
     },
+    statuses: {
+      ...listOf({ id: text, codes: text }),
+      description:
+        "Ways out of their own, before Success and Error, each by its id: the first whose codes (404, \"401, 403\", 4xx, 500-599, apart by commas or spaces) hold the response's status is taken, handing on the response, not retried. One no edge leaves ends the run's way there, without failing.",
+    },
   },
   bash: {
     command: {

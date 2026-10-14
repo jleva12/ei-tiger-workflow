@@ -154,9 +154,10 @@
       "label": "HTTP request",
       "group": "actions",
       "icon": "globe-02",
-      "summary": "Calls a URL and hands on the response.",
-      "keywords": "api rest fetch call url post get webhook",
+      "summary": "Calls a URL and hands on the response; a status of its own (404, 401, 4xx) can take a way of its own.",
+      "keywords": "api rest fetch call url post get webhook status code 404 401 not found unauthorized",
       "id_prefix": "http",
+      "rows": { "setting": "statuses", "label": "codes", "empty": "Status way {n}" },
       "outputs": [
         { "id": "success", "label": "Success", "branch": true },
         { "id": "error", "label": "Error", "branch": true, "fallback": true }
@@ -170,7 +171,8 @@
         "timeout_seconds": 30,
         "retries": 0,
         "output_schema": {},
-        "credential": ""
+        "credential": "",
+        "statuses": []
       }
     },
     {

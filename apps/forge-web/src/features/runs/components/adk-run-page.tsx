@@ -77,6 +77,8 @@ import { useNodeCatalogs } from "@/features/adk-workflows/lib/api"
 import { kindInfo } from "@/features/adk-workflows/lib/catalog"
 import {
   adkApprovePermission,
+  calledWithTitle,
+  callRunId,
   eventTitle,
   failureCategory,
   failureTitle,
@@ -755,18 +757,23 @@ function Step({
   index,
   doc,
   onTrace,
+  onOpenRun,
 }: {
   step: AdkRunStep
   index: number
   doc: AgentDocument | undefined
   /** Open the Trace tab on this step's events; absent for those who can't. */
   onTrace?: (stepId: string) => void
+  /** Open a run its agents started (a workflow they called). */
+  onOpenRun?: (runId: string) => void
 }) {
   const kind = stepKindOf(step, doc)
   const info = kind && kindInfo(kind)
   const shown = stepStatusOf(step.status)
   const hasOutput = step.output !== null && step.output !== undefined
   const hasInput = step.input !== null && step.input !== undefined
+  const hasCalledWith =
+    step.called_with !== null && step.called_with !== undefined
   const changes = step.state_changes ?? []
   const error = stepErrorOf(step.error)
   // A step that took its Error way is done, and hands on its error.
@@ -829,7 +836,17 @@ function Step({
           value={step.input}
         />
       )}
-      {step.calls && step.calls.length > 0 && <ToolCalls calls={step.calls} />}
+      {hasCalledWith && (
+        <StepValue
+          summary={calledWithTitle(kind)}
+          value={step.called_with}
+          // What it sent is what to check first when it failed.
+          defaultOpen={failed}
+        />
+      )}
+      {step.calls && step.calls.length > 0 && (
+        <ToolCalls calls={step.calls} onOpenRun={onOpenRun} />
+      )}
       {hasOutput && (
         <StepValue
           summary="Output"
@@ -894,8 +911,18 @@ const CALL_STATUS: Record<
   running: { label: "Calling", tone: "neutral" },
 }
 
-/** The tools a step's agents called: each one's name, who called it, and what went back and forth. */
-function ToolCalls({ calls }: { calls: AdkToolCall[] }) {
+/**
+ * The tools a step's agents called: each one's name, who called it, what
+ * went wrong for a failed one, the run a workflow's call started, and what
+ * went back and forth.
+ */
+function ToolCalls({
+  calls,
+  onOpenRun,
+}: {
+  calls: AdkToolCall[]
+  onOpenRun?: (runId: string) => void
+}) {
   return (
     <div className="mt-1 flex flex-col gap-1.5">
       <span className="text-xs font-medium text-muted-foreground">
@@ -903,6 +930,7 @@ function ToolCalls({ calls }: { calls: AdkToolCall[] }) {
       </span>
       {calls.map((call) => {
         const shown = CALL_STATUS[call.status]
+        const started = callRunId(call)
         return (
           <div
             key={call.id}
@@ -921,6 +949,29 @@ function ToolCalls({ calls }: { calls: AdkToolCall[] }) {
                 {shown.label}
               </Chip>
             </div>
+            {call.error && (
+              <p className="flex items-start gap-1.5 text-xs/[1.55] wrap-anywhere text-destructive">
+                <Icon
+                  icon="failed"
+                  size={13}
+                  className="mt-[0.15rem] shrink-0"
+                />
+                <span>{call.error}</span>
+              </p>
+            )}
+            {started && onOpenRun && (
+              <span className="text-xs text-muted-foreground">
+                Started run{" "}
+                <Button
+                  variant="link"
+                  size="xs"
+                  className="h-auto p-0 font-mono"
+                  onClick={() => onOpenRun(started)}
+                >
+                  {shortId(started)}
+                </Button>
+              </span>
+            )}
             <Disclosure summary="What it was sent, and answered">
               <pre>
                 {JSON.stringify(
@@ -949,11 +1000,13 @@ function AdkRunSteps({
   run,
   doc,
   onTrace,
+  onOpenRun,
 }: {
   organizationId: string
   run: AdkRunDetail
   doc: AgentDocument | undefined
   onTrace?: (stepId: string) => void
+  onOpenRun?: (runId: string) => void
 }) {
   const steps = useAdkRunSteps(organizationId, run)
   const list = steps.data?.steps
@@ -995,7 +1048,8 @@ function AdkRunSteps({
       <>
         <p className="mb-2 max-w-[75ch] text-[0.8125rem] text-muted-foreground">
           Every node of the workflow, in order, and how far the run got with
-          each: what it was handed, what it handed on (in a loop, its last
+          each: what it was handed, what it sent (a saved workflow&apos;s
+          inputs, an HTTP request), what it handed on (in a loop, its last
           item&apos;s) or why it failed, and what it changed in the run&apos;s
           state. What runs inside a node, a team&apos;s sub-agents or a saved
           workflow&apos;s steps, counts as that node.
@@ -1008,6 +1062,7 @@ function AdkRunSteps({
               index={index}
               doc={doc}
               onTrace={onTrace}
+              onOpenRun={onOpenRun}
             />
           ))}
         </ExecutionPlan>
@@ -1493,6 +1548,7 @@ export function AdkRunPage({
               organizationId={organization.id}
               run={run}
               doc={doc}
+              onOpenRun={onOpenRun}
               onTrace={
                 canManage
                   ? (stepId) => {

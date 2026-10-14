@@ -35,9 +35,11 @@ from forge_task_adk_workflows.graph import (
     due_pauses,
     pending_pauses,
 )
+from forge_task_adk_workflows.graph.data import CALLED_WITH_KEY
 from forge_task_adk_workflows.graph.factories.logic import MergeAll
 from forge_task_adk_workflows.graph.schemas import is_model
 from forge_task_adk_workflows.support.expressions import Evaluator
+from forge_task_adk_workflows.support.http import statuses_of
 
 from .scripted_llm import ScriptedLlm
 
@@ -855,7 +857,13 @@ def test_a_way_taken_with_nothing_handed_on_still_leads_on() -> None:
         # An Error way hands on nothing, and keeps the step's error.
         "read": {
             "output": None,
-            "error": {"message": "It answered 404", "status": 404, "body": "gone"},
+            "error": {
+                "message": "GET https://api.example.com/issues/1 answered 404 Not Found: gone",
+                "status": 404,
+                "body": "gone",
+                "method": "GET",
+                "url": "https://api.example.com/issues/1",
+            },
         },
     }
     [event] = [e for e in session.events if name_of(e) == "check"]
@@ -906,7 +914,17 @@ def test_an_http_request_sends_its_body_and_hands_on_the_response() -> None:
         {"id": 9},
         "abc",
     )
-    assert [e.actions.route for e in session.events if name_of(e) == "post"] == ["success"]
+    posted = [e for e in session.events if name_of(e) == "post"]
+    assert [e.actions.route for e in posted] == [None, "success"]
+    # The request, kept before it's sent: its headers by name, never their values.
+    assert posted[0].custom_metadata == {
+        CALLED_WITH_KEY: {
+            "method": "POST",
+            "url": "https://api.example.com/issues/XMEN-12",
+            "headers": ["Authorization"],
+            "body": {"text": "Fix XMEN-12"},
+        }
+    }
 
 
 def test_an_http_requests_query_parameters_are_filled_in_and_encoded() -> None:
@@ -978,9 +996,11 @@ def test_an_http_request_retries_then_takes_its_error_way() -> None:
     assert len(calls) == 3
     assert clock.slept == [2, 4]
     assert session.result == {
-        "message": "It answered 503",
+        "message": "GET https://api.example.com/x answered 503 Service Unavailable: busy",
         "status": 503,
         "body": "busy",
+        "method": "GET",
+        "url": "https://api.example.com/x",
     }
 
 
@@ -1141,6 +1161,115 @@ def test_http_requests_never_reach_a_private_network() -> None:
     assert len(calls) == 1
 
 
+def status_ways(*ways: tuple[str, str]) -> dict[str, Any]:
+    """A GET whose status ways are ``(id, codes)``."""
+    return {
+        "url": "https://api.example.com/users/{{ input }}",
+        "retries": 2,
+        "statuses": [{"id": way, "codes": codes} for way, codes in ways],
+    }
+
+
+def test_a_status_with_a_way_of_its_own_takes_it_handing_on_the_response() -> None:
+    calls: list[httpx.Request] = []
+
+    def api(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        status = int(request.url.path.rsplit("/", 1)[1])
+        return httpx.Response(status, json={"detail": f"answered {status}"})
+
+    document = agent(
+        [
+            START_NODE,
+            node("read", "http", status_ways(("missing", "404"), ("denied", "401, 403"), ("busy", "5xx"))),
+            end("found", '"found"'),
+            end("not_found", '"not found: " & previous.body.detail'),
+            end("no_access", '"no access: " & $string(previous.status)'),
+            end("later", '"later"'),
+            end("broke", '"broke: " & $string(steps.read.error.status)'),
+        ],
+        [
+            ("start", "next", "read"),
+            ("read", "success", "found"),
+            ("read", "missing", "not_found"),
+            ("read", "denied", "no_access"),
+            ("read", "busy", "later"),
+            ("read", "error", "broke"),
+        ],
+    )
+    said = {
+        status: run(lambda status=status: ran(document, status, svc=services(api))).result
+        for status in (200, 404, 401, 403, 503, 409)
+    }
+    assert said == {
+        200: "found",
+        404: "not found: answered 404",
+        401: "no access: 401",
+        403: "no access: 403",
+        # A status with a way of its own is an answer: taken at once, not retried.
+        503: "later",
+        409: "broke: 409",
+    }
+    assert [str(call.url).rsplit("/", 1)[1] for call in calls] == ["200", "404", "401", "403", "503", "409"]
+
+
+def test_a_status_way_goes_before_success_and_one_left_unconnected_ends_its_way_quietly() -> None:
+    def created(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(204)
+
+    # 2xx can have a way of its own too, taken instead of Success.
+    document = agent(
+        [START_NODE, node("read", "http", status_ways(("empty", "204"))), end("ok", '"ok"'), end("empty", '"empty"')],
+        [("start", "next", "read"), ("read", "success", "ok"), ("read", "empty", "empty")],
+    )
+    assert run(lambda: ran(document, 1, svc=services(created))).result == "empty"
+
+    def missing(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "nobody"})
+
+    # Skipped: nothing leads on from it, so its way ends there, handing on
+    # the response, without failing; Success still leads on.
+    skipping = agent(
+        [START_NODE, node("read", "http", status_ways(("skip", "404"))), end("ok", '"ok"')],
+        [("start", "next", "read"), ("read", "success", "ok")],
+    )
+    skipped = run(lambda: ran(skipping, 1, svc=services(missing))).result
+    assert (skipped["status"], skipped["body"]) == (404, {"detail": "nobody"})
+    assert run(lambda: ran(skipping, 1, svc=services(lambda request: httpx.Response(200)))).result == "ok"
+
+
+@pytest.mark.parametrize(
+    ("codes", "said"),
+    [
+        ("", "give its status way 1 the statuses that take it"),
+        ("404, nope", "its status way '404, nope': 'nope' isn't a status (404), a class (4xx) or a range (500-599)"),
+        ("599-500", "its status way '599-500': '599-500' ends before it starts"),
+        ("600", "its status way '600': '600' isn't a status (404), a class (4xx) or a range (500-599)"),
+    ],
+)
+def test_a_status_way_must_name_statuses(codes: str, said: str) -> None:
+    document = agent(
+        [START_NODE, node("read", "http", status_ways(("way", codes))), end("ok")],
+        [("start", "next", "read"), ("read", "success", "ok")],
+    )
+    with pytest.raises(AgentBuildError) as raised:
+        build_agent(document, services=services())
+    assert str(raised.value) == f"Node 'Read': {said}."
+
+
+def test_status_codes_read_as_statuses_classes_and_ranges() -> None:
+    holds = statuses_of("404 401,403  5XX 418-420")
+    assert [status for status in (200, 401, 403, 404, 405, 417, 418, 420, 421, 500, 599) if holds(status)] == [
+        401,
+        403,
+        404,
+        418,
+        420,
+        500,
+        599,
+    ]
+
+
 def test_a_failing_step_takes_its_error_way_or_fails_the_run() -> None:
     def gone(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, text="gone")
@@ -1151,15 +1280,17 @@ def test_a_failing_step_takes_its_error_way_or_fails_the_run() -> None:
         [("start", "next", "read"), ("read", "error", "failed")],
     )
     assert run(lambda: ran(with_way, svc=services(gone))).result == {
-        "message": "It answered 404",
+        "message": "GET https://api.example.com/issues/1 answered 404 Not Found: gone",
         "status": 404,
         "body": "gone",
+        "method": "GET",
+        "url": "https://api.example.com/issues/1",
     }
     without = agent(
         [START_NODE, read, end("done")],
         [("start", "next", "read"), ("read", "success", "done")],
     )
-    with pytest.raises(RunFailed, match=r"Read \(read\) failed: It answered 404"):
+    with pytest.raises(RunFailed, match=r"Read \(read\) failed: GET https://api\.example\.com/issues/1 answered 404"):
         run(lambda: ran(without, svc=services(gone)))
 
 

@@ -2,6 +2,7 @@ import type { VersionChoice } from "@/features/builder/components/version-field"
 import type {
   KnowledgeBaseLookup,
   McpServerLookup,
+  SkillLookup,
 } from "@/features/agents/components/chat-agent-store"
 import type { ChatAgentLookup } from "@/features/adk-workflows/lib/validate"
 import type { CredentialLookup } from "@/features/credentials/lib/display"
@@ -52,6 +53,8 @@ export type AgentLookups = {
   knowledgeBases: Record<string, KnowledgeBaseLookup>
   /** The organization's API credentials, by ID: what HTTP steps and tools sign in with. */
   credentials: Record<string, CredentialLookup>
+  /** The organization's skills (its skills vault), by ID, for LLM agents' Skills tools. */
+  skills: Record<string, SkillLookup>
 }
 
 /** An agent from the Agents page, as an LLM node picks it. */
