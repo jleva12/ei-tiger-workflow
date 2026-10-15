@@ -49,7 +49,7 @@ AUDIT = "agents:audit"
 NOT_FOUND = "There's no such conversation"
 UNAVAILABLE = "The conversations' database isn't answering; try again shortly"
 
-Channel = Literal["console", "api", "a2a", "assistant", "unknown"]
+Channel = Literal["console", "api", "a2a", "assistant", "page", "unknown"]
 Since = Literal["1d", "7d", "30d", "90d", "all"]
 DAYS = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}
 

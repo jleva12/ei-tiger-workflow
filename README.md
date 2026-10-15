@@ -94,7 +94,9 @@ the **assistant** (the AI helper on every page).
   UIs) and Google's A2A protocol (`/runtime/a2a/{agent}`: JSON-RPC, A2A 1.0
   and 0.3, and each agent's card, for other agents), both public unless
   `FORGE_ADMIN_AGENT_RUNTIME_PUBLIC=false`. **Generate standalone agent**
-  downloads the agent as a project of its own that speaks both too.
+  downloads the agent as a project of its own that speaks both too. A
+  published agent's **Chat page** switch shares it as a full-page chat at a
+  link of its own (`/chat/{token}`), for anyone who has the link.
 - **Outside apps.** Workflows are published as versions too, and outside apps
   run them by reference (`ag_x`, `ag_x@3`, `ag_x@draft`) over REST
   (`/api/v1/runtime/workflows/{ref}/runs`: start, wait, answer what a run

@@ -1,9 +1,9 @@
 import * as React from "react"
 import { cn } from "cn"
-import mermaid from "mermaid"
 import { Flowchart01Icon, SourceCodeIcon } from "@hugeicons/core-free-icons"
 
 import { readText } from "./content"
+import { drawMermaid } from "./mermaid-draw"
 import {
   BarDivider,
   DownloadButton,
@@ -20,38 +20,6 @@ import { Lines } from "./text-view"
 
 type Mode = "diagram" | "source"
 
-// Mermaid keeps one configuration for the page, so drawings take turns.
-let queue: Promise<unknown> = Promise.resolve()
-let drawings = 0
-
-function draw(source: string, dark: boolean) {
-  const turn = queue.then(async () => {
-    const font = getComputedStyle(document.body).fontFamily
-    mermaid.initialize({
-      startOnLoad: false,
-      // Labels are sanitized and click handlers never bound.
-      securityLevel: "strict",
-      suppressErrorRendering: true,
-      theme: dark ? "dark" : "neutral",
-      fontFamily: font,
-      themeVariables: { fontFamily: font },
-    })
-    drawings += 1
-    const { svg } = await mermaid.render(
-      `file-preview-mermaid-${drawings}`,
-      source
-    )
-    // Its size at 100%, from the drawing's own coordinates.
-    const box = /viewBox="[-\d.]+ [-\d.]+ ([\d.]+) ([\d.]+)"/.exec(svg)
-    return {
-      svg,
-      size: box ? { width: Number(box[1]), height: Number(box[2]) } : undefined,
-    }
-  })
-  queue = turn.catch(() => undefined)
-  return turn
-}
-
 /**
  * A Mermaid diagram drawn in the app's theme, fitted to the view; zoom in
  * and drag to look around. Its source is a switch away, and shown with
@@ -67,7 +35,7 @@ export default function MermaidView({
   const text = usePreviewTask(() => readText(data), [data])
   const source = text.value?.text ?? ""
   const drawn = usePreviewTask(
-    async () => (source.trim() ? draw(source, dark) : undefined),
+    async () => (source.trim() ? drawMermaid(source, dark) : undefined),
     [source, dark]
   )
   const [mode, setMode] = React.useState<Mode>("diagram")

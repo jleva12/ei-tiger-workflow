@@ -7,6 +7,7 @@ import type { IconProp } from "@/components/forge/icons"
 import { Chip } from "@/components/forge/status"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import type { ApiError } from "@/lib/api/index"
@@ -211,6 +212,161 @@ export function ApprovalPanel({
         </p>
       )}
     </PauseFrame>
+  )
+}
+
+/**
+ * A Decision board a run waits at: what it's about, and each choice still
+ * open, which people accept or reject on their own (`children`: a
+ * `BoardChoiceRow` each). A choice decided takes its way at once, while
+ * the others wait.
+ */
+export function DecisionBoardPanel({
+  organizationId,
+  gates,
+  permission,
+  docs = "Workflows",
+  children,
+}: {
+  organizationId: string
+  /** Its open choices: the run's gates at it, in order. */
+  gates: AdkRunPause[]
+  /** What deciding them takes in the organization. */
+  permission: PermissionKey
+  docs?: string
+  children: React.ReactNode
+}) {
+  const can = useScopeAccess(`org:${organizationId}`)
+  const [first] = gates
+  const board = first?.details.board
+  const approvers = first?.details.approvers ?? "org:admin"
+  const laid = Math.max(board?.choices ?? gates.length, gates.length)
+  const decided = laid - gates.length
+  const step = first?.details.step_name || board?.name
+  return (
+    <PauseFrame
+      icon="review"
+      title={
+        board?.message || `Decide each of ${step ?? "the board"}'s choices`
+      }
+      meta={[
+        step && `${step} step`,
+        first?.details.workflow_name,
+        first?.requested_at && `asked ${formatRelative(first.requested_at)}`,
+        `${decided} of ${laid} decided`,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
+      chip={
+        <Chip tone="notice">
+          {APPROVERS[approvers] ?? APPROVERS["org:admin"]}
+        </Chip>
+      }
+    >
+      <p className="text-sm/[1.6] text-notice-foreground">
+        Accept or reject each on its own, in any order: a choice takes its way
+        as soon as it&apos;s decided, while the others wait.
+        {can(permission)
+          ? ""
+          : approvers === "org:member"
+            ? ` Any member who can run the organization's ${docs} decides them.`
+            : " The organization's admins decide them."}
+      </p>
+      <ul aria-label="Open choices" className="flex flex-col gap-2">
+        {children}
+      </ul>
+    </PauseFrame>
+  )
+}
+
+/**
+ * One of a Decision board's open choices: its name and question, and, for
+ * those who may (`allowed`), a comment and Accept or Reject through `decide`.
+ */
+export function BoardChoiceRow({
+  pause,
+  decide,
+  allowed,
+}: {
+  pause: AdkRunPause
+  decide: DecideMutation
+  allowed: boolean
+}) {
+  const id = React.useId()
+  const [comment, setComment] = React.useState("")
+  const [choice, setChoice] = React.useState<boolean>()
+  const label = pause.details.board?.label ?? pause.reason
+  const busy = decide.isPending || decide.isSuccess
+  const submit = (approved: boolean) => {
+    setChoice(approved)
+    decide.mutate({ requestId: pause.id, approved, comment: comment.trim() })
+  }
+  return (
+    <li
+      aria-labelledby={`${id}-label`}
+      className="flex flex-col gap-2.5 rounded-(--radius-control) border border-notice-border bg-background p-3"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span id={`${id}-label`} className="text-sm font-medium">
+            {label}
+          </span>
+          {pause.reason !== `${label}?` && (
+            <span className="text-sm/[1.5] text-muted-foreground">
+              {pause.reason}
+            </span>
+          )}
+          {pause.deadline && (
+            <span className="text-xs text-muted-foreground">
+              Rejected {formatRelative(pause.deadline)} unless someone decides
+            </span>
+          )}
+        </div>
+        {allowed && (
+          <div className="flex shrink-0 gap-2">
+            <Button size="sm" disabled={busy} onClick={() => submit(true)}>
+              {decide.isPending && choice === true ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Icon icon="check" data-icon="inline-start" />
+              )}
+              Accept
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() => submit(false)}
+            >
+              {decide.isPending && choice === false ? (
+                <Spinner data-icon="inline-start" />
+              ) : (
+                <Icon icon="close" data-icon="inline-start" />
+              )}
+              Reject
+            </Button>
+          </div>
+        )}
+      </div>
+      {allowed && (
+        <Input
+          aria-label={`Comment on ${label}`}
+          value={comment}
+          maxLength={4000}
+          disabled={busy}
+          placeholder="Optional comment: why, for the record"
+          onChange={(event) => setComment(event.target.value)}
+          className="h-8 text-xs md:text-xs"
+        />
+      )}
+      {decide.error && (
+        <ErrorCallout title="Couldn't record the decision">
+          {decide.error.status === 409
+            ? "Someone decided it first, or the run moved on. The page shows where it is now."
+            : decide.error.message}
+        </ErrorCallout>
+      )}
+    </li>
   )
 }
 

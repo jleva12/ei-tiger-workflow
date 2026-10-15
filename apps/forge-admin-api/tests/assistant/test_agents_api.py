@@ -138,6 +138,27 @@ def test_conversations_list_most_recently_active_first(
     assert [s["id"] for s in client.get(SESSIONS).json()] == [first, second]
 
 
+def test_a_conversation_is_named_after_its_first_message(
+    agent_client: Client, settings: Settings
+) -> None:
+    model = ScriptedLlm(turns=[[text("They run here.")], [text("And there.")]])
+    client = agent_client(forge_app(settings, model))
+    session_id = start(client)
+
+    sse_events(
+        run(client, session_id, {"text": "Where do workflows run?\nAll of them."})
+    )
+    listed = client.get(SESSIONS).json()
+    # The console's history lists it with its title, kept with the turn.
+    assert listed[0]["state"]["forge:title"] == "Where do workflows run?"
+    stored = client.get(f"{SESSIONS}/{session_id}").json()
+    assert [e["author"] for e in stored["events"]] == ["user", "forge"]
+    # Later turns keep it.
+    sse_events(run(client, session_id, {"text": "And agents?"}))
+    again = client.get(f"{SESSIONS}/{session_id}").json()
+    assert again["state"]["forge:title"] == "Where do workflows run?"
+
+
 def test_a_conversation_can_start_with_state_and_be_deleted(
     agent_client: Client, settings: Settings
 ) -> None:

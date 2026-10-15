@@ -60,6 +60,10 @@ export type AssistantOptions = {
    * `useAdkAssistant` sends it).
    */
   composerContext?: React.ReactNode
+  /** The message box's placeholder. Default "Send a message...". */
+  placeholder?: string
+  /** Under the message box, e.g. that answers can be wrong. */
+  composerNote?: React.ReactNode
   /**
    * Cited sources: reads the passages in tool results, each with a ref the
    * agent cites as "[S3]", and draws the citations as numbered chips with a
@@ -137,6 +141,8 @@ function AssistantProvider({
   welcome,
   commands,
   composerContext,
+  placeholder,
+  composerNote,
   sources,
   agents,
   showContext,
@@ -166,6 +172,8 @@ function AssistantProvider({
       title,
       commands,
       composerContext,
+      placeholder,
+      composerNote,
       sources,
       agents,
       showContext,
@@ -179,6 +187,8 @@ function AssistantProvider({
       title,
       commands,
       composerContext,
+      placeholder,
+      composerNote,
       sources,
       agents,
       showContext,
@@ -219,6 +229,18 @@ function AssistantComposerContext() {
   return <>{composerContext}</>
 }
 
+function AssistantComposerNote() {
+  const { composerNote } = useAssistantSettings()
+  return (
+    <p
+      data-slot="assistant-composer-note"
+      className="-mt-2 px-2 text-center text-2xs text-muted-foreground"
+    >
+      {composerNote}
+    </p>
+  )
+}
+
 const threadComponents = {
   Welcome: AssistantWelcomeMessage,
   ToolFallback: AdkToolFallback,
@@ -237,18 +259,21 @@ const threadComponents = {
  * read, e.g. an audit's replay of what was said.
  */
 function AssistantThread({ readOnly = false }: { readOnly?: boolean } = {}) {
-  const { commands, composerContext } = useAssistantSettings()
+  const { commands, composerContext, placeholder, composerNote } =
+    useAssistantSettings()
   const hasCommands = Boolean(commands?.length)
   const hasContext = composerContext != null
+  const hasNote = composerNote != null && composerNote !== ""
   const components = React.useMemo(
     () => ({
       ...threadComponents,
       ...(hasContext && { ComposerHeader: AssistantComposerContext }),
+      ...(hasNote && { ComposerFooter: AssistantComposerNote }),
       // The model section and the context meter, each when it's on.
       ComposerActions: AdkComposerActions,
       ...(hasCommands && { ComposerTriggers: AssistantCommandMenu }),
     }),
-    [hasContext, hasCommands]
+    [hasContext, hasCommands, hasNote]
   )
   return (
     <Thread
@@ -256,7 +281,8 @@ function AssistantThread({ readOnly = false }: { readOnly?: boolean } = {}) {
       composer={!readOnly}
       autoFocus={!readOnly}
       placeholder={
-        hasCommands ? "Send a message, or type / for commands..." : undefined
+        placeholder ||
+        (hasCommands ? "Send a message, or type / for commands..." : undefined)
       }
     />
   )

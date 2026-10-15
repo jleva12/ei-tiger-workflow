@@ -7,6 +7,10 @@
   agent to run by ID, and what it resolves for it: saved agents, the
   organization's MCP servers, its workflows.
 
+- :mod:`.pages`: a published agent shared as a full-page chat at a link of
+  its own.
+
 Routes: ``forge_admin.api.routes.chat_agents`` (the lifecycle) and the
-runtime's own router, mounted at ``/runtime``.
+runtime's own router, mounted at ``/runtime`` (chat pages' at
+``/runtime/pages/{token}``).
 """

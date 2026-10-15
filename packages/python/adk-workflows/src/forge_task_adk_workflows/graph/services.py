@@ -102,11 +102,16 @@ class RunServices:
     #: which a start that allows a file system keeps in ``state.workspace``;
     #: None when the run has none.
     workspace: str | None = None
-    #: Whether Bash steps run their commands here (``commands`` local); off,
-    #: a run with one fails before it starts (``runs.AdkRun``).
+    #: Whether Bash steps run their commands (``commands`` local or
+    #: openshell); off, a run with one fails before it starts (``runs.AdkRun``).
     commands: bool = False
+    #: Where they run them when not on this machine: each in a new OpenShell
+    #: sandbox (``support.sandbox_commands.OpenShellCommands``, ``commands``
+    #: openshell); None runs them here.
+    command_sandbox: Any = None
     #: What every command gets of the worker's environment
-    #: (``support.commands.passed_environment``).
+    #: (``support.commands.passed_environment``): in a sandbox, not this
+    #: machine's PATH, HOME and locale.
     command_environment: Mapping[str, str] = field(default_factory=passed_environment)
     #: The most of a command's stdout, and of its stderr, kept.
     max_command_output_bytes: int = _DEFAULTS.command_max_output_bytes
@@ -148,6 +153,8 @@ class RunServices:
         model = services.get("model")
         if isinstance(model, ProviderModels) and "model_callbacks" not in services:
             services["model_callbacks"] = model_selection(model, timeout=settings.model_timeout)
+        if settings.commands == "openshell" and "command_sandbox" not in services:
+            services["command_sandbox"] = command_sandbox(settings)
         return cls(
             **{
                 "evaluator": Evaluator(
@@ -158,8 +165,10 @@ class RunServices:
                 "max_response_bytes": settings.http_max_response_bytes,
                 "inline_delay_seconds": settings.inline_delay_seconds,
                 "max_loop_items": settings.max_loop_items,
-                "commands": settings.commands == "local",
-                "command_environment": passed_environment(settings.tool_environment),
+                "commands": settings.commands != "off",
+                "command_environment": passed_environment(
+                    settings.tool_environment, machine=settings.commands != "openshell"
+                ),
                 "max_command_output_bytes": settings.command_max_output_bytes,
                 "pi_command": tuple(shlex.split(settings.pi_command)) if settings.pi_agent == "local" else None,
                 "pi_max_seconds": settings.pi_max_seconds,
@@ -173,6 +182,25 @@ class RunServices:
     def but(self, **changes: Any) -> Self:
         """:return: These services with some changed; None changes nothing."""
         return replace(self, **{key: value for key, value in changes.items() if value is not None})
+
+
+def command_sandbox(settings: AdkWorkflowsSettings) -> Any:
+    """
+    :return: Where Bash steps run their commands for ``commands`` openshell:
+        sandboxes on the gateway in ``openshell``, from ``command_image`` and
+        ``command_policy`` (else ``openshell``'s), reaching
+        ``command_allowed_hosts`` besides.
+    :raises ValueError: The policy file can't be used, or an allowed host isn't one.
+    """
+    from forge_task_adk_workflows.support.sandbox_commands import OpenShellCommands
+
+    return OpenShellCommands(
+        settings.openshell,
+        image=settings.command_image or settings.openshell.image,
+        policy=settings.command_policy or settings.openshell.policy,
+        allowed_hosts=settings.command_allowed_hosts,
+        max_folder_bytes=settings.command_max_folder_bytes,
+    )
 
 
 def model_id(config: dict[str, Any]) -> str:

@@ -11,6 +11,7 @@ from forge_task_adk_workflows.graph import FACTORIES, NODE_CATALOG, NodeCatalog,
 from forge_task_adk_workflows.support.step_settings import (
     ApprovalConfig,
     BashConfig,
+    DecisionBoardConfig,
     DelayConfig,
     EndConfig,
     EntryConfig,
@@ -33,6 +34,7 @@ from forge_task_adk_workflows.support.step_settings import (
 MODELS: dict[str, type[BaseModel]] = {
     "start": EntryConfig,
     "approval": ApprovalConfig,
+    "decision_board": DecisionBoardConfig,
     "http": HttpConfig,
     "bash": BashConfig,
     "git_clone": GitCloneConfig,
@@ -78,6 +80,8 @@ def test_a_new_nodes_ways_out_are_the_ones_its_graph_has() -> None:
     for entry in NODE_CATALOG.kinds:
         node = {"id": "n", "kind": entry.kind, "config": entry.defaults}
         rows = [row["id"] for row in entry.defaults[entry.rows.setting]] if entry.rows else []
+        if entry.rows and entry.rows.ways:
+            rows = [f"{row}:{way.id}" for row in rows for way in entry.rows.ways]
         assert outputs_of(node) == [*rows, *(output.id for output in entry.outputs)], entry.kind
 
 
@@ -97,6 +101,14 @@ def test_ways_out_by_kind() -> None:
     assert ways("switch", {"cases": [{"id": "a"}, {"value": "x"}, "b", {"id": "c"}]}) == ["a", "c", "default"]
     assert ways("match", {"arms": [{"id": "first"}]}) == ["first", "otherwise"]
     assert ways("match", {"arms": None}) == ["otherwise"]
+    # A board's choice has two ways, before Done.
+    assert ways("decision_board", {"choices": [{"id": "ship"}, {"label": "x"}, {"id": "hold"}]}) == [
+        "ship:accepted",
+        "ship:rejected",
+        "hold:accepted",
+        "hold:rejected",
+        "done",
+    ]
     # A kind it doesn't know goes on by next, as before (building refuses it).
     assert ways("nope") == ["next"]
 

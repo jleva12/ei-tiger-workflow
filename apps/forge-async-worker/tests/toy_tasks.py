@@ -4,7 +4,9 @@ payload (RunPayload) and goes through the steps its input lists, carrying on
 from what it kept, with the control calls an ADK workflow run makes.
 
 Steps: ``step`` (nothing), ``approve`` and ``ask`` (an approval or a question,
-gate ``gate-<index>``), ``wait`` (until ``until``), ``fail`` (a failed result)
+gate ``gate-<index>``), ``board`` (``choices`` approvals at once, gates
+``gate-<index>-<n>``, each decided on its own; the test's ``task.hook`` runs
+before it waits), ``wait`` (until ``until``), ``fail`` (a failed result)
 and ``hook`` (the test's own ``task.hook``). Each finished step is kept,
 checkpointed and noted.
 """
@@ -17,7 +19,7 @@ from datetime import datetime
 from typing import Any
 
 from forge_task_adk_workflows.runs import RunPayload
-from forge_tasks.control import JobControl, current_control
+from forge_tasks.control import Gate, JobControl, current_control
 from forge_tasks.runner import ok
 from forge_tasks.tasks import JobResult, Schedule, TaskContext, TaskRegistry
 
@@ -62,6 +64,19 @@ class ScriptedRun:
                         details={"kind": "human_input", "response_schema": {"type": "object"}},
                     )
                     said.append(json.loads(decision.comment))
+                case "board":
+                    keys = [f"gate-{index}-{n}" for n in range(step.get("choices", 2))]
+                    found = {key: control.decided(key) for key in keys}
+                    await self.task.hook(control, index)
+                    details = {"kind": "approval", "approvers": "org:member", "step": f"step-{index}"}
+                    waiting = [
+                        Gate(key, f"{key}?", details, step.get("timeout"))
+                        for key, made in found.items()
+                        if made is None
+                    ]
+                    if waiting:
+                        await control.wait_for(waiting)
+                    said.append({key: made.approved for key, made in found.items() if made is not None})
                 case "wait":
                     if not control.load(f"waited-{index}"):
                         control.keep(f"waited-{index}", True)

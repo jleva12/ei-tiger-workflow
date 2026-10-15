@@ -13,7 +13,7 @@ from sqlalchemy import exc as db
 
 from forge_async_worker.control import PauseRun, RunControl, StopRun, WaitRun
 from forge_task_adk_workflows.run_store import LostLease, NotAllowed, RunStore
-from forge_tasks.control import Decision, JobControl
+from forge_tasks.control import Decision, Gate, JobControl
 from forge_tasks.errors import TransientError
 
 from .conftest import ALICE, BOB, START, Clock, payload
@@ -123,27 +123,48 @@ async def test_an_undecided_approval_pauses_the_run(store: RunStore) -> None:
     with pytest.raises(PauseRun) as paused:
         await control.approval(key="gate-1", reason="Ship it?", details=details, timeout_seconds=3600)
 
-    signal = paused.value
-    assert (signal.key, signal.kind, signal.reason, signal.details) == ("gate-1", "approval", "Ship it?", details)
-    assert signal.deadline == START + timedelta(hours=1)
+    [gate] = paused.value.gates
+    assert gate == {
+        "key": "gate-1",
+        "kind": "approval",
+        "reason": "Ship it?",
+        "details": details,
+        "deadline": START + timedelta(hours=1),
+    }
+    assert paused.value.until is None
 
     with pytest.raises(PauseRun) as asked:
         await control.approval(key="gate-2", reason="How many?", details={"kind": "human_input"})
-    assert (asked.value.kind, asked.value.deadline) == ("human_input", None)
+    [gate] = asked.value.gates
+    assert (gate["kind"], gate["deadline"]) == ("human_input", None)
+
+
+async def test_a_run_waits_at_every_gate_together_and_a_time_too(store: RunStore) -> None:
+    _, control = await claimed(store)
+    gates = [Gate("a", "A?"), Gate("b", "B?", {"kind": "human_input"}, 60)]
+
+    with pytest.raises(PauseRun) as paused:
+        await control.wait_for(gates, until=datetime(2026, 10, 1, 13, 0), reason="Delay waits")
+
+    assert [(g["key"], g["kind"], g["deadline"]) for g in paused.value.gates] == [
+        ("a", "approval", None),
+        ("b", "human_input", START + timedelta(seconds=60)),
+    ]
+    assert (paused.value.until, paused.value.reason) == (START + timedelta(hours=1), "Delay waits")
+    # Without a gate, it's a wait.
+    with pytest.raises(WaitRun):
+        await control.wait_for([], until=START, reason="Later")
+    assert control.decided("a") is None
 
 
 async def test_a_decided_approval_answers_at_once(store: RunStore) -> None:
     run, control = await claimed(store)
-    pause = await store.pause(
+    [pause] = await store.pause(
         run["id"],
         owner="w1",
         state={},
-        key="gate-1",
-        kind="approval",
-        reason="Ship it?",
-        details={},
-        deadline=None,
-    )
+        gates=[{"key": "gate-1", "kind": "approval", "reason": "Ship it?", "details": {}, "deadline": None}],
+    ) or [{}]
     await store.decide(run["id"], request_id=pause["id"], approved=True, comment="fine", actor=BOB)
     resumed = await store.claim(run["id"], owner="w2", lease_seconds=60)
     assert resumed is not None

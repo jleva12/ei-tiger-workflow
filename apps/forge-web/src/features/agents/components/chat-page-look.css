@@ -1,0 +1,87 @@
+/*
+ * A chat page's look (chat-page-look.tsx), set on the region the page fills:
+ * its tokens are the theme's, overridden here, so everything inside follows.
+ * The thread reads --chat-thread-width, --chat-composer-radius,
+ * --chat-user-bubble and --chat-user-text (thread.aui.tsx).
+ */
+
+[data-slot="chat-page-look"] {
+  /* Tailwind's colour aliases resolve where they're declared (the document's
+     root): pointed at this region's tokens, so what reads them directly (the
+     composer's background, the visitor's messages) follows its theme and accent. */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-primary: var(--primary);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* --------------------------------------------- the visitor's messages */
+
+[data-slot="chat-page-look"][data-bubbles="accent"] {
+  --chat-user-bubble: var(--chat-accent, var(--primary));
+  --chat-user-text: var(--chat-accent-ink, var(--primary-foreground));
+}
+[data-slot="chat-page-look"][data-bubbles="tint"] {
+  --chat-user-bubble: color-mix(
+    in oklab,
+    var(--chat-accent, var(--primary)) 14%,
+    var(--background)
+  );
+  --chat-user-text: var(--foreground);
+}
+
+/* ---------------------------------------------------------------- corners */
+
+[data-slot="chat-page-look"][data-corners="square"] {
+  --radius: 0.25rem;
+  --radius-chip: 2px;
+  --radius-item: 2px;
+  --radius-soft: 3px;
+  --radius-control: 3px;
+  --radius-card: 4px;
+  --radius-band: 4px;
+  --radius-dialog: 6px;
+  --chat-composer-radius: 6px;
+}
+[data-slot="chat-page-look"][data-corners="rounded"] {
+  --radius: 0.875rem;
+  --radius-chip: 8px;
+  --radius-item: 10px;
+  --radius-soft: 12px;
+  --radius-control: 12px;
+  --radius-card: 16px;
+  --radius-band: 16px;
+  --radius-dialog: 24px;
+  --chat-composer-radius: 1.5rem;
+}
+
+/* ------------------------------------------------------------------- font */
+
+[data-slot="chat-page-look"][data-font="system"] {
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+}
+[data-slot="chat-page-look"][data-font="serif"] {
+  font-family: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+}
+[data-slot="chat-page-look"][data-font="mono"] {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ------------------------------------------------------------------ width */
+
+[data-slot="chat-page-look"][data-width="narrow"] {
+  --chat-thread-width: 36rem;
+}
+[data-slot="chat-page-look"][data-width="wide"] {
+  --chat-thread-width: 56rem;
+}

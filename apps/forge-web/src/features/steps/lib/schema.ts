@@ -30,6 +30,23 @@ export const CONFIGS: Record<StepKind, Record<string, unknown>> = {
       description: "0 waits until someone decides.",
     },
   },
+  decision_board: {
+    message: {
+      ...text,
+      description: "What the board is about, above its choices; {{ }} puts in the run's data.",
+    },
+    choices: {
+      ...listOf({ id: text, label: text, question: text, ask_when: text }),
+      description:
+        "Each laid out (when its JSONata ask_when holds; empty, always) for people to accept or reject on their own: a choice decided takes its way at once, <id>:accepted or <id>:rejected, while the others still wait. question is a template; empty asks \"<label>?\". An id is never done, nor has a colon.",
+    },
+    approvers: oneOf("org:admin", "org:member"),
+    timeout_hours: {
+      ...count(0),
+      description:
+        "Hours each choice waits; then nobody deciding rejects it. 0 waits until someone decides.",
+    },
+  },
   http: {
     method: oneOf("GET", "POST", "PUT", "PATCH", "DELETE"),
     url: text,

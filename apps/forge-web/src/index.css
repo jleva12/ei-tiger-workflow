@@ -3,7 +3,11 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
-@custom-variant dark (&:is(.dark *));
+/*
+ * Dark inside a `.dark` element, unless a `.light` one inside it is nearer:
+ * a region can take the other theme from the page (a chat page's preview).
+ */
+@custom-variant dark (&:is(.dark *):not(.dark .light *));
 
 /*
  * Forge Workspace design system
@@ -19,7 +23,9 @@
  *   4. Base + global rules (focus ring, scrollbars, reduced motion)
  */
 
-:root {
+/* `.light` too: a region inside a dark page can take the light theme. */
+:root,
+.light {
   /* shadcn semantic tokens */
   --background: oklch(0.998 0.002 260);
   --foreground: oklch(0.235 0.009 260);

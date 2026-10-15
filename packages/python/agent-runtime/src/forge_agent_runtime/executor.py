@@ -36,6 +36,7 @@ from google.adk.memory import BaseMemoryService, InMemoryMemoryService
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, InMemorySessionService
+from google.adk.sessions.base_session_service import GetSessionConfig
 from google.genai import types
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
@@ -49,6 +50,7 @@ from forge_agent_runtime.tools import http_client
 from forge_common.adk.follow_ups import MOST
 from forge_common.adk.follow_ups import REQUEST_KEY as FOLLOW_UPS_REQUEST
 from forge_common.adk.models import ProviderModels
+from forge_common.adk.titles import TITLE_KEY, with_title
 from forge_common.patterns import schema_errors
 
 log = logging.getLogger(__name__)
@@ -358,6 +360,7 @@ class AgentExecutor:
         """
         runner, resolved = await self.runner(request.app_name)
         delta = check_state(resolved.document, request.state_delta)
+        delta = await self._titled(resolved.document.id, request, delta)
         delta[REQUEST_KEY] = {
             "appName": request.app_name,
             "userId": request.user_id,
@@ -396,6 +399,26 @@ class AgentExecutor:
         ):
             async for event in events:
                 yield event
+
+    async def _titled(self, agent_id: str, request: RunRequest, delta: dict[str, Any]) -> dict[str, Any]:
+        """
+        :return: The turn's state, naming a conversation that has no title
+            yet after its first message (``forge_common.adk.titles``), with
+            the turn rather than on its own, so the runner's session never
+            goes stale under it.
+        """
+        user_id, session_id = request.user_id, request.session_id
+        bare = await self.sessions.get_session(
+            app_name=agent_id,
+            user_id=user_id,
+            session_id=session_id,
+            config=GetSessionConfig(num_recent_events=0),
+        )
+        if bare is None or bare.state.get(TITLE_KEY):
+            return delta
+        # Untitled (mostly a new one, with no past to read): its first message names it.
+        session = await self.sessions.get_session(app_name=agent_id, user_id=user_id, session_id=session_id)
+        return with_title(delta, session, request.new_message) or delta
 
     async def close(self) -> None:
         """Closes every built agent (their toolsets' connections) and the HTTP client, if made here."""

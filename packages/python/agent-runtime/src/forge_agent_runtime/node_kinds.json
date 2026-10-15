@@ -186,6 +186,19 @@
       "outputs": [],
       "workflow_tool": true,
       "defaults": { "skills": [], "run_scripts": false }
+    },
+    {
+      "kind": "rich_answers",
+      "label": "Rich answers",
+      "group": "tools",
+      "icon": "dashboard-square-01",
+      "summary": "Lets the agent answer with cards, key figures, tables, charts and steps the chat draws beside its text, and choices the person clicks to reply.",
+      "keywords": "rich answers generative ui present cards charts graphs tables facts figures steps choices buttons options visual layout",
+      "id_prefix": "rich",
+      "outputs": [],
+      "defaults": {
+        "components": ["Card", "Row", "Col", "Fact", "Table", "Chart", "Steps", "Choices"]
+      }
     }
   ]
 }

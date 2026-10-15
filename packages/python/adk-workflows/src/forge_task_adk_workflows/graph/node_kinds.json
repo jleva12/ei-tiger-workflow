@@ -150,6 +150,32 @@
       "defaults": { "message": "", "response_schema": {} }
     },
     {
+      "kind": "decision_board",
+      "label": "Decision board",
+      "group": "people",
+      "icon": "task-done-01",
+      "summary": "Lays out choices for people to accept or reject, each on its own; a choice takes its own way as soon as it's decided.",
+      "keywords": "human people team approve reject accept confirm choices options checklist triage sign off decide board several paths",
+      "id_prefix": "decisions",
+      "person": true,
+      "rows": {
+        "setting": "choices",
+        "label": "label",
+        "empty": "Choice {n}",
+        "ways": [
+          { "id": "accepted", "label": "Accepted", "branch": true },
+          { "id": "rejected", "label": "Rejected", "branch": true, "fallback": true }
+        ]
+      },
+      "outputs": [{ "id": "done", "label": "Done", "branch": true }],
+      "defaults": {
+        "message": "",
+        "choices": [{ "id": "choice_1", "label": "", "question": "", "ask_when": "" }],
+        "approvers": "org:admin",
+        "timeout_hours": 0
+      }
+    },
+    {
       "kind": "http",
       "label": "HTTP request",
       "group": "actions",

@@ -261,6 +261,168 @@ def test_a_published_agent_answers_over_a2a_too(org: Org) -> None:
     assert missing.status_code == 404
 
 
+def test_a_published_agent_is_shared_as_a_chat_page(org: Org) -> None:
+    agent = create(org)["id"]
+    setting = f"{org.agents}/{agent}/chat-page"
+    # A page runs the latest published version: there's none yet.
+    early = org.member.put(setting, json={"enabled": True})
+    assert early.status_code == 409
+    assert early.json()["detail"]["code"] == "NOT_PUBLISHED"
+    published = org.member.post(
+        f"{org.agents}/{agent}/publish", json={"revision": 1}
+    ).json()
+    assert org.viewer.put(setting, json={"enabled": True}).status_code == 403
+
+    shared = org.member.put(setting, json={"enabled": True})
+    assert shared.status_code == 200, shared.text
+    link = shared.json()["chat_page"]["token"]
+    assert shared.json()["chat_page"]["enabled"] is True
+    # It isn't a change to the agent: the builder's next save still fits.
+    assert shared.json()["revision"] == published["revision"]
+    assert shared.json()["updated_at"] == published["updated_at"]
+    read = org.viewer.get(f"{org.agents}/{agent}").json()
+    assert read["chat_page"]["token"] == link
+
+    # Anyone with the link: what the page shows, then a visitor's turn.
+    page = f"{RUNTIME}/pages/{link}"
+    shown = org.outsider.get(page)
+    assert shown.status_code == 200, shown.text
+    assert (shown.json()["app_name"], shown.json()["version"]) == (agent, 1)
+    assert shown.json()["name"] == "Support assistant"
+    visitor = "visitor_" + uuid4().hex
+    session = org.outsider.post(
+        f"{page}/apps/{agent}/users/{visitor}/sessions", json={}
+    )
+    assert session.status_code == 201, session.text
+    org.llm.turns = [[types.Part(text="Hello from the page.")]]
+    got = events(
+        org.outsider.post(
+            f"{page}/run_sse",
+            json={
+                "appName": agent,
+                "userId": visitor,
+                "sessionId": session.json()["id"],
+                "newMessage": {"role": "user", "parts": [{"text": "Hi"}]},
+            },
+        )
+    )
+    assert got[-1]["content"]["parts"][0]["text"] == "Hello from the page."
+
+    # Prompts its empty conversation offers: trimmed, each once, in order.
+    assert shown.json()["suggestions"] == []
+    offered = org.member.put(
+        setting,
+        json={
+            "enabled": True,
+            "suggestions": [" What can you do? ", "Track my order", "What can you do?"],
+        },
+    )
+    assert offered.status_code == 200, offered.text
+    assert offered.json()["chat_page"]["suggestions"] == [
+        "What can you do?",
+        "Track my order",
+    ]
+    assert org.outsider.get(page).json()["suggestions"] == [
+        "What can you do?",
+        "Track my order",
+    ]
+    too_many = org.member.put(
+        setting, json={"enabled": True, "suggestions": [f"Q{n}" for n in range(7)]}
+    )
+    assert too_many.status_code == 422
+    assert (
+        org.member.put(
+            setting, json={"enabled": True, "suggestions": ["  "]}
+        ).status_code
+        == 422
+    )
+
+    # Off, the link stops answering; on again, it's the same link.
+    off = org.member.put(setting, json={"enabled": False})
+    assert off.json()["chat_page"]["enabled"] is False
+    assert org.outsider.get(page).status_code == 404
+    again = org.member.put(setting, json={"enabled": True}).json()
+    assert again["chat_page"]["token"] == link
+    # Turning it off and on keeps its prompts.
+    assert again["chat_page"]["suggestions"] == ["What can you do?", "Track my order"]
+    # What the page leaves out: each on its own, the rest kept.
+    assert (again["chat_page"]["hide_history"], again["chat_page"]["hide_top_bar"]) == (
+        False,
+        False,
+    )
+    bare = org.member.put(setting, json={"enabled": True, "hide_history": True}).json()[
+        "chat_page"
+    ]
+    assert (bare["hide_history"], bare["hide_top_bar"]) == (True, False)
+    bare = org.member.put(setting, json={"enabled": True, "hide_top_bar": True}).json()[
+        "chat_page"
+    ]
+    assert (bare["hide_history"], bare["hide_top_bar"]) == (True, True)
+    assert bare["suggestions"] == ["What can you do?", "Track my order"]
+    shown = org.outsider.get(page).json()
+    assert (shown["hide_history"], shown["hide_top_bar"]) == (True, True)
+    # Follow-up questions: on until turned off.
+    assert shown["follow_ups"] is True
+    quiet = org.member.put(setting, json={"enabled": True, "follow_ups": False}).json()[
+        "chat_page"
+    ]
+    assert (quiet["follow_ups"], quiet["hide_history"]) == (False, True)
+    assert org.outsider.get(page).json()["follow_ups"] is False
+    # Its words and look: each on its own, the rest kept.
+    look = {
+        "title": " Acme help ",
+        "welcome_title": "Hi there",
+        "welcome_message": "Ask about your orders.",
+        "placeholder": "Ask Acme...",
+        "footer_note": "Answers can be wrong.",
+        "theme": "dark",
+        "theme_toggle": False,
+        "accent": "#2F6FEB",
+        "bubbles": "accent",
+        "corners": "rounded",
+        "font": "serif",
+        "width": "wide",
+    }
+    looked = org.member.put(setting, json={"enabled": True, **look})
+    assert looked.status_code == 200, looked.text
+    kept = looked.json()["chat_page"]
+    # Trimmed, and the accent as one spelling.
+    assert {key: kept[key] for key in look} == {
+        **look,
+        "title": "Acme help",
+        "accent": "#2f6feb",
+    }
+    assert (kept["follow_ups"], kept["suggestions"]) == (
+        False,
+        ["What can you do?", "Track my order"],
+    )
+    shown = org.outsider.get(page).json()
+    assert {key: shown[key] for key in look} == {key: kept[key] for key in look}
+    # A text "" and a null accent go back to the defaults; the rest stay.
+    back = org.member.put(
+        setting, json={"enabled": True, "title": "", "accent": None}
+    ).json()["chat_page"]
+    assert (back["title"], back["accent"], back["theme"]) == ("", None, "dark")
+    for wrong in (
+        {"accent": "blue"},
+        {"theme": "sepia"},
+        {"font": "comic"},
+        {"title": "x" * 81},
+        {"looks": "nice"},
+    ):
+        refused = org.member.put(setting, json={"enabled": True, **wrong})
+        assert refused.status_code == 422, wrong
+    # A new link stops the old one for good.
+    renewed = org.member.put(setting, json={"enabled": True, "new_link": True})
+    fresh = renewed.json()["chat_page"]["token"]
+    assert fresh != link
+    assert org.outsider.get(page).status_code == 404
+    assert org.outsider.get(f"{RUNTIME}/pages/{fresh}").status_code == 200
+    # A deleted agent's page is gone with it.
+    assert org.member.delete(f"{org.agents}/{agent}").status_code == 204
+    assert org.outsider.get(f"{RUNTIME}/pages/{fresh}").status_code == 404
+
+
 def test_a_draft_is_saved_then_published_as_a_version_nothing_changes(org: Org) -> None:
     made = create(org)
     agent = made["id"]

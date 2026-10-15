@@ -8,11 +8,11 @@ models. The worker's own tests run it on the run store.
 
 import asyncio
 import json
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 import pytest
@@ -44,6 +44,7 @@ from forge_task_adk_workflows.task import (
 from forge_tasks.control import (
     AwaitingDecision,
     Decision,
+    Gate,
     LocalJobControl,
     WaitingUntil,
     controlling,
@@ -77,20 +78,24 @@ REVIEW = "review@test_agent@1/review@1"
 
 @dataclass
 class Control(LocalJobControl):
-    """LocalJobControl, recording what each gate was asked with."""
+    """LocalJobControl, recording what each gate was asked with, and whose
+    decisions the run read."""
 
     gates: list[dict[str, Any]] = field(default_factory=list)
+    read: list[str] = field(default_factory=list)
 
-    async def approval(
-        self,
-        *,
-        key: str,
-        reason: str,
-        details: dict[str, Any] | None = None,
-        timeout_seconds: int | None = None,
-    ) -> Decision:
-        self.gates.append({"key": key, "reason": reason, "details": details, "timeout_seconds": timeout_seconds})
-        return await super().approval(key=key, reason=reason, details=details, timeout_seconds=timeout_seconds)
+    def decided(self, key: str) -> Decision | None:
+        found = super().decided(key)
+        if found is not None:
+            self.read.append(key)
+        return found
+
+    async def wait_for(self, gates: Sequence[Gate], *, until: datetime | None = None, reason: str = "") -> NoReturn:
+        self.gates.extend(
+            {"key": gate.key, "reason": gate.reason, "details": gate.details, "timeout_seconds": gate.timeout_seconds}
+            for gate in gates
+        )
+        await super().wait_for(gates, until=until, reason=reason)
 
     def said(self) -> list[str]:
         return [message for message, _ in self.notes]
@@ -110,6 +115,11 @@ class Worker:
         """One attempt of the run's job (to its end, or a wait, which raises)."""
         with controlling(self.control):
             return await self.task.jobs["run"].run(run)
+
+    async def steps(self, run: RunPayload) -> list[dict[str, Any]]:
+        """The run's steps, as its run page shows them."""
+        session = await self.sessions.get_session(app_name=APP_NAME, user_id=run.run_as, session_id=run.session_id)
+        return run_steps(session, run.document)
 
     async def session_ids(self) -> list[str]:
         listed = await self.sessions.list_sessions(app_name=APP_NAME, user_id=MEMBER)
@@ -521,7 +531,8 @@ async def test_two_approvals_are_asked_one_after_the_other(sessions: DatabaseSes
     with pytest.raises(AwaitingDecision) as waiting:
         await w.run(run)
     assert waiting.value.key == second
-    assert [gate["details"]["approvers"] for gate in w.control.gates] == ["org:member", "org:member", "org:admin"]
+    assert [gate["details"]["approvers"] for gate in w.control.gates] == ["org:member", "org:admin"]
+    assert w.control.read == [first]
     w.control.decide(second, Decision(approved=True, actor_id="u-2", actor_name="Admin"))
 
     result = await w.run(run)
@@ -529,6 +540,48 @@ async def test_two_approvals_are_asked_one_after_the_other(sessions: DatabaseSes
     assert result.status is JobStatus.OK
     assert result.detail["result"]["first"]["output"]["decided_by"] == "Member"
     assert result.detail["result"]["second"]["output"]["decided_by"] == "Admin"
+
+
+async def test_approvals_on_ways_at_once_are_asked_together_and_decided_in_any_order(
+    sessions: DatabaseSessionService,
+) -> None:
+    w = worker(sessions)
+    document = agent(
+        [
+            START_NODE,
+            node("legal", "approval", {"message": "Legal?", "timeout_hours": 0}),
+            node("money", "approval", {"message": "Budget?", "timeout_hours": 0}),
+            transform("signed", '{"legal": previous.decided_by}'),
+            transform("paid", '{"money": previous.decided_by}'),
+        ],
+        [
+            ("start", "next", "legal"),
+            ("start", "next", "money"),
+            ("legal", "approved", "signed"),
+            ("money", "approved", "paid"),
+        ],
+    )
+    run = payload(document, {})
+    legal, money = "legal@test_agent@1/legal@1", "money@test_agent@1/money@1"
+
+    with pytest.raises(AwaitingDecision) as waiting:
+        await w.run(run)
+    assert waiting.value.keys == [legal, money]
+    # The second decided first carries its way on; the first still waits.
+    w.control.decide(money, Decision(approved=True, actor_id="u-2", actor_name="Fin"))
+    with pytest.raises(AwaitingDecision) as waiting:
+        await w.run(run)
+    assert waiting.value.keys == [legal]
+    assert [step["status"] for step in await w.steps(run) if step["id"] in ("signed", "paid")] == [
+        "not_reached",
+        "done",
+    ]
+    w.control.decide(legal, Decision(approved=True, actor_id="u-1", actor_name="Lex"))
+
+    result = await w.run(run)
+
+    assert result.status is JobStatus.OK
+    assert [ended["result"] for ended in result.detail["result"]] == [{"money": "Fin"}, {"legal": "Lex"}]
 
 
 async def test_a_loop_whose_body_pauses_asks_for_each_item_in_turn(sessions: DatabaseSessionService) -> None:
@@ -872,7 +925,7 @@ async def test_a_hiccup_after_a_decision_carries_on_with_that_decision(sessions:
     assert result.detail["result"] == {"review": "Lead", "said": "Shipped"}
     # Asked, then its decision read; carrying on after the hiccup reads it no more.
     assert w.control.asked == [waiting.value.key]
-    assert len(w.control.gates) == 2
+    assert (len(w.control.gates), w.control.read) == (1, [waiting.value.key])
     assert w.control.said().count("Review (review) finished") == 1
 
 
@@ -1110,7 +1163,7 @@ async def test_a_run_resubmitted_while_its_last_task_waited_asks_its_own_questio
 
     assert result.status is JobStatus.OK
     assert result.detail["result"]["approved"] is True
-    assert len(w.control.gates) == 2
+    assert (len(w.control.gates), w.control.read) == (1, [waiting.value.key])
     assert len(w.sent) == 2
 
 

@@ -47,6 +47,8 @@ function detailOf(step: ChatStep, lookups: ChatLookups): string {
       return step.config.confirm ? "Asks before calling" : "Calls it directly"
     case "code_execution":
       return step.config.confirm ? "Asks before running" : "Runs it directly"
+    case "rich_answers":
+      return "Drawn in the chat"
     case "skills": {
       const picked = step.config.skills
       if (!picked.length) return "No skill picked"
@@ -100,6 +102,8 @@ function summaryOf(step: ChatStep): NodeSummary | null {
         : { text: `Up to ${step.config.max_results} passages a search` }
     case "code_execution":
       return { text: "Python the model writes, run on the server" }
+    case "rich_answers":
+      return { text: "Cards, figures, tables, charts, steps and choices" }
     case "skills":
       return {
         text: step.config.run_scripts

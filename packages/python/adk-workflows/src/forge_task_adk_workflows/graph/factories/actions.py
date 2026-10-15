@@ -15,8 +15,10 @@ Actions: HTTP requests, Bash commands, transforms, filters and delays.
   it too; a body that fits is handed on as its schema has it. With no Error
   way, the run fails.
 - ``bash``: runs its command by bash on the worker's machine, starting in its
-  folder of the run's folder (``support.commands``), and hands on ``{exit_code,
-  stdout, stderr, cwd, truncated}`` by its Success way when it exits with 0.
+  folder of the run's folder (``support.commands``), or in a sandbox of its
+  own, the run's folder copied in and its changes back
+  (``support.sandbox_commands``), and hands on ``{exit_code, stdout, stderr,
+  cwd, truncated}`` by its Success way when it exits with 0.
   Its command runs as it's written; its environment variables (templates) and
   ``WORKSPACE`` (the run's folder) are how it reads the run's data. Any other
   exit code, a folder outside the run's folder or a command that runs past
@@ -412,10 +414,14 @@ def bash(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
         env = {**services.command_environment, **UNASKED}
         for name, value in variables.items():
             env[name] = await evaluator.render(value, data, what=f"Its {name} variable")
-        env[WORKSPACE_VARIABLE] = workspace
-        finished = await run_command(
-            s.command, cwd=folder, env=env, seconds=seconds, max_bytes=services.max_command_output_bytes
-        )
+        max_bytes = services.max_command_output_bytes
+        if services.command_sandbox is not None:
+            finished = await services.command_sandbox.run(
+                s.command, workspace=workspace, folder=folder, env=env, seconds=seconds, max_bytes=max_bytes
+            )
+        else:
+            env[WORKSPACE_VARIABLE] = workspace
+            finished = await run_command(s.command, cwd=folder, env=env, seconds=seconds, max_bytes=max_bytes)
         if finished.exit_code != 0:
             raise StepFailed(
                 _exited(finished),

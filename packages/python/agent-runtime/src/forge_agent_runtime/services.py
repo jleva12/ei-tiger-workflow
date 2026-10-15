@@ -59,6 +59,29 @@ class WorkflowRunner(Protocol):
         """:return: What the run answered, or where it got to (paused, still running)."""
         ...
 
+    async def progress(
+        self,
+        *,
+        agent_id: str,
+        user_id: str,
+        session_id: str,
+        call_id: str,
+        organization_id: str | None,
+    ) -> dict[str, Any] | None:
+        """
+        How the run a call started is going, for the chat to show while it
+        waits: ``{"run_id", "workflow", "status", "steps": [{"id", "name",
+        "kind", "status", "started_at", "finished_at", "handed_to"}], ...}``,
+        without what the steps were handed or handed on.
+
+        :param agent_id: The chat agent (its ID, whichever version runs).
+        :param user_id: Whose conversation it is.
+        :param session_id: The conversation.
+        :param call_id: The model's call of the workflow (ADK's function call ID).
+        :return: None when that call, in that person's conversation, started no run.
+        """
+        ...
+
 
 class KnowledgeBases(Protocol):
     """Searches the organization's knowledge bases an agent names by ID (a

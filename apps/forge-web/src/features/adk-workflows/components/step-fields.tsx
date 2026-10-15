@@ -348,6 +348,96 @@ function ApprovalFields({ id, config }: Props<"approval">) {
   )
 }
 
+/**
+ * A Decision board's settings: what it's about, its choices (each a name,
+ * a question, and when it's asked), and who decides by when.
+ */
+function DecisionBoardFields({ id, config }: Props<"decision_board">) {
+  const set = useSetter<"decision_board">(id)
+  return (
+    <>
+      <Setting
+        id={id}
+        setting="message"
+        label="What it's about"
+        value={config.message}
+        multiline
+        rows={2}
+        placeholder="What should we do about {{ steps.triage.output.title }}?"
+        onChange={(value) => set("message", value)}
+      />
+      <ListEditor
+        issue="choices"
+        label="Choices"
+        items={config.choices}
+        onChange={(value) => set("choices", value)}
+        make={() => ({
+          id: uid("choice"),
+          label: "",
+          question: "",
+          ask_when: "",
+        })}
+        addLabel="Add choice"
+        renderItem={(choice, change, index) => {
+          const name = choice.label.trim() || `Choice ${index + 1}`
+          return {
+            head: (
+              <Input
+                aria-label={`Choice ${index + 1} name`}
+                value={choice.label}
+                placeholder={`Choice ${index + 1}`}
+                onChange={(event) => change({ label: event.target.value })}
+                className={cn(bare, "text-xs font-medium md:text-xs")}
+              />
+            ),
+            body: (
+              <div className="flex flex-col gap-2">
+                <Setting
+                  id={id}
+                  setting={`choices.${choice.id}`}
+                  label={`${name}'s question`}
+                  labelHidden
+                  value={choice.question}
+                  multiline
+                  placeholder={`${name}?`}
+                  onChange={(value) => change({ question: value })}
+                />
+                <Setting
+                  id={id}
+                  setting={`choices.${choice.id}.ask_when`}
+                  label={`When ${name} is asked`}
+                  labelHidden
+                  value={choice.ask_when}
+                  placeholder="Always asked; or only when, e.g. previous.risky = true"
+                  onChange={(value) => change({ ask_when: value })}
+                />
+              </div>
+            ),
+          }
+        }}
+        description="People accept or reject each choice on its own, in any order. A choice takes its Accepted or Rejected way as soon as it's decided, while the others still wait; Done goes on once every one is. A choice is laid out only when its condition (JSONata) holds; empty, always."
+      />
+      <ChoiceField
+        issue="approvers"
+        label="Who decides"
+        value={config.approvers}
+        options={[
+          { value: "org:admin", label: "An organization admin" },
+          { value: "org:member", label: "Any member of the organization" },
+        ]}
+        onChange={(value) => set("approvers", value)}
+      />
+      <NumberField
+        issue="timeout_hours"
+        label="Each choice waits up to (hours)"
+        value={config.timeout_hours}
+        onChange={(value) => set("timeout_hours", value)}
+        description="0 waits until someone decides. When it runs out, a choice nobody decided takes Rejected."
+      />
+    </>
+  )
+}
+
 function HttpFields({ id, config }: Props<"http">) {
   const set = useSetter<"http">(id)
   const organizationId = useBuilder((s) => s.meta.organization_id)
@@ -1307,6 +1397,8 @@ export function StepFields({ id, step }: { id: string; step: StepData }) {
   switch (step.kind) {
     case "approval":
       return <ApprovalFields id={id} config={step.config} />
+    case "decision_board":
+      return <DecisionBoardFields id={id} config={step.config} />
     case "http":
       return <HttpFields id={id} config={step.config} />
     case "bash":

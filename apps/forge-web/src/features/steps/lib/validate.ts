@@ -123,6 +123,22 @@ export function settingsIssues(
         "Tell the approver what they're deciding."
       )
       break
+    case "decision_board": {
+      const c = step.config
+      need(c.choices.length > 0, "choices", "Add a choice.")
+      need(
+        c.choices.every((choice) => choice.label.trim()),
+        "choice-label",
+        "Every choice needs a name: it's what people see, and its ways are called by it."
+      )
+      const names = c.choices.map((x) => x.label.trim().toLowerCase()).filter(Boolean)
+      warn(
+        new Set(names).size === names.length,
+        "choice-twice",
+        "Two choices have the same name: people couldn't tell them apart."
+      )
+      break
+    }
     case "http": {
       const c = step.config
       if (!c.url.trim()) need(false, "url", "Give it a URL.")
@@ -407,6 +423,9 @@ const FIELDS: Record<string, string> = {
   "status-twice": "statuses",
   arms: "arms",
   "arm-empty": "arms",
+  choices: "choices",
+  "choice-label": "choices",
+  "choice-twice": "choices",
   items: "items",
   "item-name": "item_name",
   max: "max_iterations",

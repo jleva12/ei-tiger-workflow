@@ -4,6 +4,7 @@ import {
   type BuilderGraph,
   type Point,
 } from "@/features/builder/lib/types"
+import { adkName } from "@/features/adk-workflows/lib/model"
 import { upgradedHttpTool } from "@/features/agents/lib/http-template"
 import { readList } from "@/features/steps/lib/document"
 import { HTTP_METHODS, THINKING_LEVELS } from "@/features/steps/lib/model"
@@ -184,6 +185,33 @@ export const usesOf = (doc: Pick<ChatAgentDocument, "nodes">) =>
   doc.nodes.flatMap((n) =>
     n.kind === "saved_agent" && n.config.agent ? [n.config.agent] : []
   )
+
+/**
+ * Its agents (the chat agent and its sub-agents) by the names ADK calls
+ * them, with the names the canvas gives them: what a chat shows over their
+ * replies, and calls that hand a request to one show as asking it.
+ */
+export const agentNamesOf = (doc: Pick<ChatAgentDocument, "nodes">) =>
+  Object.fromEntries(
+    doc.nodes.flatMap((n) =>
+      (n.kind === "agent" || n.kind === "sub_agent") && adkName(n.name)
+        ? [[adkName(n.name), n.name]]
+        : []
+    )
+  ) as Record<string, string>
+
+/**
+ * Its workflow tools by the names the model calls them, with the names the
+ * canvas gives them: a chat shows a call of one as the run it starts.
+ */
+export const workflowNamesOf = (doc: Pick<ChatAgentDocument, "nodes">) =>
+  Object.fromEntries(
+    doc.nodes.flatMap((n) =>
+      n.kind === "adk_workflow" && adkName(n.name)
+        ? [[adkName(n.name), n.name]]
+        : []
+    )
+  ) as Record<string, string>
 
 /* -------------------------------------------------------------------------- */
 /* Reading a document                                                         */

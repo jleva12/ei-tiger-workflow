@@ -21,6 +21,7 @@ from typing import Annotated, Any, Literal
 
 from forge_agent_runtime.document import KINDS
 from forge_agent_runtime.names import adk_name
+from forge_agent_runtime.present import components_of
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -321,6 +322,14 @@ def _fields(schema: object) -> str:
     return "; ".join(said)
 
 
+def _components(config: Mapping[str, Any]) -> tuple[str, ...]:
+    """:return: A Rich answers node's components, with what they need; the defaults for none."""
+    try:
+        return components_of(config.get("components"))
+    except ValueError:
+        return ()
+
+
 def _called(name: str, fallback: str) -> str:
     return adk_name(name) or fallback
 
@@ -498,6 +507,13 @@ def _tool_lines(tool: BriefTool, found: Resolved) -> list[str]:
             return [
                 f"- `{name}(code)`: runs a whole Python 3 program, fresh each call, "
                 "and answers what it printed and its errors." + _confirm(c)
+            ]
+        case "rich_answers":
+            return [
+                "- `present(...)`: shows the person a composition the chat draws, of the "
+                f"components its Rich answers node picks ({', '.join(_components(c))}); what the "
+                "person clicks or fills in comes back as their next message. It's told by itself "
+                "how, and to write a sentence about it too, so say when to use it, not how."
             ]
         case _:
             return []

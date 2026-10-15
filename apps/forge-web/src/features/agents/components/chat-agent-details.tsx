@@ -87,29 +87,32 @@ export function ChatAgentDetails({ children }: { children?: React.ReactNode }) {
       {children}
       <Section>
         <fieldset disabled={readOnly} className="contents">
-        <Field>
-          <FieldLabel htmlFor={nameId}>Name</FieldLabel>
-          <Input
-            id={nameId}
-            value={meta.name}
-            onChange={(event) =>
-              api.getState().updateMeta({ name: event.target.value }, "name")
-            }
-          />
-        </Field>
-        <Field>
-          <FieldLabel htmlFor={descriptionId}>Description</FieldLabel>
-          <Textarea
-            id={descriptionId}
-            value={meta.description}
-            placeholder="What it's for, and who chats with it."
-            onChange={(event) =>
-              api
-                .getState()
-                .updateMeta({ description: event.target.value }, "description")
-            }
-          />
-        </Field>
+          <Field>
+            <FieldLabel htmlFor={nameId}>Name</FieldLabel>
+            <Input
+              id={nameId}
+              value={meta.name}
+              onChange={(event) =>
+                api.getState().updateMeta({ name: event.target.value }, "name")
+              }
+            />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={descriptionId}>Description</FieldLabel>
+            <Textarea
+              id={descriptionId}
+              value={meta.description}
+              placeholder="What it's for, and who chats with it."
+              onChange={(event) =>
+                api
+                  .getState()
+                  .updateMeta(
+                    { description: event.target.value },
+                    "description"
+                  )
+              }
+            />
+          </Field>
         </fieldset>
       </Section>
       <Section title="In it">

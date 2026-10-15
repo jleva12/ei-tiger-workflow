@@ -30,6 +30,8 @@ ASSISTANT = "assistant"
 
 #: How a turn came in, as its invocation keeps it (``usage_invocations.channel``).
 CONSOLE, API, A2A, ASSISTANT_CHANNEL = "console", "api", "a2a", "assistant"
+#: An agent's chat page, shared at a link (``forge_admin.chat_agents.pages``).
+PAGE = "page"
 #: The header Forge's console sends with the builder's chat, so its turns
 #: read as the console's rather than an outside app's.
 CLIENT_HEADER = "X-Forge-Client"

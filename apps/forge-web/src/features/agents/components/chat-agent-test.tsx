@@ -9,16 +9,14 @@ import {
 import { Icon } from "@/components/forge/icon"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { apiAuthHeaders } from "@/lib/api-instance"
-
-/** The builder's chat's requests: who's testing, and that it's Forge's console. */
-const consoleHeaders = () => ({
-  ...apiAuthHeaders(),
-  "X-Forge-Client": "console",
-})
+import { consoleHeaders } from "@/features/agents/lib/runtime-headers"
 import { useMe } from "@/lib/users"
 import { RUNTIME_URL, type ChatAgentRecord } from "@/features/agents/lib/api"
+import { agentNamesOf, workflowNamesOf } from "@/features/agents/lib/document"
 import { declaredState } from "@/features/agents/lib/input"
+import { WorkflowRunsContext } from "@/features/agents/lib/workflow-run-context"
+import { workflowRunToolkit } from "@/features/agents/lib/workflow-run-toolkit"
+import { workflowRunFollower } from "@/features/agents/lib/workflow-runs"
 import { knowledgeDocumentHref } from "@/features/knowledge/lib/sources"
 import type { DataType } from "@/features/steps/lib/types"
 
@@ -45,6 +43,16 @@ export function ChatAgentTestPanel({
       entry?.kind === "agent" ? entry.config.state_schema : {}
     )
   }, [record.document])
+  // Its agents' names, so a hand-off to one shows as asking it.
+  const agents = React.useMemo(
+    () => agentNamesOf(record.document),
+    [record.document]
+  )
+  // Its workflow tools, so a call of one shows as the run it starts.
+  const workflows = React.useMemo(
+    () => workflowNamesOf(record.document),
+    [record.document]
+  )
   const [values, setValues] = React.useState<Record<string, string>>({})
   // What the next message sends, read as it's sent.
   const latest = React.useRef(values)
@@ -104,6 +112,8 @@ export function ChatAgentTestPanel({
             userId={userId}
             organizationId={record.organization_id}
             name={record.document.name}
+            agents={agents}
+            workflows={workflows}
             state={() => stateDelta(fields, latest.current)}
           />
         ) : (
@@ -121,12 +131,18 @@ function TestChat({
   userId,
   organizationId,
   name,
+  agents,
+  workflows,
   state,
 }: {
   appName: string
   userId: string
   organizationId: string
   name: string
+  /** Its agents by ADK name, as the canvas names them. */
+  agents: Record<string, string>
+  /** Its workflow tools by ADK name, as the canvas names them. */
+  workflows: Record<string, string>
   state: () => Record<string, unknown>
 }) {
   // Its knowledge base tools' passages, cited in its answers; each opens in
@@ -149,20 +165,43 @@ function TestChat({
     // As a chat would show them: a few questions to ask next, after each reply.
     suggestFollowUps: true,
   })
+  // Its workflow tools' calls, each drawn as the run it starts; the run's
+  // page opens from the card.
+  const follower = React.useMemo(
+    () =>
+      workflowRunFollower({
+        url: RUNTIME_URL!,
+        appName,
+        userId,
+        headers: consoleHeaders,
+        names: workflows,
+        runHref: (runId) =>
+          `/organizations/${encodeURIComponent(organizationId)}?view=agents&agentRun=${encodeURIComponent(runId)}`,
+      }),
+    [appName, userId, workflows, organizationId]
+  )
+  const toolkit = React.useMemo(
+    () => workflowRunToolkit(workflows),
+    [workflows]
+  )
   return (
-    <AssistantProvider
-      runtime={runtime}
-      artifacts={artifacts}
-      sources={sources}
-      title={name || "Agent"}
-      welcome={{
-        title: `Talk to ${name || "the agent"}`,
-        description:
-          "Each message runs it as a chat would, with the state above.",
-      }}
-    >
-      <AssistantThread />
-    </AssistantProvider>
+    <WorkflowRunsContext.Provider value={follower}>
+      <AssistantProvider
+        runtime={runtime}
+        toolkit={toolkit}
+        artifacts={artifacts}
+        sources={sources}
+        title={name || "Agent"}
+        agents={agents}
+        welcome={{
+          title: `Talk to ${name || "the agent"}`,
+          description:
+            "Each message runs it as a chat would, with the state above.",
+        }}
+      >
+        <AssistantThread />
+      </AssistantProvider>
+    </WorkflowRunsContext.Provider>
   )
 }
 

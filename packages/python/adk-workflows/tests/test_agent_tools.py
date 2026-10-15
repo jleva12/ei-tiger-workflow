@@ -136,7 +136,7 @@ def with_tools(
     code: Any = None,
     answer: Callable[..., Any] | None = None,
     workflow_wait: float = 120.0,
-    code_execution: str = "off",
+    sandbox_mode: str = "off",
 ) -> Worker:
     """A worker whose LLM agents run on ``llm``, their tools on fakes."""
     models = ProviderModels(PROVIDERS, build=lambda _call: llm)
@@ -147,7 +147,7 @@ def with_tools(
             environment={},
             allowed_hosts=("api.example.com",),
             mcp_servers=servers,
-            code_executor=code_executor(code_execution),
+            code_executor=code_executor(sandbox_mode),
         ),
         http=w.task.services.http,
         search=search,
@@ -232,7 +232,7 @@ async def test_an_http_tools_url_and_body_read_the_runs_data(sessions: DatabaseS
 
 async def test_an_llm_agent_runs_code_and_reads_what_it_printed(sessions: DatabaseSessionService) -> None:
     llm = ScriptedLlm(turns=[[call("calculate", code="print(sum(range(1, 101)))")], [text("5050")]])
-    w = with_tools(sessions, llm, code_execution="local")
+    w = with_tools(sessions, llm, sandbox_mode="local")
     code = tool("tool_code", "code_execution", "Calculate")
     document = line(node("helper", "llm", llm_config(tools=[code])), end("done", "steps.helper.output"))
 

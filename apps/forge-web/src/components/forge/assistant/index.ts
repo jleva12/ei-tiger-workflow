@@ -22,6 +22,11 @@ export {
 } from "./adk"
 export { adkToolkit } from "./adk-toolkit"
 export {
+  DocumentAttachmentAdapter,
+  MAX_DOCUMENT_BYTES,
+  defaultAttachments,
+} from "./attachments"
+export {
   CONTEXT_STATE_PREFIX,
   contextView,
   currentContext,

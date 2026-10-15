@@ -26,12 +26,14 @@ from forge_task_adk_workflows.run_store import (
     SUCCEEDED,
     WAITING,
     Renewal,
+    open_gates,
     runs,
 )
 from forge_tasks.control import JobControl
 from forge_tasks.errors import TransientError
 
 from .conftest import BOB, START, FakeJob, Worker, at
+from .toy_tasks import nothing as jobs_nothing
 
 STEP = {"do": "step"}
 HOOK = {"do": "hook"}
@@ -169,6 +171,44 @@ async def test_an_approval_pauses_the_run_until_someone_decides(worker: Worker) 
         "succeeded",
     ]
     assert worker.task.attempts == [run["id"], run["id"]]
+
+
+async def test_a_run_waits_at_several_gates_each_decided_on_its_own(worker: Worker) -> None:
+    run = await worker.start({"do": "board", "choices": 3, "timeout": 3600})
+
+    assert await worker.run(run["id"]) == "paused"
+
+    first, second, third = open_gates(await worker.get(run["id"]))
+    assert [gate["key"] for gate in (first, second, third)] == ["gate-0-0", "gate-0-1", "gate-0-2"]
+    # Each gate's expiry, at its deadline.
+    assert [(f, kwargs["pause_id"]) for f, kwargs in worker.sent] == [
+        ("expire_pause", first["id"]),
+        ("expire_pause", second["id"]),
+        ("expire_pause", third["id"]),
+    ]
+
+    # The last decided: the run carries on, and waits at the others again,
+    # under the same IDs, their expiry queued already.
+    await worker.store.decide(run["id"], request_id=third["id"], approved=False, comment="", actor=BOB)
+    assert await worker.run(run["id"]) == "paused"
+    assert [gate["id"] for gate in open_gates(await worker.get(run["id"]))] == [first["id"], second["id"]]
+    assert len(worker.sent) == 3
+
+    # The first decided while the run runs (with the second's decision): its
+    # pause queues it again instead.
+    async def decide_meanwhile(control: JobControl, index: int) -> None:
+        await worker.store.decide(run["id"], request_id=first["id"], approved=True, comment="", actor=BOB)
+
+    worker.task.hook = decide_meanwhile
+    await worker.store.decide(run["id"], request_id=second["id"], approved=True, comment="", actor=BOB)
+    assert await worker.run(run["id"]) == "queued"
+    assert (await worker.get(run["id"]))["status"] == QUEUED
+    assert worker.sent[-1][0] == "run_adk"
+
+    worker.task.hook = jobs_nothing
+    assert await worker.run(run["id"]) == "succeeded"
+    said = (await worker.get(run["id"]))["result"]["said"]
+    assert said == [{"gate-0-0": True, "gate-0-1": True, "gate-0-2": False}]
 
 
 async def test_a_question_pauses_the_run_until_someone_answers(worker: Worker) -> None:

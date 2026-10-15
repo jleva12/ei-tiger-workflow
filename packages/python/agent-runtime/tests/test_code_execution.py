@@ -3,6 +3,8 @@ from typing import Any, cast
 
 import pytest
 from google.adk.agents import LlmAgent
+from google.adk.code_executors.base_code_executor import BaseCodeExecutor
+from google.adk.code_executors.code_execution_utils import CodeExecutionInput, CodeExecutionResult
 from google.adk.code_executors.unsafe_local_code_executor import UnsafeLocalCodeExecutor
 
 from forge_agent_runtime.build import BuildError, build_app, build_tools
@@ -11,6 +13,8 @@ from forge_agent_runtime.document import parse_document
 from forge_agent_runtime.services import RuntimeServices
 from forge_agent_runtime.tools import GuardedTools
 from forge_common.adk import ToolFailure
+from forge_common.sandbox import OpenShellSettings, SandboxUnavailable
+from forge_common.sandbox.openshell import OpenShellCodeExecutor
 from tests.conftest import EXAMPLE_HOSTS
 
 
@@ -36,11 +40,20 @@ def with_code(example: dict[str, Any], **config: Any) -> dict[str, Any]:
     return doc
 
 
-def test_code_runs_on_this_machine_only_when_the_deployment_says_so():
+def test_code_runs_where_the_deployments_sandbox_mode_says():
     assert code_executor("off") is None
     local = code_executor("local")
     assert isinstance(local, UnsafeLocalCodeExecutor)
     assert local.timeout_seconds == CODE_SECONDS
+
+    # In a new OpenShell sandbox for each call, on the gateway the settings
+    # name (the gateway is reached on the first call, not here).
+    sandboxed = code_executor("openshell", OpenShellSettings(gateway="openshell", image="python:3.13-slim"))
+    assert isinstance(sandboxed, OpenShellCodeExecutor)
+    assert sandboxed.timeout_seconds == CODE_SECONDS
+    assert sandboxed.settings.gateway == "openshell" and sandboxed.client is None
+    default = code_executor("openshell")
+    assert isinstance(default, OpenShellCodeExecutor) and default.settings == OpenShellSettings()
 
 
 async def test_an_agent_with_code_execution_gets_a_tool_that_runs_its_code(example, models, web):
@@ -102,3 +115,19 @@ async def test_the_tool_answers_with_what_the_code_printed_and_its_errors():
 
     with pytest.raises(ToolFailure, match="Python program"):
         await tool.run_async(args={"code": "  "}, tool_context=CONTEXT)
+
+
+class Unavailable(BaseCodeExecutor):
+    """A sandbox that can't be had."""
+
+    def execute_code(
+        self, invocation_context: Any, code_execution_input: CodeExecutionInput
+    ) -> CodeExecutionResult:
+        raise SandboxUnavailable("The OpenShell sandbox didn't start: ControlSupervisorStartFailed")
+
+
+async def test_a_sandbox_that_cant_be_had_fails_the_call_without_inviting_a_retry():
+    tool = CodeTool(name="run_code", executor=Unavailable())
+    with pytest.raises(ToolFailure, match="didn't run: The OpenShell sandbox didn't start") as failed:
+        await tool.run_async(args={"code": "print(1)"}, tool_context=CONTEXT)
+    assert "Don't send it again" in failed.value.suggested_fixes[0]

@@ -17,10 +17,10 @@ dependencies = [
     # logging with request ids (forge_common.logging); and runs' inputs and
     # answers held to their JSON Schemas with the patterns bounded in time and
     # off the interpreter lock (forge_common.patterns).
-    "forge-common[adk,adk-models,logging,patterns]",
+    "forge-common[adk,adk-models,logging,patterns,sandbox]",
     # Organizations' chat agents, run by ID (packages/python/agent-runtime):
     # built from their documents and served over ADK's run API and A2A.
-    "forge-agent-runtime[server,a2a]",
+    "forge-agent-runtime[server,a2a,openshell]",
     # ADK workflows are built as the async worker runs them, to check them
     # before a run; runs are kept by its run store, and a run's steps are
     # read from its ADK session (packages/python/adk-workflows).

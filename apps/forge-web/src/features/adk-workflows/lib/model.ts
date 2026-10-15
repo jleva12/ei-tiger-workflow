@@ -160,6 +160,7 @@ export type SubAgent<K extends SubAgentKind = SubAgentKind> = {
  */
 export const FORGE_KINDS = [
   "approval",
+  "decision_board",
   "http",
   "bash",
   "transform",
@@ -331,6 +332,7 @@ export function outputsOf(step: AgentStep): StepOutput[] {
 /** The Forge steps a run can wait at: a person deciding, or time passing. */
 export const PAUSING_KINDS = new Set<AgentKind>([
   "approval",
+  "decision_board",
   "human_input",
   "delay",
 ])

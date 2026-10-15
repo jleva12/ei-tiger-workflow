@@ -95,5 +95,31 @@ class CodeGraphTemplatesTest(unittest.TestCase):
         self.assertNotIn("CODEGRAPH_SEARCH_ENHANCE_QUERY", worker)
 
 
+class SandboxTemplatesTest(unittest.TestCase):
+    def test_every_app_running_agents_names_the_shared_sandbox(self):
+        # Chat agents (the admin API) and workflows' agents (the async
+        # worker) run code in the one sandbox mode, on the one OpenShell
+        # gateway, from .env.common, as make env sets them; off by default.
+        common = env_file(ROOT / ".env.common.example")
+        self.assertEqual(common["FORGE_AGENT_SANDBOX_MODE"], "off")
+        self.assertEqual(common["FORGE_OPENSHELL_WORKSPACE"], "default")
+        for path, mode, openshell in (
+            ("apps/forge-admin-api/.env.example", "FORGE_ADMIN_AGENT_SANDBOX_MODE", "FORGE_ADMIN_AGENT_OPENSHELL__"),
+            (
+                "apps/forge-async-worker/.env.example",
+                "HYBRID_ADK_WORKFLOWS__AGENT_SANDBOX_MODE",
+                "HYBRID_ADK_WORKFLOWS__OPENSHELL__",
+            ),
+        ):
+            template = env_file(ROOT / path)
+            with self.subTest(template=path):
+                self.assertEqual(template.get(mode), "${FORGE_AGENT_SANDBOX_MODE}")
+                for setting in ("GATEWAY", "TLS_DIR", "TOKEN", "WORKSPACE", "IMAGE", "POLICY"):
+                    self.assertIn("FORGE_OPENSHELL_" + setting, common)
+                    self.assertEqual(template.get(openshell + setting), "${FORGE_OPENSHELL_" + setting + "}")
+                # The apps' own settings from before it are gone.
+                self.assertFalse([key for key in template if key.endswith("CODE_EXECUTION")])
+
+
 if __name__ == "__main__":
     unittest.main()

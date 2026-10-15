@@ -140,6 +140,8 @@ class AdkWorkflowsTask:
     async def close(self) -> None:
         if self.services.http is not None:
             await self.services.http.aclose()
+        if self.services.command_sandbox is not None:
+            self.services.command_sandbox.close()
         agents = self.services.agents
         code = getattr(agents, "code", None)
         if code is not None:
@@ -226,7 +228,7 @@ def build_agent_services(
         allowed_hosts=tuple(settings.http_allowed_hosts),
         max_response_bytes=settings.http_max_response_bytes,
         model_timeout=settings.model_timeout,
-        code_executor=code_executor(settings.code_execution),
+        code_executor=code_executor(settings.agent_sandbox_mode, settings.openshell),
         mcp_servers=WorkerMcpServers(
             servers,
             store,

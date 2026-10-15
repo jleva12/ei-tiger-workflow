@@ -21,7 +21,7 @@ dependencies = [
     # ProviderModels, model_provider.yaml, ForgeBaseToolset; state schemas'
     # patterns, bounded in time and off the interpreter lock (forge_common.patterns);
     # and MCP tools' results held to their output schemas so (forge_common.mcp)
-    "forge-common[adk,adk-models,mcp,patterns]",
+    "forge-common[adk,adk-models,mcp,patterns,sandbox]",
     "forge-jsonata",                  # instructions' {{ }} templates are JSONata
     # Skills tools: SkillToolset's eager discovery (skills.skill_toolset)
     "google-adk>=2.10.0",
@@ -48,6 +48,8 @@ artifacts-s3 = ["forge-common[adk-artifacts-s3]"]
 # Conversations in PostgreSQL or MySQL (SQLite's driver comes with server)
 sessions-postgres = ["asyncpg>=0.30"]
 sessions-mysql = ["aiomysql>=0.2"]
+# Agents' code in NVIDIA OpenShell sandboxes (FORGE_AGENT_SANDBOX_MODE=openshell)
+openshell = ["forge-common[sandbox-openshell]"]
 
 [project.scripts]
 forge-agent = "forge_agent_runtime.cli:main"
@@ -57,7 +59,7 @@ requires = ["uv_build>=0.11.17,<0.12.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = ["forge-agent-runtime[server,a2a]"]
+dev = ["forge-agent-runtime[server,a2a,openshell]"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

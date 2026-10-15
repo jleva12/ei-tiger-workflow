@@ -9,7 +9,7 @@ dependencies = [
   "forge-jsonata",                    # every expression in a document is JSONata, evaluated here in Python
   # ADK, the models of the shared model_provider.yaml, artifacts in S3 (runs' files), and documents'
   # regular expressions, bounded in time and off the interpreter lock (forge_common.patterns)
-  "forge-common[adk,adk-models,adk-artifacts-s3,patterns]",
+  "forge-common[adk,adk-models,adk-artifacts-s3,patterns,sandbox]",
   "google-adk>=2.9.2",
   "pydantic>=2.7",
   "jsonschema>=4.23",
@@ -17,7 +17,7 @@ dependencies = [
   "sqlalchemy[asyncio]>=2.0",         # sessions in the admin MySQL: ADK's DatabaseSessionService (async: greenlet)
   "aiomysql>=0.2",
   # LLM agents' tools and agents from the Agents page, built as the hosted runtime builds them
-  "forge-agent-runtime",
+  "forge-agent-runtime[openshell]",
   # The organization's MCP servers, connected with their credentials (the admin's, shared)
   "forge-mcp-servers",
   # System design knowledge bases: their code searched as the admin API searches it

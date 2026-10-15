@@ -71,13 +71,14 @@ def test_on_mysql_it_makes_the_run_stores_tables() -> None:
 
 #: The run store's columns and indexes later migrations added
 #: (0012adk_run_versions, 0020adk_run_control, 0021adk_run_children,
-#: 0022adk_run_backoff).
+#: 0022adk_run_backoff, 0026adk_run_gates).
 LATER = (
     "version",
     "lease_epoch",
     "cancel_requested_at",
     "parent_run_id",
     "next_attempt_at",
+    "gates",
 )
 LATER_INDEXES = ("ix_adk_runs_parent",)
 

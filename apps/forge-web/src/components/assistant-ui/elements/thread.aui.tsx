@@ -115,6 +115,8 @@ export type ThreadComponents = {
    * follow-up suggestions, e.g. ones a server writes.
    */
   FollowUps?: ComponentType | undefined
+  /** Under the composer, e.g. a note that answers can be wrong. */
+  ComposerFooter?: ComponentType | undefined
 }
 
 const messageGroupBy = groupPartByType({
@@ -234,8 +236,11 @@ const ThreadRoot: FC<{
   placeholder: string
   composer: boolean
 }> = ({ isEmpty, autoFocus, placeholder, composer }) => {
-  const { Welcome = ThreadWelcome, FollowUps = ThreadFollowupSuggestions } =
-    useContext(ThreadComponentsContext)
+  const {
+    Welcome = ThreadWelcome,
+    FollowUps = ThreadFollowupSuggestions,
+    ComposerFooter,
+  } = useContext(ThreadComponentsContext)
   // A new message scrolls to the top (turnAnchor="top") and its reply fills
   // the space below; once the reply outgrows it, the thread follows it.
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -244,11 +249,13 @@ const ThreadRoot: FC<{
   return (
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root @container flex h-full flex-col bg-background text-sm"
+      // A page around it may set its width and roundness (--chat-thread-width,
+      // --chat-composer-radius), e.g. a chat page's look.
       style={{
-        ["--thread-max-width" as string]: "44rem",
+        ["--thread-max-width" as string]: "var(--chat-thread-width, 44rem)",
         ["--composer-bg" as string]:
           "color-mix(in oklab, var(--color-muted) 30%, transparent)",
-        ["--composer-radius" as string]: "1rem",
+        ["--composer-radius" as string]: "var(--chat-composer-radius, 1rem)",
         ["--composer-padding" as string]: "8px",
       }}
     >
@@ -297,6 +304,7 @@ const ThreadRoot: FC<{
                 >
                   <ThreadSuggestions />
                 </AuiIf>
+                {ComposerFooter && <ComposerFooter />}
               </>
             )}
           </ThreadPrimitive.ViewportFooter>
@@ -888,7 +896,8 @@ const UserMessage: FC = () => {
       <UserMessageAttachments />
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
-        <div className="aui-user-message-content peer rounded-(--composer-radius) bg-muted px-4 py-2 wrap-break-word text-foreground empty:hidden">
+        {/* A page around it may colour these (--chat-user-bubble, --chat-user-text). */}
+        <div className="aui-user-message-content peer rounded-(--composer-radius) bg-[var(--chat-user-bubble,var(--color-muted))] px-4 py-2 wrap-break-word text-[color:var(--chat-user-text,var(--color-foreground))] empty:hidden">
           <MessagePrimitive.Parts
             components={{ File: UserFilePart, Image: UserImagePart }}
           />

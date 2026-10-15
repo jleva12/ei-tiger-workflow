@@ -37,7 +37,12 @@ def test_the_workflow_catalog_lists_every_kind_the_worker_builds(
         "setting": "cases",
         "label": "value",
         "empty": "Empty value",
+        "ways": None,
     }
+    # A board's choice has two ways out of its own.
+    board = next(kind for kind in catalog["kinds"] if kind["kind"] == "decision_board")
+    assert [way["id"] for way in board["rows"]["ways"]] == ["accepted", "rejected"]
+    assert board["person"] is True
     assert switch["outputs"] == [
         {
             "id": "default",

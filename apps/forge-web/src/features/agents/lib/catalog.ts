@@ -55,6 +55,7 @@ const SET_UP: Record<ChatKind, true> = {
   adk_workflow: true,
   code_execution: true,
   skills: true,
+  rich_answers: true,
 }
 
 const catalog = kindCatalog<ChatKind, ChatCatalogKind>(

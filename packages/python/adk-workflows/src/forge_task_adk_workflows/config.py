@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from forge_codegraph_query import CodeGraphSettings
+from forge_common.sandbox import OpenShellSettings, SandboxMode
 from pydantic import BaseModel, Field, SecretStr, field_validator
 
 
@@ -87,15 +88,30 @@ class AdkWorkflowsSettings(BaseModel):
     # isn't there. Unset, such a run fails saying so.
     workspaces: str | None = None
     # Where Bash steps run their commands: off (a run with one fails before it
-    # starts), or local: bash on this worker's machine, as the worker's user,
+    # starts); local: bash on this worker's machine, as the worker's user,
     # starting in a folder of the run's own, with its network and whatever
-    # its user may read and write. The command gets PATH, HOME, the locale and
+    # its user may read and write (the command gets PATH, HOME, the locale and
     # the variables tool_environment lists, not the rest of the worker's
-    # environment; it isn't sandboxed, so only for workflows whose authors you
-    # trust with this machine. What it writes to stdout and stderr is kept up
-    # to this many bytes each (the end of it).
-    commands: Literal["off", "local"] = "off"
+    # environment), not sandboxed, so only for workflows whose authors you
+    # trust with this machine; or openshell: bash in a new sandbox for each
+    # command on the OpenShell gateway in openshell (FORGE_OPENSHELL_*), the
+    # run's folder copied in and its changes copied back
+    # (forge_task_adk_workflows.support.sandbox_commands). What it writes to
+    # stdout and stderr is kept up to this many bytes each (the end of it).
+    commands: Literal["off", "local", "openshell"] = "off"
     command_max_output_bytes: int = Field(default=1024 * 1024, gt=0)
+    # openshell's sandboxes for Bash steps: their image, which needs bash and
+    # tar (empty: openshell's image, else the gateway's default); their policy
+    # file (OpenShell's SandboxPolicy, YAML or JSON; empty: openshell's
+    # policy, else no network, the system read-only, /sandbox and /tmp
+    # writable); the hosts any program in them may reach besides (host or
+    # host:port, 443 by default; *.example.com for a domain's), e.g.
+    # ["github.com"] for git clone over HTTPS; and the most the run's folder
+    # may hold, copied in and back out.
+    command_image: str = ""
+    command_policy: str = ""
+    command_allowed_hosts: list[str] = Field(default_factory=list)
+    command_max_folder_bytes: int = Field(default=1024 * 1024 * 1024, gt=0)
 
     # LLM agents' tools (the Agents builder's: MCP servers, knowledge bases,
     # HTTP tools, OpenAPI specs, agents, workflows). The key the organization's
@@ -112,11 +128,15 @@ class AdkWorkflowsSettings(BaseModel):
     # never send the worker's own secrets anywhere. Put API keys and tokens
     # in the organization's credentials instead (the same key decrypts them).
     tool_environment: list[str] = Field(default_factory=list)
-    # Where LLM agents' Code execution tools run the code they send: off (a
-    # step whose agent has one fails), or local: ADK's UnsafeLocalCodeExecutor,
-    # a new Python process on this worker's machine for each call, with the
-    # worker's environment, files and network. Local development only.
-    code_execution: Literal["off", "local"] = "off"
+    # Where LLM agents' Code execution tools (and skills' scripts) run the
+    # code they send, as .env.common's FORGE_AGENT_SANDBOX_MODE says: off (a
+    # step whose agent has one fails); local: ADK's UnsafeLocalCodeExecutor, a
+    # new Python process on this worker's machine for each call, with the
+    # worker's environment, files and network (local development only); or
+    # openshell: a new sandbox for each call on the OpenShell gateway in
+    # openshell (FORGE_OPENSHELL_*), confined by its policy, then deleted.
+    agent_sandbox_mode: SandboxMode = "off"
+    openshell: OpenShellSettings = OpenShellSettings()
     # Pi agent steps: pi, the coding agent (pi.dev, forge_pi_agent), run on
     # this worker's machine in the run's folder, with the built-in tools each
     # step allows, on the steps' models: off (such a step fails) or local. Its

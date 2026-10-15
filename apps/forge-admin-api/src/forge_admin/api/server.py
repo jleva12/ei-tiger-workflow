@@ -27,7 +27,8 @@ from forge_admin.api.routes import health, info
 from forge_admin.assistant.runtime import AgentRuntime
 from forge_admin.auth.authorization import create_enforcer
 from forge_admin.auth.runtime_access import runtime_dependencies
-from forge_admin.auth.security import authenticate
+from forge_admin.auth.security import authenticate, identify
+from forge_admin.chat_agents import pages as chat_pages
 from forge_admin.chat_agents import runtime as chat_agent_runtime
 from forge_admin.chat_agents.source import create_executor
 from forge_admin.chat_agents.store import ChatAgentStore
@@ -176,6 +177,11 @@ class ApiServer:
         # Tests set their own (a scripted model, in-memory sessions).
         if getattr(app.state, "agents", None) is None:
             app.state.agents = AgentRuntime.create(self.settings, engine, app)
+        # ADK workflow runs' sessions, which the async worker's ADK workflows
+        # task keeps in this database too: a run's steps are read from them.
+        # Tests set their own.
+        if getattr(app.state, "adk_run_sessions", None) is None:
+            app.state.adk_run_sessions = DatabaseSessionService(db_engine=engine)
         # Organizations' chat agents (drafts and published versions) in MongoDB,
         # and the runtime that runs them by ID; None without MongoDB. Tests set
         # their own.
@@ -195,6 +201,7 @@ class ApiServer:
                     queue=app.state.embedding,
                     knowledge_search=app.state.knowledge_search,
                     codegraph=app.state.codegraph,
+                    run_sessions=app.state.adk_run_sessions,
                 )
                 if app.state.chat_agents is not None
                 else None
@@ -203,11 +210,6 @@ class ApiServer:
         # set their own.
         if getattr(app.state, "a2a_tasks", None) is None:
             app.state.a2a_tasks = task_store(engine)
-        # ADK workflow runs' sessions, which the async worker's ADK workflows
-        # task keeps in this database too: a run's steps are read from them.
-        # Tests set their own.
-        if getattr(app.state, "adk_run_sessions", None) is None:
-            app.state.adk_run_sessions = DatabaseSessionService(db_engine=engine)
         # The files workflow runs start with: ADK artifacts of their sessions,
         # where the async worker's runs keep theirs; None when not set up.
         # Tests set their own.
@@ -286,6 +288,15 @@ class ApiServer:
             workflow_runtime.router,
             prefix=f"{self.settings.api_prefix}/runtime",
             dependencies=runtime,
+        )
+        # Chat agents shared as chat pages: the link is the credential, so
+        # they answer whether or not the runtime is public, to anyone who
+        # has it (forge_admin.chat_agents.pages).
+        app.include_router(
+            chat_pages.router,
+            prefix=f"{self.settings.api_prefix}/runtime",
+            dependencies=[Depends(identify)],
+            tags=["chat pages"],
         )
         return app
 

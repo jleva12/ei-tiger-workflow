@@ -2554,6 +2554,11 @@
           "target": "@components/forge/assistant/assistant-screen.tsx"
         },
         {
+          "path": "src/components/forge/assistant/attachments.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/attachments.ts"
+        },
+        {
           "path": "src/components/forge/assistant/commands.tsx",
           "type": "registry:component",
           "target": "@components/forge/assistant/commands.tsx"
@@ -2582,6 +2587,11 @@
           "path": "src/components/forge/assistant/model-settings.ts",
           "type": "registry:component",
           "target": "@components/forge/assistant/model-settings.ts"
+        },
+        {
+          "path": "src/components/forge/assistant/session-titles.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/session-titles.ts"
         },
         {
           "path": "src/components/forge/assistant/source-refs.ts",

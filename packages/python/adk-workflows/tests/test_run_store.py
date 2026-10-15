@@ -27,6 +27,8 @@ from forge_task_adk_workflows.run_store import (
     NotOpen,
     RunStore,
     metadata,
+    open_gates,
+    overdue_gates,
     runs,
 )
 
@@ -58,6 +60,25 @@ async def store(clock: Clock) -> AsyncIterator[RunStore]:
         await conn.run_sync(metadata.create_all)
     yield RunStore(engine, clock=clock)
     await engine.dispose()
+
+
+def gate(
+    key: str,
+    *,
+    kind: str = "approval",
+    reason: str = "?",
+    details: dict | None = None,
+    deadline: datetime | None = None,
+) -> dict:
+    """A gate as a worker pauses a run at it."""
+    return {"key": key, "kind": kind, "reason": reason, "details": details or {}, "deadline": deadline}
+
+
+async def opened(store: RunStore, run_id: str, *, gates: list[dict], state: dict | None = None, **options) -> list:
+    """The run's open gates, once w1 paused it at ``gates``."""
+    found = await store.pause(run_id, owner="w1", state=state or {}, gates=gates, **options)
+    assert found is not None
+    return found
 
 
 async def started(store: RunStore, *, organization: str = "org-1", agent: str = "ag-1") -> dict:
@@ -124,9 +145,7 @@ async def test_a_worker_whose_lease_ran_out_cant_write_though_nobody_took_the_ru
     with pytest.raises(LostLease):
         await store.finish(run["id"], owner="w1", state=None, succeeded=True)
     with pytest.raises(LostLease):
-        await store.pause(
-            run["id"], owner="w1", state={}, key="gate", kind="approval", reason="?", details={}, deadline=None
-        )
+        await store.pause(run["id"], owner="w1", state={}, gates=[gate("gate")])
     assert not await store.renew(run["id"], owner="w1", lease_seconds=60)  # not brought back to life
     assert await store.requeue(run["id"], owner="w1", error={"message": "A hiccup", "category": "transient"}) is None
     with pytest.raises(NotAllowed, match="isn't running"):
@@ -141,15 +160,18 @@ async def test_a_worker_whose_lease_ran_out_cant_write_though_nobody_took_the_ru
 async def test_a_paused_run_carries_on_once_decided(store: RunStore) -> None:
     run = await started(store)
     await store.claim(run["id"], owner="w1", lease_seconds=60)
-    pause = await store.pause(
+    [pause] = await opened(
+        store,
         run["id"],
-        owner="w1",
         state={"where": "approval"},
-        key="gate-1",
-        kind="approval",
-        reason="Refund 40 EUR?",
-        details={"step_name": "Approve the refund", "approvers": "org:admin"},
-        deadline=START + timedelta(hours=1),
+        gates=[
+            gate(
+                "gate-1",
+                reason="Refund 40 EUR?",
+                details={"step_name": "Approve the refund", "approvers": "org:admin"},
+                deadline=START + timedelta(hours=1),
+            )
+        ],
     )
     paused = await store.get(run["id"])
     assert paused["status"] == PAUSED and paused["lease_owner"] is None
@@ -169,15 +191,8 @@ async def test_a_paused_run_carries_on_once_decided(store: RunStore) -> None:
 async def test_an_approval_nobody_decided_in_time_is_rejected(store: RunStore, clock: Clock) -> None:
     run = await started(store)
     await store.claim(run["id"], owner="w1", lease_seconds=60)
-    pause = await store.pause(
-        run["id"],
-        owner="w1",
-        state={},
-        key="gate-1",
-        kind="approval",
-        reason="Ship it?",
-        details={},
-        deadline=START + timedelta(minutes=5),
+    [pause] = await opened(
+        store, run["id"], gates=[gate("gate-1", reason="Ship it?", deadline=START + timedelta(minutes=5))]
     )
     assert await store.overdue() == []
     clock.advance(301)
@@ -188,6 +203,85 @@ async def test_an_approval_nobody_decided_in_time_is_rejected(store: RunStore, c
     assert timed_out["decisions"]["gate-1"]["actor_id"] is None
     assert (await store.events(run["id"]))[-1]["kind"] == "timed_out"
     assert await store.time_out(run["id"], pause_id=pause["id"], comment="again") is None
+
+
+async def test_a_run_waits_at_several_gates_each_decided_on_its_own(store: RunStore, clock: Clock) -> None:
+    run = await started(store)
+    await store.claim(run["id"], owner="w1", lease_seconds=60)
+    ship, hold, ask = await opened(
+        store,
+        run["id"],
+        gates=[gate("ship", reason="Ship?"), gate("hold", reason="Hold?"), gate("ask", kind="human_input")],
+    )
+    paused = await store.get(run["id"])
+    assert paused["status"] == PAUSED and paused["pause"]["id"] == ship["id"]
+    assert [g["key"] for g in open_gates(paused)] == ["ship", "hold", "ask"]
+
+    # Any of them, in any order: the run is queued with it, the others stay open.
+    decided = await store.decide(run["id"], request_id=hold["id"], approved=False, comment="", actor=BOB)
+    assert decided["status"] == QUEUED and decided["pause"] is None
+    assert [g["key"] for g in open_gates(decided)] == ["ship", "ask"]
+    # Decided while it's queued, or running: kept for its next attempt.
+    clock.advance(1)
+    assert (await store.decide(run["id"], request_id=ask["id"], approved=True, comment="{}", actor=BOB))[
+        "status"
+    ] == QUEUED
+    await store.claim(run["id"], owner="w1", lease_seconds=60)
+    with pytest.raises(NotOpen):
+        await store.decide(run["id"], request_id=hold["id"], approved=True, comment="", actor=BOB)
+    running = await store.decide(run["id"], request_id=ship["id"], approved=True, comment="", actor=BOB)
+    assert running["status"] == RUNNING and open_gates(running) == []
+    assert set(running["decisions"]) == {"ship", "hold", "ask"}
+
+    # Its attempt read the decisions before ship's was made: pausing at it
+    # queues the run again instead, for the next attempt to read it.
+    assert await store.pause(run["id"], owner="w1", state={"n": 2}, gates=[gate("ship"), gate("more")]) is None
+    again = await store.get(run["id"])
+    assert (again["status"], again["state"], again["lease_owner"]) == (QUEUED, {"n": 2}, None)
+    [more] = open_gates(again)
+    assert more["key"] == "more"
+
+
+async def test_a_gate_still_open_keeps_its_id(store: RunStore, clock: Clock) -> None:
+    run = await started(store)
+    await store.claim(run["id"], owner="w1", lease_seconds=60)
+    first, second = await opened(store, run["id"], gates=[gate("a"), gate("b")])
+    await store.decide(run["id"], request_id=first["id"], approved=True, comment="", actor=BOB)
+    clock.advance(5)
+    await store.claim(run["id"], owner="w1", lease_seconds=60)
+    still, new = await opened(store, run["id"], gates=[gate("b"), gate("c")])
+    assert (still["id"], still["requested_at"]) == (second["id"], second["requested_at"])
+    assert new["id"] not in (first["id"], second["id"])
+    kinds = [(e["kind"], e["message"]) for e in await store.events(run["id"])][-2:]
+    # Only the new one is noted as asked.
+    assert kinds == [("resumed", "A worker carries it on"), ("paused", "Waits for a decision: ?")]
+
+
+async def test_a_run_waiting_for_a_time_at_gates_is_queued_by_a_decision(store: RunStore, clock: Clock) -> None:
+    run = await started(store)
+    await store.claim(run["id"], owner="w1", lease_seconds=60)
+    [only] = await opened(store, run["id"], gates=[gate("a")], until=START + timedelta(hours=1), reason="Delay waits")
+    waiting = await store.get(run["id"])
+    assert (waiting["status"], waiting["pause"], waiting["waiting_reason"]) == (WAITING, None, "Delay waits")
+    decided = await store.decide(run["id"], request_id=only["id"], approved=True, comment="", actor=BOB)
+    assert (decided["status"], decided["waiting_until"]) == (QUEUED, None)
+
+
+async def test_each_gate_past_its_deadline_is_overdue(store: RunStore, clock: Clock) -> None:
+    run = await started(store)
+    await store.claim(run["id"], owner="w1", lease_seconds=60)
+    await opened(
+        store,
+        run["id"],
+        gates=[
+            gate("soon", deadline=START + timedelta(minutes=5)),
+            gate("never"),
+            gate("later", deadline=START + timedelta(hours=1)),
+        ],
+    )
+    clock.advance(301)
+    [late] = await store.overdue()
+    assert [g["key"] for g in overdue_gates(late, clock())] == ["soon"]
 
 
 async def test_a_waiting_run_is_taken_again_when_its_time_comes(store: RunStore, clock: Clock) -> None:
@@ -299,9 +393,7 @@ async def test_a_running_run_abandoned_is_stopped_by_its_worker(store: RunStore)
     with pytest.raises(CancelRequested):
         await store.checkpoint(run["id"], owner="w1", state={"done": 1})
     with pytest.raises(CancelRequested):
-        await store.pause(
-            run["id"], owner="w1", state={}, key="k", kind="approval", reason="Ship?", details={}, deadline=None
-        )
+        await store.pause(run["id"], owner="w1", state={}, gates=[gate("k", reason="Ship?")])
     with pytest.raises(CancelRequested):
         await store.wait(run["id"], owner="w1", state={}, until=START, reason="Later")
     with pytest.raises(CancelRequested):

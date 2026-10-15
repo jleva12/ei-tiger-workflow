@@ -52,8 +52,9 @@ RUN /app/.venv/bin/forge-async-worker prepare
 FROM python:3.13-slim-bookworm AS runtime
 # Tesseract reads scanned PDF pages (the documents task's OCR); add a
 # tesseract-ocr-<lang> pack per extra language in HYBRID_DOCUMENTS__OCR__LANGUAGES.
-# git and gh are for workflows' Bash steps (HYBRID_ADK_WORKFLOWS__COMMANDS=local):
-# cloning repositories into a run's folder.
+# git and gh are for workflows' Bash steps (HYBRID_ADK_WORKFLOWS__COMMANDS=local;
+# with openshell they run in the sandbox's image): cloning repositories into a
+# run's folder.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tesseract-ocr tesseract-ocr-eng git gh \
     && rm -rf /var/lib/apt/lists/* \

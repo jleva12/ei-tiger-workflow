@@ -85,6 +85,7 @@ RUN_FIELDS = {
     "waiting_until",
     "waiting_reason",
     "pause",
+    "gates",
     "error",
     "cancel_requested_at",
     "parent_run_id",
@@ -317,18 +318,55 @@ class Workspace:
     def paused(self, kind: str = "approval", **details: Any) -> dict[str, Any]:
         """A run waiting at an approval, or a question."""
         run = self.claimed()
-        pause = self.call(
+        [pause] = self.call(
             self.runs.pause,
             run["id"],
             owner="w1",
             state={},
-            key="review",
-            kind=kind,
-            reason="Ship it?",
-            details={"kind": kind, "step": "review", "step_name": "Review", **details},
-            deadline=None,
+            gates=[
+                {
+                    "key": "review",
+                    "kind": kind,
+                    "reason": "Ship it?",
+                    "details": {
+                        "kind": kind,
+                        "step": "review",
+                        "step_name": "Review",
+                        **details,
+                    },
+                    "deadline": None,
+                }
+            ],
         )
         return {**run, "request_id": pause["id"]}
+
+    def at_board(self) -> tuple[dict[str, Any], list[str]]:
+        """A run waiting at a Decision board's two choices: their request IDs."""
+        run = self.claimed()
+        board = {"name": "Release", "message": "", "choices": 2}
+        gates = self.call(
+            self.runs.pause,
+            run["id"],
+            owner="w1",
+            state={},
+            gates=[
+                {
+                    "key": key,
+                    "kind": "approval",
+                    "reason": f"{label}?",
+                    "details": {
+                        "kind": "approval",
+                        "step": "board",
+                        "step_name": "Release",
+                        "approvers": "org:member",
+                        "board": {**board, "choice": key, "label": label},
+                    },
+                    "deadline": None,
+                }
+                for key, label in (("ship", "Ship it"), ("tell", "Tell the team"))
+            ],
+        )
+        return run, [str(gate["id"]) for gate in gates]
 
     def finished(self, succeeded: bool) -> dict[str, Any]:
         run = self.claimed()
@@ -861,6 +899,34 @@ def test_approvals_are_decided_by_whom_the_step_names(workspace: Workspace) -> N
         ).status_code
         == 403
     )
+
+
+def test_a_boards_choices_are_each_decided_on_their_own(workspace: Workspace) -> None:
+    run, (ship, tell) = workspace.at_board()
+    decisions = f"{RUNS}/{run['id']}/decisions"
+    paused = workspace.get(f"{RUNS}/{run['id']}").json()
+    assert paused["pause"]["id"] == ship
+    assert [gate["id"] for gate in paused["gates"]] == [ship, tell]
+    assert paused["gates"][1]["details"]["board"]["label"] == "Tell the team"
+
+    # The second first: the run is queued, the first still open.
+    told = workspace.post(decisions, MEMBER, {"request_id": tell, "approved": False})
+    assert told.status_code == 202
+    assert (told.json()["status"], [g["id"] for g in told.json()["gates"]]) == (
+        "queued",
+        [ship],
+    )
+    # Decided while the run is queued (or running): its next attempt reads it.
+    shipped = workspace.post(decisions, MEMBER, {"request_id": ship, "approved": True})
+    assert shipped.status_code == 202
+    assert (shipped.json()["status"], shipped.json()["gates"]) == ("queued", [])
+    kept = workspace.call(workspace.runs.get, run["id"])
+    assert {key: made["approved"] for key, made in kept["decisions"].items()} == {
+        "ship": True,
+        "tell": False,
+    }
+    again = workspace.post(decisions, MEMBER, {"request_id": ship, "approved": False})
+    assert again.status_code == 409
 
 
 def test_a_question_isnt_decided_nor_an_approval_answered(

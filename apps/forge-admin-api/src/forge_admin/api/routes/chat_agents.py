@@ -13,6 +13,8 @@ Reading needs ``organizations:read`` in the organization; anything else needs
   draft; ``DELETE …/draft`` discards it.
 - Published versions are read and exported, never changed: no route here
   changes one. The runtime (``/runtime``) runs them by ID.
+- ``PUT …/chat-page`` shares a published agent as a full-page chat at a
+  link of its own, or stops sharing it (``forge_admin.chat_agents.pages``).
 """
 
 import logging
@@ -35,6 +37,10 @@ from pymongo.errors import PyMongoError
 from forge_admin.api.routes.common import NodeId, Session, name_of
 from forge_admin.auth.access import CurrentUser, Enforcer, Level, Scope, authorize
 from forge_admin.chat_agents.bundle import FindSkills, bundle
+from forge_admin.chat_agents.page_settings import (
+    ChatPageSettings,
+    ChatPageSettingsChange,
+)
 from forge_admin.chat_agents.standalone import (
     model_provider_yaml,
     standalone_document,
@@ -84,6 +90,21 @@ ChatAgentId = Annotated[str, Path(pattern=ID_PATTERN)]
 VersionNumber = Annotated[int, Path(ge=1)]
 
 
+class ChatPageRead(ChatPageSettings):
+    """
+    An agent's chat page: a full-page chat of its latest published version,
+    with its settings (``page_settings``).
+    """
+
+    #: Its link's token: the page is ``/chat/<token>`` in the web console.
+    token: str
+    #: Whether the link answers.
+    enabled: bool
+    updated_at: UtcDateTime
+    updated_by: str
+    updated_by_name: str | None
+
+
 class ChatAgentRead(BaseModel):
     """A chat agent: the document the builder shows, and where it is between draft and published."""
 
@@ -106,6 +127,8 @@ class ChatAgentRead(BaseModel):
     updated_at: UtcDateTime
     updated_by: str
     updated_by_name: str | None
+    #: Its chat page; null when it was never shared as one.
+    chat_page: ChatPageRead | None = None
 
 
 class VersionRead(BaseModel):
@@ -154,6 +177,15 @@ class NewVersion(BaseModel):
 
     #: The published version to start from; the latest when omitted.
     from_version: int | None = Field(default=None, ge=1)
+
+
+class ChatPageChange(ChatPageSettingsChange):
+    """Turning a chat page on or off, a new link, and its settings to change."""
+
+    #: Whether its chat page answers.
+    enabled: bool
+    #: Give it a new link: the old one stops working.
+    new_link: bool = False
 
 
 class Duplicate(BaseModel):
@@ -672,6 +704,54 @@ async def download_standalone(
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{project.name}.zip"'},
     )
+
+
+@router.put(ONE + "/chat-page")
+async def set_chat_page(
+    organization_id: NodeId,
+    agent_id: ChatAgentId,
+    body: ChatPageChange,
+    request: Request,
+    user: CurrentUser,
+    session: Session,
+    enforcer: Enforcer,
+) -> ChatAgentRead:
+    """
+    Share the agent as a full-page chat at a link of its own, or stop. The
+    page runs its latest published version, for anyone who has the link,
+    whether or not the runtime is public. Turning it off keeps the link for
+    turning it on again; ``new_link`` stops the old link for good.
+    \f
+    :raises HTTPException: 403 without agents:manage; 404; 409
+        ``NOT_PUBLISHED`` when turning on a page for an agent never published.
+    """
+    await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
+    name = await name_of(session, user)
+    try:
+        record = await chat_agent_store(request).set_chat_page(
+            organization_id,
+            agent_id,
+            enabled=body.enabled,
+            new_link=body.new_link,
+            by=user,
+            by_name=name,
+            settings=body.changes(),
+        )
+    except ChatAgentState as error:
+        raise _state(error) from None
+    except PyMongoError as error:
+        raise _unavailable(error) from None
+    found = await _found(record)
+    changed = sorted(body.changes())
+    logger.info(
+        "%s turned the chat page of chat agent %s %s%s%s",
+        user,
+        agent_id,
+        "on" if body.enabled else "off",
+        ", with a new link" if body.new_link else "",
+        f", changing {', '.join(changed)}" if changed else "",
+    )
+    return _read(found)
 
 
 @router.post(ONE + "/duplicate", status_code=status.HTTP_201_CREATED)

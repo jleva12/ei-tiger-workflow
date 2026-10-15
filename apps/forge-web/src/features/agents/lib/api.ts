@@ -10,6 +10,7 @@ import { api } from "@/lib/api-instance"
 import { ApiError } from "@/lib/api/index"
 import { useMe } from "@/lib/users"
 import type { ChatAgentDocument } from "./document"
+import type { ChatPageSettings } from "./page-settings"
 
 /*
  * An organization's chat agents, kept by the admin API (in MongoDB) and
@@ -28,6 +29,32 @@ import type { ChatAgentDocument } from "./document"
  */
 
 export type ChatAgentStatus = "draft" | "published" | "published+draft"
+
+/**
+ * A published agent shared as a full-page chat at a link of its own
+ * (`/chat/<token>`): its latest published version, for anyone with the link,
+ * with the page's settings (its words, what it shows, its look).
+ */
+export type ChatPage = ChatPageSettings & {
+  token: string
+  /** Whether the link answers; off keeps it for turning on again. */
+  enabled: boolean
+  updated_at: string
+  updated_by: string
+  updated_by_name: string | null
+}
+
+export { MAX_PAGE_SUGGESTIONS } from "./page-settings"
+
+/**
+ * A change to a chat page: on or off, a new link, and the settings to
+ * change (`suggestions: []` offers none, `accent: null` goes back to
+ * Forge's ink). What's omitted stays as it is.
+ */
+export type ChatPageChange = {
+  enabled: boolean
+  new_link?: boolean
+} & Partial<ChatPageSettings>
 
 export type ChatAgentRecord = {
   id: string
@@ -48,6 +75,8 @@ export type ChatAgentRecord = {
   updated_by: string
   /** Who changed it last, by name as they were then. */
   updated_by_name: string | null
+  /** Its chat page; null when it was never shared as one. */
+  chat_page: ChatPage | null
 }
 
 export type ChatAgentVersion = {
@@ -258,6 +287,23 @@ export function downloadStandalone(
   )
 }
 
+/**
+ * Shares it as a chat page, or stops: off keeps the link for turning on
+ * again; `new_link` stops the old link for good. A 409 (`NOT_PUBLISHED`)
+ * before its first version.
+ */
+export function setChatPage(
+  organizationId: string,
+  id: string,
+  body: ChatPageChange
+) {
+  return api.put<ChatAgentRecord, typeof body>(
+    `${one(organizationId, id)}/chat-page`,
+    body,
+    { silent: true }
+  )
+}
+
 /** A new agent (an ID of its own) whose draft is a copy of this one. */
 export function duplicateChatAgent(
   organizationId: string,
@@ -424,6 +470,42 @@ export function useChatAgentLifecycle(organizationId: string, id: string) {
     meta: { silent: true },
   })
   return { publish, newVersion, discard }
+}
+
+/**
+ * Its chat page as it is now: the builder keeps the record it opened, but
+ * the page changes beside it (`useChatPageSetting`), in the cached detail.
+ */
+export function useChatPage(record: ChatAgentRecord): ChatPage | null {
+  const { data } = useQuery({
+    queryKey: keys.detail(record.organization_id, record.id),
+    queryFn: () => getChatAgent(record.organization_id, record.id),
+    // Only read: the builder's own query fetches it.
+    enabled: false,
+  })
+  return data ? data.chat_page : record.chat_page
+}
+
+/**
+ * Turning its chat page on or off, or giving it a new link. Only the page
+ * changes in the cache: the record the builder saves from stays as it is.
+ */
+export function useChatPageSetting(organizationId: string, id: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (body: ChatPageChange) => setChatPage(organizationId, id, body),
+    onSuccess: ({ chat_page }) => {
+      client.setQueryData<ChatAgentDetail>(
+        keys.detail(organizationId, id),
+        (kept) => kept && { ...kept, chat_page }
+      )
+      client.setQueryData<ChatAgentRecord[]>(
+        keys.list(organizationId),
+        (list) => list?.map((r) => (r.id === id ? { ...r, chat_page } : r))
+      )
+    },
+    meta: { silent: true },
+  })
 }
 
 /** Deleting one. */

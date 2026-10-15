@@ -83,7 +83,22 @@ export type AdkPauseDetails = {
   confirmation?: boolean
   tool?: string
   args?: Record<string, unknown>
+  /** A Decision board's choice: the board, and which of its choices. */
+  board?: BoardChoiceAsked
 } & Record<string, unknown>
+
+/** Which of a Decision board's choices a gate asks, and of what board. */
+export type BoardChoiceAsked = {
+  /** The board step's name. */
+  name: string
+  /** What the board is about, filled in. */
+  message: string
+  /** The choice's ID, and name. */
+  choice: string
+  label: string
+  /** How many choices the board laid out. */
+  choices: number
+}
 
 /** What a paused run waits at: an approval or a question. */
 export type AdkRunPause = {
@@ -140,8 +155,14 @@ export type AdkRun = {
   /** A waiting run carries on by itself then. */
   waiting_until: string | null
   waiting_reason: string | null
-  /** What a paused run waits at. */
+  /** What a paused run waits at first. */
   pause: AdkRunPause | null
+  /**
+   * Every approval and question it waits at, each decided on its own (ways
+   * at an approval each, a Decision board's choices): while it's paused,
+   * waiting for a time, or carrying on meanwhile. Missing from older APIs.
+   */
+  gates?: AdkRunPause[]
   /** Why it failed, or the last hiccup it was retried after. */
   error: AdkRunFailure | null
   /** When someone abandoned it while it ran: its worker stops it, then it's abandoned. */
@@ -600,6 +621,41 @@ export function stepNameOf(
 export const pauseKindOf = (pause: Pick<AdkRunPause, "kind">) =>
   pause.kind === "human_input" ? "human_input" : "approval"
 
+/** Every approval and question an unfinished run waits at, each decided on its own. */
+export function openGatesOf(
+  run: Pick<AdkRun, "status" | "pause" | "gates">
+): AdkRunPause[] {
+  if (["succeeded", "failed", "abandoned"].includes(run.status)) return []
+  if (run.gates) return run.gates
+  return run.status === "paused" && run.pause ? [run.pause] : []
+}
+
+/** What a run waits at, as the page shows it: a board's choices together, else each on its own. */
+export type GateGroup =
+  | { kind: "board"; step: string; gates: AdkRunPause[] }
+  | { kind: "one"; gate: AdkRunPause }
+
+/** The gates, in order, a board's choices grouped by its step where its first is. */
+export function gateGroups(gates: AdkRunPause[]): GateGroup[] {
+  const groups: GateGroup[] = []
+  const boards = new Map<string, AdkRunPause[]>()
+  for (const gate of gates) {
+    const step = gate.details.board ? gate.details.step : undefined
+    if (!step) {
+      groups.push({ kind: "one", gate })
+      continue
+    }
+    const found = boards.get(step)
+    if (found) found.push(gate)
+    else {
+      const list = [gate]
+      boards.set(step, list)
+      groups.push({ kind: "board", step, gates: list })
+    }
+  }
+  return groups
+}
+
 /** The JSON Schema a person's answer is held to; `{}` takes anything. */
 export function responseSchemaOf(
   pause: Pick<AdkRunPause, "details">
@@ -959,7 +1015,22 @@ export function useAdkRunSessionFiles(
 export function useDecideAdkRun(
   organizationId: string,
   runId: string,
-  { meta }: MutationMeta = {}
+  {
+    meta,
+    said = (approved) =>
+      approved
+        ? {
+            title: "Approved.",
+            description: "The run carries on down its approved way.",
+          }
+        : {
+            title: "Rejected.",
+            description: "The run carries on down its rejected way.",
+          },
+  }: MutationMeta & {
+    /** What the toast says once it's decided. */
+    said?: (approved: boolean) => { title: string; description: string }
+  } = {}
 ) {
   const client = useQueryClient()
   return useMutation({
@@ -976,13 +1047,7 @@ export function useDecideAdkRun(
     meta: { errorTitle: "Couldn't record the decision", ...meta },
     onSuccess: async (_, { approved }) => {
       await refreshAdkRuns(client, organizationId, runId)
-      toast.add({
-        title: approved ? "Approved." : "Rejected.",
-        description: approved
-          ? "The run carries on down its approved way."
-          : "The run carries on down its rejected way.",
-        type: "success",
-      })
+      toast.add({ ...said(approved), type: "success" })
     },
   })
 }

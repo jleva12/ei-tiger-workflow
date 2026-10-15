@@ -383,6 +383,9 @@ Below `/api/v1/runtime`, for outside apps; who may call is
 | POST | `/runtime/run_sse`; GET, POST `/runtime/apps/{app}/users/{user}/sessions`… | A chat agent over ADK's run API (`appName` `ca_x`, `ca_x@3`, `ca_x@draft`) |
 | GET | `/runtime/a2a/{app}/.well-known/agent-card.json` | A chat agent's or workflow's A2A card (`ca_…`, `ag_…`) |
 | POST | `/runtime/a2a/{app}` | A2A JSON-RPC, 1.0 and 0.3 |
+| GET | `/runtime/apps/{app}/users/{user}/sessions/{session}/workflow-runs/{call}` (and under `/runtime/pages/{token}`) | How the workflow run a chat's call of a workflow tool started is going, for the person whose conversation it is: its status and the steps it reached, with their times (no inputs or outputs); the chat draws it as a card while the call waits |
+| GET | `/runtime/pages/{token}` | A chat page: the agent shared at a link (`/chat/{token}` in the console), its name, description, the page's settings (`chat_agents/page_settings.py`: words, prompt suggestions, what it hides, follow-ups, theme, accent, message style, corners, font, width), its agents' and workflow tools' names, and `appName` |
+| POST | `/runtime/pages/{token}/run_sse`; GET, POST `/runtime/pages/{token}/apps/{app}/users/{visitor}/sessions`… | The run API through a chat page's link, for anyone who has it, public runtime or not: its agent's latest published version only, into visitors' conversations (`visitor_…`) |
 | GET | `/runtime/workflows/{ref}` | A workflow at a version (`ag_x`, `ag_x@3`, `ag_x@draft`): its name, what it does, the input its start takes |
 | POST | `/runtime/workflows/{ref}/runs` | Run it, `{"input", "wait"?}`: 201 with the run (and `Location`), once it pauses or ends or `wait` runs out |
 | GET | `/runtime/workflows/{ref}/runs/{run}?wait=` | Follow a run |

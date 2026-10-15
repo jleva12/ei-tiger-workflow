@@ -37,6 +37,7 @@ def test_the_document_reads_its_kinds_from_the_catalog() -> None:
         "adk_workflow",
         "code_execution",
         "skills",
+        "rich_answers",
     } == KINDS
     assert {"agent", "sub_agent"} == AGENT_LIKE
     assert {"sub_agent", "saved_agent"} == HANDED_TO
@@ -53,9 +54,10 @@ def test_an_agents_ways_out_are_its_tools_and_who_it_hands_off_to() -> None:
 def test_what_a_tool_may_be_outside_a_canvas() -> None:
     # Any kind but an agent: an agent is only ever on a canvas.
     assert KINDS - {"agent", "sub_agent"} == TOOL_KINDS
-    # A workflow's LLM agent has no memory of past conversations to recall.
+    # A workflow's LLM agent has no memory of past conversations to recall,
+    # nor a chat to draw rich answers in.
     workflow = {kind.kind for kind in CHAT_NODE_CATALOG.kinds if kind.workflow_tool}
-    assert workflow == TOOL_KINDS - {"memory"}
+    assert workflow == TOOL_KINDS - {"memory", "rich_answers"}
 
 
 def test_a_kind_it_doesnt_have_is_refused() -> None:

@@ -735,7 +735,7 @@ function Builder({
           />
           <div className="min-h-0 flex-1 overflow-y-auto">
             <ChatAgentDetails>
-              <RunInfo record={record} />
+              <RunInfo record={record} canManage={canManage} />
             </ChatAgentDetails>
           </div>
           {/* Kept clear for the assistant's launcher, which floats here. */}

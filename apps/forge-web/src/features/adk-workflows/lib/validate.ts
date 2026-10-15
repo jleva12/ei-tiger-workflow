@@ -967,15 +967,18 @@ export function validateAgent(
           const data = byId.get(branching)?.data
           const name = data?.name ?? branching
           // A match taking every rule that holds may take both, but not
-          // always: it would wait for good when one doesn't hold.
+          // always: it would wait for good when one doesn't hold. A board's
+          // choices too, as people decide them.
           const every = data?.kind === "match" && data.config.mode === "all"
           add(
             "error",
             step.id,
             `merge-exclusive-${branching}`,
-            every
-              ? `Its ways in come from different rules of ${name}, and a run takes only the rules that hold, so waiting for all may never go on. Wait for any instead.`
-              : `Its ways in come from different ways out of ${name}, and a run takes only one, so waiting for all would never go on. Wait for any instead.`
+            data?.kind === "decision_board"
+              ? `Its ways in come from different choices of ${name}, and people may reject any of them, so waiting for all may never go on. Wait for any instead, or go on from the board's Done.`
+              : every
+                ? `Its ways in come from different rules of ${name}, and a run takes only the rules that hold, so waiting for all may never go on. Wait for any instead.`
+                : `Its ways in come from different ways out of ${name}, and a run takes only one, so waiting for all would never go on. Wait for any instead.`
           )
         }
       }

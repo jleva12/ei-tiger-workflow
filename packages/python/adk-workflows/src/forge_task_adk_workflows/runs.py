@@ -10,10 +10,14 @@ person's answer, the timer), and every retry.
   control's ``instance_id``, the run store's run ID). A resubmitted run has a
   session of its own; one resubmitted before they did shares its original's,
   as another invocation of it, run afresh.
-- **Pauses.** Its oldest pending pause (``graph.pending_pauses``) is asked of
-  the control, then answered in the session, which resumes the same
-  invocation (``Runner.run_async(invocation_id=...)``). One gate at a time:
-  a run waits at one question at a time.
+- **Pauses.** Its pending pauses (``graph.pending_pauses``) are each asked
+  of the control, oldest first, and answered in the session as they have an
+  answer, one at a time, each resuming the same invocation
+  (``Runner.run_async(invocation_id=...)``): a way whose question is
+  answered carries on while the others still wait. Each gate is decided on
+  its own: once none has an answer, the run waits at every one together
+  (``control.wait_for``), and at the earliest delay too, and any decision
+  carries it on.
 
   - An approval is one of its approval gates (``control.approval``), timed
     out at its deadline. The timeout, or a decision made at or after the
@@ -23,11 +27,10 @@ person's answer, the timer), and every retry.
     as JSON (the admin API held it to the step's response schema). Declined,
     or not JSON, the run fails.
   - A delay whose time has come (or is close enough to sleep in place) is
-    woken; before that, the run lets the worker go until then
-    (``control.wait_until``).
+    woken; before that, the run lets the worker go until then.
 
-  Each gate that isn't decided yet ends the attempt by raising the control's
-  signal, and the decision starts the job again.
+  Gates that aren't decided yet end the attempt by raising the control's
+  signal, and a decision starts the job again.
 
   ADK hands an answer to the newest invocation of the session that asked
   under its ID, so a run whose question another run of its session asked
@@ -135,13 +138,13 @@ from forge_task_adk_workflows.graph.agent_tools import (
 )
 from forge_task_adk_workflows.graph.data import ERROR_KEY
 from forge_task_adk_workflows.graph.factories.base import config_of, items, label_of, text
-from forge_task_adk_workflows.graph.names import BODY_KINDS, FINISH_NODE, adk_name, body_name
+from forge_task_adk_workflows.graph.names import BODY_KINDS, FINISH_NODE, adk_name, body_name, choice_name
 from forge_task_adk_workflows.graph.pauses import REQUEST_CONFIRMATION, REQUEST_INPUT, TOOL_CONFIRMATION
 from forge_task_adk_workflows.graph.uses import agent_ref
 from forge_task_adk_workflows.models import RETRYABLE, UNANSWERED
 from forge_task_adk_workflows.support.commands import NO_COMMANDS
 from forge_task_adk_workflows.workspaces import WorkspaceError, make_workspace, runs_commands, uses_file_system
-from forge_tasks.control import ControlSignal, JobControl
+from forge_tasks.control import ControlSignal, Gate, JobControl
 from forge_tasks.errors import TaskError, TransientError
 from forge_tasks.runner import ok
 from forge_tasks.tasks import JobResult
@@ -489,23 +492,42 @@ class AdkRun:
                 # Its invocation ended, every way of it (_begin carried on one that hadn't).
                 # Without a finish, it ended without reaching an ending that hands one on.
                 return _finish_of(session) or {"outcome": "succeeded", "result": None}
-            pause = pauses[0]
-            step = pause.payload.get("step")
-            if self.askers.get(pause.interrupt_id, self.invocation_id) != self.invocation_id:
-                raise RunFailed(
-                    f"{self._label(pause)}: another run of this session waits at the same step, so the answer "
-                    "would go to that run. Let that run finish or abandon it, then resubmit this one",
-                    step=step,
-                )
-            if pause.interrupt_id in answered:
-                raise RunFailed(
-                    f"{self._label(pause)}: its answer didn't reach the run, so the run stopped instead of "
-                    "answering again",
-                    step=step,
-                )
-            response = await self._answer(pause, session)
-            answered.add(pause.interrupt_id)
-            await self._drive(pause.answer(response))
+            # Each answered on its own, oldest first: the first with an answer
+            # carries its way on, then the session is read again.
+            gates: list[Gate] = []
+            wake: tuple[Pause, datetime] | None = None
+            for pause in pauses:
+                step = pause.payload.get("step")
+                if self.askers.get(pause.interrupt_id, self.invocation_id) != self.invocation_id:
+                    raise RunFailed(
+                        f"{self._label(pause)}: another run of this session waits at the same step, so the answer "
+                        "would go to that run. Let that run finish or abandon it, then resubmit this one",
+                        step=step,
+                    )
+                if pause.interrupt_id in answered:
+                    raise RunFailed(
+                        f"{self._label(pause)}: its answer didn't reach the run, so the run stopped instead of "
+                        "answering again",
+                        step=step,
+                    )
+                found = await self._answer(pause, session)
+                if isinstance(found, Gate):
+                    gates.append(found)
+                elif isinstance(found, datetime):
+                    if wake is None or found < wake[1]:
+                        wake = (pause, found)
+                else:
+                    answered.add(pause.interrupt_id)
+                    await self._drive(pause.answer(found))
+                    break
+            else:
+                # Nothing to answer yet: it waits at every gate, and its earliest delay.
+                until, reason = None, ""
+                if wake is not None:
+                    until = wake[1]
+                    reason = f"{self._label(wake[0])} waits until {until.isoformat(timespec='seconds')}"
+                    await self._note(reason)
+                await self.control.wait_for(gates, until=until, reason=reason)
 
     async def _begin(self, session: Session) -> None:
         """The run starts, if it hasn't; if it stopped mid-way (its invocation
@@ -901,11 +923,13 @@ class AdkRun:
 
     # ------------------------------------------------------------------ pauses
 
-    async def _answer(self, pause: Pause, session: Session) -> dict[str, Any]:
+    async def _answer(self, pause: Pause, session: Session) -> dict[str, Any] | Gate | datetime:
         """
-        The answer to a pause: the timer's, a decision, a person's answer.
+        The answer to a pause, when it has one: the timer's, a decision, a
+        person's answer.
 
-        :raises ControlSignal: It isn't answered yet: the run waits.
+        :return: The answer; or what it still waits for: the gate a person
+            decides, or the time a delay ends.
         :raises RunFailed: Human input declined, or answered with anything but
             a JSON object.
         """
@@ -917,9 +941,7 @@ class AdkRun:
         if pause.kind == "delay":
             due = pause.due or now
             if (due - now).total_seconds() > self.services.inline_delay_seconds:
-                when = due.isoformat(timespec="seconds")
-                await self._note(f"{label} waits until {when}")
-                await self.control.wait_until(due, reason=f"{label} waits until {when}")
+                return due
             return pause.timer_answer()
         details: dict[str, Any] = {
             "step": step,
@@ -934,7 +956,8 @@ class AdkRun:
         if pause.kind == TOOL_CONFIRMATION:
             return await self._confirm(pause, key, details)
         if pause.kind == "approval":
-            decision = await self.control.approval(
+            board = pause.payload.get("board")
+            gate = Gate(
                 key=key,
                 reason=pause.message or f"Approve {step_name or 'this step'}?",
                 details={
@@ -942,9 +965,14 @@ class AdkRun:
                     "approvers": pause.payload.get("approvers"),
                     "expires_at": pause.payload.get("expires_at"),
                     **details,
+                    # A Decision board's choice: the board's step, and which of its choices.
+                    **({"board": board} if isinstance(board, dict) else {}),
                 },
                 timeout_seconds=_seconds_until(pause.due, now),
             )
+            decision = self.control.decided(key)
+            if decision is None:
+                return gate
             # Held to when it was made, not when the run reads it: a decision in
             # time whose job waited past the deadline stands.
             decided_at = _utc(decision.decided_at or self.services.clock())
@@ -960,7 +988,7 @@ class AdkRun:
                 "decided_at": decided_at.isoformat(),
             }
         # Human input, and any other question a node asks.
-        decision = await self.control.approval(
+        gate = Gate(
             key=key,
             reason=pause.message or f"Answer {step_name or 'this step'}",
             details={
@@ -968,8 +996,10 @@ class AdkRun:
                 "response_schema": self.steps.response_schema(node) or _asked_schema(session, pause),
                 **details,
             },
-            timeout_seconds=None,
         )
+        decision = self.control.decided(key)
+        if decision is None:
+            return gate
         who = decision.actor_name or decision.actor_id or ""
         if not decision.approved:
             said = f": {decision.comment}" if decision.comment else ""
@@ -983,7 +1013,7 @@ class AdkRun:
         await self._note(f"{label}: answered by {who or 'someone'}")
         return answer
 
-    async def _confirm(self, pause: Pause, key: str, details: dict[str, Any]) -> dict[str, Any]:
+    async def _confirm(self, pause: Pause, key: str, details: dict[str, Any]) -> dict[str, Any] | Gate:
         """
         A tool a person confirms before it's called: an approval of the call
         (the tool, and what the model would call it with), by the
@@ -992,7 +1022,7 @@ class AdkRun:
         found = self.steps.around(pause.path)
         label, node = found if found else (str(pause.payload.get("agent") or "An agent"), None)
         tool = str(pause.payload.get("tool") or "a tool")
-        decision = await self.control.approval(
+        gate = Gate(
             key=key,
             reason=pause.message,
             details={
@@ -1007,8 +1037,10 @@ class AdkRun:
                 "args": pause.payload.get("args") or {},
                 "confirmation": True,
             },
-            timeout_seconds=None,
         )
+        decision = self.control.decided(key)
+        if decision is None:
+            return gate
         who = decision.actor_name or decision.actor_id or ""
         await self._note(
             f"{label}: calling {tool} {'allowed' if decision.approved else 'refused'} by {who or 'no one'}"
@@ -1016,12 +1048,16 @@ class AdkRun:
         return {"confirmed": decision.approved}
 
     def _label(self, pause: Pause) -> str:
-        """How the run's activity names the step a pause is at."""
+        """How the run's activity names the step a pause is at (and a board's choice)."""
         step = pause.payload.get("step")
         node = self.steps.node(step)
         # A step asks under its ID and its node's path (graph.factories.base.interrupt_id).
         path = pause.interrupt_id.partition("@")[2].partition("#")[0]
-        return self.steps.label(path) or (label_of(node) if node else str(step or pause.interrupt_id))
+        label = self.steps.label(path) or (label_of(node) if node else str(step or pause.interrupt_id))
+        board = pause.payload.get("board")
+        if isinstance(board, dict) and isinstance(board.get("label"), str):
+            return f"{label}, {board['label']}"
+        return label
 
     def _gate(self, pause: Pause) -> str:
         # A run that started over asks its questions afresh.
@@ -1093,6 +1129,12 @@ class Steps:
     def of(cls, document: dict[str, Any], saved: Mapping[str, dict[str, Any]]) -> Steps:
         nodes = [node for node in items(document.get("nodes")) if isinstance(node, dict)]
         by_name = {adk_name(text(node.get("name"))): node for node in nodes if node.get("kind") != "start"}
+        # A Decision board's choices ask at nodes of their own: they're the board's.
+        for name, node in list(by_name.items()):
+            if node.get("kind") == "decision_board":
+                for row in items(config_of(node).get("choices")):
+                    if isinstance(row, dict) and (choice := text(row.get("id"))):
+                        by_name[choice_name(name, choice)] = node
         loops = frozenset(name for name, node in by_name.items() if node.get("kind") in BODY_KINDS)
         by_id: dict[str, dict[str, Any]] = {}
         for each in [document, *saved.values()]:

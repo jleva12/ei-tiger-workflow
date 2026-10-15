@@ -122,11 +122,15 @@ def test_settle_stops_at_a_pause(runtime: Runtime) -> None:
             run["id"],
             owner="w1",
             state={},
-            key="k",
-            kind="approval",
-            reason="Go?",
-            details={},
-            deadline=None,
+            gates=[
+                {
+                    "key": "k",
+                    "kind": "approval",
+                    "reason": "Go?",
+                    "details": {},
+                    "deadline": None,
+                }
+            ],
         )
 
     async def follow() -> Any:

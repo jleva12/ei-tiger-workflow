@@ -123,7 +123,8 @@
             "mcp",
             "adk_workflow",
             "code_execution",
-            "skills"
+            "skills",
+            "rich_answers"
           ]
         },
         "name": {
@@ -314,6 +315,22 @@
             "properties": {
               "config": {
                 "$ref": "#/$defs/config_skills"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "rich_answers"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_rich_answers"
               }
             }
           }
@@ -833,6 +850,61 @@
         "run_scripts": {
           "type": "boolean",
           "description": "The model may run the skills' scripts, where the runtime runs code; otherwise it reads a script and follows it itself."
+        }
+      }
+    },
+    "config_rich_answers": {
+      "type": "object",
+      "description": "Lets the agent answer with cards, key figures, tables, charts and steps the chat draws beside its text, and choices the person clicks to reply.",
+      "required": [
+        "components"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "components": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "Card",
+              "Row",
+              "Col",
+              "Tabs",
+              "Carousel",
+              "Box",
+              "Spacer",
+              "Divider",
+              "Header",
+              "Text",
+              "Caption",
+              "Markdown",
+              "Badge",
+              "Icon",
+              "Alert",
+              "Citation",
+              "Fact",
+              "Table",
+              "Chart",
+              "Steps",
+              "Timeline",
+              "ListView",
+              "ListViewItem",
+              "Image",
+              "Diagram",
+              "Map",
+              "Choices",
+              "Button",
+              "Select",
+              "Input",
+              "DatePicker",
+              "Checkbox",
+              "Slider",
+              "RadioGroup",
+              "CheckboxGroup",
+              "Form"
+            ]
+          },
+          "uniqueItems": true,
+          "description": "The Generative UI components the agent may draw with present; only these go into its model calls."
         }
       }
     }

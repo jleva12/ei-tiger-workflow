@@ -161,9 +161,10 @@ export type ChatConfigs = {
     confirm: boolean
   }
   /**
-   * Python the model writes, run where the runtime runs code (for now ADK's
-   * UnsafeLocalCodeExecutor, when the deployment turns it on): it answers
-   * with what the code printed and its errors.
+   * Python the model writes, run where the deployment's sandbox mode says
+   * (FORGE_AGENT_SANDBOX_MODE: a new OpenShell sandbox for each call, or ADK's
+   * UnsafeLocalCodeExecutor locally): it answers with what the code printed
+   * and its errors.
    */
   code_execution: {
     /** A person confirms each run, seeing the code, before it runs. */
@@ -183,6 +184,16 @@ export type ChatConfigs = {
      * otherwise it reads a script and follows it itself.
      */
     run_scripts: boolean
+  }
+  /**
+   * Answers the chat draws (Generative UI): the agent gets the `present`
+   * tool, whose call is a composition of the components picked here
+   * (`rich-answers-schema.ts`), drawn beside its text; what the person
+   * clicks or fills in comes back as their next message.
+   */
+  rich_answers: {
+    /** The components it may use; only these go into its model calls. */
+    components: string[]
   }
 }
 

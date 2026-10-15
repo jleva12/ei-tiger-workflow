@@ -13,10 +13,12 @@ A run's ``status``:
   Abandoned while it runs, it's marked (``cancel_requested_at``): its worker
   stops it at its next step, or as it renews its lease, and abandons it; the
   maintenance does, should the worker go first.
-- ``paused``: waiting for a person, at the approval or question in ``pause``.
-  A decision (or the pause's deadline) queues it again.
+- ``paused``: waiting for people, at the approvals and questions in
+  ``gates`` (``pause`` is the first of them). A decision at any of them (or
+  its deadline) queues it again; the others stay open.
 - ``waiting``: waiting for a time (a delay), until ``waiting_until``; then a
-  worker takes it again.
+  worker takes it again. It may wait at gates too meanwhile: a decision at
+  one queues it at once.
 - ``succeeded``, ``failed``, ``abandoned``: finished. A failed run can be
   retried (it carries on from where it was, as its next ``attempt``), unless
   another run of its ADK session is still going: two runs waiting at the same
@@ -30,6 +32,13 @@ each names it (``parent_run_id``), under an ID its call makes for it, so a
 call answered again (its worker stopped) finds the run it started rather than
 starting another (``create_child``). Abandoning a run abandons the runs it
 started, and theirs, that are still going; whatever else becomes of it, they go on.
+
+A run's open gates (``gates``) are the approvals and questions it waits at,
+each decided on its own (``decide``, by its ``id``), whatever the run is doing
+meanwhile: paused, waiting, or carrying on with a decision made at another.
+A decision made while a worker has the run is read by its next attempt: the
+pause it ends at, finding it, queues the run again instead. A run from before
+gates has none: its ``pause`` is its only one.
 
 A run's decisions (``decisions``, by the gate's key) are what the worker's
 control answers ``approval`` with; ``state`` is what the run keeps
@@ -47,7 +56,7 @@ from __future__ import annotations
 
 import copy
 import uuid
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -103,6 +112,9 @@ runs = sa.Table(
     sa.Column("state", sa.JSON, nullable=True),
     sa.Column("decisions", sa.JSON, nullable=True),
     sa.Column("pause", sa.JSON, nullable=True),
+    # Every approval and question it waits at, each decided on its own
+    # (forge-admin's 0026adk_run_gates): pause is the first, while it's paused.
+    sa.Column("gates", sa.JSON, nullable=True),
     sa.Column("waiting_until", DATETIME, nullable=True),
     sa.Column("waiting_reason", sa.String(500), nullable=True),
     sa.Column("result", sa.JSON, nullable=True),
@@ -166,7 +178,7 @@ class NotAllowed(RunStoreError):
 
 
 class NotOpen(NotAllowed):
-    """The approval or question named isn't the one the run waits at."""
+    """The approval or question named isn't one the run waits at."""
 
 
 class LostLease(RunStoreError):
@@ -548,17 +560,19 @@ class RunStore:
         timed_out: bool = False,
     ) -> dict[str, Any]:
         """
-        Decide (or answer) what the paused run waits at; the run is queued to
-        carry on with it. ``timed_out``: nobody did by its deadline (the
-        worker's rejection).
+        Decide (or answer) an approval or question the run waits at (one of
+        its gates); the others stay open. Paused or waiting, the run is
+        queued to carry on with it; queued or running, its next attempt reads
+        it. ``timed_out``: nobody did by its deadline (the worker's rejection).
 
         :raises NoSuchRun: There's no such run.
         :raises NotOpen: It doesn't wait at ``request_id`` (decided already, or moved on).
         """
         async with self.engine.begin() as conn:
             run = await self._locked(conn, run_id, organization_id)
-            pause = run["pause"] if run["status"] == PAUSED else None
-            if not isinstance(pause, dict) or pause.get("id") != request_id:
+            gates = open_gates(run)
+            pause = next((gate for gate in gates if gate.get("id") == request_id), None)
+            if pause is None:
                 raise NotOpen("The run doesn't wait at that approval or question any more")
             now = self._now()
             decisions = dict(run["decisions"] or {})
@@ -570,12 +584,14 @@ class RunStore:
                 "request_id": request_id,
                 "decided_at": now.replace(tzinfo=UTC).isoformat(),
             }
-            await self._update(
-                conn,
-                run_id,
-                {"status": QUEUED, "pause": None, "decisions": decisions, "updated_at": now},
-                expect=(PAUSED,),
-            )
+            values: dict[str, Any] = {
+                "decisions": decisions,
+                "gates": [gate for gate in gates if gate is not pause] or None,
+                "updated_at": now,
+            }
+            if run["status"] in (PAUSED, WAITING):
+                values.update(status=QUEUED, pause=None, waiting_until=None, waiting_reason=None)
+            await self._update(conn, run_id, values, expect=(run["status"],))
             if timed_out:
                 kind, message = "timed_out", "Nobody decided in time"
             elif pause.get("kind") == "human_input":
@@ -695,6 +711,7 @@ class RunStore:
             {
                 "status": ABANDONED,
                 "pause": None,
+                "gates": None,
                 "waiting_until": None,
                 "waiting_reason": None,
                 "finished_at": now,
@@ -738,6 +755,7 @@ class RunStore:
                     values = {
                         "status": ABANDONED,
                         "pause": None,
+                        "gates": None,
                         "waiting_until": None,
                         "waiting_reason": None,
                         "finished_at": at,
@@ -864,47 +882,60 @@ class RunStore:
         *,
         owner: str,
         state: dict[str, Any],
-        key: str,
-        kind: str,
-        reason: str,
-        details: dict[str, Any],
-        deadline: datetime | None,
-    ) -> dict[str, Any]:
+        gates: Sequence[Mapping[str, Any]],
+        until: datetime | None = None,
+        reason: str = "",
+    ) -> list[dict[str, Any]] | None:
         """
-        The run waits for a person: its worker lets it go.
+        The run waits for people, at each of ``gates`` (``{key, kind, reason,
+        details, deadline}``), each decided on its own; with ``until``, for a
+        time too (a delay: it's ``waiting``, ``reason`` saying why). Its
+        worker lets it go. A gate still open keeps its ``id``, so a decision
+        on it made before lands whatever the run did since.
 
-        :return: The pause (its ``id`` names it in a decision).
+        A gate someone decided while the worker had the run (its attempt read
+        the run's decisions before) doesn't wait: the run is queued again
+        instead, for its next attempt to carry on with the decision.
+
+        :return: Its open gates (each ``id`` names it in a decision); None
+            when it was queued again instead.
         :raises LostLease: The owner lost the run.
         :raises CancelRequested: Someone abandoned the run: it doesn't wait.
         """
         now = self._now()
-        pause = {
-            "id": new_id(),
-            "key": key,
-            "kind": kind,
-            "reason": reason[:1000],
-            "details": _json(details),
-            "requested_at": now.replace(tzinfo=UTC).isoformat(),
-            "deadline": _naive(deadline).replace(tzinfo=UTC).isoformat() if deadline else None,
-        }
         async with self.engine.begin() as conn:
-            await self._fenced(
-                conn,
-                run_id,
-                owner,
-                {
-                    "status": PAUSED,
-                    "state": _json(state),
-                    "pause": pause,
-                    "lease_owner": None,
-                    "lease_until": None,
-                    "updated_at": now,
-                },
-                going=True,
-            )
-            what = "an answer" if kind == "human_input" else "a decision"
-            await self._event(conn, run_id, "paused", f"Waits for {what}: {reason}"[:1000], at=now)
-        return pause
+            run = await self._locked(conn, run_id, None)
+            decided = run["decisions"] or {}
+            known = {gate.get("key"): gate for gate in open_gates(run)}
+            made = [_gate(gate, known.get(gate["key"]), now) for gate in gates]
+            fresh = [gate for gate in made if gate["key"] not in known]
+            values: dict[str, Any] = {
+                "state": _json(state),
+                "lease_owner": None,
+                "lease_until": None,
+                "updated_at": now,
+            }
+            if any(gate["key"] in decided for gate in made):
+                open_ = [gate for gate in made if gate["key"] not in decided]
+                values.update(status=QUEUED, pause=None, gates=open_ or None, waiting_until=None, waiting_reason=None)
+                await self._fenced(conn, run_id, owner, values, going=True)
+                await self._event(conn, run_id, "note", "Decided while it ran: it carries on", at=now)
+                return None
+            if until is not None:
+                values.update(status=WAITING, pause=None, waiting_until=_naive(until), waiting_reason=reason[:500])
+            else:
+                values.update(status=PAUSED, pause=made[0] if made else None)
+            values["gates"] = made or None
+            await self._fenced(conn, run_id, owner, values, going=True)
+            if until is not None:
+                await self._event(conn, run_id, "waiting", reason[:1000] or "Waits", at=now)
+            for gate in fresh:
+                what = "an answer" if gate["kind"] == "human_input" else "a decision"
+                await self._event(conn, run_id, "paused", f"Waits for {what}: {gate['reason']}"[:1000], at=now)
+            if not fresh and until is None:
+                count = f"{len(made)} approvals or questions" if len(made) != 1 else "its approval or question"
+                await self._event(conn, run_id, "paused", f"Waits at {count} still open", at=now)
+        return made
 
     async def wait(self, run_id: str, *, owner: str, state: dict[str, Any], until: datetime, reason: str) -> None:
         """
@@ -922,6 +953,7 @@ class RunStore:
                 {
                     "status": WAITING,
                     "state": _json(state),
+                    "gates": None,
                     "waiting_until": _naive(until),
                     "waiting_reason": reason[:500],
                     "lease_owner": None,
@@ -946,6 +978,8 @@ class RunStore:
         now = self._now()
         values: dict[str, Any] = {
             "status": SUCCEEDED if succeeded else FAILED,
+            "pause": None,
+            "gates": None,
             "result": _json(result),
             "error": _failure(error, now) if not succeeded else None,
             "lease_owner": None,
@@ -1027,6 +1061,8 @@ class RunStore:
                 .where(runs.c.id == run_id, runs.c.status == RUNNING, runs.c.lease_until < now)
                 .values(
                     status=FAILED,
+                    pause=None,
+                    gates=None,
                     error=_failure(error, now),
                     result=_json(result),
                     lease_owner=None,
@@ -1078,6 +1114,7 @@ class RunStore:
                 .values(
                     status=ABANDONED,
                     pause=None,
+                    gates=None,
                     waiting_until=None,
                     waiting_reason=None,
                     lease_owner=None,
@@ -1101,7 +1138,7 @@ class RunStore:
 
     async def time_out(self, run_id: str, *, pause_id: str, comment: str) -> dict[str, Any] | None:
         """
-        Nobody decided the approval the run waits at by its deadline: a
+        Nobody decided an approval the run waits at by its deadline: a
         rejection by nobody, and the run is queued to carry on with it.
 
         :return: The run; None when it doesn't wait at ``pause_id`` any more.
@@ -1142,15 +1179,11 @@ class RunStore:
         )
 
     async def overdue(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        """:return: Paused runs past their pause's deadline."""
-        found = await self._find(runs.c.status == PAUSED, limit=None)
+        """:return: Paused (or waiting) runs with a gate past its deadline
+        (``overdue_gates`` says which)."""
+        found = await self._find(runs.c.status.in_([PAUSED, WAITING]), limit=None)
         now = self.clock()
-        late = []
-        for run in found:
-            deadline = (run.get("pause") or {}).get("deadline")
-            if deadline and datetime.fromisoformat(deadline) <= now:
-                late.append(run)
-        return late[:limit]
+        return [run for run in found if overdue_gates(run, now)][:limit]
 
     # ------------------------------------------------------------------ helpers
 
@@ -1283,4 +1316,43 @@ def _failure(error: dict[str, Any] | None, now: datetime) -> dict[str, Any]:
         "category": category if category in FAILURE_CATEGORIES else "error",
         "step": error.get("step"),
         "occurred_at": now.replace(tzinfo=UTC).isoformat(),
+    }
+
+
+def open_gates(run: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """:return: The approvals and questions an unfinished run waits at, each
+    decided on its own (``{id, key, kind, reason, details, requested_at,
+    deadline}``): its gates, or (a run from before gates) its pause."""
+    if run.get("status") in FINISHED:
+        return []
+    gates = run.get("gates")
+    if isinstance(gates, list):
+        return [gate for gate in gates if isinstance(gate, dict) and gate.get("id")]
+    pause = run.get("pause")
+    return [pause] if run.get("status") == PAUSED and isinstance(pause, dict) and pause.get("id") else []
+
+
+def overdue_gates(run: Mapping[str, Any], now: datetime) -> list[dict[str, Any]]:
+    """:return: The run's open gates past their deadline at ``now``."""
+    late = []
+    for gate in open_gates(run):
+        deadline = gate.get("deadline")
+        if isinstance(deadline, str) and deadline and datetime.fromisoformat(deadline) <= now:
+            late.append(gate)
+    return late
+
+
+def _gate(asked: Mapping[str, Any], known: Mapping[str, Any] | None, now: datetime) -> dict[str, Any]:
+    """A gate as the run keeps it: one still open keeps its ID and when it was asked."""
+    deadline = asked.get("deadline")
+    return {
+        "id": str(known["id"]) if known else new_id(),
+        "key": str(asked["key"]),
+        "kind": str(asked.get("kind") or "approval"),
+        "reason": str(asked.get("reason") or "")[:1000],
+        "details": _json(dict(asked.get("details") or {})),
+        "requested_at": str(known["requested_at"])
+        if known and known.get("requested_at")
+        else now.replace(tzinfo=UTC).isoformat(),
+        "deadline": _naive(deadline).replace(tzinfo=UTC).isoformat() if isinstance(deadline, datetime) else None,
     }

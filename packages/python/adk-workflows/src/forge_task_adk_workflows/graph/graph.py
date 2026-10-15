@@ -24,6 +24,12 @@ kind's factory (``factories.FACTORIES``), joined by ADK's edges.
   each that ends is one of the run's endings. An HTTP step's status way that
   leads nowhere is an ending too: a status it skips ends its way there,
   handing on the response, while its other ways lead on.
+- **Decision boards.** A board is its own node (what leads into it leads
+  there), which leads to a hidden node per choice by the choice's ID; each
+  choice's node leads on by its Accepted and Rejected ways, and every one of
+  them (and the board's, when it lays nothing out) by Done
+  (``factories/people.py``). Its Done way leading nowhere, the board ends its
+  way there, once every choice is decided.
 - **Merges.** A Merge "all" is a ``JoinNode``, which goes on only once every
   node into it has; ways in from different ways out of one branching step
   would never all come (or, from a Match taking every rule that holds, not
@@ -62,6 +68,7 @@ from forge_task_adk_workflows.graph.factories.base import (
     where_of,
 )
 from forge_task_adk_workflows.graph.factories.logic import back, ending, finish, stop, via
+from forge_task_adk_workflows.graph.factories.people import DONE, BoardParts, board_parts
 from forge_task_adk_workflows.graph.factories.start import input_model
 from forge_task_adk_workflows.graph.names import (
     BODY_KINDS,
@@ -70,6 +77,7 @@ from forge_task_adk_workflows.graph.names import (
     RESERVED_NAMES,
     adk_name,
     body_name,
+    choice_name,
     ending_name,
     via_name,
 )
@@ -82,7 +90,9 @@ KINDS = frozenset(FACTORIES)
 SUB_AGENT_ID = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 # Steps that can pause a run: a loop whose body has one runs its items one at
 # a time.
-PAUSING = frozenset({"approval", "human_input", "delay", "saved"})
+PAUSING = frozenset({"approval", "human_input", "decision_board", "delay", "saved"})
+#: A Decision board: built as hidden nodes, a choice's ways leaving its own.
+BOARD = "decision_board"
 
 
 class AgentGraph(Workflow):
@@ -147,7 +157,8 @@ def build_agent(
 
 def outputs_of(node: dict[str, Any]) -> list[str]:
     """:return: A node's ways out, by ID, in order: its kind's (``NODE_CATALOG``),
-    after one per row of its settings for a kind whose rows are ways out."""
+    after one per row of its settings for a kind whose rows are ways out (or
+    each of the row's ways, ``<row>:<way>``)."""
     kind = NODE_CATALOG.find(node.get("kind"))
     if kind is None:
         return ["next"]
@@ -155,7 +166,10 @@ def outputs_of(node: dict[str, Any]) -> list[str]:
     if kind.rows is not None:
         found = items(config_of(node).get(kind.rows.setting))
         rows = [text(row.get("id")) for row in found if isinstance(row, dict)]
-    return [*(row for row in rows if row), *(output.id for output in kind.outputs)]
+        rows = [row for row in rows if row]
+        if kind.rows.ways:
+            rows = [f"{row}:{way.id}" for row in rows for way in kind.rows.ways]
+    return [*rows, *(output.id for output in kind.outputs)]
 
 
 def _routed(node: dict[str, Any]) -> bool:
@@ -243,6 +257,9 @@ class _Agent:
             if node is not self.start:
                 parse = answer_parser(config_of(node)) if node["kind"] == "llm" else None
                 steps[self.names[node["id"]]] = StepInfo(node["id"], node["kind"], parse)
+                # A board's choices hand on the board as it stands: they're its.
+                for choice in _choice_ids(node):
+                    steps[choice_name(self.names[node["id"]], choice)] = StepInfo(node["id"], node["kind"])
         self.scope = Scope(steps=steps, start=self.start["id"])
         self.connected = {
             node["id"]: frozenset(output for source, output, _ in self.edges if source == node["id"])
@@ -309,7 +326,10 @@ class _Agent:
                 for step in loops
             },
         )
-        built: dict[str, BaseNode] = {step: self._node(step, ctx) for step in ordered}
+        boards = {step: self._board(step, ctx) for step in ordered if self.by_id[step]["kind"] == BOARD}
+        built: dict[str, BaseNode] = {
+            step: boards[step].opener if step in boards else self._node(step, ctx) for step in ordered
+        }
         # What leads into the graph: the start's input node, or the loop's
         # Each item way; what leads back to the loop.
         entries: list[str] = []
@@ -328,53 +348,84 @@ class _Agent:
                 continue  # the body's, cut out
             ways.setdefault((source, target), []).append(output)
         edges = [Edge(from_node=START, to_node=built[entry]) for entry in dict.fromkeys(entries) if entry in built]
+        for parts in boards.values():
+            edges.extend(
+                Edge(from_node=parts.opener, to_node=asks, route=choice) for choice, asks in parts.choices.items()
+            )
         for (source, target), outputs in ways.items():
             node = self.by_id[source]
-            route = self._route(node, outputs) if node is not self.start else None
-            target_node = self.by_id.get(target)
-            if (
-                target_node is not None
-                and target_node["kind"] == "merge"
-                and config_of(target_node).get("mode") == "any"
-            ):
-                tag = via(via_name(self.names[target], built[source].name), source)
-                edges.append(Edge(from_node=built[source], to_node=tag, route=route))
-                edges.append(Edge(from_node=tag, to_node=built[target]))
+            if source in boards:
+                for leaving, route in _board_routes(boards[source], outputs):
+                    edges.extend(self._lead(leaving, source, target, route, built))
                 continue
-            edges.append(Edge(from_node=built[source], to_node=built[target], route=route))
-        edges.extend(self._endings(members, built, ways, loop=loop))
+            route = self._route(node, outputs) if node is not self.start else None
+            edges.extend(self._lead(built[source], source, target, route, built))
+        edges.extend(self._endings(members, built, ways, boards, loop=loop))
         return edges
+
+    def _lead(self, leaving: BaseNode, source: str, target: str, route: Any, built: dict[str, BaseNode]) -> list[Edge]:
+        # The edges of a way from a step's node to another step: through a
+        # hidden node tagging it with its step, into a Merge "any".
+        target_node = self.by_id.get(target)
+        if target_node is not None and target_node["kind"] == "merge" and config_of(target_node).get("mode") == "any":
+            tag = via(via_name(self.names[target], leaving.name), source)
+            return [Edge(from_node=leaving, to_node=tag, route=route), Edge(from_node=tag, to_node=built[target])]
+        return [Edge(from_node=leaving, to_node=built[target], route=route)]
+
+    def _board(self, step: str, ctx: BuildContext) -> BoardParts:
+        node = self.by_id[step]
+        try:
+            return board_parts(node, ctx)
+        except AgentBuildError:
+            raise
+        except ValueError as error:
+            raise AgentBuildError(f"{where_of(node)}: ADK refuses it: {error}") from None
 
     def _endings(
         self,
         members: AbstractSet[str],
         built: dict[str, BaseNode],
         ways: dict[tuple[str, str], list[str]],
+        boards: dict[str, BoardParts],
         *,
         loop: str | None,
     ) -> list[Edge]:
         # The graph's endings, led to its hidden ending nodes: ADK takes one
         # ending with an output. A step nothing leads on from ends its way
         # whichever way it takes; an HTTP step's status way nothing leads on
-        # from ends its way too (it's skipped), the others leading on.
+        # from ends its way too (it's skipped), the others leading on; a
+        # board whose Done way leads nowhere ends its way at Done.
         leading = {source for source, _ in ways}
-        ends: dict[str, Any] = {step: None for step in built if step in members and step not in leading}
+        ends: dict[str, Any] = {
+            step: None for step in built if step in members and step not in leading and step not in boards
+        }
         for step in built:
             if step in members and step in leading and (left := self._open_status_ways(step, ways)):
                 ends[step] = left[0] if len(left) == 1 else left
-        if not ends:
+        done = {
+            step: parts
+            for step, parts in boards.items()
+            if step in members and not any(source == step and DONE in outputs for (source, _), outputs in ways.items())
+        }
+        if not ends and not done:
             return []
+        # Each way to an ending: from the step's node, or from each of a board's.
+        leaving = [(step, built[step], route) for step, route in ends.items()]
+        for step, parts in done.items():
+            leaving.extend((step, part, DONE) for part in (parts.opener, *parts.choices.values()))
         if loop is not None:
             sink = stop()
-            return [Edge(from_node=built[step], to_node=sink, route=route) for step, route in ends.items()]
+            return [Edge(from_node=node, to_node=sink, route=route) for _, node, route in leaving]
         # Each ending tagged with its step on the way, so the finish can
         # collect every way that ended.
         collector = finish(top=self.top)
         edges = []
-        for step, route in ends.items():
-            tag = ending(ending_name(built[step].name), self.by_id[step])
-            edges.append(Edge(from_node=built[step], to_node=tag, route=route))
-            edges.append(Edge(from_node=tag, to_node=collector))
+        tags: dict[str, BaseNode] = {}
+        for step, node, route in leaving:
+            if step not in tags:
+                tags[step] = ending(ending_name(built[step].name), self.by_id[step])
+                edges.append(Edge(from_node=tags[step], to_node=collector))
+            edges.append(Edge(from_node=node, to_node=tags[step], route=route))
         return edges
 
     def _open_status_ways(self, step: str, ways: dict[tuple[str, str], list[str]]) -> list[str]:
@@ -521,7 +572,8 @@ class _Agent:
                 ways = list(came.items())
                 # A match taking every rule that holds may take both, but
                 # not always: it would wait for good when one doesn't hold.
-                every = step["kind"] == "match" and config_of(step).get("mode") == "all"
+                # A board's choices too, as people decide them.
+                every = (step["kind"] == "match" and config_of(step).get("mode") == "all") or step["kind"] == BOARD
                 for index, (first, outs) in enumerate(ways):
                     for second, others in ways[index + 1 :]:
                         if outs.isdisjoint(others):
@@ -535,6 +587,36 @@ class _Agent:
                                 f"{'may' if every else 'would'} never go "
                                 'on; make it go on at the first ("any").'
                             )
+
+
+def _choice_ids(node: dict[str, Any]) -> list[str]:
+    """:return: A Decision board's choices' IDs; none for any other step."""
+    if node.get("kind") != BOARD:
+        return []
+    return [
+        choice
+        for row in items(config_of(node).get("choices"))
+        if isinstance(row, dict) and (choice := text(row.get("id")))
+    ]
+
+
+def _board_routes(parts: BoardParts, outputs: list[str]) -> list[tuple[BaseNode, Any]]:
+    """
+    :param parts: A Decision board's nodes.
+    :param outputs: Its ways out that lead to one step.
+    :return: The nodes those ways leave from, each with its route there: a
+        choice's ways from its node, Done from every one of them.
+    """
+    found: dict[str, tuple[BaseNode, list[str]]] = {}
+    for output in dict.fromkeys(outputs):
+        if output == DONE:
+            leaving = [parts.opener, *parts.choices.values()]
+        else:
+            asks = parts.choices.get(output.partition(":")[0])
+            leaving = [asks] if asks is not None else []
+        for node in leaving:
+            found.setdefault(node.name, (node, []))[1].append(output)
+    return [(node, routes[0] if len(routes) == 1 else routes) for node, routes in found.values()]
 
 
 def _way(by_id: dict[str, dict[str, Any]], way: tuple[str, str]) -> str:

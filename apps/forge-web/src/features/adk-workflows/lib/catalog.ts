@@ -25,7 +25,9 @@ import type { AgentConfigs, AgentKind } from "./model"
 
 /**
  * Ways out a node's settings list, one per row, before its fixed ones: a
- * Switch's cases, a Match's rules. Each row's `id` is its way out's.
+ * Switch's cases, a Match's rules. Each row's `id` is its way out's; with
+ * `ways`, each row has those (a Decision board's choice its Accepted and
+ * Rejected ways), `<row id>:<way id>`.
  */
 export type CatalogRows = {
   /** The setting holding the rows. */
@@ -34,6 +36,8 @@ export type CatalogRows = {
   label: string
   /** What it's called when that's blank; `{n}` is the row's number. */
   empty: string
+  /** Each row's ways out, when it has more than one. */
+  ways?: StepOutput[] | null
 }
 
 /** One kind of workflow node, as served. */
@@ -61,6 +65,7 @@ const SET_UP: Record<AgentKind, true> = {
   pi_agent: true,
   approval: true,
   human_input: true,
+  decision_board: true,
   http: true,
   bash: true,
   transform: true,
@@ -116,14 +121,17 @@ function rowsOf(rows: CatalogRows, config: object): StepOutput[] {
     if (!row || typeof row !== "object") return []
     const { id, [rows.label]: label } = row as Record<string, unknown>
     if (typeof id !== "string" || !id) return []
-    const named = typeof label === "string" ? label.trim() : ""
-    return [
-      {
-        id,
-        label: named || rows.empty.replace("{n}", String(index + 1)),
-        branch: true,
-      },
-    ]
+    const named =
+      (typeof label === "string" ? label.trim() : "") ||
+      rows.empty.replace("{n}", String(index + 1))
+    if (rows.ways?.length)
+      return rows.ways.map((way) => ({
+        ...way,
+        id: `${id}:${way.id}`,
+        // The way first, so a long label never hides which it is.
+        label: `${way.label} · ${named}`,
+      }))
+    return [{ id, label: named, branch: true }]
   })
 }
 
