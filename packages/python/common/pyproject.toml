@@ -43,6 +43,17 @@ patterns = ["jsonschema>=4.23", "referencing>=0.28.4", "regex>=2024.11.6"]
 # the bounded engine (forge_common.patterns) rather than by the mcp client; its
 # check to swap (ClientSession.validate_tool_result) is mcp 2.x's
 mcp = ["forge-common[patterns]", "mcp>=2.3.0,<3"]
+# forge_common.sandbox: where agents' code runs (FORGE_AGENT_SANDBOX_MODE) and
+# the OpenShell gateway's settings
+sandbox = ["pydantic>=2.11"]
+# forge_common.sandbox.openshell: an ADK code executor running each call in a
+# new sandbox on an NVIDIA OpenShell gateway (its Python SDK, over gRPC)
+sandbox-openshell = [
+    "forge-common[sandbox]",
+    "google-adk>=2.9.2",
+    "openshell>=0.1.2,<0.2",
+    "pyyaml>=6.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.17,<0.12.0"]
@@ -50,7 +61,7 @@ build-backend = "uv_build"
 
 # Every extra's libraries, for the tests (the tools are the workspace root's).
 [dependency-groups]
-dev = ["forge-common[adk,adk-artifacts-s3,adk-memory,adk-models,logging,mcp,patterns,templates]"]
+dev = ["forge-common[adk,adk-artifacts-s3,adk-memory,adk-models,logging,mcp,patterns,sandbox-openshell,templates]"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

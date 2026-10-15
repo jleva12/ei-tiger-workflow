@@ -23,6 +23,8 @@ export function stepDetail(step: StepData): string {
       return step.config.approvers === "org:admin"
         ? "An organization admin decides"
         : "Any member decides"
+    case "decision_board":
+      return `${plural(step.config.choices.length, "choice")} · ${step.config.approvers === "org:admin" ? "admins decide" : "any member decides"}`
     case "http":
       return step.config.retries
         ? `${step.config.timeout_seconds} s timeout · ${plural(step.config.retries, "retry")}`
@@ -81,6 +83,7 @@ export function stepDetail(step: StepData): string {
 export function stepSummary(step: StepData): NodeSummary | null {
   switch (step.kind) {
     case "approval":
+    case "decision_board":
       return step.config.message.trim()
         ? { text: step.config.message.trim() }
         : null

@@ -559,9 +559,14 @@ def _env_example(
         "# FORGE_AGENT_ALLOWED_HOSTS=[]",
         *(
             [
-                "# Where its Code execution tools run code: off (they don't build), or local, on",
-                "# this machine, unsandboxed, with this server's environment and files (development only)",
-                "# FORGE_AGENT_CODE_EXECUTION=off",
+                "# Where its Code execution tools run code: off (they don't build); local, on this",
+                "# machine, unsandboxed, with this server's environment and files (development only);",
+                "# or openshell, a new sandbox for each call on an NVIDIA OpenShell gateway: one the",
+                "# openshell CLI registered (its name; the active one when empty) or a URL, with",
+                "# forge-agent-runtime[openshell] installed",
+                "# FORGE_AGENT_SANDBOX_MODE=off",
+                "# FORGE_AGENT_OPENSHELL__GATEWAY=",
+                "# FORGE_AGENT_OPENSHELL__IMAGE=",
             ]
             if runs_code
             else []
@@ -748,8 +753,9 @@ def generate_project(
         if item.get("kind") == "code_execution":
             notes.append(
                 f"{item.get('name') or item.get('id')} runs code, which is off until "
-                "FORGE_AGENT_CODE_EXECUTION=local: that runs it on the server's machine, unsandboxed, "
-                "so only in development."
+                "FORGE_AGENT_SANDBOX_MODE=openshell (a new OpenShell sandbox for each call, with "
+                "forge-agent-runtime[openshell]) or local (on the server's machine, unsandboxed, so "
+                "only in development)."
             )
     if options.memory == "atlas" and "memory" not in kinds:
         notes.append("The agent has no Memory tool, so MongoDB Atlas memory isn't used until it gets one.")

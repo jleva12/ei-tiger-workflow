@@ -14,17 +14,24 @@ activity, and the job queued again when a wait is over). Outside the worker
 (tests, the CLI) :class:`LocalJobControl` keeps the same state in memory. A
 job reads its control with :func:`current_control`.
 
-The two waits end the current attempt by raising: :meth:`JobControl.approval`
-the first time it's asked for a decision, :meth:`JobControl.wait_until`
-always. Don't swallow what they raise (a broad ``except Exception`` must
-re-raise :class:`ControlSignal`s): the run pauses on it.
+The waits end the current attempt by raising: :meth:`JobControl.approval`
+the first time it's asked for a decision, :meth:`JobControl.wait_for` and
+:meth:`JobControl.wait_until` always. Don't swallow what they raise (a broad
+``except Exception`` must re-raise :class:`ControlSignal`s): the run pauses on
+it.
+
+A job waiting on several people at once (an ADK workflow's ways, each at an
+approval of its own) reads each decision with :meth:`JobControl.decided`,
+carries on with those made, and waits on the rest together
+(:meth:`JobControl.wait_for`): each is decided on its own, and any decision
+resumes the run.
 """
 
 from __future__ import annotations
 
 import contextlib
 import copy
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -44,6 +51,18 @@ class Decision:
     #: to when the run reads it. None when unknown: the run takes the time it
     #: reads it.
     decided_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class Gate:
+    """A decision a job waits for: what :meth:`JobControl.approval` asks, as
+    :meth:`JobControl.wait_for` takes it."""
+
+    key: str
+    reason: str
+    details: dict[str, Any] = field(default_factory=dict)
+    #: With a timeout, no decision in time is a rejection.
+    timeout_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +119,16 @@ class JobControl(Protocol):
         rejection."""
         ...
 
+    def decided(self, key: str) -> Decision | None:
+        """The decision made at ``key``, if anyone made it; never pauses."""
+        ...
+
+    async def wait_for(self, gates: Sequence[Gate], *, until: datetime | None = None, reason: str = "") -> NoReturn:
+        """End this attempt until someone decides any of ``gates`` (each on its
+        own: the rest stay open), or ``until`` comes (a time it waits for too,
+        ``reason`` saying why). Without gates, it's :meth:`wait_until`."""
+        ...
+
     async def wait_until(self, when: datetime, *, reason: str) -> NoReturn:
         """End this attempt and carry on at ``when``: checkpoints, schedules the
         resume, and raises. The resumed run starts the job again, from what it kept."""
@@ -124,12 +153,14 @@ class ControlSignal(Exception):
 
 
 class AwaitingDecision(ControlSignal):
-    """LocalJobControl: the run waits for a decision at ``key``."""
+    """LocalJobControl: the run waits for a decision at ``key`` (the first of
+    ``keys``, every one it waits at)."""
 
-    def __init__(self, key: str, reason: str) -> None:
+    def __init__(self, key: str, reason: str, keys: Sequence[str] = ()) -> None:
         super().__init__(f"waiting for a decision: {reason}")
         self.key = key
         self.reason = reason
+        self.keys = list(keys) or [key]
 
 
 class WaitingUntil(ControlSignal):
@@ -190,8 +221,18 @@ class LocalJobControl:
     ) -> Decision:
         if key in self.decisions:
             return self.decisions[key]
-        self.asked.append(key)
-        raise AwaitingDecision(key, reason)
+        await self.wait_for([Gate(key, reason, dict(details or {}), timeout_seconds)])
+
+    def decided(self, key: str) -> Decision | None:
+        return self.decisions.get(key)
+
+    async def wait_for(self, gates: Sequence[Gate], *, until: datetime | None = None, reason: str = "") -> NoReturn:
+        if not gates:
+            if until is None:
+                raise ValueError("A wait needs a gate or a time")
+            raise WaitingUntil(until, reason)
+        self.asked.extend(gate.key for gate in gates)
+        raise AwaitingDecision(gates[0].key, gates[0].reason, [gate.key for gate in gates])
 
     async def wait_until(self, when: datetime, *, reason: str) -> NoReturn:
         raise WaitingUntil(when, reason)

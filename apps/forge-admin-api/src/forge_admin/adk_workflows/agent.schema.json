@@ -101,6 +101,7 @@
             "pi_agent",
             "approval",
             "human_input",
+            "decision_board",
             "http",
             "bash",
             "transform",
@@ -275,6 +276,22 @@
             "properties": {
               "config": {
                 "$ref": "#/$defs/config_human_input"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "decision_board"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_decision_board"
               }
             }
           }
@@ -1277,6 +1294,63 @@
         "response_schema": {
           "type": "object",
           "description": "A JSON Schema of their answer; {} takes anything."
+        }
+      }
+    },
+    "config_decision_board": {
+      "type": "object",
+      "description": "Lays out choices for people to accept or reject, each on its own; a choice takes its own way as soon as it's decided. Lays out its choices for people to decide each on its own; each decided hands on the board as it stands, {accepted, rejected, open, decisions, decided} (choice IDs; decisions by choice ID, each {choice, label, question, approved, decided_by, comment, decided_at}; decided the one just made), by that choice's <id>:accepted or <id>:rejected way at once, while the others still wait. The last one decided (or none laid out) takes done too. A way that leads nowhere ends there; done leading nowhere ends the board's way.",
+      "required": [
+        "message",
+        "choices",
+        "approvers",
+        "timeout_hours"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "What the board is about, above its choices; {{ }} puts in the run's data."
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "label",
+              "question",
+              "ask_when"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "question": {
+                "type": "string"
+              },
+              "ask_when": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Each laid out (when its JSONata ask_when holds; empty, always) for people to accept or reject on their own: a choice decided takes its way at once, <id>:accepted or <id>:rejected, while the others still wait. question is a template; empty asks \"<label>?\". An id is never done, nor has a colon."
+        },
+        "approvers": {
+          "type": "string",
+          "enum": [
+            "org:admin",
+            "org:member"
+          ]
+        },
+        "timeout_hours": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Hours each choice waits; then nobody deciding rejects it. 0 waits until someone decides."
         }
       }
     },

@@ -14,6 +14,11 @@ sessions.
   and they're saved as artifacts of its session for its steps to read.
 - Listing and reading runs, their steps and the files they started with,
   needs ``organizations:read``.
+- A run may wait at several approvals and questions at once (``gates``: the
+  ways of it at an approval each, a Decision board's choices), each decided
+  on its own by its ``id``, while the run is paused, waiting for a time, or
+  carrying on with a decision made at another. ``pause`` is the first, while
+  it's paused.
 - An approval a run waits at is decided by whom its step names:
   ``agents:approve`` (the organization's admins) when they're its admins,
   ``agents:run`` (every member) when any member may.
@@ -49,6 +54,7 @@ from forge_task_adk_workflows.run_store import (
     NoSuchRun,
     NotAllowed,
     RunStore,
+    open_gates,
 )
 from forge_task_adk_workflows.runs import MAX_NOTES, STATE_KEY
 from forge_task_adk_workflows.steps import run_progress
@@ -145,7 +151,7 @@ class DecisionCreate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    #: The approval decided, as the run's ``pause`` names it (its ``id``): a
+    #: The approval decided, as the run's ``gates`` name it (its ``id``): a
     #: decision never lands on a later approval of the same run.
     request_id: str = Field(min_length=1, max_length=64)
     approved: bool
@@ -158,7 +164,7 @@ class AnswerCreate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    #: The question answered, as the run's ``pause`` names it (its ``id``).
+    #: The question answered, as the run's ``gates`` name it (its ``id``).
     request_id: str = Field(min_length=1, max_length=64)
     #: The answer: it must fit the question's ``response_schema``.
     answer: Any
@@ -172,7 +178,7 @@ class RunActor(BaseModel):
 
 
 class RunPause(BaseModel):
-    """What a paused run waits for: a person's decision or answer."""
+    """What a run waits for: a person's decision or answer (one of its gates)."""
 
     #: Names it in a decision or answer (``request_id``).
     id: str
@@ -181,7 +187,9 @@ class RunPause(BaseModel):
     reason: str
     #: The step's: ``kind``, ``approvers``, ``expires_at``, ``step``,
     #: ``step_name``, ``workflow_name``, ``agent_id``, ``message``,
-    #: ``session_id``, ``interrupt_id``; a question's ``response_schema`` too.
+    #: ``session_id``, ``interrupt_id``; a question's ``response_schema`` too;
+    #: a Decision board's choice's ``board`` (``{name, message, choice,
+    #: label, choices}``).
     details: dict[str, Any]
     requested_at: str
     #: When nobody deciding rejects it; null for never.
@@ -226,7 +234,11 @@ class AdkRun(BaseModel):
     #: A waiting run's time, and why.
     waiting_until: str | None
     waiting_reason: str | None
+    #: The first of its gates, while it's paused.
     pause: RunPause | None
+    #: Every approval and question it waits at, each decided on its own:
+    #: while it's paused, waiting for a time, or carrying on meanwhile.
+    gates: list[RunPause] = []
     error: RunFailure | None
     #: When someone abandoned it while it ran: its worker stops it, and it's
     #: abandoned then (unless it ended first).
@@ -420,6 +432,14 @@ def _pause(run: dict[str, Any]) -> RunPause | None:
     pause = run.get("pause")
     if run["status"] != PAUSED or not isinstance(pause, dict):
         return None
+    return _gate(pause)
+
+
+def _gates(run: dict[str, Any]) -> list[RunPause]:
+    return [_gate(gate) for gate in open_gates(run)]
+
+
+def _gate(pause: dict[str, Any]) -> RunPause:
     details = pause.get("details")
     return RunPause(
         id=str(pause.get("id") or ""),
@@ -483,6 +503,7 @@ def _summary(run: dict[str, Any]) -> dict[str, Any]:
         "waiting_until": _iso(run.get("waiting_until")),
         "waiting_reason": run.get("waiting_reason"),
         "pause": _pause(run),
+        "gates": _gates(run),
         "error": _failure(run),
         "cancel_requested_at": _iso(run.get("cancel_requested_at")),
         "parent_run_id": run.get("parent_run_id"),
@@ -520,15 +541,15 @@ def actions_of(run: dict[str, Any]) -> RunActions:
     """:return: What the run's status allows (and what started it: an A2A
     task's run isn't retried)."""
     current = run["status"]
-    pause = _pause(run)
+    gates = _gates(run)
     # Running, unless someone abandoned it already (its worker stops it).
     stopping = run.get("cancel_requested_at") is not None
     return RunActions(
         retry=current == FAILED and not a2a_task(run),
         resubmit=current in FINISHED,
         abandon=current in CANCELABLE and not stopping,
-        decide=pause is not None and pause.kind != HUMAN_INPUT,
-        answer=pause is not None and pause.kind == HUMAN_INPUT,
+        decide=any(gate.kind != HUMAN_INPUT for gate in gates),
+        answer=any(gate.kind == HUMAN_INPUT for gate in gates),
     )
 
 
@@ -648,11 +669,11 @@ async def _read(
 
 def _waits_at(run: dict[str, Any], request_id: str) -> RunPause:
     """
-    :return: The pause the run waits at, when it's the one named.
-    :raises HTTPException: 409 when it isn't (decided, or the run moved on).
+    :return: The gate named, when the run waits at it.
+    :raises HTTPException: 409 when it doesn't (decided, or the run moved on).
     """
-    pause = _pause(run)
-    if pause is None or pause.id != request_id:
+    pause = next((gate for gate in _gates(run) if gate.id == request_id), None)
+    if pause is None:
         raise HTTPException(status.HTTP_409_CONFLICT, NOT_OPEN)
     return pause
 
@@ -1101,11 +1122,12 @@ async def decide_adk_run(
     enforcer: Enforcer,
 ) -> AdkRun:
     """
-    Approve or reject the approval an ADK workflow run waits at: the run is
-    queued to carry on down the step's approved or rejected way, with who
-    decided and why.
+    Approve or reject an approval an ADK workflow run waits at (one of its
+    gates; the others stay open): the run carries on down the step's
+    approved or rejected way, with who decided and why.
     \f
-    :return: The run, queued.
+    :return: The run: queued, unless it's carrying on already (its next
+        attempt reads the decision).
     :raises HTTPException: 403 without the permission the step asks of its
         approvers; 404 for a run that isn't the organization's; 409 when the
         approval isn't open, or it's a question (answered at ``.../answers``).
@@ -1157,10 +1179,10 @@ async def answer_adk_run(
     enforcer: Enforcer,
 ) -> AdkRun:
     """
-    Answer the question (human input) an ADK workflow run waits at: the run
-    is queued to carry on with the answer.
+    Answer a question (human input) an ADK workflow run waits at: the run
+    carries on with the answer.
     \f
-    :return: The run, queued.
+    :return: The run: queued, unless it's carrying on already.
     :raises HTTPException: 403 without agents:run in the organization; 404 for
         a run that isn't the organization's; 409 when the question isn't open,
         or it's an approval (decided at ``.../decisions``); 422 for an answer

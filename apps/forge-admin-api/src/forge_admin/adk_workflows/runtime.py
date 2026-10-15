@@ -32,7 +32,13 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request, Response, status
 from forge_task_adk_workflows.files import FILE_TYPES, RunFile, files_rule
-from forge_task_adk_workflows.run_store import CANCELABLE, PAUSED, RUNNING, Actor
+from forge_task_adk_workflows.run_store import (
+    CANCELABLE,
+    PAUSED,
+    RUNNING,
+    Actor,
+    open_gates,
+)
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo.errors import PyMongoError
 from starlette.routing import NoMatchFound
@@ -222,6 +228,10 @@ class RuntimeRun(BaseModel):
     result: Any = None
     error: RuntimeFailure | None
     pause: RuntimePause | None
+    #: Every approval and question it waits at, each decided on its own (a
+    #: Decision board's choices, ways at an approval each): ``pause`` is the
+    #: first, while it's paused.
+    gates: list[RuntimePause] = []
     #: The files it started with.
     files: list[RunFile] = []
     #: Where to follow it, and act on it: ``self``, ``answers``,
@@ -237,10 +247,20 @@ def _iso(value: Any) -> str | None:
 
 
 def runtime_pause(run: dict[str, Any]) -> RuntimePause | None:
-    """:return: What a paused run waits for, as outside apps see it."""
+    """:return: What a paused run waits for first, as outside apps see it."""
     pause = run.get("pause")
     if run.get("status") != PAUSED or not isinstance(pause, dict):
         return None
+    return runtime_gate(pause)
+
+
+def runtime_gates(run: dict[str, Any]) -> list[RuntimePause]:
+    """:return: Every approval and question a run waits at, each decided on its own."""
+    return [runtime_gate(gate) for gate in open_gates(run)]
+
+
+def runtime_gate(pause: dict[str, Any]) -> RuntimePause:
+    """:return: An approval or question a run waits at, as outside apps see it."""
     details = pause.get("details")
     details = details if isinstance(details, dict) else {}
     schema, args = details.get("response_schema"), details.get("args")
@@ -269,9 +289,10 @@ def runtime_run(request: Request, run: dict[str, Any]) -> RuntimeRun:
     )
     links = {"self": base}
     pause = runtime_pause(run)
-    if pause is not None:
-        links["answers" if pause.kind == HUMAN_INPUT else "decisions"] = (
-            f"{base}/{'answers' if pause.kind == HUMAN_INPUT else 'decisions'}"
+    gates = runtime_gates(run)
+    for gate in gates:
+        links["answers" if gate.kind == HUMAN_INPUT else "decisions"] = (
+            f"{base}/{'answers' if gate.kind == HUMAN_INPUT else 'decisions'}"
         )
     if run["status"] in CANCELABLE and run.get("cancel_requested_at") is None:
         links["cancel"] = f"{base}/cancel"
@@ -296,6 +317,7 @@ def runtime_run(request: Request, run: dict[str, Any]) -> RuntimeRun:
         if isinstance(error, dict)
         else None,
         pause=pause,
+        gates=gates,
         files=run_files(run.get("payload")),
         links=links,
         cancel_requested_at=_iso(run.get("cancel_requested_at")),
@@ -476,16 +498,18 @@ async def answer_run(
     """
     if not await may(request, caller, run, RUN):
         raise HTTPException(status.HTTP_404_NOT_FOUND, NO_SUCH_RUN)
-    pause = runtime_pause(run)
-    if pause is None or pause.id != request_id:
+    found = next(
+        (gate for gate in open_gates(run) if gate.get("id") == request_id), None
+    )
+    if found is None:
         raise HTTPException(status.HTTP_409_CONFLICT, NOT_OPEN)
-    if pause.kind != HUMAN_INPUT:
+    if runtime_gate(found).kind != HUMAN_INPUT:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "The run waits for a decision, not an answer: send it to …/decisions",
         )
     try:
-        comment = checked_answer(run["pause"].get("details") or {}, answer)
+        comment = checked_answer(found.get("details") or {}, answer)
     except AdkRunError as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from None
     queue = run_queue(request)
@@ -519,8 +543,8 @@ async def decide_run(
     """
     if not await may(request, caller, run, READ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, NO_SUCH_RUN)
-    pause = runtime_pause(run)
-    if pause is None or pause.id != request_id:
+    pause = next((gate for gate in runtime_gates(run) if gate.id == request_id), None)
+    if pause is None:
         raise HTTPException(status.HTTP_409_CONFLICT, NOT_OPEN)
     if pause.kind == HUMAN_INPUT:
         raise HTTPException(

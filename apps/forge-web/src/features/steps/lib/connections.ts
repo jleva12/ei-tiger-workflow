@@ -27,6 +27,10 @@ export function toneOf(step: StepData, output: StepOutput, index: number): EdgeT
     case "github_pull_request":
     case "approval":
       return output.fallback ? "negative" : "positive"
+    // Each choice's Accepted and Rejected; then Done.
+    case "decision_board":
+      if (output.id === "done") return "neutral"
+      return output.fallback ? "negative" : "positive"
     case "if":
       return output.fallback ? "neutral" : "positive"
     case "switch":

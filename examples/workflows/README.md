@@ -32,7 +32,10 @@ It hands back `{request, repositories, need_changes, no_changes, not_cloned,
 findings}`: each finding is the repository's `needs_change`, a `summary` and
 `changes` (`file`, `symbol`, `what`), with the commit it read.
 
-**The worker** needs `HYBRID_ADK_WORKFLOWS__COMMANDS=local` (Bash steps),
+**The worker** needs `HYBRID_ADK_WORKFLOWS__COMMANDS=local` (Bash steps; or
+`openshell`, each in an OpenShell sandbox, with
+`HYBRID_ADK_WORKFLOWS__COMMAND_ALLOWED_HOSTS='["github.com"]'` and an image
+with git, e.g. `HYBRID_ADK_WORKFLOWS__COMMAND_IMAGE=buildpack-deps:bookworm-scm`),
 `HYBRID_ADK_WORKFLOWS__PI_AGENT=local` with pi installed, and a
 `HYBRID_ADK_WORKFLOWS__WORKSPACES` folder (each run clones into its own).
 

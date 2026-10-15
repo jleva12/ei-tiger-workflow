@@ -36,6 +36,23 @@ export function expressionSettings(step: StepData): ExpressionSetting[] {
   switch (step.kind) {
     case "approval":
       return [template("message", "What they're deciding", step.config.message)]
+    case "decision_board":
+      return [
+        template("message", "What it's about", step.config.message),
+        ...step.config.choices.flatMap((choice, index) => {
+          const name = choice.label.trim() || `Choice ${index + 1}`
+          return [
+            template(`choices.${choice.id}`, `${name}'s question`, choice.question),
+            {
+              key: `choices.${choice.id}.ask_when`,
+              label: `When ${name} is asked`,
+              mode: "expression" as const,
+              text: choice.ask_when,
+              check: { expect: "condition" as const },
+            },
+          ]
+        }),
+      ]
     case "http":
       return [
         template("url", "URL", step.config.url),

@@ -47,6 +47,7 @@ curl -N -X POST localhost:8000/run_sse -H 'content-type: application/json' -d '{
 | `GET /apps/{app}` | The agent: name, version, the state it takes |
 | `GET` / `POST /apps/{app}/users/{user}/sessions` | A person's conversations |
 | `GET` / `DELETE /apps/{app}/users/{user}/sessions/{id}` | One conversation |
+| `GET /apps/{app}/users/{user}/sessions/{id}/workflow-runs/{call}` | How the workflow a call in it started is going: its steps so far (hosted runtime: `WorkflowRunner.progress`) |
 | `POST /run_sse` | Run a turn; ADK events as Server-Sent Events |
 
 `forge-agent serve ./agents/` serves every agent in a folder. When it holds
@@ -64,7 +65,8 @@ Settings are flags or `FORGE_AGENT_*` variables:
 | `FORGE_AGENT_STREAMING` | `true` or `false` to stream replies, or not, whatever requests ask; as each asks by default |
 | `FORGE_AGENT_API_KEYS` | Keys the API asks for (`["k1","k2"]`): callers send `Authorization: Bearer <key>` or `X-API-Key` |
 | `FORGE_AGENT_ALLOW_PRIVATE`, `FORGE_AGENT_ALLOWED_HOSTS` | What HTTP tools may reach. Private networks are refused by default. |
-| `FORGE_AGENT_CODE_EXECUTION` | Where Code execution tools run the code agents send: `off` (the default; agents with one don't build), or `local` (`--code-execution`): ADK's `UnsafeLocalCodeExecutor`, a new Python process on this machine for each call, with the server's environment, files and network. Development only. |
+| `FORGE_AGENT_SANDBOX_MODE` | Where Code execution tools (and skills' scripts) run the code agents send (`--sandbox-mode`): `off` (the default; agents with one don't build); `local`, ADK's `UnsafeLocalCodeExecutor`, a new Python process on this machine for each call, with the server's environment, files and network (development only); or `openshell`, a new NVIDIA OpenShell sandbox for each call, deleted after it (the `openshell` extra). |
+| `FORGE_AGENT_OPENSHELL__GATEWAY` | For `openshell`: a gateway the `openshell` CLI registered (its name; the active one by default), or its URL with `FORGE_AGENT_OPENSHELL__TLS_DIR` (`ca.crt`, `tls.crt`, `tls.key`) and/or `__TOKEN`. `__WORKSPACE`, `__IMAGE` (needs `python3`; the gateway's default by default) and `__POLICY` (a `SandboxPolicy` YAML/JSON file; by default no network, only `/sandbox` and `/tmp` writable) shape the sandboxes. |
 | `FORGE_AGENT_API_PREFIX` | Mount the run API under a path (`--prefix`; none by default, `/api` in `AgentServer`) |
 | `FORGE_AGENT_A2A` | `true` serves Google's A2A protocol too, at `/a2a` (`--a2a`; the `a2a` extra) |
 | `FORGE_AGENT_A2A_TASKS` | Where A2A tasks are kept: `memory`, or a database URL; the conversations' database by default |
@@ -291,7 +293,8 @@ organization's MCP servers and knowledge bases with it.
 | Saved agent | ✓ | Exported in the agent's `dependencies` |
 | Workflow | hosted only | Pass `RuntimeServices(workflows=…)` to provide your own |
 | Knowledge base | hosted only | Pass `RuntimeServices(knowledge_bases=…)` to provide your own |
-| Code execution | ✓ | Off until `FORGE_AGENT_CODE_EXECUTION=local` (unsandboxed: development only); or pass `RuntimeServices(code_executor=…)`, any of ADK's code executors |
+| Code execution | ✓ | Off until `FORGE_AGENT_SANDBOX_MODE=openshell` (a new OpenShell sandbox for each call) or `local` (unsandboxed: development only); or pass `RuntimeServices(code_executor=…)`, any of ADK's code executors |
+| Rich answers | ✓ | A `present` tool answering `{"shown": true}`: Forge's chats draw its call with assistant-ui's Generative UI (its 35 components and Forge's Choices). Each Rich answers node picks the components (`components`), and only those go into the agent's model calls; what the person clicks or fills in comes back as their next message. API and A2A callers get the raw call, and the agent is told to write a sentence about it too. Built from `present.catalog.json`, written by the web console's `npm run generate:agent-schema` |
 
 Exports never carry secrets: write them as `${NAME}` in the builder, and set
 them in the environment the agent runs in.

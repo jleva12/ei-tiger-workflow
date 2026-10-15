@@ -1,0 +1,228 @@
+/*
+ * A workflow run in the chat (workflow-run-card.tsx): its mark, a little
+ * graph a pulse runs through while the run goes; the bar under its header;
+ * and its steps' rail, whose line into the step at work flows.
+ */
+
+[data-slot="workflow-run"] {
+  --wf-running: var(--signal-running);
+  --wf-done: var(--signal-success);
+  --wf-failed: var(--signal-failed);
+  --wf-waiting: var(--notice-accent);
+  --wf-line: var(--border);
+}
+
+/* ------------------------------------------------------------------ mark */
+
+[data-slot="workflow-run-mark"] .wf-edge {
+  fill: none;
+  stroke: var(--wf-line);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+[data-slot="workflow-run-mark"] .wf-pulse {
+  fill: none;
+  stroke: var(--wf-tone);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 7 40;
+  stroke-dashoffset: 7;
+  animation: wf-pulse 1.5s cubic-bezier(0.45, 0, 0.35, 1) infinite;
+}
+
+[data-slot="workflow-run-mark"] .wf-node {
+  fill: var(--card);
+  stroke: var(--wf-line);
+  stroke-width: 1.6;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+[data-slot="workflow-run-mark"][data-phase="running"] .wf-node,
+[data-slot="workflow-run-mark"][data-phase="starting"] .wf-node {
+  animation: wf-node 1.5s ease-in-out infinite;
+}
+[data-slot="workflow-run-mark"] .wf-node:nth-of-type(2) {
+  animation-delay: 0.5s;
+}
+[data-slot="workflow-run-mark"] .wf-node:nth-of-type(3) {
+  animation-delay: 1s;
+}
+
+/* Starting: the pulse hasn't left the first step. */
+[data-slot="workflow-run-mark"][data-phase="starting"] .wf-pulse {
+  animation-duration: 2.4s;
+}
+
+/* Waiting for a person or a time: it breathes, and the pulse rests. */
+[data-slot="workflow-run-mark"][data-phase="waiting"] {
+  animation: wf-breathe 2.4s ease-in-out infinite;
+}
+[data-slot="workflow-run-mark"][data-phase="waiting"] .wf-node:nth-of-type(2) {
+  fill: var(--wf-tone);
+  stroke: var(--wf-tone);
+}
+
+/* Ended: every step lit, in its outcome's tone. */
+[data-slot="workflow-run-mark"][data-phase="succeeded"] .wf-edge,
+[data-slot="workflow-run-mark"][data-phase="failed"] .wf-edge,
+[data-slot="workflow-run-mark"][data-phase="stopped"] .wf-edge {
+  stroke: var(--wf-tone);
+}
+[data-slot="workflow-run-mark"][data-phase="succeeded"] .wf-node,
+[data-slot="workflow-run-mark"][data-phase="failed"] .wf-node {
+  fill: var(--wf-tone);
+  stroke: var(--wf-tone);
+}
+
+@keyframes wf-pulse {
+  to {
+    stroke-dashoffset: -40;
+  }
+}
+
+@keyframes wf-node {
+  0%,
+  100% {
+    transform: scale(1);
+    stroke: var(--wf-line);
+  }
+  20% {
+    transform: scale(1.35);
+    stroke: var(--wf-tone);
+    fill: var(--wf-tone);
+  }
+  45% {
+    transform: scale(1);
+    stroke: var(--wf-tone);
+  }
+}
+
+@keyframes wf-breathe {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* ------------------------------------------------------------------- bar */
+
+[data-slot="workflow-run-bar"] {
+  position: relative;
+  height: 2px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--wf-tone) 16%, transparent);
+}
+[data-slot="workflow-run-bar"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--wf-tone);
+}
+[data-slot="workflow-run-bar"][data-going]::after {
+  inset: 0 auto 0 0;
+  width: 35%;
+  border-radius: 999px;
+  animation: wf-sweep 1.6s cubic-bezier(0.6, 0, 0.4, 1) infinite;
+}
+[data-slot="workflow-run-bar"][data-phase="waiting"]::after {
+  animation-duration: 3.2s;
+  opacity: 0.6;
+}
+
+@keyframes wf-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(290%);
+  }
+}
+
+/* ----------------------------------------------------------------- steps */
+
+[data-slot="workflow-run-step"] {
+  animation: wf-step-in 260ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+@keyframes wf-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* The rail: a line into each step but the first, out of each but the last. */
+[data-slot="workflow-run-step"] .wf-line {
+  width: 1.5px;
+  background: var(--wf-line);
+}
+[data-slot="workflow-run-step"] .wf-line[data-flow] {
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--wf-running) 0 3px,
+    transparent 3px 6px
+  );
+  background-size: 100% 12px;
+  animation: wf-flow 0.6s linear infinite;
+}
+[data-slot="workflow-run-step"] .wf-line[data-flow="waiting"] {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--wf-waiting) 0 3px,
+    transparent 3px 6px
+  );
+  animation-duration: 1.8s;
+}
+
+@keyframes wf-flow {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 0 12px;
+  }
+}
+
+/* The step at work: a ring turning round its dot. */
+[data-slot="workflow-run-dot"][data-state="running"] {
+  border: 1.5px solid color-mix(in oklab, var(--wf-running) 28%, transparent);
+  border-top-color: var(--wf-running);
+  animation: wf-turn 0.8s linear infinite;
+}
+[data-slot="workflow-run-dot"][data-state="running"]::after {
+  content: "";
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--wf-running);
+  animation: wf-turn 0.8s linear infinite reverse;
+}
+[data-slot="workflow-run-dot"][data-state="waiting"] {
+  box-shadow: 0 0 0 0 color-mix(in oklab, var(--wf-waiting) 45%, transparent);
+  animation: wf-halo 2s ease-out infinite;
+}
+
+@keyframes wf-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes wf-halo {
+  70%,
+  100% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="workflow-run"] *,
+  [data-slot="workflow-run"] *::after,
+  [data-slot="workflow-run-mark"] {
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+  }
+}

@@ -195,7 +195,10 @@ def test_a_draft_runs_what_changes_but_not_what_isnt_there(store: Store) -> None
     def problems(*nodes: dict[str, Any]) -> list[str]:
         return asyncio.run(check_runnable(document("ag_new00000001", *nodes), find))
 
-    assert problems(saved("a", "ag_both000001", "draft"), saved("b", "ag_draft00001")) == []
+    assert (
+        problems(saved("a", "ag_both000001", "draft"), saved("b", "ag_draft00001"))
+        == []
+    )
     [missing] = problems(saved("a", "ag_both000001", 9))
     assert "no version 9" in missing
     [gone] = problems(saved("a", "ag_nothing001"))

@@ -18,6 +18,7 @@ import { Route as AdminConversationsRouteImport } from './routes/admin/conversat
 import { Route as AdminPermissionsRouteImport } from './routes/admin/permissions'
 import { Route as AdminRolesRouteImport } from './routes/admin/roles'
 import { Route as AdminUsersRouteImport } from './routes/admin/users'
+import { Route as ChatTokenRouteImport } from './routes/chat.$token'
 import { Route as OrganizationsOrganizationIdRouteImport } from './routes/organizations/$organizationId'
 import { Route as AdminOrganizationsIndexRouteImport } from './routes/admin/organizations/index'
 import { Route as OauthCredentialsCallbackRouteImport } from './routes/oauth/credentials/callback'
@@ -26,6 +27,7 @@ import { Route as AdminOrganizationsOrganizationIdIndexRouteImport } from './rou
 import { Route as OrganizationsOrganizationIdAgentsAgentIdRouteImport } from './routes/organizations/$organizationId_.agents.$agentId'
 import { Route as OrganizationsOrganizationIdChatAgentsChatAgentIdRouteImport } from './routes/organizations/$organizationId_.chat-agents.$chatAgentId'
 import { Route as OrganizationsOrganizationIdKnowledgeKnowledgeBaseIdRouteImport } from './routes/organizations/$organizationId_.knowledge.$knowledgeBaseId'
+import { Route as OrganizationsOrganizationIdChatAgentsChatAgentIdChatPageRouteImport } from './routes/organizations/$organizationId_.chat-agents.$chatAgentId_.chat-page'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -71,6 +73,11 @@ const AdminUsersRoute = AdminUsersRouteImport.update({
   id: '/users',
   path: '/users',
   getParentRoute: () => AdminRouteRoute,
+} as any)
+const ChatTokenRoute = ChatTokenRouteImport.update({
+  id: '/chat/$token',
+  path: '/chat/$token',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const OrganizationsOrganizationIdRoute =
   OrganizationsOrganizationIdRouteImport.update({
@@ -118,6 +125,12 @@ const OrganizationsOrganizationIdKnowledgeKnowledgeBaseIdRoute =
     path: '/organizations/$organizationId/knowledge/$knowledgeBaseId',
     getParentRoute: () => rootRouteImport,
   } as any)
+const OrganizationsOrganizationIdChatAgentsChatAgentIdChatPageRoute =
+  OrganizationsOrganizationIdChatAgentsChatAgentIdChatPageRouteImport.update({
+    id: '/organizations/$organizationId_/chat-agents/$chatAgentId_/chat-page',
+    path: '/organizations/$organizationId/chat-agents/$chatAgentId/chat-page',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -128,6 +141,7 @@ export interface FileRoutesByFullPath {
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/chat/$token': typeof ChatTokenRoute
   '/organizations/$organizationId': typeof OrganizationsOrganizationIdRoute
   '/admin/': typeof AdminIndexRoute
   '/oauth/credentials/callback': typeof OauthCredentialsCallbackRoute
@@ -137,6 +151,7 @@ export interface FileRoutesByFullPath {
   '/organizations/$organizationId/chat-agents/$chatAgentId': typeof OrganizationsOrganizationIdChatAgentsChatAgentIdRoute
   '/organizations/$organizationId/knowledge/$knowledgeBaseId': typeof OrganizationsOrganizationIdKnowledgeKnowledgeBaseIdRoute
   '/admin/organizations/$organizationId/': typeof AdminOrganizationsOrganizationIdIndexRoute
+  '/organizations/$organizationId/chat-agents/$chatAgentId/chat-page': typeof OrganizationsOrganizationIdChatAgentsChatAgentIdChatPageRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -146,6 +161,7 @@ export interface FileRoutesByTo {
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/chat/$token': typeof ChatTokenRoute
   '/organizations/$organizationId': typeof OrganizationsOrganizationIdRoute
   '/admin': typeof AdminIndexRoute
   '/oauth/credentials/callback': typeof OauthCredentialsCallbackRoute
@@ -155,6 +171,7 @@ export interface FileRoutesByTo {
   '/organizations/$organizationId/chat-agents/$chatAgentId': typeof OrganizationsOrganizationIdChatAgentsChatAgentIdRoute
   '/organizations/$organizationId/knowledge/$knowledgeBaseId': typeof OrganizationsOrganizationIdKnowledgeKnowledgeBaseIdRoute
   '/admin/organizations/$organizationId': typeof AdminOrganizationsOrganizationIdIndexRoute
+  '/organizations/$organizationId/chat-agents/$chatAgentId/chat-page': typeof OrganizationsOrganizationIdChatAgentsChatAgentIdChatPageRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -166,6 +183,7 @@ export interface FileRoutesById {
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/chat/$token': typeof ChatTokenRoute
   '/organizations/$organizationId': typeof OrganizationsOrganizationIdRoute
   '/admin/': typeof AdminIndexRoute
   '/oauth/credentials/callback': typeof OauthCredentialsCallbackRoute
@@ -175,6 +193,7 @@ export interface FileRoutesById {
   '/organizations/$organizationId_/chat-agents/$chatAgentId': typeof OrganizationsOrganizationIdChatAgentsChatAgentIdRoute
   '/organizations/$organizationId_/knowledge/$knowledgeBaseId': typeof OrganizationsOrganizationIdKnowledgeKnowledgeBaseIdRoute
   '/admin/organizations/$organizationId/': typeof AdminOrganizationsOrganizationIdIndexRoute
+  '/organizations/$organizationId_/chat-agents/$chatAgentId_/chat-page': typeof OrganizationsOrganizationIdChatAgentsChatAgentIdChatPageRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -187,6 +206,7 @@ export interface FileRouteTypes {
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
+    | '/chat/$token'
     | '/organizations/$organizationId'
     | '/admin/'
     | '/oauth/credentials/callback'
@@ -196,6 +216,7 @@ export interface FileRouteTypes {
     | '/organizations/$organizationId/chat-agents/$chatAgentId'
     | '/organizations/$organizationId/knowledge/$knowledgeBaseId'
     | '/admin/organizations/$organizationId/'
+    | '/organizations/$organizationId/chat-agents/$chatAgentId/chat-page'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -205,6 +226,7 @@ export interface FileRouteTypes {
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
+    | '/chat/$token'
     | '/organizations/$organizationId'
     | '/admin'
     | '/oauth/credentials/callback'
@@ -214,6 +236,7 @@ export interface FileRouteTypes {
     | '/organizations/$organizationId/chat-agents/$chatAgentId'
     | '/organizations/$organizationId/knowledge/$knowledgeBaseId'
     | '/admin/organizations/$organizationId'
+    | '/organizations/$organizationId/chat-agents/$chatAgentId/chat-page'
   id:
     | '__root__'
     | '/'
@@ -224,6 +247,7 @@ export interface FileRouteTypes {
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
+    | '/chat/$token'
     | '/organizations/$organizationId'
     | '/admin/'
     | '/oauth/credentials/callback'
@@ -233,6 +257,7 @@ export interface FileRouteTypes {
     | '/organizations/$organizationId_/chat-agents/$chatAgentId'
     | '/organizations/$organizationId_/knowledge/$knowledgeBaseId'
     | '/admin/organizations/$organizationId/'
+    | '/organizations/$organizationId_/chat-agents/$chatAgentId_/chat-page'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -240,12 +265,14 @@ export interface RootRouteChildren {
   AdminRouteRoute: typeof AdminRouteRouteWithChildren
   AssistantRoute: typeof AssistantRoute
   SettingsRoute: typeof SettingsRoute
+  ChatTokenRoute: typeof ChatTokenRoute
   OrganizationsOrganizationIdRoute: typeof OrganizationsOrganizationIdRoute
   OauthCredentialsCallbackRoute: typeof OauthCredentialsCallbackRoute
   OauthMcpCallbackRoute: typeof OauthMcpCallbackRoute
   OrganizationsOrganizationIdAgentsAgentIdRoute: typeof OrganizationsOrganizationIdAgentsAgentIdRoute
   OrganizationsOrganizationIdChatAgentsChatAgentIdRoute: typeof OrganizationsOrganizationIdChatAgentsChatAgentIdRoute
   OrganizationsOrganizationIdKnowledgeKnowledgeBaseIdRoute: typeof OrganizationsOrganizationIdKnowledgeKnowledgeBaseIdRoute
+  OrganizationsOrganizationIdChatAgentsChatAgentIdChatPageRoute: typeof OrganizationsOrganizationIdChatAgentsChatAgentIdChatPageRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -313,6 +340,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminUsersRouteImport
       parentRoute: typeof AdminRouteRoute
     }
+    '/chat/$token': {
+      id: '/chat/$token'
+      path: '/chat/$token'
+      fullPath: '/chat/$token'
+      preLoaderRoute: typeof ChatTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/organizations/$organizationId': {
       id: '/organizations/$organizationId'
       path: '/organizations/$organizationId'
@@ -369,6 +403,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrganizationsOrganizationIdKnowledgeKnowledgeBaseIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/organizations/$organizationId_/chat-agents/$chatAgentId_/chat-page': {
+      id: '/organizations/$organizationId_/chat-agents/$chatAgentId_/chat-page'
+      path: '/organizations/$organizationId/chat-agents/$chatAgentId/chat-page'
+      fullPath: '/organizations/$organizationId/chat-agents/$chatAgentId/chat-page'
+      preLoaderRoute: typeof OrganizationsOrganizationIdChatAgentsChatAgentIdChatPageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -402,6 +443,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRouteRoute: AdminRouteRouteWithChildren,
   AssistantRoute: AssistantRoute,
   SettingsRoute: SettingsRoute,
+  ChatTokenRoute: ChatTokenRoute,
   OrganizationsOrganizationIdRoute: OrganizationsOrganizationIdRoute,
   OauthCredentialsCallbackRoute: OauthCredentialsCallbackRoute,
   OauthMcpCallbackRoute: OauthMcpCallbackRoute,
@@ -411,6 +453,8 @@ const rootRouteChildren: RootRouteChildren = {
     OrganizationsOrganizationIdChatAgentsChatAgentIdRoute,
   OrganizationsOrganizationIdKnowledgeKnowledgeBaseIdRoute:
     OrganizationsOrganizationIdKnowledgeKnowledgeBaseIdRoute,
+  OrganizationsOrganizationIdChatAgentsChatAgentIdChatPageRoute:
+    OrganizationsOrganizationIdChatAgentsChatAgentIdChatPageRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

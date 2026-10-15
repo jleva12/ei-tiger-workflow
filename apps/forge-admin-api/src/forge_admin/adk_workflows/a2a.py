@@ -91,6 +91,7 @@ from forge_admin.adk_workflows.runtime import (
     decide_run,
     found_workflow,
     may,
+    runtime_gates,
     runtime_pause,
     start_runtime_run,
     wait_of,
@@ -461,6 +462,8 @@ class WorkflowA2aExecutor(AgentExecutor):
         caller = caller_of(request)
         value = value_of(message)
         named = value.get("request_id") if isinstance(value, dict) else None
+        # It may name any approval or question the run waits at; else the first.
+        pause = next((gate for gate in runtime_gates(run) if gate.id == named), pause)
         request_id = str(named or pause.id)
         try:
             if pause.kind == HUMAN_INPUT:

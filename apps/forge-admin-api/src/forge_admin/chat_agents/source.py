@@ -14,8 +14,10 @@ are and what they may use here:
   Skills tools name, from the organization's vault as they are now.
 """
 
+import hashlib
 import logging
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from typing import Any
 
 from forge_agent_runtime import (
@@ -36,9 +38,11 @@ from forge_common.model_provider import load_model_provider_config
 from forge_mcp_servers.api_credentials import ApiCredentials
 from forge_mcp_servers.service import McpServers
 from forge_task_adk_workflows.run_store import RunStore
+from forge_task_adk_workflows.runs import STATE_KEY
+from forge_task_adk_workflows.steps import run_progress
 from forge_task_adk_workflows.usage_store import UsageStore
 from google.adk.artifacts import InMemoryArtifactService
-from google.adk.sessions import DatabaseSessionService
+from google.adk.sessions import BaseSessionService, DatabaseSessionService
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.tool_context import ToolContext
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -48,6 +52,7 @@ from forge_admin.adk_workflows.documents import AgentStore
 from forge_admin.adk_workflows.queue import Embedding
 from forge_admin.adk_workflows.resources import RunResources
 from forge_admin.adk_workflows.runs import (
+    APP_NAME,
     AdkRunError,
     prepare_run,
     settle,
@@ -78,6 +83,33 @@ logger = logging.getLogger(__name__)
 
 #: How long a chat agent waits for a workflow it called, in seconds.
 WORKFLOW_WAIT = 120.0
+
+#: What a chat sees of each step of a workflow run it started: not what the
+#: step was handed, handed on or called, which only the organization's
+#: members see on the run's page.
+CHAT_STEP_FIELDS = (
+    "id",
+    "name",
+    "kind",
+    "status",
+    "started_at",
+    "finished_at",
+    "handed_to",
+)
+
+
+def chat_run_id(agent_id: str, session_id: str, call_id: str) -> str:
+    """
+    :return: The ID of the run a chat agent's call of a workflow starts,
+        made from the conversation and the call: the chat follows the run by
+        its call, and a call answered again finds the run it started.
+    """
+    made = f"{agent_id}\n{session_id}\n{call_id}".encode()
+    return hashlib.sha256(made).hexdigest()[:32]
+
+
+def _iso(value: Any) -> str | None:
+    return value.isoformat() if isinstance(value, datetime) else None
 
 
 class MongoAgentSource:
@@ -163,6 +195,8 @@ class OrganizationWorkflows:
     The workflows a chat agent calls: started as runs on the async worker,
     as the agent, and waited for. A run that pauses (for an approval, a
     person's answer) or takes longer answers with where it got to.
+    Meanwhile the chat follows it by its call (``progress``): each call
+    starts the run :func:`chat_run_id` names.
     """
 
     def __init__(
@@ -171,12 +205,16 @@ class OrganizationWorkflows:
         runs: RunStore,
         queue: Embedding | None,
         resources: Callable[[str], RunResources] | None = None,
+        run_sessions: BaseSessionService | None = None,
     ) -> None:
         self.agents = agents
         self.runs = runs
         self.queue = queue
         #: What a workflow's LLM agents use from its organization, by organization.
         self.resources = resources
+        #: Where the worker keeps runs' ADK sessions, which their steps are
+        #: read from; without it, a run's progress has no steps.
+        self.run_sessions = run_sessions
 
     async def _resolved(
         self, ref: str, organization_id: str | None
@@ -215,6 +253,38 @@ class OrganizationWorkflows:
             raise RuntimeError(
                 "Workflows can't run: the async worker's queue isn't set up."
             )
+        session = context.session
+        call_id = context.function_call_id
+        run_id = chat_run_id(session.app_name, session.id, call_id) if call_id else None
+        started = (
+            await self.runs.get(run_id, organization_id=organization_id)
+            if run_id
+            else None
+        )
+        if started is None:
+            started = await self._start(
+                workflow_id, workflow_input, organization_id, context, run_id
+            )
+        current = await settle(self.runs, started["id"], wait=WORKFLOW_WAIT)
+        status = current["status"] if current else "missing"
+        answer: dict[str, Any] = {"run_id": started["id"], "status": status}
+        if current is not None:
+            if current.get("result") is not None:
+                answer["result"] = current["result"]
+            if current.get("error") is not None:
+                answer["error"] = current["error"]
+        return answer
+
+    async def _start(
+        self,
+        workflow_id: str,
+        workflow_input: dict[str, Any],
+        organization_id: str | None,
+        context: ToolContext,
+        run_id: str | None,
+    ) -> dict[str, Any]:
+        """:return: A new run of the workflow, for the call, queued."""
+        assert self.queue is not None
         resolved = await self._resolved(workflow_id, organization_id)
         record = resolved.run_record
         find = workflow_finder(self.agents, record["organization_id"])
@@ -226,7 +296,7 @@ class OrganizationWorkflows:
         except AdkRunError as error:
             raise ValueError(str(error)) from error
         agent = context.agent_name
-        run = await start_adk_run(
+        return await start_adk_run(
             self.runs,
             self.queue,
             record,
@@ -238,18 +308,83 @@ class OrganizationWorkflows:
                 "type": "chat_agent",
                 "agent_id": context.session.app_name,
                 "user": context.user_id,
+                # The conversation and call it ran for, which follow it (``progress``).
+                "session_id": context.session.id,
+                "call_id": context.function_call_id,
             },
             version=resolved.version,
+            run_id=run_id,
         )
-        current = await settle(self.runs, run["id"], wait=WORKFLOW_WAIT)
-        status = current["status"] if current else "missing"
-        answer: dict[str, Any] = {"run_id": run["id"], "status": status}
-        if current is not None:
-            if current.get("result") is not None:
-                answer["result"] = current["result"]
-            if current.get("error") is not None:
-                answer["error"] = current["error"]
-        return answer
+
+    async def progress(
+        self,
+        *,
+        agent_id: str,
+        user_id: str,
+        session_id: str,
+        call_id: str,
+        organization_id: str | None,
+    ) -> dict[str, Any] | None:
+        if organization_id is None:
+            return None
+        run = await self.runs.get(
+            chat_run_id(agent_id, session_id, call_id), organization_id=organization_id
+        )
+        payload = run.get("payload") if run is not None else None
+        if run is None or not isinstance(payload, dict):
+            return None
+        trigger = payload.get("trigger")
+        # Only the person whose conversation started it follows it.
+        if not isinstance(trigger, dict) or (
+            trigger.get("type"),
+            trigger.get("agent_id"),
+            trigger.get("user"),
+            trigger.get("session_id"),
+        ) != ("chat_agent", agent_id, user_id, session_id):
+            return None
+        state = run.get("state")
+        kept = state.get(STATE_KEY) if isinstance(state, dict) else None
+        kept = kept if isinstance(kept, dict) else {}
+        found = None
+        if self.run_sessions is not None:
+            found = await self.run_sessions.get_session(
+                app_name=APP_NAME,
+                user_id=str(payload.get("run_as") or ""),
+                session_id=str(kept.get("session_id") or run["session_id"]),
+            )
+        document = payload.get("document")
+        steps = (
+            run_progress(
+                found,
+                document,
+                # Before it starts, it has no invocation, and so no events of its own.
+                invocation_id=str(kept.get("invocation_id") or ""),
+            )["steps"]
+            if isinstance(document, dict)
+            else []
+        )
+        error = run.get("error")
+        return {
+            "run_id": run["id"],
+            "workflow": run["agent_name"],
+            "status": run["status"],
+            "created_at": _iso(run.get("created_at")),
+            "started_at": _iso(run.get("started_at")),
+            "finished_at": _iso(run.get("finished_at")),
+            "waiting_reason": run.get("waiting_reason"),
+            "error": {"message": str(error.get("message") or "")}
+            if isinstance(error, dict)
+            else None,
+            # The steps it reached, and its start (where a run that hasn't
+            # recorded anything yet is): not the others, ways it didn't take.
+            "steps": [
+                {key: step[key] for key in CHAT_STEP_FIELDS}
+                for step in steps
+                if step["status"] != "not_reached"
+                or step["handed_to"]
+                or step["kind"] == "start"
+            ],
+        }
 
 
 def chat_agent_models(settings: Settings) -> ProviderModels:
@@ -277,6 +412,7 @@ def create_executor(
     knowledge_search: KnowledgeSearch | None = None,
     codegraph: CodeGraph | None = None,
     api_credentials: ApiCredentials | None = None,
+    run_sessions: BaseSessionService | None = None,
 ) -> AgentExecutor:
     """
     The hosted runtime: agents from ``store``, conversations in the admin
@@ -292,7 +428,9 @@ def create_executor(
         environment_note=TOOL_ENVIRONMENT_NOTE,
         allow_private=settings.agent_tools_allow_private,
         allowed_hosts=tuple(settings.agent_tools_allowed_hosts),
-        code_executor=code_executor(settings.agent_code_execution),
+        code_executor=code_executor(
+            settings.agent_sandbox_mode, settings.agent_openshell
+        ),
         mcp_servers=OrganizationMcpServers(mcp_servers, sessions)
         if mcp_servers is not None
         else None,
@@ -306,6 +444,7 @@ def create_executor(
             lambda organization: RunResources(
                 organization, chat_agents=store, sessions=sessions
             ),
+            run_sessions=run_sessions or DatabaseSessionService(db_engine=engine),
         )
         if agents is not None
         else None,

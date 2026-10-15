@@ -18,24 +18,37 @@ has one, otherwise its latest published version. Only the format's JSON
 Schema is checked on save: a draft that can't run yet is saved all the same.
 Publishing checks that it builds. The workflows are versioned the same way
 (``forge_admin.adk_workflows.versioned_store``).
+
+A published agent can also be shared as a **chat page**: a full-page chat at
+a link of its own (``chat_page`` on the record, beside its versions; see
+``forge_admin.chat_agents.pages``). Turning it on or off, or making a new
+link, isn't a change to the agent: its revision and times stay as they are.
 """
 
 import json
+import secrets
+import string
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
 
 from forge_agent_runtime.document import FORMAT, schema_problems, with_defaults
+from pymongo import ASCENDING, IndexModel, ReturnDocument
 
-from forge_admin.adk_workflows.document_store import iso, new_id
+from forge_admin.adk_workflows.document_store import iso, new_id, now
 from forge_admin.adk_workflows.versioned_store import (
     VersionedDocumentStore,
     VersionState,
     status_of,
+    versioned,
 )
+from forge_admin.chat_agents.page_settings import page_settings
 
 COLLECTION = "chat_agents"
 VERSIONS = "chat_agent_versions"
 ID_PATTERN = r"^ca_[a-z0-9]{6,40}$"
+#: A chat page's link: ``cp_`` and 24 random lowercase letters and digits.
+PAGE_TOKEN_PATTERN = r"^cp_[a-z0-9]{24}$"
 MAX_PROBLEMS = 5
 
 
@@ -59,6 +72,16 @@ ChatAgentState = VersionState
 def new_chat_agent_id() -> str:
     """:return: A new agent ID, ``ca_`` and ten random letters and digits."""
     return new_id("ca_")
+
+
+def new_page_token() -> str:
+    """
+    :return: A new chat page link, ``cp_`` and 24 random lowercase letters
+        and digits (about 124 bits): whoever holds it may use the page, so
+        it can't be guessed.
+    """
+    alphabet = string.ascii_lowercase + string.digits
+    return "cp_" + "".join(secrets.choice(alphabet) for _ in range(24))
 
 
 def checked_document(
@@ -119,6 +142,7 @@ __all__ = [
     "ChatAgentTaken",
     "checked_document",
     "new_chat_agent_id",
+    "new_page_token",
     "status_of",
 ]
 
@@ -134,6 +158,15 @@ class ChatAgentStore(VersionedDocumentStore):
     id_prefix = "ca_"
     conflict = ChatAgentConflict
     id_taken = ChatAgentTaken
+    extra_indexes = (
+        # A chat page's link finds its agent.
+        IndexModel(
+            [("chat_page.token", ASCENDING)],
+            name="chat_page_token",
+            unique=True,
+            partialFilterExpression={"chat_page.token": {"$type": "string"}},
+        ),
+    )
 
     def checked(
         self,
@@ -153,4 +186,74 @@ class ChatAgentStore(VersionedDocumentStore):
             created_at=created_at,
             updated_at=updated_at,
             max_bytes=max_bytes,
+        )
+
+    async def set_chat_page(
+        self,
+        organization_id: str,
+        agent_id: str,
+        *,
+        enabled: bool,
+        new_link: bool,
+        by: str,
+        by_name: str | None,
+        settings: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """
+        Turn the agent's chat page on or off, keeping its link; or give it a
+        new link, which stops the old one. The agent's revision and times
+        stay as they are: the builder saves its draft as before.
+
+        :param settings: The page's settings to change (``page_settings``:
+            its prompts, what it leaves out, its words and look); the rest
+            stay as they are.
+
+        :return: The agent; None when there's no such one.
+        :raises VersionState: ``NOT_PUBLISHED``: turning on a page for an
+            agent never published (a page runs its latest published version).
+        """
+        current = await self.get(organization_id, agent_id)
+        if current is None:
+            return None
+        if enabled and current.get("published_version") is None:
+            raise VersionState(
+                "NOT_PUBLISHED",
+                "Publish it first: its chat page runs its latest published version.",
+            )
+        kept = current.get("chat_page") or {}
+        if not kept and not enabled and not settings:
+            return current
+        page = {
+            **page_settings(kept),
+            **(settings or {}),
+            "token": new_page_token() if new_link or not kept else kept["token"],
+            "enabled": enabled,
+            "updated_at": now(),
+            "updated_by": by,
+            "updated_by_name": by_name,
+        }
+        collection = await self._ready()
+        return versioned(
+            await collection.find_one_and_update(
+                {
+                    "_id": agent_id,
+                    "organization_id": organization_id,
+                    "deleted_at": None,
+                },
+                {"$set": {"chat_page": page}},
+                return_document=ReturnDocument.AFTER,
+            )
+        )
+
+    async def find_chat_page(self, token: str) -> dict[str, Any] | None:
+        """:return: The agent whose chat page answers at a link; None when none does."""
+        collection = await self._ready()
+        return versioned(
+            await collection.find_one(
+                {
+                    "chat_page.token": token,
+                    "chat_page.enabled": True,
+                    "deleted_at": None,
+                }
+            )
         )

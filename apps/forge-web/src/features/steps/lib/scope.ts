@@ -221,6 +221,40 @@ export function outputTypeOf(
         comment: t.string("What they said, if anything."),
         decided_at: t.string("When.", { format: "date-time" }),
       })
+    case "decision_board": {
+      const decision = t.object({
+        choice: t.string("The choice's ID."),
+        label: t.string("The choice's name."),
+        question: t.string("What they were asked."),
+        approved: t.boolean("Whether they accepted it."),
+        decided_by: t.string("Who decided; Forge when its time ran out."),
+        comment: t.string("What they said, if anything."),
+        decided_at: t.string("When.", { format: "date-time" }),
+      })
+      const ids = (what: string) => t.array(t.string("A choice's ID."), what)
+      return t.object({
+        accepted: ids("The choices accepted so far, by ID."),
+        rejected: ids("The choices rejected so far, by ID."),
+        open: ids("The choices nobody has decided yet, by ID: none at Done."),
+        decisions: t.object(
+          Object.fromEntries(
+            step.config.choices.map((choice, index) => [
+              choice.id,
+              {
+                ...decision,
+                description: `${choice.label.trim() || `Choice ${index + 1}`}'s decision, once it's made.`,
+              },
+            ])
+          ),
+          "Each decision made so far, by choice ID."
+        ),
+        decided: {
+          ...decision,
+          description:
+            "The decision just made: the choice whose way this is. Null at Done when nothing was laid out.",
+        },
+      })
+    }
     case "http":
       return httpResponse(
         Object.keys(step.config.output_schema).length

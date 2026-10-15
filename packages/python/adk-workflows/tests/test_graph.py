@@ -253,6 +253,7 @@ def test_every_kind_has_a_factory() -> None:
             "pi_agent",
             "approval",
             "human_input",
+            "decision_board",
             "http",
             "bash",
             "transform",

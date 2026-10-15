@@ -181,15 +181,24 @@ class Runtime:
     def paused(self, run_id: str, kind: str, **details: Any) -> str:
         """Put a run at a pause, as the worker would: the pause's ID."""
         assert self.call(self.runs.claim, run_id, owner="w1", lease_seconds=60)
-        pause = self.call(
+        [pause] = self.call(
             self.runs.pause,
             run_id,
             owner="w1",
             state={},
-            key="review",
-            kind=kind,
-            reason="Go on?",
-            details={"kind": kind, "step": "review", "step_name": "Review", **details},
-            deadline=None,
+            gates=[
+                {
+                    "key": "review",
+                    "kind": kind,
+                    "reason": "Go on?",
+                    "details": {
+                        "kind": kind,
+                        "step": "review",
+                        "step_name": "Review",
+                        **details,
+                    },
+                    "deadline": None,
+                }
+            ],
         )
         return str(pause["id"])

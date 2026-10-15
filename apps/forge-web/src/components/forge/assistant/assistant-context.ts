@@ -37,6 +37,10 @@ export type AssistantSettings = {
   commands?: AssistantCommand[] | undefined
   /** Shown at the top of the composer; see `AssistantOptions`. */
   composerContext?: ReactNode | undefined
+  /** The message box's placeholder; see `AssistantOptions`. */
+  placeholder?: string | undefined
+  /** Under the message box; see `AssistantOptions`. */
+  composerNote?: ReactNode | undefined
   /** How answers cite what the tools found; see `AssistantOptions`. */
   sources?: AssistantSourcesConfig | undefined
   /** What the app's agents are called; see `AssistantOptions`. */

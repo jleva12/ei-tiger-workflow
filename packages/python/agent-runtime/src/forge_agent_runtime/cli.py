@@ -173,9 +173,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--memory-atlas-uri")
     run.add_argument("--allow-private", action="store_true", default=None)
     run.add_argument(
-        "--code-execution",
-        choices=["off", "local"],
-        help="Where Code execution tools run code: local runs it on this machine, unsandboxed",
+        "--sandbox-mode",
+        choices=["off", "local", "openshell"],
+        help="Where Code execution tools run code: local runs it on this machine, unsandboxed; "
+        "openshell, in a new OpenShell sandbox for each call",
     )
     run.add_argument(
         "--a2a", action="store_true", default=None, help="Serve over Google's A2A protocol too (/a2a)"

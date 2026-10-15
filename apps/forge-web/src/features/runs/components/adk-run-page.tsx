@@ -33,6 +33,8 @@ import {
 import { CopyButton, JsonView } from "@/features/json/components/json-view"
 import {
   ApprovalPanel,
+  BoardChoiceRow,
+  DecisionBoardPanel,
   HumanInputPanel,
 } from "@/features/runs/components/pause-panels"
 import { AdkRunTraceTab } from "@/features/runs/components/run-trace"
@@ -72,6 +74,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { MyOrganization } from "@/lib/access"
+import { useScopeAccess } from "@/lib/hierarchy"
 import type { AgentDocument } from "@/features/adk-workflows/lib/document"
 import { useNodeCatalogs } from "@/features/adk-workflows/lib/api"
 import { kindInfo } from "@/features/adk-workflows/lib/catalog"
@@ -85,6 +88,8 @@ import {
   humanize,
   isAdkRunTab,
   isFailureEvent,
+  gateGroups,
+  openGatesOf,
   pauseKindOf,
   responseSchemaOf,
   shortId,
@@ -204,6 +209,93 @@ function AdkPausePanel(props: Pause) {
   )
 }
 
+/** One of a Decision board's open choices, decided through the run. */
+function AdkBoardChoice({
+  organizationId,
+  runId,
+  pause,
+  allowed,
+}: Pause & { allowed: boolean }) {
+  // The row shows the failure itself.
+  const decide = useDecideAdkRun(organizationId, runId, {
+    meta: { silent: true },
+    said: (approved) => ({
+      title: approved ? "Accepted." : "Rejected.",
+      description: `${pause.details.board?.label ?? "The choice"} takes its ${approved ? "Accepted" : "Rejected"} way.`,
+    }),
+  })
+  return <BoardChoiceRow pause={pause} decide={decide} allowed={allowed} />
+}
+
+/** A Decision board's open choices, each decided on its own. */
+function AdkBoard({
+  organizationId,
+  runId,
+  gates,
+}: {
+  organizationId: string
+  runId: string
+  gates: AdkRunPause[]
+}) {
+  const can = useScopeAccess(`org:${organizationId}`)
+  const permission = adkApprovePermission(
+    gates[0]?.details.approvers ?? "org:admin"
+  )
+  return (
+    <DecisionBoardPanel
+      organizationId={organizationId}
+      gates={gates}
+      permission={permission}
+    >
+      {gates.map((gate) => (
+        <AdkBoardChoice
+          key={gate.id}
+          organizationId={organizationId}
+          runId={runId}
+          pause={gate}
+          allowed={can(permission)}
+        />
+      ))}
+    </DecisionBoardPanel>
+  )
+}
+
+/**
+ * Every approval and question a run waits at, each decided on its own: a
+ * board's choices together, the rest each in a panel of its own. A run may
+ * wait at them while it's paused, waiting for a time, or carrying on with
+ * a decision made at another.
+ */
+function AdkGates({
+  organizationId,
+  run,
+}: {
+  organizationId: string
+  run: AdkRunDetail
+}) {
+  return (
+    <>
+      {gateGroups(openGatesOf(run)).map((group) =>
+        group.kind === "board" ? (
+          <AdkBoard
+            key={`board-${group.step}`}
+            organizationId={organizationId}
+            runId={run.id}
+            gates={group.gates}
+          />
+        ) : (
+          <AdkPausePanel
+            key={group.gate.id}
+            organizationId={organizationId}
+            runId={run.id}
+            pause={group.gate}
+          />
+        )
+      )}
+    </>
+  )
+}
+
 /**
  * Where the run stands, when that needs saying: what it waits for (a
  * person, a time, a worker), its being stopped, the hiccup it's retried
@@ -216,14 +308,18 @@ export function StatusNotice({
   organizationId: string
   run: AdkRunDetail
 }) {
-  if (run.status === "paused" && run.pause)
-    return (
-      <AdkPausePanel
-        organizationId={organizationId}
-        runId={run.id}
-        pause={run.pause}
-      />
-    )
+  return (
+    <>
+      {openGatesOf(run).length > 0 && (
+        <AdkGates organizationId={organizationId} run={run} />
+      )}
+      <StatusLine run={run} />
+    </>
+  )
+}
+
+/** Where the run stands besides what people decide: a time, a stop, a hiccup, a failure. */
+function StatusLine({ run }: { run: AdkRunDetail }) {
   if (run.status === "waiting" && run.waiting_until) {
     return (
       <WaitingNotice
@@ -1072,12 +1168,8 @@ function AdkRunSteps({
 
   return (
     <div className={BODY}>
-      {run.status === "paused" && run.pause && (
-        <AdkPausePanel
-          organizationId={organizationId}
-          runId={run.id}
-          pause={run.pause}
-        />
+      {openGatesOf(run).length > 0 && (
+        <AdkGates organizationId={organizationId} run={run} />
       )}
       {body}
     </div>

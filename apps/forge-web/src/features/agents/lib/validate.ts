@@ -278,6 +278,31 @@ function settingsIssues(
       }
       break
     }
+    case "rich_answers": {
+      const c = step.config
+      if (!c.components.length) {
+        out.push([
+          "components",
+          "error",
+          "Pick the components it may use.",
+          "components",
+        ])
+      }
+      const fields = ["Select", "Input", "DatePicker", "Checkbox", "Slider"]
+      const options = ["RadioGroup", "CheckboxGroup"]
+      if (
+        c.components.includes("Form") &&
+        ![...fields, ...options].some((name) => c.components.includes(name))
+      ) {
+        out.push([
+          "form-fields",
+          "warning",
+          "It may use Form, but no fields to put in one: pick a few (Input, Select…).",
+          "components",
+        ])
+      }
+      break
+    }
     case "knowledge_base": {
       const c = step.config
       if (!c.knowledge_bases.length) {
@@ -683,6 +708,14 @@ export function validateChatAgent(
           step.id,
           "code-twice",
           "It has Code execution twice: one is enough."
+        )
+      }
+      if (attached.filter((t) => t?.kind === "rich_answers").length > 1) {
+        add(
+          "warning",
+          step.id,
+          "rich-twice",
+          "It has Rich answers twice: one is enough."
         )
       }
     }

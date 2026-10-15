@@ -26,6 +26,16 @@ const TARGETS = [
       "../../packages/python/agent-runtime/src/forge_agent_runtime/chat_agent.schema.json"
     ),
   },
+  {
+    // What a chat agent's `present` call is built from (Rich answers): the
+    // Generative UI vocabulary the web console draws, each component's props.
+    module: "/src/components/forge/assistant/rich-answers-schema.ts",
+    name: "presentCatalog",
+    file: path.resolve(
+      root,
+      "../../packages/python/agent-runtime/src/forge_agent_runtime/present.catalog.json"
+    ),
+  },
 ]
 
 // Load the TypeScript module as the app sees it, without the app's plugins,

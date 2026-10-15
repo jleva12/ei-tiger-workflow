@@ -6,7 +6,7 @@ import type { AdkRunTrace } from "@/features/runs/lib/trace"
 
 /*
  * The conversation audit: every conversation of an organization's chat
- * agents (from the builder's chat, the run API or A2A) and of the assistant
+ * agents (from the builder's chat, the run API, A2A or its chat page) and of the assistant
  * asked from inside it (`agents:audit`, its admins), and on the site every
  * assistant conversation (`agents:audit` on the site, its admins). Each is an
  * ADK session; its turns say how they came in (their channel) and who called
@@ -18,7 +18,8 @@ import type { AdkRunTrace } from "@/features/runs/lib/trace"
 /* -------------------------------------------------------------------------- */
 
 /** How a turn came in. */
-export type Channel = "console" | "api" | "a2a" | "assistant" | "unknown"
+export type Channel =
+  "console" | "api" | "a2a" | "assistant" | "page" | "unknown"
 
 export const CHANNELS: Record<
   Channel,
@@ -39,6 +40,11 @@ export const CHANNELS: Record<
     label: "Assistant",
     description: "The on-screen assistant",
     tone: "outline",
+  },
+  page: {
+    label: "Chat page",
+    description: "The agent's chat page, from someone with its link",
+    tone: "warning",
   },
   unknown: {
     label: "Unknown",

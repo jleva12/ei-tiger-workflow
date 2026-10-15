@@ -363,6 +363,11 @@ def brief(**changes: Any) -> dict[str, Any]:
             },
             {"kind": "adk_workflow", "name": "", "config": {"workflow": "wf_returns"}},
             {"kind": "code_execution", "name": "", "config": {}},
+            {
+                "kind": "rich_answers",
+                "name": "Rich answers",
+                "config": {"components": ["Fact", "Form", "Input"]},
+            },
             {"kind": "memory", "name": "Memory", "config": {"mode": "on_demand"}},
         ],
         "hand_offs": [
@@ -426,6 +431,10 @@ def test_it_writes_the_instruction_from_the_brief(workspace: Workspace) -> None:
     assert "`start_a_return`: Opens a return for an order." in sent
     assert "`order_id` (string, required)" in sent
     assert "`run_code(code)`" in sent
+    assert (
+        "`present(...)`: shows the person a composition the chat draws, of the components its "
+        "Rich answers node picks (Fact, Input, Form)" in sent
+    )
     assert "`load_memory(query)`" in sent
     # Who it hands off to, as ADK names them.
     assert '`billing_specialist` (the Agents page\'s "Billing desk")' in sent

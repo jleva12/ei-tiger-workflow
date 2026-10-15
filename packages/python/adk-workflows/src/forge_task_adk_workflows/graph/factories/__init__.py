@@ -16,7 +16,7 @@ from forge_task_adk_workflows.graph.factories.agents import (
 from forge_task_adk_workflows.graph.factories.base import Body, BuildContext, Factory
 from forge_task_adk_workflows.graph.factories.github import git_branch, git_clone, git_push, github_pull_request
 from forge_task_adk_workflows.graph.factories.logic import end, for_each, if_, loop, match, merge, switch
-from forge_task_adk_workflows.graph.factories.people import approval, human_input
+from forge_task_adk_workflows.graph.factories.people import approval, decision_board, human_input
 from forge_task_adk_workflows.graph.factories.pi import pi_agent
 from forge_task_adk_workflows.graph.factories.start import start
 
@@ -31,6 +31,7 @@ FACTORIES: dict[str, Factory] = {
     "pi_agent": pi_agent,
     "approval": approval,
     "human_input": human_input,
+    "decision_board": decision_board,
     "http": http,
     "bash": bash,
     "transform": transform,

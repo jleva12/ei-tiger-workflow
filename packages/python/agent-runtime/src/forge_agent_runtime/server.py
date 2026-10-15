@@ -6,6 +6,9 @@ Routes (under wherever the router is mounted):
 - ``GET /apps/{app}``: the agent: its name, version and the state it takes.
 - ``GET|POST /apps/{app}/users/{user}/sessions``: a person's conversations.
 - ``GET|DELETE /apps/{app}/users/{user}/sessions/{session}``: one of them.
+- ``GET /apps/{app}/users/{user}/sessions/{session}/workflow-runs/{call}``:
+  how the workflow a call in it started is going (``WorkflowRunner.progress``),
+  for the chat to show its steps while the call waits.
 - ``POST /run_sse``: run a turn, streaming ADK's events as Server-Sent
   Events (``data: <event JSON>``). A failure after the stream starts arrives
   as an event with ``errorCode`` and ``errorMessage``.
@@ -58,6 +61,7 @@ SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 AppName = Annotated[str, Path(pattern=r"^[A-Za-z][A-Za-z0-9_-]*(@(draft|[0-9]+))?$", max_length=96)]
 UserId = Annotated[str, Path(min_length=1, max_length=255)]
 SessionId = Annotated[str, Path(pattern=r"^[A-Za-z0-9._:-]+$", max_length=128)]
+CallId = Annotated[str, Path(pattern=r"^[A-Za-z0-9._:-]+$", max_length=128)]
 
 
 #: What a call does with an agent: read it (``agent``), its conversations
@@ -219,6 +223,35 @@ def create_router(
                 app_name=agent, user_id=user_id, session_id=session_id, filename=name
             )
         await of(request).sessions.delete_session(app_name=agent, user_id=user_id, session_id=session_id)
+
+    @router.get("/apps/{app_name}/users/{user_id}/sessions/{session_id}/workflow-runs/{call_id}")
+    async def get_workflow_run(
+        request: Request, app_name: AppName, user_id: UserId, session_id: SessionId, call_id: CallId
+    ) -> dict[str, Any]:
+        """
+        How the workflow a call in the conversation started is going: its
+        steps so far, each with its status and times, for the chat to show
+        while the call waits. Asked again as it goes, until it ends.
+        \f
+        :raises HTTPException: 404 when the call started no run in the
+            person's conversation (or not yet), or there are no workflows here.
+        """
+        document = (await agent_of(request, app_name, action="sessions", user_id=user_id)).document
+        workflows = of(request).services.workflows
+        found = (
+            await workflows.progress(
+                agent_id=document.id,
+                user_id=user_id,
+                session_id=session_id,
+                call_id=call_id,
+                organization_id=document.organization_id,
+            )
+            if workflows is not None
+            else None
+        )
+        if found is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "That call started no workflow run")
+        return found
 
     @router.post(
         "/run_sse",

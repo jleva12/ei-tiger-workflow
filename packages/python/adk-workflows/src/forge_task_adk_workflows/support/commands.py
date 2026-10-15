@@ -1,7 +1,10 @@
 """
 Bash steps' commands (``graph.factories.actions.bash``): run by bash on the
 worker's machine, as its user, starting in a folder of the run's own
-(``forge_task_adk_workflows.workspaces``).
+(``forge_task_adk_workflows.workspaces``); or, where the worker's
+``commands`` is ``openshell``, in a sandbox of its own on an OpenShell gateway
+(``support.sandbox_commands``), the run's folder copied in and its changes
+copied back.
 
 - **As written.** The command is never filled in with the run's data, so the
   data can't become code: it reads it from its environment variables (each a
@@ -36,7 +39,10 @@ from pathlib import Path
 from forge_task_adk_workflows.support.errors import StepFailed
 
 #: How a worker that doesn't run commands is set to.
-NO_COMMANDS = "set HYBRID_ADK_WORKFLOWS__COMMANDS=local on a worker whose workflows' authors you trust with its machine"
+NO_COMMANDS = (
+    "set HYBRID_ADK_WORKFLOWS__COMMANDS=openshell to run them in sandboxes on an OpenShell gateway, "
+    "or HYBRID_ADK_WORKFLOWS__COMMANDS=local on a worker whose workflows' authors you trust with its machine"
+)
 #: What a step's environment variable may be called.
 VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 #: The variable every command reads its run's folder from.
@@ -65,14 +71,19 @@ class Finished:
     truncated: bool
 
 
-def passed_environment(names: Iterable[str] = (), environ: Mapping[str, str] | None = None) -> dict[str, str]:
+def passed_environment(
+    names: Iterable[str] = (), environ: Mapping[str, str] | None = None, *, machine: bool = True
+) -> dict[str, str]:
     """
     :param names: The worker's variables tools may read (``tool_environment``).
     :param environ: The worker's environment (``os.environ``).
+    :param machine: Whether the commands run on the worker's machine, and
+        get its PATH, HOME and locale (:data:`PASSED`) too; a sandbox has its own.
     :return: What every command gets of the worker's environment.
     """
     environ = os.environ if environ is None else environ
-    return {name: environ[name] for name in (*PASSED, *names) if name in environ}
+    wanted = (*PASSED, *names) if machine else tuple(names)
+    return {name: environ[name] for name in wanted if name in environ}
 
 
 def folder_in(workspace: str, path: str) -> Path:
@@ -98,7 +109,7 @@ def folder_in(workspace: str, path: str) -> Path:
     return folder
 
 
-class _End:
+class Tail:
     """The end of a stream: its last ``limit`` bytes."""
 
     def __init__(self, limit: int) -> None:
@@ -106,17 +117,31 @@ class _End:
         self.data = bytearray()
         self.cut = False
 
+    def add(self, chunk: bytes) -> None:
+        self.data += chunk
+        if len(self.data) > self.limit:
+            del self.data[: len(self.data) - self.limit]
+            self.cut = True
+
     async def read(self, stream: asyncio.StreamReader | None) -> None:
         if stream is None:
             return
         while chunk := await stream.read(64 * 1024):
-            self.data += chunk
-            if len(self.data) > self.limit:
-                del self.data[: len(self.data) - self.limit]
-                self.cut = True
+            self.add(chunk)
 
     def text(self) -> str:
         return self.data.decode("utf-8", errors="replace")
+
+
+def finished(exit_code: int, stdout: Tail, stderr: Tail) -> Finished:
+    """:return: How a command ended: its exit code, and the end of what it
+    wrote (stdout without its last line ends, as bash's ``$( )`` gives it)."""
+    return Finished(
+        exit_code=exit_code,
+        stdout=stdout.text().rstrip("\r\n"),
+        stderr=stderr.text(),
+        truncated=stdout.cut or stderr.cut,
+    )
 
 
 def _signal(group: int, number: int) -> None:
@@ -182,7 +207,7 @@ async def run_program(
         raise StepFailed(f"{argv[0]} isn't on this worker's PATH") from None
     except (OSError, ValueError) as error:
         raise StepFailed(f"{argv[0]} can't start: {getattr(error, 'strerror', None) or error}") from None
-    out, err = _End(max_bytes), _End(max_bytes)
+    out, err = Tail(max_bytes), Tail(max_bytes)
     reading = asyncio.ensure_future(asyncio.gather(out.read(process.stdout), err.read(process.stderr)))
     timed_out = False
     try:
@@ -211,23 +236,13 @@ async def run_program(
             # Stopped itself (its run abandoned): the command stops too.
             _signal(process.pid, signal.SIGKILL)
         reading.cancel()
-    finished = Finished(
-        exit_code=process.returncode if process.returncode is not None else -signal.SIGKILL,
-        stdout=_trimmed(out.text()),
-        stderr=err.text(),
-        truncated=out.cut or err.cut,
-    )
+    ended = finished(process.returncode if process.returncode is not None else -signal.SIGKILL, out, err)
     if timed_out:
         raise StepFailed(
             f"It didn't finish in {seconds:g} seconds",
-            details={"stdout": finished.stdout, "stderr": finished.stderr},
+            details={"stdout": ended.stdout, "stderr": ended.stderr},
         )
-    return finished
-
-
-def _trimmed(stdout: str) -> str:
-    # Without its last line ends, as bash's $( ) gives it.
-    return stdout.rstrip("\r\n")
+    return ended
 
 
 def last_line(text: str, limit: int = 300) -> str:

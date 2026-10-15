@@ -7,6 +7,7 @@ import {
   Brain01Icon,
   ChatBotIcon,
   CommandLineIcon,
+  DashboardSquare01Icon,
   DistributionIcon,
   FilterIcon,
   Flag02Icon,
@@ -29,6 +30,7 @@ import {
   Robot01Icon,
   Route02Icon,
   SquareIcon,
+  TaskDone01Icon,
   UserCheck01Icon,
   UserQuestion01Icon,
 } from "@hugeicons/core-free-icons"
@@ -102,6 +104,7 @@ const ICONS: Record<string, IconProp> = {
   "ai-programming": AiProgrammingIcon,
   "user-check-01": UserCheck01Icon,
   "user-question-01": UserQuestion01Icon,
+  "task-done-01": TaskDone01Icon,
   "globe-02": Globe02Icon,
   "command-line": CommandLineIcon,
   function: FunctionIcon,
@@ -118,6 +121,7 @@ const ICONS: Record<string, IconProp> = {
   "git-pull-request-create": GitPullRequestCreateIcon,
   "flag-02": Flag02Icon,
   "magic-wand-01": MagicWand01Icon,
+  "dashboard-square-01": DashboardSquare01Icon,
 }
 
 function infoOf(kind: CatalogKind): CatalogKindInfo {

@@ -150,11 +150,15 @@ async def a_run(
             run["id"],
             owner="w1",
             state={},
-            key="review",
-            kind="approval",
-            reason="Refund 40 EUR?",
-            details={"kind": "approval"},
-            deadline=None,
+            gates=[
+                {
+                    "key": "review",
+                    "kind": "approval",
+                    "reason": "Refund 40 EUR?",
+                    "details": {"kind": "approval"},
+                    "deadline": None,
+                }
+            ],
         )
     else:
         await runs.finish(

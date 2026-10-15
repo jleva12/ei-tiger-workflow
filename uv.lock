@@ -743,6 +743,15 @@ wheels = [
 ]
 
 [[package]]
+name = "cloudpickle"
+version = "3.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/27/fb/576f067976d320f5f0114a8d9fa1215425441bb35627b1993e5afd8111e5/cloudpickle-3.1.2.tar.gz", hash = "sha256:7fda9eb655c9c230dab534f1983763de5835249750e85fbcef43aaa30a9a2414", size = 22330, upload-time = "2025-11-03T09:25:26.604Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/39/799be3f2f0f38cc727ee3b4f1445fe6d5e4133064ec2e4115069418a5bb6/cloudpickle-3.1.2-py3-none-any.whl", hash = "sha256:9acb47f6afd73f60dc1df93bb801b472f05ff42fa6c84167d25cb206be1fbf4a", size = 22228, upload-time = "2025-11-03T09:25:25.534Z" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1307,10 +1316,10 @@ dependencies = [
     { name = "casbin-async-sqlalchemy-adapter" },
     { name = "cryptography" },
     { name = "fastapi" },
-    { name = "forge-agent-runtime", extra = ["a2a", "server"] },
+    { name = "forge-agent-runtime", extra = ["a2a", "openshell", "server"] },
     { name = "forge-codegraph" },
     { name = "forge-codegraph-query" },
-    { name = "forge-common", extra = ["adk", "adk-models", "logging", "patterns"] },
+    { name = "forge-common", extra = ["adk", "adk-models", "logging", "patterns", "sandbox"] },
     { name = "forge-mcp-servers" },
     { name = "forge-task-adk-workflows" },
     { name = "forge-task-documents" },
@@ -1337,10 +1346,10 @@ requires-dist = [
     { name = "casbin-async-sqlalchemy-adapter", specifier = ">=1.17.0" },
     { name = "cryptography", specifier = ">=50.0.1" },
     { name = "fastapi", specifier = ">=0.141.1" },
-    { name = "forge-agent-runtime", extras = ["server", "a2a"], editable = "packages/python/agent-runtime" },
+    { name = "forge-agent-runtime", extras = ["server", "a2a", "openshell"], editable = "packages/python/agent-runtime" },
     { name = "forge-codegraph", editable = "packages/python/codegraph" },
     { name = "forge-codegraph-query", editable = "packages/python/codegraph-query" },
-    { name = "forge-common", extras = ["adk", "adk-models", "logging", "patterns"], editable = "packages/python/common" },
+    { name = "forge-common", extras = ["adk", "adk-models", "logging", "patterns", "sandbox"], editable = "packages/python/common" },
     { name = "forge-mcp-servers", editable = "packages/python/mcp-servers" },
     { name = "forge-task-adk-workflows", editable = "packages/python/adk-workflows" },
     { name = "forge-task-documents", editable = "packages/python/documents" },
@@ -1364,7 +1373,7 @@ name = "forge-agent-runtime"
 version = "0.1.0"
 source = { editable = "packages/python/agent-runtime" }
 dependencies = [
-    { name = "forge-common", extra = ["adk", "adk-models", "mcp", "patterns"] },
+    { name = "forge-common", extra = ["adk", "adk-models", "mcp", "patterns", "sandbox"] },
     { name = "forge-jsonata" },
     { name = "google-adk" },
     { name = "httpx" },
@@ -1389,6 +1398,9 @@ artifacts-s3 = [
 memory-atlas = [
     { name = "forge-common", extra = ["adk-memory"] },
 ]
+openshell = [
+    { name = "forge-common", extra = ["sandbox-openshell"] },
+]
 server = [
     { name = "aiosqlite" },
     { name = "fastapi" },
@@ -1404,7 +1416,7 @@ sessions-postgres = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "forge-agent-runtime", extra = ["a2a", "server"] },
+    { name = "forge-agent-runtime", extra = ["a2a", "openshell", "server"] },
 ]
 
 [package.metadata]
@@ -1415,9 +1427,10 @@ requires-dist = [
     { name = "asyncpg", marker = "extra == 'sessions-postgres'", specifier = ">=0.30" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "forge-agent-runtime", extras = ["server"], marker = "extra == 'a2a'", editable = "packages/python/agent-runtime" },
-    { name = "forge-common", extras = ["adk", "adk-models", "mcp", "patterns"], editable = "packages/python/common" },
+    { name = "forge-common", extras = ["adk", "adk-models", "mcp", "patterns", "sandbox"], editable = "packages/python/common" },
     { name = "forge-common", extras = ["adk-artifacts-s3"], marker = "extra == 'artifacts-s3'", editable = "packages/python/common" },
     { name = "forge-common", extras = ["adk-memory"], marker = "extra == 'memory-atlas'", editable = "packages/python/common" },
+    { name = "forge-common", extras = ["sandbox-openshell"], marker = "extra == 'openshell'", editable = "packages/python/common" },
     { name = "forge-jsonata", editable = "packages/python/jsonata" },
     { name = "google-adk", specifier = ">=2.10.0" },
     { name = "httpx", specifier = ">=0.28" },
@@ -1429,10 +1442,10 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'server'", specifier = ">=2.0" },
     { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },
 ]
-provides-extras = ["server", "a2a", "memory-atlas", "artifacts-s3", "sessions-postgres", "sessions-mysql"]
+provides-extras = ["server", "a2a", "memory-atlas", "artifacts-s3", "sessions-postgres", "sessions-mysql", "openshell"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "forge-agent-runtime", extras = ["server", "a2a"], editable = "packages/python/agent-runtime" }]
+dev = [{ name = "forge-agent-runtime", extras = ["server", "a2a", "openshell"], editable = "packages/python/agent-runtime" }]
 
 [[package]]
 name = "forge-async-worker"
@@ -1566,6 +1579,15 @@ patterns = [
     { name = "referencing" },
     { name = "regex" },
 ]
+sandbox = [
+    { name = "pydantic" },
+]
+sandbox-openshell = [
+    { name = "google-adk" },
+    { name = "openshell" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
 templates = [
     { name = "jinja2" },
     { name = "pydantic" },
@@ -1573,7 +1595,7 @@ templates = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "forge-common", extra = ["adk", "adk-artifacts-s3", "adk-memory", "adk-models", "logging", "mcp", "patterns", "templates"] },
+    { name = "forge-common", extra = ["adk", "adk-artifacts-s3", "adk-memory", "adk-models", "logging", "mcp", "patterns", "sandbox-openshell", "templates"] },
 ]
 
 [package.metadata]
@@ -1582,30 +1604,35 @@ requires-dist = [
     { name = "forge-common", extras = ["model-provider"], marker = "extra == 'adk-memory'", editable = "packages/python/common" },
     { name = "forge-common", extras = ["model-provider"], marker = "extra == 'adk-models'", editable = "packages/python/common" },
     { name = "forge-common", extras = ["patterns"], marker = "extra == 'mcp'", editable = "packages/python/common" },
+    { name = "forge-common", extras = ["sandbox"], marker = "extra == 'sandbox-openshell'", editable = "packages/python/common" },
     { name = "google-adk", marker = "extra == 'adk'", specifier = ">=2.9.2" },
     { name = "google-adk", marker = "extra == 'adk-artifacts-s3'", specifier = ">=2.9.2" },
     { name = "google-adk", marker = "extra == 'adk-memory'", specifier = ">=2.9.2" },
     { name = "google-adk", marker = "extra == 'adk-models'", specifier = ">=2.9.2" },
+    { name = "google-adk", marker = "extra == 'sandbox-openshell'", specifier = ">=2.9.2" },
     { name = "httpx", marker = "extra == 'adk-memory'", specifier = ">=0.28" },
     { name = "httpx", marker = "extra == 'model-provider'", specifier = ">=0.28" },
     { name = "jinja2", marker = "extra == 'templates'", specifier = ">=3.1" },
     { name = "jsonschema", marker = "extra == 'patterns'", specifier = ">=4.23" },
     { name = "litellm", marker = "extra == 'adk-models'", specifier = ">=1.83" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3.0,<3" },
+    { name = "openshell", marker = "extra == 'sandbox-openshell'", specifier = ">=0.1.2,<0.2" },
     { name = "pydantic", marker = "extra == 'logging'", specifier = ">=2.11" },
     { name = "pydantic", marker = "extra == 'model-provider'", specifier = ">=2.11" },
+    { name = "pydantic", marker = "extra == 'sandbox'", specifier = ">=2.11" },
     { name = "pydantic", marker = "extra == 'templates'", specifier = ">=2.11" },
     { name = "pymongo", marker = "extra == 'adk-memory'", specifier = ">=4.13" },
     { name = "pyyaml", marker = "extra == 'model-provider'", specifier = ">=6.0" },
+    { name = "pyyaml", marker = "extra == 'sandbox-openshell'", specifier = ">=6.0" },
     { name = "referencing", marker = "extra == 'patterns'", specifier = ">=0.28.4" },
     { name = "regex", marker = "extra == 'patterns'", specifier = ">=2024.11.6" },
     { name = "starlette", marker = "extra == 'logging'", specifier = ">=0.46" },
     { name = "structlog", marker = "extra == 'logging'", specifier = ">=26.1.0" },
 ]
-provides-extras = ["adk", "model-provider", "adk-models", "logging", "adk-memory", "adk-artifacts-s3", "templates", "patterns", "mcp"]
+provides-extras = ["adk", "model-provider", "adk-models", "logging", "adk-memory", "adk-artifacts-s3", "templates", "patterns", "mcp", "sandbox", "sandbox-openshell"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "forge-common", extras = ["adk", "adk-artifacts-s3", "adk-memory", "adk-models", "logging", "mcp", "patterns", "templates"], editable = "packages/python/common" }]
+dev = [{ name = "forge-common", extras = ["adk", "adk-artifacts-s3", "adk-memory", "adk-models", "logging", "mcp", "patterns", "sandbox-openshell", "templates"], editable = "packages/python/common" }]
 
 [[package]]
 name = "forge-embeddings"
@@ -1712,10 +1739,10 @@ version = "0.1.0"
 source = { editable = "packages/python/adk-workflows" }
 dependencies = [
     { name = "aiomysql" },
-    { name = "forge-agent-runtime" },
+    { name = "forge-agent-runtime", extra = ["openshell"] },
     { name = "forge-codegraph" },
     { name = "forge-codegraph-query" },
-    { name = "forge-common", extra = ["adk", "adk-artifacts-s3", "adk-models", "patterns"] },
+    { name = "forge-common", extra = ["adk", "adk-artifacts-s3", "adk-models", "patterns", "sandbox"] },
     { name = "forge-jsonata" },
     { name = "forge-mcp-servers" },
     { name = "forge-pi-agent" },
@@ -1730,10 +1757,10 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiomysql", specifier = ">=0.2" },
-    { name = "forge-agent-runtime", editable = "packages/python/agent-runtime" },
+    { name = "forge-agent-runtime", extras = ["openshell"], editable = "packages/python/agent-runtime" },
     { name = "forge-codegraph", editable = "packages/python/codegraph" },
     { name = "forge-codegraph-query", editable = "packages/python/codegraph-query" },
-    { name = "forge-common", extras = ["adk", "adk-models", "adk-artifacts-s3", "patterns"], editable = "packages/python/common" },
+    { name = "forge-common", extras = ["adk", "adk-models", "adk-artifacts-s3", "patterns", "sandbox"], editable = "packages/python/common" },
     { name = "forge-jsonata", editable = "packages/python/jsonata" },
     { name = "forge-mcp-servers", editable = "packages/python/mcp-servers" },
     { name = "forge-pi-agent", editable = "packages/python/pi-agent" },
@@ -3775,6 +3802,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/3d/f9/88d94a75de065ea32619465d2f77b29a0469500e99012523b91cc4141cd1/openpyxl-3.1.5.tar.gz", hash = "sha256:cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050", size = 186464, upload-time = "2024-06-28T14:03:44.161Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c0/da/977ded879c29cbd04de313843e76868e6e13408a94ed6b987245dc7c8506/openpyxl-3.1.5-py2.py3-none-any.whl", hash = "sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2", size = 250910, upload-time = "2024-06-28T14:03:41.161Z" },
+]
+
+[[package]]
+name = "openshell"
+version = "0.1.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cloudpickle" },
+    { name = "googleapis-common-protos" },
+    { name = "grpcio" },
+    { name = "httpx" },
+    { name = "protobuf" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/09/7f/0f2132b67d3d6e606d8d7a1bce67abe6dd3f4e631ccf1a20608f1c132309/openshell-0.1.4-py3-none-any.whl", hash = "sha256:2a25991a4c050e9d40d947b9df537d5c5370cf9a569b7a4e8c92cea882f5ddcb", size = 138757, upload-time = "2026-10-13T20:49:52.401Z" },
 ]
 
 [[package]]

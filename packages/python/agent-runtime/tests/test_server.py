@@ -419,3 +419,71 @@ def test_authorize_decides_each_call_before_the_agent_is_built(agent_file, model
     assert seen == [(AGENT, "agent", None), (AGENT, "sessions", "ada"), (AGENT, "run", "mallory")]
     # Refused before anything was built.
     assert built == []
+
+
+def test_a_conversation_follows_the_workflow_runs_its_calls_started(agent_file, models, web):
+    from fastapi import FastAPI, HTTPException
+
+    asked: list[dict[str, Any]] = []
+    going = {"run_id": "r1", "workflow": "Triage", "status": "running", "steps": []}
+
+    class Workflows:
+        async def describe(self, workflow_id, *, organization_id):
+            raise LookupError(workflow_id)
+
+        async def run(self, workflow_id, workflow_input, *, organization_id, context):
+            raise AssertionError("not run here")
+
+        async def progress(self, **asking):
+            asked.append(asking)
+            return going if asking["call_id"] == "call_1" else None
+
+    async def authorize(request, agent, *, action, user_id):
+        if user_id == "mallory":
+            raise HTTPException(403, "Not yours")
+
+    def app_with(services: RuntimeServices) -> FastAPI:
+        executor = AgentExecutor(FileAgentSource(agent_file), models=models, http=web(), services=services)
+        app = FastAPI()
+        app.include_router(create_router(executor, authorize=authorize))
+        return app
+
+    path = "/apps/{app}/users/{user}/sessions/s1/workflow-runs/{call}"
+    with TestClient(app_with(RuntimeServices(workflows=Workflows()))) as client:
+        # Whichever version the chat runs, the run is the agent's.
+        got = client.get(path.format(app=f"{AGENT}@1", user="ada", call="call_1"))
+        assert got.status_code == 200, got.text
+        assert got.json() == going
+        assert asked == [
+            {
+                "agent_id": AGENT,
+                "user_id": "ada",
+                "session_id": "s1",
+                "call_id": "call_1",
+                "organization_id": load_document(agent_file).organization_id,
+            }
+        ]
+        # A call that started none, and someone else's conversation.
+        assert client.get(path.format(app=AGENT, user="ada", call="call_2")).status_code == 404
+        assert client.get(path.format(app=AGENT, user="mallory", call="call_1")).status_code == 403
+        assert len(asked) == 2
+    # A runtime without workflows has no runs to follow.
+    with TestClient(app_with(RuntimeServices())) as client:
+        assert client.get(path.format(app=AGENT, user="ada", call="call_1")).status_code == 404
+
+
+def test_a_conversation_is_named_after_its_first_message_with_that_turn(client, llm):
+    llm.turns = [[text("It shipped.")], [text("Also shipped.")]]
+    sid = session(client)
+    first = "Where's my order A-1042?\nI ordered it Monday."
+    events(run(client, sid, first))
+    listed = client.get(f"/apps/{AGENT}/users/ada/sessions").json()
+    # The chat lists it with its title, from its state.
+    assert listed[0]["state"]["forge:title"] == "Where's my order A-1042?"
+    # Set with the turn: no event of its own in the conversation.
+    kept = client.get(f"/apps/{AGENT}/users/ada/sessions/{sid}").json()
+    assert all(e.get("content") for e in kept["events"])
+    # Later turns keep it.
+    events(run(client, sid, "And B-7731?"))
+    again = client.get(f"/apps/{AGENT}/users/ada/sessions/{sid}").json()
+    assert again["state"]["forge:title"] == "Where's my order A-1042?"

@@ -63,6 +63,7 @@ Add an object to `graph/node_kinds.json` where it should sit in the library:
 - `icon` is a Hugeicons name (`robot-01`, `globe-02`); step 3.3 maps it.
 - `outputs` are its ways out, in canvas order. A node that just goes on has `[{ "id": "next", "label": "Next" }]`, and an ending has `[]`. `branch` marks a named way, `fallback` the way for everything else, and `body` a loop's body way.
 - `rows` is for per-row ways out before the fixed ones, as Switch and Match have: `{ "setting": "cases", "label": "value", "empty": "Empty value" }`. `{n}` in `empty` is the row's number. Default rows need fixed IDs (`case_1`), which only have to be unique within the node.
+  - With `"ways": [{ "id": "accepted", … }, { "id": "rejected", … }]`, each row has several ways out, `<row id>:<way id>` (a Decision board's choices). One ADK node can only take its ways once, so a kind whose rows go on separately is built as hidden nodes: see `board_parts` in `factories/people.py` and `BOARD` in `graph.py` / `steps.py`.
 - Optional flags: `terminal` (drawn as a start or finish), `person` (a person decides here) and `orb` (agent orb 0–4).
 - `defaults` must fit the backend settings model. The catalog test checks this.
 

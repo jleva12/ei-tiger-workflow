@@ -72,6 +72,16 @@ CODEGRAPH_REFERENCES := \
   $(ASYNC_WORKER_DIR)/.env:HYBRID_ADK_WORKFLOWS__CODEGRAPH__SEARCH__ENHANCE_QUERY:FORGE_CODEGRAPH_SEARCH_ENHANCE_QUERY \
   $(foreach s,DATABASE CURSOR_SIGNING_KEY,$(CODEGRAPH_MCP_DIR)/.env:CODEGRAPH_SPANNER__$(s):FORGE_CODEGRAPH_$(if $(filter DATABASE,$(s)),SPANNER_DATABASE,$(s))) \
   $(CODEGRAPH_MCP_DIR)/.env:CODEGRAPH_SEARCH__ENHANCE_QUERY:FORGE_CODEGRAPH_SEARCH_ENHANCE_QUERY
+# Every app's agents run code in the one sandbox mode, on the one OpenShell
+# gateway, in .env.common (FORGE_AGENT_SANDBOX_MODE, FORGE_OPENSHELL_*): each
+# app's settings, as file:setting:shared name, which make env points at
+# .env.common's by reference.
+OPENSHELL_SETTINGS := GATEWAY TLS_DIR TOKEN WORKSPACE IMAGE POLICY
+SANDBOX_REFERENCES := \
+  $(ADMIN_DIR)/.env:FORGE_ADMIN_AGENT_SANDBOX_MODE:FORGE_AGENT_SANDBOX_MODE \
+  $(foreach s,$(OPENSHELL_SETTINGS),$(ADMIN_DIR)/.env:FORGE_ADMIN_AGENT_OPENSHELL__$(s):FORGE_OPENSHELL_$(s)) \
+  $(ASYNC_WORKER_DIR)/.env:HYBRID_ADK_WORKFLOWS__AGENT_SANDBOX_MODE:FORGE_AGENT_SANDBOX_MODE \
+  $(foreach s,$(OPENSHELL_SETTINGS),$(ASYNC_WORKER_DIR)/.env:HYBRID_ADK_WORKFLOWS__OPENSHELL__$(s):FORGE_OPENSHELL_$(s))
 # The task packages the async worker bundles: checked and tested with it.
 TASK_PACKAGES := $(addprefix packages/python/,task-sdk adk-workflows documents embeddings)
 # Python packages the apps share.
@@ -246,7 +256,22 @@ env:
 	@! grep -q '^FORGE_CODEGRAPH_EMBEDDING_' .env.common || { \
 	  perl -i -ne 'print unless /^FORGE_CODEGRAPH_EMBEDDING_(MODEL|DIMENSIONS)=/' .env.common; \
 	  echo "Removed FORGE_CODEGRAPH_EMBEDDING_* from .env.common: FORGE_EMBEDDING_* replaced them"; }
-	@for entry in $(CODEGRAPH_REFERENCES); do \
+	@# Agents' code sandbox: a .env.common from before it takes the template's
+	@# lines, local where an app's own setting from before it ran code locally
+	@# (FORGE_ADMIN_AGENT_CODE_EXECUTION, HYBRID_ADK_WORKFLOWS__CODE_EXECUTION);
+	@# those settings go, and the apps name .env.common's by reference (below).
+	@grep -q '^FORGE_AGENT_SANDBOX_MODE=' .env.common || { \
+	  { [ -z "$$(tail -c1 .env.common)" ] || echo; echo; \
+	    sed -n '/^# Agents. code sandbox:/,/^FORGE_OPENSHELL_POLICY=/p' .env.common.example; } >> .env.common; \
+	  ! grep -Eqs '^(FORGE_ADMIN_AGENT|HYBRID_ADK_WORKFLOWS_)_CODE_EXECUTION=local' $(ADMIN_DIR)/.env $(ASYNC_WORKER_DIR)/.env || \
+	    perl -i -pe 's/^FORGE_AGENT_SANDBOX_MODE=.*/FORGE_AGENT_SANDBOX_MODE=local/' .env.common; \
+	  echo "Added the agents' code sandbox to .env.common (FORGE_AGENT_SANDBOX_MODE=$$(sed -n 's/^FORGE_AGENT_SANDBOX_MODE=//p' .env.common))"; }
+	@for file in $(ADMIN_DIR)/.env $(ASYNC_WORKER_DIR)/.env; do \
+	  ! grep -Eq '^(FORGE_ADMIN_AGENT|HYBRID_ADK_WORKFLOWS_)_CODE_EXECUTION=' $$file || { \
+	    perl -i -ne 'print unless /^(FORGE_ADMIN_AGENT|HYBRID_ADK_WORKFLOWS_)_CODE_EXECUTION=/' $$file; \
+	    echo "Removed $$file's code execution setting: FORGE_AGENT_SANDBOX_MODE in .env.common replaced it"; }; \
+	done
+	@for entry in $(CODEGRAPH_REFERENCES) $(SANDBOX_REFERENCES); do \
 	  file=$${entry%%:*}; rest=$${entry#*:}; setting=$${rest%%:*}; reference="\$${$${rest#*:}}"; \
 	  [ "$$(sed -n "s/^$$setting=//p" $$file | tail -1)" = "$$reference" ] && continue; \
 	  if grep -q "^$$setting=" $$file; then \

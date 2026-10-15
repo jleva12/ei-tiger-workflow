@@ -53,6 +53,7 @@ from forge_agent_runtime.openapi import (
     load_spec,
     toolset_of,
 )
+from forge_agent_runtime.present import PresentTool
 from forge_agent_runtime.refs import AgentRef
 from forge_agent_runtime.services import RequestAuth, RuntimeServices
 from forge_agent_runtime.skills import SkillBundle, skill_toolset
@@ -69,6 +70,7 @@ from forge_agent_runtime.tools import (
     http_client,
 )
 from forge_common.adk.ask_person import ASK_PERSON_INSTRUCTION, ask_person, repair_input_schemas
+from forge_common.adk.attachments import AttachmentsPlugin
 from forge_common.adk.context_window import ContextWindowPlugin, windows_from
 from forge_common.adk.follow_ups import FollowUpsPlugin
 from forge_common.adk.models import ProviderModels
@@ -133,13 +135,17 @@ class _Builder:
         what = f"{node.name}'s instruction"
         tools: list[Any] = []
         skills = [target for target in self.doc.targets(node.id, TOOLS) if target.kind == "skills"]
+        rich = [target for target in self.doc.targets(node.id, TOOLS) if target.kind == "rich_answers"]
         for target in self.doc.targets(node.id, TOOLS):
-            if target.kind != "skills":
+            if target.kind not in ("skills", "rich_answers"):
                 tools.extend(await self.tool(target))
         if skills:
             # ADK's skill tools (load_skill, …) are an agent's once: its Skills
             # nodes are one toolset of all their skills.
             tools.append(await self.skill_tools(skills))
+        if rich:
+            # So is present: its Rich answers nodes offer all their components.
+            tools.append(self.present(rich))
         sub_agents: list[Any] = [await self.handed(target) for target in self.doc.targets(node.id, HANDS_OFF)]
         options: dict[str, Any] = {}
         template = str(config.get("instruction") or "")
@@ -284,7 +290,17 @@ class _Builder:
                 return [GuardedTools([runs], confirm=bool(config.get("confirm")), timeout_seconds=guarded)]
             case "skills":
                 return [await self.skill_tools([node])]
+            case "rich_answers":
+                return [self.present([node])]
         raise BuildError(f"{node.name!r} ({node.kind}) can't be a tool.")
+
+    def present(self, nodes: list[Node]) -> PresentTool:
+        """The ``present`` tool of these Rich answers nodes: the components they pick, together."""
+        picked = [name for node in nodes for name in node.config.get("components") or []]
+        try:
+            return PresentTool(picked)
+        except ValueError as exc:
+            raise BuildError(f"{', '.join(repr(node.name) for node in nodes)}: {exc}.") from exc
 
     async def skill_tools(self, nodes: list[Node]) -> BaseToolset:
         """
@@ -634,7 +650,9 @@ async def build_app(
         Its agents' context windows are kept in the state and compacted
         mid-turn as well (``forge_common.adk.context_window``, at the models'
         windows), and runs that ask get follow-up questions after a reply
-        (``forge_common.adk.follow_ups``), unless one of these does that.
+        (``forge_common.adk.follow_ups``), and files a chat attached are
+        given to the model with their bare types and names
+        (``forge_common.adk.attachments``), unless one of these does that.
     :return: The app, its root the entry agent.
     :raises BuildError: Something it uses can't be found or set up.
     """
@@ -643,6 +661,9 @@ async def build_app(
         plugins = [ContextWindowPlugin(window=windows_from(models)), *plugins]
     if not any(isinstance(plugin, FollowUpsPlugin) for plugin in plugins):
         plugins = [*plugins, FollowUpsPlugin()]
+    # First, so the others see the files a person attached as the model will.
+    if not any(isinstance(plugin, AttachmentsPlugin) for plugin in plugins):
+        plugins = [AttachmentsPlugin(), *plugins]
     return App(name=app_name or doc.id, root_agent=root, plugins=list(plugins))
 
 

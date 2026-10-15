@@ -268,6 +268,8 @@ const HANDS_ON: Record<AgentKind, string> = {
   human_input: "Hands on the person's answer, held to response_schema.",
   approval:
     "Hands on {approved, decided_by, comment, decided_at} by its approved or rejected way.",
+  decision_board:
+    "Lays out its choices for people to decide each on its own; each decided hands on the board as it stands, {accepted, rejected, open, decisions, decided} (choice IDs; decisions by choice ID, each {choice, label, question, approved, decided_by, comment, decided_at}; decided the one just made), by that choice's <id>:accepted or <id>:rejected way at once, while the others still wait. The last one decided (or none laid out) takes done too. A way that leads nowhere ends there; done leading nowhere ends the board's way.",
   http: "Hands on {status, headers, body} by its success way, body held to output_schema when it declares one. Its error way hands on nothing; steps.<id>.error is {message, status?, body?, expression?}.",
   bash: "Runs its command by bash in its folder of the run's folder (the start must allow a file system), its env variables and WORKSPACE (the run's folder) set; hands on {exit_code, stdout, stderr, cwd, truncated} by its success way when it exits with 0. Its error way (another exit code, a folder outside the run's, its timeout) hands on nothing; steps.<id>.error is {message, exit_code?, stdout?, stderr?}.",
   git_clone:

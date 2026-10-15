@@ -64,6 +64,7 @@ import { useAssistantSettings } from "./assistant-context"
 import { SearchLabel, type AssistantSearch } from "./sources"
 import { answerFrom, askForm, describeAnswer } from "./ask-person"
 import { followUpsOf } from "./follow-ups"
+import { offersChoices } from "./rich-answers-schema"
 import {
   compactTokens,
   contextView,
@@ -1246,6 +1247,9 @@ function AdkFollowUps() {
   const suggestions = React.useMemo(() => followUpsOf(state), [state])
   const running = useAuiState((s) => s.thread.isRunning)
   const waiting = useAdkLongRunningToolIds().length > 0
+  // The reply offers its own choices (Rich answers): chips would repeat them.
+  const offered = useAuiState((s) => offersChoices(s.thread.messages.at(-1)))
+  if (offered) return null
   if (suggestions.length === 0) return <ThreadFollowupSuggestions />
   if (running || waiting) return null
   return (

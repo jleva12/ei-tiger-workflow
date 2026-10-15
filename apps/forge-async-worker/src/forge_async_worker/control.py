@@ -6,11 +6,14 @@ The control an ADK workflow run's job gets on the worker
 - **State.** ``keep`` and ``load`` work on a copy of what the run keeps
   (``run["state"]``); a checkpoint makes it durable, fenced on the worker's
   lease. Every attempt of the run starts from what the last one kept.
-- **Approvals and questions.** ``approval`` answers at once with the
-  decision the run has for that gate (``run["decisions"]``); without one it
-  raises :class:`PauseRun`, which the worker makes the run's pause (and, with
-  a timeout, queues its expiry for the deadline). A decision queues the run
-  again, and its next attempt reads the decision from the same call.
+- **Approvals and questions.** ``approval`` (and ``decided``) answers at
+  once with the decision the run has for that gate (``run["decisions"]``);
+  without one it raises :class:`PauseRun`, which the worker makes the run's
+  pause (and, with a timeout, queues its expiry for the deadline).
+  ``wait_for`` raises it for every gate the run waits at together, each
+  decided on its own, with the time it waits for too, if any. A decision
+  queues the run again, and its next attempt reads the decision from the
+  same call.
 - **Waits.** ``wait_until`` raises :class:`WaitRun`, which the worker makes
   the run's wait, queueing ``run_adk`` for the time.
 - **Notes** go on the run's activity. There are no other runs to find.
@@ -27,14 +30,14 @@ import contextlib
 import copy
 import json
 import logging
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, NoReturn
 
 from sqlalchemy import exc as db
 
 from forge_task_adk_workflows.run_store import Actor, CancelRequested, RunStore, new_id
-from forge_tasks.control import ControlSignal, Decision, RunState
+from forge_tasks.control import ControlSignal, Decision, Gate, RunState
 from forge_tasks.errors import TransientError
 
 log = logging.getLogger(__name__)
@@ -44,15 +47,23 @@ HUMAN_INPUT = "human_input"
 
 
 class PauseRun(ControlSignal):
-    """The run waits for a person: the approval or question at ``key``."""
+    """The run waits for people: at each of ``gates`` (``{key, kind, reason,
+    details, deadline}``), each decided on its own; and with ``until``, for a
+    time too (``reason`` why)."""
 
-    def __init__(self, *, key: str, kind: str, reason: str, details: dict[str, Any], deadline: datetime | None) -> None:
-        super().__init__(f"waits for {'an answer' if kind == HUMAN_INPUT else 'a decision'}: {reason}")
-        self.key = key
-        self.kind = kind
+    def __init__(self, gates: Sequence[dict[str, Any]], *, until: datetime | None = None, reason: str = "") -> None:
+        first = gates[0]
+        what = "an answer" if first["kind"] == HUMAN_INPUT else "a decision"
+        more = f" (and {len(gates) - 1} more)" if len(gates) > 1 else ""
+        super().__init__(f"waits for {what}: {first['reason']}{more}")
+        self.gates = list(gates)
+        self.until = until
         self.reason = reason
-        self.details = details
-        self.deadline = deadline
+
+    @property
+    def key(self) -> str:
+        """The first gate's key."""
+        return str(self.gates[0]["key"])
 
 
 class StopRun(ControlSignal):
@@ -157,23 +168,42 @@ class RunControl:
         details: dict[str, Any] | None = None,
         timeout_seconds: int | None = None,
     ) -> Decision:
+        decided = self.decided(key)
+        if decided is not None:
+            return decided
+        await self.wait_for([Gate(key, reason, dict(details or {}), timeout_seconds)])
+
+    def decided(self, key: str) -> Decision | None:
         decided = self.decisions.get(key)
-        if isinstance(decided, dict):
-            return Decision(
-                approved=bool(decided.get("approved")),
-                comment=str(decided.get("comment") or ""),
-                actor_id=decided.get("actor_id"),
-                actor_name=str(decided.get("actor_name") or ""),
-                request_id=decided.get("request_id"),
-                # When it was made, not when the run reads it: its job may have waited past the deadline.
-                decided_at=_decided_at(decided.get("decided_at")),
-            )
-        details = dict(details or {})
-        kind = HUMAN_INPUT if details.get("kind") == HUMAN_INPUT else APPROVAL
-        deadline = None
-        if timeout_seconds is not None:
-            deadline = _utc(self.store.clock()) + timedelta(seconds=timeout_seconds)
-        raise PauseRun(key=key, kind=kind, reason=reason, details=details, deadline=deadline)
+        if not isinstance(decided, dict):
+            return None
+        return Decision(
+            approved=bool(decided.get("approved")),
+            comment=str(decided.get("comment") or ""),
+            actor_id=decided.get("actor_id"),
+            actor_name=str(decided.get("actor_name") or ""),
+            request_id=decided.get("request_id"),
+            # When it was made, not when the run reads it: its job may have waited past the deadline.
+            decided_at=_decided_at(decided.get("decided_at")),
+        )
+
+    async def wait_for(self, gates: Sequence[Gate], *, until: datetime | None = None, reason: str = "") -> NoReturn:
+        if not gates:
+            if until is None:
+                raise ValueError("A wait needs a gate or a time")
+            await self.wait_until(until, reason=reason)
+        now = _utc(self.store.clock())
+        asked = [
+            {
+                "key": gate.key,
+                "kind": HUMAN_INPUT if gate.details.get("kind") == HUMAN_INPUT else APPROVAL,
+                "reason": gate.reason,
+                "details": dict(gate.details),
+                "deadline": now + timedelta(seconds=gate.timeout_seconds) if gate.timeout_seconds is not None else None,
+            }
+            for gate in gates
+        ]
+        raise PauseRun(asked, until=_utc(until) if until is not None else None, reason=reason)
 
     async def wait_until(self, when: datetime, *, reason: str) -> NoReturn:
         # A naive time is UTC, like everything the run store keeps; never the host's zone.

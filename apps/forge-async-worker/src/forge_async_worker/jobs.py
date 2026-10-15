@@ -33,8 +33,10 @@ the job ...                     the run ...
 ==============================  ==============================================
 returns a result                succeeds, with the graph's result; or fails
                                 (``failed``) with the result's message and step
-waits for a person              is paused; with a deadline, ``expire_pause``
-                                is queued for then
+waits for people                is paused at each gate (also waiting, with a
+                                time); a gate with a deadline has its
+                                ``expire_pause`` queued for then. A gate
+                                decided while it ran queues it again instead
 waits for a time                waits; ``run_adk`` is queued for then
 hits a hiccup (TransientError)  is queued again as its next attempt, taken
                                 no sooner than its backoff ends (``run_adk``
@@ -57,7 +59,7 @@ it once the run's lease runs out, failing the run rather than running it
 again, whatever became of the worker meanwhile.
 
 ``expire_pause`` rejects an approval nobody decided by its deadline (the run
-carries on down its rejected way). ``maintain`` runs every minute: runs whose
+carries on down its rejected way; the other gates stay open). ``maintain`` runs every minute: runs whose
 worker went are queued again (or fail: once too often, or with the failure
 their worker kept; while Redis can't say whether it kept one, they wait for
 the next maintenance), runs abandoned while their worker went are abandoned,
@@ -86,7 +88,14 @@ from pydantic import ValidationError
 from forge_async_worker.control import PauseRun, RunControl, StopRun, WaitRun, is_hiccup
 from forge_async_worker.queue import RunQueue, run_key
 from forge_async_worker.watchdog import Watchdog
-from forge_task_adk_workflows.run_store import PAUSED, QUEUED, CancelRequested, LostLease, RunStore
+from forge_task_adk_workflows.run_store import (
+    QUEUED,
+    CancelRequested,
+    LostLease,
+    RunStore,
+    open_gates,
+    overdue_gates,
+)
 from forge_task_adk_workflows.runs import RunPayload
 from forge_task_adk_workflows.task import RUN, TASK_NAME
 from forge_task_adk_workflows.usage_store import UsageStore
@@ -314,25 +323,34 @@ class AdkRunJobs:
             return await self.runner.run(spec)
 
     async def _pause(self, control: RunControl, signal: PauseRun) -> str:
-        pause = await self._durably(
+        gates = await self._durably(
             control,
             "its pause",
             lambda: self.store.pause(
                 control.run_id,
                 owner=control.owner,
                 state=control.state,
-                key=signal.key,
-                kind=signal.kind,
+                gates=signal.gates,
+                until=signal.until,
                 reason=signal.reason,
-                details=signal.details,
-                deadline=signal.deadline,
             ),
         )
-        if signal.deadline is not None:
-            await self._send(
-                f"the expiry of run {control.run_id}'s pause",
-                self.queue.expire_pause(control.run_id, pause["id"], at=signal.deadline),
-            )
+        if gates is None:
+            # Someone decided one of them meanwhile: it carries on with it.
+            await self._send(f"run {control.run_id} after a decision", self.queue.run_adk(control.run_id))
+            return "queued"
+        # Those open when it was taken have their expiry queued already.
+        known = {gate.get("id") for gate in open_gates(control.run)}
+        for gate in gates:
+            deadline = _when(gate.get("deadline"))
+            if deadline is not None and gate["id"] not in known:
+                await self._send(
+                    f"the expiry of run {control.run_id}'s pause",
+                    self.queue.expire_pause(control.run_id, gate["id"], at=deadline),
+                )
+        if signal.until is not None:
+            await self._send(f"run {control.run_id} at its time", self.queue.run_adk(control.run_id, at=signal.until))
+            return "waiting"
         return "paused"
 
     async def _wait(self, control: RunControl, signal: WaitRun) -> str:
@@ -489,24 +507,27 @@ class AdkRunJobs:
 
     async def expire_pause(self, run_id: str, pause_id: str) -> dict[str, Any]:
         """
-        The pause's deadline came: unless someone decided it, it's rejected
-        (by nobody), and the run carries on.
+        A gate's deadline came: unless someone decided it, it's rejected (by
+        nobody), and the run carries on (at once, unless a worker has it: its
+        next attempt does).
 
         :return: What became of it: ``skipped`` (decided, or moved on),
             ``rescheduled`` (too early, on this worker's clock) or ``timed_out``.
         """
         run = await self.store.get(run_id)
-        pause = (run or {}).get("pause") or {}
-        if run is None or run["status"] != PAUSED or pause.get("id") != pause_id:
+        pause = next((gate for gate in open_gates(run or {}) if gate.get("id") == pause_id), None)
+        if run is None or pause is None:
             return {"run_id": run_id, "outcome": "skipped"}
         deadline = _when(pause.get("deadline"))
         if deadline is not None and deadline > self.store.clock():
             async with asyncio.timeout(REDIS_SECONDS):
                 await self.queue.expire_pause(run_id, pause_id, at=deadline)
             return {"run_id": run_id, "outcome": "rescheduled"}
-        if await self.store.time_out(run_id, pause_id=pause_id, comment=TIMED_OUT) is None:
+        timed_out = await self.store.time_out(run_id, pause_id=pause_id, comment=TIMED_OUT)
+        if timed_out is None:
             return {"run_id": run_id, "outcome": "skipped"}
-        await self._send(f"run {run_id} after its timeout", self.queue.run_adk(run_id))
+        if timed_out["status"] == QUEUED:
+            await self._send(f"run {run_id} after its timeout", self.queue.run_adk(run_id))
         return {"run_id": run_id, "outcome": "timed_out"}
 
     # ------------------------------------------------------------------ maintain
@@ -548,9 +569,12 @@ class AdkRunJobs:
             ):
                 done["queued"].append(run["id"])
         for run in await self.store.overdue():
-            pause_id = (run.get("pause") or {}).get("id")
             with _apart(run["id"]):
-                if pause_id and await self.store.time_out(run["id"], pause_id=pause_id, comment=TIMED_OUT):
+                timed_out = False
+                for gate in overdue_gates(run, now):
+                    if await self.store.time_out(run["id"], pause_id=gate["id"], comment=TIMED_OUT):
+                        timed_out = True
+                if timed_out:
                     await self._send(f"run {run['id']} after its timeout", self.queue.run_adk(run["id"]))
                     done["timed_out"].append(run["id"])
         if any(done.values()):

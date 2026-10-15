@@ -290,16 +290,25 @@ def test_the_default_grants_decide_approvals_and_manage_runs(runs: Runs) -> None
 
     async def pause(store: RunStore) -> dict[str, Any]:
         await store.claim(run["id"], owner="w1", lease_seconds=60)
-        return await store.pause(
+        [gate] = await store.pause(
             run["id"],
             owner="w1",
             state={},
-            key="review",
-            kind="approval",
-            reason="Ship it?",
-            details={"kind": "approval", "approvers": "org:admin", "step": "review"},
-            deadline=None,
-        )
+            gates=[
+                {
+                    "key": "review",
+                    "kind": "approval",
+                    "reason": "Ship it?",
+                    "details": {
+                        "kind": "approval",
+                        "approvers": "org:admin",
+                        "step": "review",
+                    },
+                    "deadline": None,
+                }
+            ],
+        ) or [{}]
+        return gate
 
     request_id = runs.in_store(pause)["id"]
     decision = {"request_id": request_id, "approved": False, "comment": "Not yet"}

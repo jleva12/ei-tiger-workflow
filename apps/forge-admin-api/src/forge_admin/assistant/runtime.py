@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from fastapi import FastAPI
+from forge_common.adk.attachments import AttachmentsPlugin
 from forge_common.adk.context_window import ContextWindowPlugin, windows_from
 from forge_common.adk.follow_ups import FollowUpsPlugin
 from forge_common.adk.models import ProviderModels
@@ -76,6 +77,9 @@ class AgentRuntime:
         """
         assistant = forge.create_app(settings, app=app)
         model = getattr(assistant.root_agent, "model", None)
+        # Files attached in the chat, given to the model with their bare
+        # types and names (first, so the plugins after see them so).
+        assistant.plugins.insert(0, AttachmentsPlugin())
         # Each agent's context window kept in the conversation's state, and
         # compacted mid-turn when its request nears the model's window.
         assistant.plugins.append(ContextWindowPlugin(window=windows_from(model)))

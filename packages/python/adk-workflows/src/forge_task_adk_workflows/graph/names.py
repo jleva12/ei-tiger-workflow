@@ -62,3 +62,9 @@ def via_name(merge: str, source: str) -> str:
     """:return: The ADK name of the hidden node that tags what a step hands a
     Merge "any" with the step's ID."""
     return f"{merge}__via__{source}"
+
+
+def choice_name(board: str, choice: str) -> str:
+    """:return: The ADK name of the hidden node that asks people one of a
+    Decision board's choices, and takes its way."""
+    return f"{board}__choice__{re.sub(r'[^A-Za-z0-9]+', '_', choice).strip('_') or 'choice'}"

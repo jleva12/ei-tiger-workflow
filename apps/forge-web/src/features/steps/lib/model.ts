@@ -29,6 +29,18 @@ export type SwitchCase = { id: string; value: string }
 export type MatchArm = { id: string; label: string; condition: string }
 /** Whether a match takes the first rule that holds, or every one at once. */
 export type MatchMode = "first" | "all"
+/**
+ * One of a Decision board's choices: people accept or reject it, each on
+ * its own, and it takes its Accepted or Rejected way (`<id>:accepted`).
+ */
+export type BoardChoice = {
+  id: string
+  label: string
+  /** What they're asked: a template; empty asks "<label>?". */
+  question: string
+  /** JSONata: it's laid out only when this holds; empty lays it out. */
+  ask_when: string
+}
 /** A loop's or a for-each's: the list it goes through, and how. */
 export type EachConfig = {
   /** An expression giving the list to go through. */
@@ -46,6 +58,15 @@ export type StepConfigs = {
     /** Who may decide: an organization role. */
     approvers: "org:admin" | "org:member"
     /** Hours to wait before the step takes Rejected; 0 waits forever. */
+    timeout_hours: number
+  }
+  decision_board: {
+    /** What the board is about: a template, above its choices. */
+    message: string
+    choices: BoardChoice[]
+    /** Who may decide: an organization role. */
+    approvers: "org:admin" | "org:member"
+    /** Hours each choice waits before it's rejected; 0 waits forever. */
     timeout_hours: number
   }
   http: {

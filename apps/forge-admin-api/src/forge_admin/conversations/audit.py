@@ -10,8 +10,8 @@ inside it; the site's are every assistant conversation. An organization reads
 only the assistant turns asked from inside it: their events, and the state
 they made.
 
-A turn's channel (``console``, ``api``, ``a2a``, ``assistant``) is kept from
-migration 0024 on; a conversation with none is ``unknown``.
+A turn's channel (``console``, ``api``, ``a2a``, ``assistant``, ``page``) is
+kept from migration 0024 on; a conversation with none is ``unknown``.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from forge_admin.models import ApiKey, User
 #: The assistant's ADK app (``forge_admin.assistant.forge.APP_NAME``).
 ASSISTANT_APP = "forge"
 #: How turns come in.
-CHANNELS = ("console", "api", "a2a", "assistant")
+CHANNELS = ("console", "api", "a2a", "assistant", "page")
 #: A conversation none of whose turns says how it came in.
 UNKNOWN = "unknown"
 #: The most conversations a page lists.

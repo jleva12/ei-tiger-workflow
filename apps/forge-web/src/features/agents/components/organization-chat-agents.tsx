@@ -532,7 +532,9 @@ function MoveFromBrowser({
   /** The agents the organization has: refreshed after a move. */
   known: number
 }) {
-  const [local, setLocal] = React.useState(() => localChatAgents(organizationId))
+  const [local, setLocal] = React.useState(() =>
+    localChatAgents(organizationId)
+  )
   const [moving, setMoving] = React.useState(false)
   if (!local.length) return null
   const move = async () => {
@@ -568,7 +570,12 @@ function MoveFromBrowser({
         This browser still keeps {plural(local.length, "agent")} from before
         agents were saved to the organization.
       </span>
-      <Button size="xs" variant="outline" disabled={moving} onClick={() => void move()}>
+      <Button
+        size="xs"
+        variant="outline"
+        disabled={moving}
+        onClick={() => void move()}
+      >
         {moving && <Spinner data-icon="inline-start" />}
         Move {local.length === 1 ? "it" : "them"} here
       </Button>

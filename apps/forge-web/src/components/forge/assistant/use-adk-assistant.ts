@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   WebSpeechDictationAdapter,
   type AssistantRuntime,
+  type AttachmentAdapter,
   type DictationAdapter,
   type FeedbackAdapter,
   type ThreadMessage,
@@ -15,6 +16,7 @@ import {
   type UseAdkRuntimeOptions,
 } from "@assistant-ui/react-google-adk"
 
+import { defaultAttachments } from "./attachments"
 import { followUpsRequest, type FollowUpsOption } from "./follow-ups"
 import {
   defaultModelStateDelta,
@@ -25,6 +27,7 @@ import {
   type ModelSettings,
   type ThinkingLevel,
 } from "./model-settings"
+import { withSessionTitles } from "./session-titles"
 
 type Headers = Record<string, string> | (() => Record<string, string>)
 
@@ -64,6 +67,14 @@ export type UseAdkAssistantOptions = Omit<
    * assistant-ui `DictationAdapter` (e.g. a server speech-to-text) replaces it.
    */
   dictation?: boolean | DictationAdapter
+  /**
+   * What the composer's attach button takes. Default: images and documents
+   * (PDF, Word, PowerPoint) as inline parts of the message, which ADK passes
+   * to the model, and text files (txt, md, csv, html, json) as text
+   * (`./attachments`). `false` turns attaching off; any assistant-ui
+   * `AttachmentAdapter` replaces it.
+   */
+  attachments?: boolean | AttachmentAdapter
   /**
    * Shows thumbs up / down on the agent's replies and receives each rating,
    * e.g. to store it next to the ADK session. Without it the buttons are
@@ -125,6 +136,7 @@ export function useAdkAssistant({
   runState,
   stream,
   dictation = true,
+  attachments = true,
   onFeedback,
   models = noModels,
   defaultModel,
@@ -163,7 +175,13 @@ export function useAdkAssistant({
           userId,
           headers: getHeaders,
         }),
-        sessionAdapter: session.adapter,
+        // Listed with their titles, which the server keeps (`session-titles`).
+        sessionAdapter: withSessionTitles(session.adapter, {
+          url,
+          appName,
+          userId,
+          headers: getHeaders,
+        }),
         load: session.load,
         artifacts: session.artifacts,
       }
@@ -244,6 +262,10 @@ export function useAdkAssistant({
   )
   const dictationAdapter =
     dictation === true ? browserDictation : dictation || undefined
+  // Created once, like the dictation adapter.
+  const [defaultAttachmentAdapter] = useState(defaultAttachments)
+  const attachmentAdapter =
+    attachments === true ? defaultAttachmentAdapter : attachments || undefined
   // Created once: reads the latest handler and session for each rating.
   const onFeedbackRef = useRef(onFeedback)
   const runtimeRef = useRef<AssistantRuntime | null>(null)
@@ -270,10 +292,17 @@ export function useAdkAssistant({
   const adapters = useMemo(
     () => ({
       dictation: dictationAdapter,
+      attachments: attachmentAdapter,
       ...(hasFeedback && { feedback: feedbackAdapter }),
       ...options.adapters,
     }),
-    [dictationAdapter, hasFeedback, feedbackAdapter, options.adapters]
+    [
+      dictationAdapter,
+      attachmentAdapter,
+      hasFeedback,
+      feedbackAdapter,
+      options.adapters,
+    ]
   )
 
   const runtime = useAdkRuntime({

@@ -27,6 +27,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from forge_common.adk.follow_ups import REQUEST_KEY as FOLLOW_UPS_REQUEST
+from forge_common.adk.titles import TITLE_KEY, with_title
 from forge_common.adk.usage import Attribution, attributed
 from forge_common.model_provider import ModelProviderAuthError
 from forge_task_adk_workflows.usage_store import UsageStore
@@ -38,7 +39,7 @@ from google.adk.agents.run_config import (
 )
 from google.adk.events import Event
 from google.adk.runners import Runner
-from google.adk.sessions import State
+from google.adk.sessions import Session, State
 from google.adk.sessions.base_session_service import GetSessionConfig
 from google.genai import errors as genai_errors
 from google.genai import types
@@ -238,7 +239,8 @@ def conversations(
 Mine = Annotated[Conversations, Depends(conversations)]
 
 
-async def _existing(mine: Conversations, session_id: str) -> None:
+async def _existing(mine: Conversations, session_id: str) -> Session:
+    """:return: The conversation, without its events."""
     session = await mine.runtime.sessions.get_session(
         app_name=mine.app_name,
         user_id=mine.user_id,
@@ -247,6 +249,27 @@ async def _existing(mine: Conversations, session_id: str) -> None:
     )
     if session is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such conversation")
+    return session
+
+
+async def _titled(
+    mine: Conversations,
+    session: Session,
+    state_delta: dict[str, Any] | None,
+    message: types.Content | None,
+) -> dict[str, Any] | None:
+    """
+    :return: The turn's state, naming a conversation that has no title yet
+        after its first message (``forge_common.adk.titles``): with the turn,
+        never on its own, so the runner's session doesn't go stale under it.
+    """
+    if session.state.get(TITLE_KEY):
+        return state_delta
+    # Untitled (mostly a new one, with no past to read): its first message names it.
+    full = await mine.runtime.sessions.get_session(
+        app_name=mine.app_name, user_id=mine.user_id, session_id=session.id
+    )
+    return with_title(state_delta, full, message)
 
 
 @router.post(CAPABILITIES)
@@ -550,7 +573,8 @@ async def run_sse(
     CALLER_BASE_URL.set(str(request.base_url))
     state_delta = _session_state(body.state_delta)
     mine = Conversations(runtime, body.app_name, body.user_id)
-    await _existing(mine, body.session_id)
+    session = await _existing(mine, body.session_id)
+    state_delta = await _titled(mine, session, state_delta, body.new_message)
     if runtime.unavailable:
         events = _refuse(runner.app_name, runtime.unavailable)
     else:

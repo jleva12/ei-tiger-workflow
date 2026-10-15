@@ -36,6 +36,27 @@ class ApprovalConfig(_Config):
     timeout_hours: float = 0
 
 
+class BoardChoice(_Config):
+    """One of a Decision board's choices: people accept or reject it, each
+    on its own, and it takes its Accepted or Rejected way."""
+
+    id: str
+    label: str = ""
+    # What they're asked (a template); blank asks "<label>?".
+    question: str = ""
+    # JSONata: the choice is laid out only when it holds; blank lays it out.
+    ask_when: str = ""
+
+
+class DecisionBoardConfig(_Config):
+    # What the board is about (a template), above its choices.
+    message: str = ""
+    choices: list[BoardChoice] = Field(default_factory=list)
+    approvers: Literal["org:admin", "org:member"] = "org:admin"
+    # 0 waits until someone decides; past it, an open choice is rejected.
+    timeout_hours: float = 0
+
+
 class Header(_Config):
     """A header, or a query parameter: its name and its value, templates."""
 

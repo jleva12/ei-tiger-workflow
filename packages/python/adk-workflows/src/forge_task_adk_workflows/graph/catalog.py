@@ -25,7 +25,9 @@ class _Entry(BaseModel):
 class OutputRows(_Entry):
     """
     Ways out a node's settings list, one per row, before its fixed ones: a
-    Switch's cases, a Match's rules. Each row's ``id`` is its way out's.
+    Switch's cases, a Match's rules. Each row's ``id`` is its way out's; with
+    ``ways``, each row has those (a Decision board's choice its Accepted and
+    Rejected ways), ``<row ID>:<way ID>``.
     """
 
     #: The setting holding the rows.
@@ -34,6 +36,8 @@ class OutputRows(_Entry):
     label: str
     #: What it's called when that's blank; ``{n}`` is the row's number.
     empty: str
+    #: Each row's ways out, when it has more than one.
+    ways: list[NodeOutput] | None = None
 
 
 class NodeKind(_Entry):

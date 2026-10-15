@@ -17,6 +17,8 @@ what it imports.
 | `forge_common.templates` | `templates` | `TemplateEngine`: Jinja templates in a directory rendered to HTML with a dictionary, as a service apps inject |
 | `forge_common.patterns` | `patterns` | Documents' regular expressions (JSON Schema's, JSONata's) on the `regex` engine, bounded in time and off the interpreter lock; `schema_errors`: a value held to a document's JSON Schema that way |
 | `forge_common.mcp` | `mcp` | `bound_tool_results`: MCP tools' results held to their output schemas with `schema_errors`, rather than by the `mcp` client's own check |
+| `forge_common.sandbox` | `sandbox` | `SandboxMode` and `OpenShellSettings`: where agents' code runs (`FORGE_AGENT_SANDBOX_MODE`), and the OpenShell gateway |
+| `forge_common.sandbox.openshell` | `sandbox-openshell` | `OpenShellCodeExecutor`: an ADK code executor running each call in a new NVIDIA OpenShell sandbox |
 
 A codebase depends on it with a path source, as on any shared package:
 
@@ -493,6 +495,50 @@ and on the `mongodb-atlas-local` image the Compose infrastructure runs.
 
 Its tests run against that Mongo when `FORGE_TEST_MONGO_URI` (or
 `FORGE_MONGO_URI`) is set, with a stand-in embedder, and skip otherwise.
+
+## Agents' code in OpenShell sandboxes
+
+`OpenShellCodeExecutor` is an ADK `BaseCodeExecutor` on an
+[NVIDIA OpenShell](https://docs.nvidia.com/openshell/latest/) gateway, through
+its Python SDK (`openshell` on PyPI). Each call gets a sandbox of its own:
+made from the image, given the call's files in `/sandbox`, sent the code on
+`python3`'s standard input, then deleted, whatever happened. Nothing carries
+over between calls and nothing of the runtime's goes in (not its environment,
+not its files). The default policy allows no network and writes only
+`/sandbox` and `/tmp`; a YAML or JSON `SandboxPolicy` file replaces it.
+
+```python
+from forge_common.sandbox import OpenShellSettings
+from forge_common.sandbox.openshell import OpenShellCodeExecutor
+
+executor = OpenShellCodeExecutor(
+    settings=OpenShellSettings(gateway="openshell", image="python:3.13-slim"),
+    timeout_seconds=60,
+)
+```
+
+The gateway is one the `openshell` CLI registered (by name, or the active one
+when `gateway` is empty), or a URL with a TLS folder (`ca.crt`, `tls.crt`,
+`tls.key`) and/or an OIDC token. It's reached on the first call, so a runtime
+starts while it's down; a call that can't get a sandbox raises
+`SandboxUnavailable` with what the gateway said. The agents' Code execution
+tools and skills' scripts use it when `FORGE_AGENT_SANDBOX_MODE=openshell`
+(`forge_agent_runtime.code_executor`).
+
+Sandboxes need a kernel with Landlock where the gateway runs them: Docker
+Desktop's doesn't have it, so on a Mac the gateway's Docker driver can't
+start one (the call says `ControlSupervisorStartFailed ... Landlock`). Its VM
+driver (libkrun microVMs, `openshell-driver-vm` in the Homebrew formula's
+libexec) can: about 5.5 seconds a call once the image is prepared. In
+OpenShell 0.1.2 it needs `e2fsprogs` (`brew install e2fsprogs`, for
+`mke2fs`), sandbox JWTs (`[openshell.gateway.gateway_jwt]`) and so callers
+authenticated by mTLS (`[openshell.gateway.tls]` with `client_ca_path`,
+`[openshell.gateway.mtls_auth]`), the supervisors' client bundle as
+`guest_tls_*` under `[openshell.gateway]` (not the VM table), and an image
+with `python3`: the driver's default Ubuntu has none, which a call reports as
+`SandboxUnavailable`. `openshell-gateway generate-certs --output-dir` makes
+the PKI and keys; copy `ca.crt` into its `client/` folder for
+`FORGE_OPENSHELL_TLS_DIR`.
 
 ## Checks
 

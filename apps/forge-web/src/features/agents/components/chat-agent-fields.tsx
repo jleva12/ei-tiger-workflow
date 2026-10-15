@@ -68,6 +68,8 @@ function NodeName({ id, step }: { id: string; step: ChatStep }) {
     ) : (
       "Its name needs a letter for ADK to call it by."
     )
+  ) : step.kind === "rich_answers" ? (
+    <>The model calls it {code("present")}.</>
   ) : step.kind === "http_tool" || step.kind === "code_execution" ? (
     name || step.kind === "code_execution" ? (
       <>The model calls it {code(name || "run_code")}.</>

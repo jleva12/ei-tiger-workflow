@@ -1,3 +1,4 @@
+import { RICH_ANSWER_COMPONENTS } from "@/components/forge/assistant/rich-answers-schema"
 import { HTTP_METHODS, THINKING_LEVELS } from "@/features/steps/lib/model"
 import { chatKindInfo, KNOWN_CHAT_KINDS } from "./catalog"
 import { CHAT_AGENT_FORMAT } from "./document"
@@ -213,6 +214,15 @@ export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
       ...bool,
       description:
         "The model may run the skills' scripts, where the runtime runs code; otherwise it reads a script and follows it itself.",
+    },
+  },
+  rich_answers: {
+    components: {
+      type: "array",
+      items: { enum: [...RICH_ANSWER_COMPONENTS] },
+      uniqueItems: true,
+      description:
+        "The Generative UI components the agent may draw with present; only these go into its model calls.",
     },
   },
   code_execution: {

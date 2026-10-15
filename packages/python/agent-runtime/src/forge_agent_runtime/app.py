@@ -61,7 +61,7 @@ from typing import TYPE_CHECKING, Any, Self
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from forge_agent_runtime.code_execution import CodeExecution, code_executor
+from forge_agent_runtime.code_execution import code_executor
 from forge_agent_runtime.document import ChatAgentDocument
 from forge_agent_runtime.executor import (
     AgentExecutor,
@@ -72,6 +72,7 @@ from forge_agent_runtime.executor import (
     FileAgentSource,
 )
 from forge_agent_runtime.services import RuntimeServices
+from forge_common.sandbox import OpenShellSettings, SandboxMode
 
 if TYPE_CHECKING:
     from a2a.server.tasks import TaskStore
@@ -205,7 +206,9 @@ class AgentServerSettings(BaseSettings):
     file beside it. Lists are JSON (``FORGE_AGENT_CORS_ORIGINS=["https://…"]``).
     """
 
-    model_config = SettingsConfigDict(env_prefix="FORGE_AGENT_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="FORGE_AGENT_", env_file=".env", env_nested_delimiter="__", extra="ignore"
+    )
 
     #: The agent's exported JSON, or a folder of them.
     definition: Path | None = None
@@ -227,10 +230,16 @@ class AgentServerSettings(BaseSettings):
     #: What HTTP tools may reach besides the internet: private networks, or these hosts.
     allow_private: bool = False
     allowed_hosts: list[str] = []
-    #: Where Code execution tools run the code agents send: off (they don't
-    #: build), or local, a new Python process on this machine for each call,
-    #: with this server's environment, files and network (local development only).
-    code_execution: CodeExecution = "off"
+    #: Where Code execution tools (and skills' scripts) run the code agents
+    #: send: off (they don't build); local, a new Python process on this
+    #: machine for each call, with this server's environment, files and
+    #: network (local development only); or openshell, a new sandbox on an
+    #: NVIDIA OpenShell gateway for each call (forge-agent-runtime[openshell]).
+    sandbox_mode: SandboxMode = "off"
+    #: For openshell: the gateway (FORGE_AGENT_OPENSHELL__GATEWAY, a name the
+    #: openshell CLI registered or a URL; the active one by default), its TLS
+    #: folder, the sandboxes' image and policy.
+    openshell: OpenShellSettings = OpenShellSettings()
     #: Whether replies stream as the model writes them (true) or arrive whole
     #: (false); as each request asks by default.
     streaming: bool | None = None
@@ -545,7 +554,7 @@ class AgentServer:
             environment=environment,
             allow_private=settings.allow_private,
             allowed_hosts=tuple(settings.allowed_hosts),
-            code_executor=code_executor(settings.code_execution),
+            code_executor=code_executor(settings.sandbox_mode, settings.openshell),
         ).but(**self._services)
         return AgentExecutor(
             source,

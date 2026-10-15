@@ -49,7 +49,9 @@ One entry per node of the document, in the document's order::
 A node's events are found by its ADK name (``names.py``) under the graph's own
 path, and under its loops' bodies (``<loop>@1/<loop>__each@item_<i>/``). The
 start is its hidden input node (``__input__``); the other hidden nodes (the
-finish, the collectors) aren't steps. What runs inside a node (a team's
+finish, the collectors) aren't steps, but a Decision board's choices'
+are the board's: it waits while any does, and the ways its choices took are
+all taken. What runs inside a node (a team's
 sub-agents, a saved agent's own steps, a loop's body) counts for that node's
 times, failures and pauses, never as steps of their own.
 
@@ -69,7 +71,7 @@ from google.adk.sessions import Session
 from forge_task_adk_workflows.graph.data import CALLED_WITH_KEY, INPUT_NODE, LOGIC, StepInfo, _record, as_data
 from forge_task_adk_workflows.graph.factories.agents import answer_parser
 from forge_task_adk_workflows.graph.factories.base import config_of, items, text
-from forge_task_adk_workflows.graph.names import BODY_KINDS, adk_name, body_name
+from forge_task_adk_workflows.graph.names import BODY_KINDS, adk_name, body_name, choice_name
 from forge_task_adk_workflows.graph.pauses import REQUEST_CONFIRMATION, REQUEST_INPUT, pending_pauses
 from forge_task_adk_workflows.support.expressions import as_text
 
@@ -78,6 +80,8 @@ FAILED = "failed"
 WAITING = "waiting"
 RUNNING = "running"
 NOT_REACHED = "not_reached"
+#: A Decision board: its choices are hidden nodes of its own.
+BOARD = "decision_board"
 #: Every status a step can have.
 STATUSES = (DONE, FAILED, WAITING, RUNNING, NOT_REACHED)
 #: The most of a tool's response a step shows, as JSON text.
@@ -105,6 +109,17 @@ class _Seen:
     #: The way it took, as its last event said (a branching step's output ID,
     #: or a list of them); None for a step whose every way is taken.
     route: Any = None
+    #: A Decision board's: each time it handed on (a choice decided), and what.
+    handings: list[tuple[float, Any]] = field(default_factory=list)
+
+    def handed_before(self, when: float) -> tuple[float, Any] | None:
+        """:return: When it last handed on, at or before ``when``, and what:
+        a board as each choice was decided, any other step as it finished."""
+        if self.handings:
+            return max((h for h in self.handings if h[0] <= when), default=None, key=lambda h: h[0])
+        if self.finished is not None and self.finished <= when and self.handed_on:
+            return self.finished, self.output
+        return None
 
     def saw(self, when: float) -> None:
         if self.started is None or when < self.started:
@@ -203,8 +218,13 @@ def run_progress(
             found.finished = when
             found.output = as_data(record.get("output"))
             found.error = record.get("error")
+            if by_id[step].kind == BOARD:
+                found.handings.append((when, found.output))
             if event.actions is not None and event.actions.route is not None:
-                found.route = event.actions.route
+                # A board's ways are taken one by one, as people decide: every one stays taken.
+                found.route = (
+                    _ways(found.route, event.actions.route) if by_id[step].kind == BOARD else event.actions.route
+                )
 
     sources = _sources(document, seen)
     _infer_silent(nodes, sources, seen)
@@ -286,6 +306,10 @@ def step_infos(nodes: list[dict[str, Any]]) -> tuple[dict[str, StepInfo], set[st
         infos[name] = StepInfo(node["id"], kind, parse)
         if kind in BODY_KINDS:
             loops.add(name)
+        if kind == BOARD:
+            for row in items(config_of(node).get("choices")):
+                if isinstance(row, dict) and (choice := text(row.get("id"))):
+                    infos[choice_name(name, choice)] = StepInfo(node["id"], kind)
     return infos, loops
 
 
@@ -305,16 +329,16 @@ def _handed_in(
     if step in visiting or found.started is None:
         return None
     handed = [
-        (when, source)
+        (handing[0], source, handing[1])
         for source in sources.get(step, ())
-        if (when := seen[source].finished) is not None and when <= found.started and seen[source].handed_on
+        if (handing := seen[source].handed_before(found.started)) is not None
     ]
     if not handed:
         return None
-    source = max(handed)[1]
+    _, source, output = max(handed, key=lambda h: h[0])
     if kinds.get(source) in LOGIC:
         return _handed_in(source, sources, seen, kinds, visiting | {step})
-    return source, seen[source].output
+    return source, output
 
 
 def _calls(event: Event, chain: list[tuple[str, bool]], seen: Mapping[str, _Seen], asked: set[str]) -> None:
@@ -476,9 +500,9 @@ def _started_when_handed_on(sources: Mapping[str, set[str]], seen: Mapping[str, 
         if found.started is None:
             continue
         handed = [
-            when
+            handing[0]
             for source in sources.get(step, ())
-            if (when := seen[source].finished) is not None and when <= found.started
+            if (handing := seen[source].handed_before(found.started)) is not None
         ]
         if handed:
             found.started = max(handed)
@@ -488,3 +512,10 @@ def _iso(moment: float | None) -> str | None:
     if moment is None:
         return None
     return datetime.fromtimestamp(moment, UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _ways(taken: Any, route: Any) -> list[Any]:
+    """:return: The ways a step has taken, with those of another of its events."""
+    found = taken if isinstance(taken, list) else [] if taken is None else [taken]
+    more = route if isinstance(route, list) else [route]
+    return list(dict.fromkeys([*found, *more]))

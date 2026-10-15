@@ -20,6 +20,15 @@ import {
   type TemplateArgument,
 } from "@/features/builder/components/fields/expression-field"
 import { Icon } from "@/components/forge/icon"
+import {
+  RICH_ANSWER_COMPONENTS,
+  RICH_ANSWER_GROUPS,
+  RICH_ANSWER_REQUIRES,
+  RICH_ANSWER_VOCABULARY,
+  schemaCost,
+  withRequired,
+  type RichAnswerComponent,
+} from "@/components/forge/assistant/rich-answers-schema"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
@@ -63,6 +72,7 @@ export type ToolKind =
   | "mcp"
   | "code_execution"
   | "skills"
+  | "rich_answers"
 
 /** What a tool may pick from: the organization's, by ID. */
 export type ToolLookups = {
@@ -195,9 +205,10 @@ function CodeExecutionFields({
     <>
       <p className="text-xs/[1.5] text-muted-foreground">
         The model writes Python and runs it, then reads what it printed and its
-        errors. Each run starts afresh. For now it runs on the server&apos;s own
-        machine, unsandboxed (ADK&apos;s local code executor), so only where
-        code execution is turned on: in local development.
+        errors. Each run starts afresh, where the deployment&apos;s sandbox mode
+        says: in a new OpenShell sandbox for each run, or in local development
+        on the server&apos;s own machine, unsandboxed. Where it&apos;s off, the
+        agent doesn&apos;t run.
       </p>
       <CheckField
         label="A person confirms each run"
@@ -205,6 +216,143 @@ function CodeExecutionFields({
         onChange={(on) => set("confirm", on)}
         description={confirmAbout}
       />
+    </>
+  )
+}
+
+/** A component's description, short: its first sentence (two, if that's a few words), without markup. */
+const firstSentence = (text: string) =>
+  (
+    (/^.{0,40}?[.!?]\s+.*?[.!?](?=\s+[A-Z`]|$)/.exec(text) ??
+      /^.*?[.!?](?=\s+[A-Z`]|$)/.exec(text))?.[0] ?? text
+  ).replace(/`/g, "")
+
+/** The picks without `name`, and without what can't do without it. */
+function withoutComponent(picked: readonly string[], name: string) {
+  let left = picked.filter((each) => each !== name)
+  for (;;) {
+    const kept = left.filter((each) =>
+      (RICH_ANSWER_REQUIRES[each as RichAnswerComponent] ?? []).every(
+        (needed) => left.includes(needed)
+      )
+    )
+    if (kept.length === left.length) return kept
+    left = kept
+  }
+}
+
+function RichAnswersFields({ config, set }: ToolProps<"rich_answers">) {
+  const groupId = React.useId()
+  const { issues, key } = useFieldIssues("components")
+  const picked = config.components
+  const cost = schemaCost(picked)
+  const pick = (names: readonly string[], on: boolean) =>
+    set(
+      "components",
+      on
+        ? withRequired([...picked, ...names])
+        : names.reduce<string[]>(withoutComponent, [...picked])
+    )
+  return (
+    <>
+      <p className="text-xs/[1.5] text-muted-foreground">
+        The agent may answer with a composition the chat draws beside its text,
+        of the components picked here. It calls{" "}
+        <code className="font-mono text-2xs">present</code> with it, and is told
+        to write a sentence about it too, since callers of the agent&apos;s API
+        and A2A get only the call. What the person clicks or fills in comes back
+        as their next message.
+      </p>
+      <div
+        role="group"
+        aria-labelledby={`${groupId}-label`}
+        data-field={key}
+        className="flex flex-col gap-2"
+      >
+        <span
+          id={`${groupId}-label`}
+          className="flex items-baseline justify-between gap-2 text-xs font-medium text-foreground"
+        >
+          Components it may use
+          <span className="font-normal text-muted-foreground tabular-nums">
+            {picked.length} of {RICH_ANSWER_COMPONENTS.length} picked
+          </span>
+        </span>
+        <div
+          className="flex max-h-96 flex-col gap-3 overflow-y-auto rounded-(--radius-item) border p-2.5"
+          tabIndex={0}
+        >
+          {RICH_ANSWER_GROUPS.map((group) => {
+            const on = group.components.filter((name) => picked.includes(name))
+            const all = on.length === group.components.length
+            return (
+              <div key={group.id} className="flex flex-col gap-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-2xs font-medium tracking-wide text-muted-foreground uppercase">
+                    {group.label}
+                    <span className="ml-1.5 font-normal tracking-normal normal-case tabular-nums">
+                      {on.length} of {group.components.length}
+                    </span>
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    aria-label={`${all ? "Untick" : "Tick"} every ${group.label.toLowerCase()} component`}
+                    onClick={() => pick(group.components, !all)}
+                  >
+                    {all ? "None" : "All"}
+                  </Button>
+                </div>
+                {group.components.map((name) => {
+                  const needs = RICH_ANSWER_REQUIRES[name]
+                  return (
+                    <Field
+                      key={name}
+                      orientation="horizontal"
+                      className="items-start"
+                    >
+                      <Checkbox
+                        id={`${groupId}-${name}`}
+                        className="mt-0.5"
+                        checked={picked.includes(name)}
+                        onCheckedChange={(checked) =>
+                          pick([name], Boolean(checked))
+                        }
+                      />
+                      <FieldLabel
+                        htmlFor={`${groupId}-${name}`}
+                        className="flex min-w-0 flex-1 flex-col items-start gap-0.5 font-normal"
+                      >
+                        <span className="font-mono text-xs">{name}</span>
+                        <span className="line-clamp-2 text-2xs text-muted-foreground">
+                          {firstSentence(
+                            RICH_ANSWER_VOCABULARY[name].description
+                          )}
+                          {needs && ` Comes with ${needs.join(" and ")}.`}
+                        </span>
+                      </FieldLabel>
+                    </Field>
+                  )
+                })}
+              </div>
+            )
+          })}
+        </div>
+        <FieldDescription>
+          {picked.length ? (
+            <>
+              Adds about {cost.openai.toLocaleString()} tokens to every model
+              call it makes on OpenAI, and about {cost.gemini.toLocaleString()}{" "}
+              on Gemini, which writes the components out in full. Pick only what
+              its answers need.
+            </>
+          ) : (
+            "Pick at least one component."
+          )}
+        </FieldDescription>
+        <IssueMessages issues={issues} />
+      </div>
     </>
   )
 }
@@ -318,7 +466,7 @@ function SkillsFields({ config, set, lookups }: ToolProps<"skills">) {
         label="It may run the skills' scripts"
         checked={config.run_scripts}
         onChange={(on) => set("run_scripts", on)}
-        description="Scripts (scripts/…) run on the server's own machine, unsandboxed, only where code execution is turned on: in local development. Otherwise the agent reads a script and follows it itself."
+        description="Scripts (scripts/…) run where the deployment's sandbox mode says: in a new OpenShell sandbox, or in local development on the server's own machine, unsandboxed. Otherwise the agent reads a script and follows it itself."
       />
     </>
   )
@@ -1075,6 +1223,12 @@ export function ToolFields<K extends ToolKind>({
       )
     case "skills":
       return <SkillsFields {...(props as unknown as ToolProps<"skills">)} />
+    case "rich_answers":
+      return (
+        <RichAnswersFields
+          {...(props as unknown as ToolProps<"rich_answers">)}
+        />
+      )
   }
   return null
 }

@@ -36,8 +36,21 @@ const fileVariants = cva(
   }
 )
 
+/** A type without its parameters: `application/pdf; name="a.pdf"` → `application/pdf`. */
+const bareType = (mimeType: string) => mimeType.split(";", 1)[0].trim()
+
+/**
+ * A file's name, when its type carries it: Forge's chat sends attachments as
+ * `application/pdf; name="report.pdf"`, since ADK's web client keeps only a
+ * part's type and data, both ways.
+ */
+function nameInType(mimeType: string): string | undefined {
+  const found = /;\s*name="((?:[^"\\]|\\.)*)"/i.exec(mimeType)
+  return found ? found[1].replace(/\\(.)/g, "$1") : undefined
+}
+
 function getMimeTypeIcon(mimeType: string): FC<{ className?: string }> {
-  const type = mimeType.toLowerCase()
+  const type = bareType(mimeType).toLowerCase()
   if (type.startsWith("image/")) {
     return ImageIcon
   }
@@ -246,11 +259,13 @@ function FileDownload({
 }
 
 const FileImpl: FileMessagePartComponent = ({
-  filename,
+  filename: given,
   data,
-  mimeType,
+  mimeType: typed,
   sourceType,
 }) => {
+  const filename = given ?? nameInType(typed)
+  const mimeType = bareType(typed)
   const kind = getFileDataKind(data, sourceType)
   const showSize =
     typeof data === "string" && (kind === "base64" || kind === "data-uri")

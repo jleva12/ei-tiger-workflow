@@ -12,10 +12,10 @@ forge_admin.env_files.
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
 
 from forge_codegraph_query import CodeGraphSettings
 from forge_common.logging import LoggingSettings
+from forge_common.sandbox import OpenShellSettings, SandboxMode
 from forge_embeddings.config import EmbeddingSettings, RerankSettings
 from forge_task_documents.retrieval.service import SearchConfig
 from pydantic import (
@@ -234,11 +234,15 @@ class Settings(BaseSettings):
     # secrets anywhere. Put API keys and tokens in the organization's
     # credentials instead.
     agent_tool_environment: list[str] = []
-    # Where chat agents' Code execution tools run the code they send: off (an
-    # agent with one doesn't build), or local: ADK's UnsafeLocalCodeExecutor,
-    # a new Python process on this machine for each call, with this API's
-    # environment, files and network. Local development only.
-    agent_code_execution: Literal["off", "local"] = "off"
+    # Where chat agents' Code execution tools (and skills' scripts) run the
+    # code they send, as .env.common's FORGE_AGENT_SANDBOX_MODE says: off (an
+    # agent with one doesn't build); local: ADK's UnsafeLocalCodeExecutor, a
+    # new Python process on this machine for each call, with this API's
+    # environment, files and network (local development only); or openshell:
+    # a new sandbox for each call on the OpenShell gateway in agent_openshell
+    # (FORGE_OPENSHELL_*), confined by its policy, then deleted.
+    agent_sandbox_mode: SandboxMode = "off"
+    agent_openshell: OpenShellSettings = OpenShellSettings()
     # Standalone agent projects (the builder's Generate standalone agent): where
     # their runtime comes from. wheels: the wheels in starter_wheels are copied
     # into each project's vendor/, until the runtime is on PyPI; pypi:<version>

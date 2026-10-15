@@ -15,7 +15,7 @@
 
 from forge_agent_runtime.app import AgentServer, AgentServerSettings, MissingSetting, env
 from forge_agent_runtime.build import TOOL_KINDS, BuildError, build_app, build_root_agent, build_tools
-from forge_agent_runtime.code_execution import CodeExecution, code_executor
+from forge_agent_runtime.code_execution import code_executor
 from forge_agent_runtime.document import ChatAgentDocument, DocumentError, load_document, parse_document
 from forge_agent_runtime.executor import (
     AgentExecutor,
@@ -41,6 +41,7 @@ from forge_agent_runtime.services import (
 )
 from forge_agent_runtime.skills import BundledSkills, SkillBundle, SkillError, SkillFile, SkillLibrary
 from forge_agent_runtime.tools import http_client
+from forge_common.sandbox import OpenShellSettings, SandboxMode
 
 __all__ = [
     "AgentExecutor",
@@ -53,7 +54,6 @@ __all__ = [
     "BuildError",
     "BundledSkills",
     "ChatAgentDocument",
-    "CodeExecution",
     "CredentialProvider",
     "DirectoryAgentSource",
     "DocumentAgentSource",
@@ -62,11 +62,13 @@ __all__ = [
     "KnowledgeBases",
     "McpServers",
     "MissingSetting",
+    "OpenShellSettings",
     "RequestAuth",
     "ResolvedAgent",
     "RunObserver",
     "RunRequest",
     "RuntimeServices",
+    "SandboxMode",
     "SkillBundle",
     "SkillError",
     "SkillFile",

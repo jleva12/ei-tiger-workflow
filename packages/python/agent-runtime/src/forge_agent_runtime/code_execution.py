@@ -10,16 +10,18 @@ every model makes one, and it's shown, journaled and confirmed as the others
 are.
 
 What runs the code is the deployment's (``RuntimeServices.code_executor``,
-:func:`code_executor`): for now ADK's ``UnsafeLocalCodeExecutor``, a new
-Python process for each call, on the same machine as the runtime, with its
-environment, its files and its network. For local development only: an
-agent that runs code where it's off doesn't build.
+:func:`code_executor`), as its sandbox mode says (``forge_common.sandbox``):
+ADK's ``UnsafeLocalCodeExecutor`` (``local``), a new Python process for each
+call on the same machine as the runtime, with its environment, its files and
+its network, for local development only; or a new NVIDIA OpenShell sandbox
+for each call (``openshell``), confined by its policy. An agent that runs
+code where it's ``off`` doesn't build.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Literal
+from typing import Any
 
 from google.adk.code_executors.base_code_executor import BaseCodeExecutor
 from google.adk.code_executors.code_execution_utils import CodeExecutionInput
@@ -29,10 +31,7 @@ from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
 from forge_common.adk import ToolFailure
-
-#: Where agents' code runs, as a deployment's setting says: ``off`` (agents
-#: that run code don't build), or ``local``, on the runtime's own machine.
-CodeExecution = Literal["off", "local"]
+from forge_common.sandbox import OpenShellSettings, SandboxUnavailable
 
 #: The most seconds one call's code may run before it's stopped.
 CODE_SECONDS = 60
@@ -45,15 +44,28 @@ DESCRIPTION = (
 )
 
 
-def code_executor(setting: str) -> BaseCodeExecutor | None:
+def code_executor(mode: str, openshell: OpenShellSettings | None = None) -> BaseCodeExecutor | None:
     """
-    :param setting: A deployment's ``CodeExecution``.
-    :return: What runs agents' code: ADK's ``UnsafeLocalCodeExecutor`` for
-        ``local``, each call stopped after :data:`CODE_SECONDS`; None for
+    :param mode: A deployment's ``SandboxMode``.
+    :param openshell: For ``openshell``: the gateway, and the sandboxes it
+        makes; the CLI's active gateway and its default image without.
+    :return: What runs agents' code, each call stopped after
+        :data:`CODE_SECONDS`: ADK's ``UnsafeLocalCodeExecutor`` for
+        ``local``, an ``OpenShellCodeExecutor`` for ``openshell``; None for
         ``off``.
+    :raises ValueError: ``openshell``'s policy file can't be used.
+    :raises ImportError: ``openshell`` without ``forge-agent-runtime[openshell]``.
     """
-    if setting == "local":
+    if mode == "local":
         return UnsafeLocalCodeExecutor(timeout_seconds=CODE_SECONDS)
+    if mode == "openshell":
+        try:
+            from forge_common.sandbox.openshell import OpenShellCodeExecutor
+        except ImportError as error:
+            raise ImportError(
+                "Running agents' code in OpenShell needs the openshell SDK: install forge-agent-runtime[openshell]."
+            ) from error
+        return OpenShellCodeExecutor(settings=openshell or OpenShellSettings(), timeout_seconds=CODE_SECONDS)
     return None
 
 
@@ -86,9 +98,17 @@ class CodeTool(BaseTool):
         if not isinstance(code, str) or not code.strip():
             raise ToolFailure("Send the Python program to run in code.")
         # The executor blocks until its process ends (or is stopped): off the event loop.
-        result = await asyncio.to_thread(
-            self.executor.execute_code,
-            tool_context.get_invocation_context(),
-            CodeExecutionInput(code=code),
-        )
+        try:
+            result = await asyncio.to_thread(
+                self.executor.execute_code,
+                tool_context.get_invocation_context(),
+                CodeExecutionInput(code=code),
+            )
+        except SandboxUnavailable as error:
+            raise ToolFailure(
+                f"The code didn't run: {error}",
+                [
+                    "Don't send it again now: work it out without running code, or tell the person code can't run."
+                ],
+            ) from error
         return {"stdout": result.stdout, "stderr": result.stderr}

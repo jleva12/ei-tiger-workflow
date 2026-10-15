@@ -6,18 +6,21 @@ import {
   AdkDelegation,
   AdkInputRequestUI,
 } from "./adk"
+import { PresentUI } from "./rich-answers"
 
 /**
  * Renderers for ADK's own calls: the human-in-the-loop ones, and
  * `finish_task`, which a task agent (`mode="task"`) calls when it's done.
  * Its report reaches the person as the result of the call that handed it
- * the request, so it isn't shown.
+ * the request, so it isn't shown. And `present`, an agent's rich answer
+ * (Rich answers on the Agents canvas), drawn as the composition it sends.
  */
 export const adkToolkit = defineToolkit({
   adk_request_confirmation: { type: "backend", render: AdkConfirmationUI },
   adk_request_credential: { type: "backend", render: AdkAuthRequestUI },
   adk_request_input: { type: "backend", render: AdkInputRequestUI },
   finish_task: { type: "backend", render: () => null },
+  present: { type: "backend", render: PresentUI },
 })
 
 /**
