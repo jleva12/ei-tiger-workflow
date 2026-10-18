@@ -649,11 +649,11 @@ class AdkRun:
                     except RunFailed as failure:
                         raise self._placed(failure, failed_at) from None
                     except Exception as error:
-                        failure = _classified(error)
-                        if isinstance(failure, _Refused):
-                            failure.began = began
-                            failure = self._placed_refused(failure, failed_at)
-                        raise failure from error
+                        stopped = _classified(error)
+                        if isinstance(stopped, _Refused):
+                            stopped.began = began
+                            stopped = self._placed_refused(stopped, failed_at)
+                        raise stopped from error
                     began = True
                     if event.error_code or event.error_message:
                         failed_at = event.node_info.path or failed_at
