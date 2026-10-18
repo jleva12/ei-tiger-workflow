@@ -33,7 +33,11 @@ from forge_admin.chat_agents import runtime as chat_agent_runtime
 from forge_admin.chat_agents.source import create_executor
 from forge_admin.chat_agents.store import ChatAgentStore
 from forge_admin.config import Settings
-from forge_admin.db.session import create_engine, create_sessionmaker
+from forge_admin.db.session import (
+    adk_session_engine,
+    create_engine,
+    create_sessionmaker,
+)
 from forge_admin.knowledge.graph import check_codegraph, codegraph_from
 from forge_admin.knowledge.queue import KnowledgeQueue
 from forge_admin.knowledge.search import KnowledgeSearch
@@ -181,7 +185,9 @@ class ApiServer:
         # task keeps in this database too: a run's steps are read from them.
         # Tests set their own.
         if getattr(app.state, "adk_run_sessions", None) is None:
-            app.state.adk_run_sessions = DatabaseSessionService(db_engine=engine)
+            app.state.adk_run_sessions = DatabaseSessionService(
+                db_engine=adk_session_engine(engine)
+            )
         # Organizations' chat agents (drafts and published versions) in MongoDB,
         # and the runtime that runs them by ID; None without MongoDB. Tests set
         # their own.

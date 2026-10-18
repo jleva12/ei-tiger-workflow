@@ -73,6 +73,7 @@ from forge_admin.api_credentials import (
 from forge_admin.assistant.language_models import gemini_config
 from forge_admin.chat_agents.store import ChatAgentStore
 from forge_admin.config import Settings
+from forge_admin.db.session import adk_session_engine
 from forge_admin.knowledge.search import KnowledgeSearch
 from forge_admin.knowledge.tools import OrganizationKnowledgeBases
 from forge_admin.mcp_servers.toolset import mcp_toolset
@@ -444,7 +445,8 @@ def create_executor(
             lambda organization: RunResources(
                 organization, chat_agents=store, sessions=sessions
             ),
-            run_sessions=run_sessions or DatabaseSessionService(db_engine=engine),
+            run_sessions=run_sessions
+            or DatabaseSessionService(db_engine=adk_session_engine(engine)),
         )
         if agents is not None
         else None,
@@ -457,7 +459,7 @@ def create_executor(
     return AgentExecutor(
         MongoAgentSource(store, SkillStamps(sessions)),
         models=models,
-        sessions=DatabaseSessionService(db_engine=engine),
+        sessions=DatabaseSessionService(db_engine=adk_session_engine(engine)),
         artifacts=InMemoryArtifactService(),
         services=services,
         cache_size=settings.agent_runtime_cache,

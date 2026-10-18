@@ -20,6 +20,7 @@ from forge_admin.assistant import forge
 from forge_admin.assistant.person import PersonLookup, database_people
 from forge_admin.assistant.screens import Screens
 from forge_admin.config import Settings
+from forge_admin.db.session import adk_session_engine
 
 NO_API_KEY = (
     "The assistant isn't set up yet: it needs a Gemini API key. Set "
@@ -95,7 +96,7 @@ class AgentRuntime:
         )
         runtime = cls.of(
             [assistant],
-            sessions=DatabaseSessionService(db_engine=engine),
+            sessions=DatabaseSessionService(db_engine=adk_session_engine(engine)),
             artifacts=InMemoryArtifactService(),
             # The shared configuration has its own keys, each required.
             unavailable=(
