@@ -56,7 +56,12 @@ WRITE_SECONDS at most, up to WRITE_TRIES times while the database hiccups. A
 failure (or a hiccup) is kept in Redis first (``RunQueue.keep_failure``), and
 forgotten once written: should the write not land, the maintenance records
 it once the run's lease runs out, failing the run rather than running it
-again, whatever became of the worker meanwhile.
+again, whatever became of the worker meanwhile. What the attempt writes as it
+goes lands only while its lease is held too: its checkpoints and notes, its
+ADK session's events (control.py) and its model and tool calls' usage rows.
+An attempt that lost its run (its lease ran out on the maintenance's clock,
+and another took the run) writes nothing more, even on a worker whose own
+clock says it holds the run.
 
 ``expire_pause`` rejects an approval nobody decided by its deadline (the run
 carries on down its rejected way; the other gates stay open). ``maintain`` runs every minute: runs whose
@@ -71,6 +76,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import os
 import random
@@ -82,7 +88,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from forge_common.adk.usage import recording
+from forge_common.adk.usage import UsageCall, UsageSink, recording
 from pydantic import ValidationError
 
 from forge_async_worker.control import PauseRun, RunControl, StopRun, WaitRun, is_hiccup
@@ -318,9 +324,25 @@ class AdkRunJobs:
         return "succeeded"
 
     async def _run_job(self, spec: JobSpec, control: RunControl) -> JobResult:
-        sink = self.usage.record if self.usage is not None else None
-        with controlling(control), recording(sink):
+        with controlling(control), recording(self._usage_sink(control)):
             return await self.runner.run(spec)
+
+    def _usage_sink(self, control: RunControl) -> UsageSink | None:
+        """Where the attempt's model and tool calls are recorded: while it has
+        its run (fenced on its lease, as its writes are), never once another
+        attempt may have taken it, which records its own."""
+        usage = self.usage
+        if usage is None:
+            return None
+        fence = functools.partial(self.store.hold, run_id=control.run_id, owner=control.owner)
+
+        async def record(call: UsageCall) -> None:
+            try:
+                await usage.record(call, fence=fence)
+            except LostLease:
+                log.info("a %s call of run %s isn't recorded: its attempt lost the run", call.call, control.run_id)
+
+        return record
 
     async def _pause(self, control: RunControl, signal: PauseRun) -> str:
         gates = await self._durably(

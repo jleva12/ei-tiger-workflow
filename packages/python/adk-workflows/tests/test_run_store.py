@@ -157,6 +157,53 @@ async def test_a_worker_whose_lease_ran_out_cant_write_though_nobody_took_the_ru
     assert [found["id"] for found in await store.interrupted()] == [run["id"]]
 
 
+async def test_a_workers_notes_land_only_while_it_has_the_run(store: RunStore, clock: Clock) -> None:
+    run = await started(store)
+    await store.claim(run["id"], owner="w1", lease_seconds=60)
+    await store.note(run["id"], "Step 1 finished", owner="w1")
+    with pytest.raises(LostLease):
+        await store.note(run["id"], "Not w2's to say", owner="w2")
+
+    clock.advance(60)  # its lease ran out, though nobody took the run yet
+    with pytest.raises(LostLease):
+        await store.note(run["id"], "Step 2 finished", owner="w1")
+    clock.advance(1)
+    await store.requeue(run["id"], owner=None, error={"message": "gone", "category": "interrupted"})
+    await store.claim(run["id"], owner="w2", lease_seconds=60)
+    with pytest.raises(LostLease):
+        await store.note(run["id"], "Step 2 finished", owner="w1")  # on its own clock, it may hold it still
+    await store.note(run["id"], "Carries on", owner="w2")
+    await store.note(run["id"], "Said by nobody's worker")  # the admin API's: not fenced
+
+    noted = [event["message"] for event in await store.events(run["id"]) if event["kind"] == "note"]
+    assert noted == ["Step 1 finished", "Carries on", "Said by nobody's worker"]
+
+
+async def test_a_worker_holds_its_run_for_a_write_elsewhere_while_it_has_it(store: RunStore, clock: Clock) -> None:
+    run = await started(store)
+    await store.claim(run["id"], owner="w1", lease_seconds=60)
+    written: list[str] = []
+    async with store.holding(run["id"], owner="w1"):
+        written.append("w1")
+    with pytest.raises(LostLease):
+        async with store.holding(run["id"], owner="w2"):
+            written.append("w2")
+    clock.advance(60)
+    with pytest.raises(LostLease):
+        async with store.holding(run["id"], owner="w1"):
+            written.append("w1, its lease run out")
+    assert written == ["w1"]
+
+    # In a write's own transaction (a usage row, on the same database): it lands with the lease, or not at all.
+    clock.advance(1)
+    await store.requeue(run["id"], owner=None, error={"message": "gone", "category": "interrupted"})
+    await store.claim(run["id"], owner="w2", lease_seconds=60)
+    async with store.engine.begin() as conn:
+        await store.hold(conn, run["id"], owner="w2")
+        with pytest.raises(LostLease):
+            await store.hold(conn, run["id"], owner="w1")
+
+
 async def test_a_paused_run_carries_on_once_decided(store: RunStore) -> None:
     run = await started(store)
     await store.claim(run["id"], owner="w1", lease_seconds=60)

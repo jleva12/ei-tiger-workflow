@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from forge_common.adk.usage import Attribution, UsageCall
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from forge_task_adk_workflows.usage_store import (
@@ -110,6 +110,27 @@ async def test_model_calls_sum_by_hour_subject_and_model(store: UsageStore) -> N
     assert by_key[(nine, "wf_refunds", "openai/gpt-5.2")]["kind"] == "workflow"
     # Another organization's, and tools, aren't model calls of this one.
     assert {r["subject_id"] for r in rows} == {"ca_support", "wf_refunds"}
+
+
+async def test_a_fenced_call_is_kept_only_when_its_fence_lets_it(store: UsageStore) -> None:
+    class Gone(Exception):
+        pass
+
+    fenced: list[bool] = []
+
+    async def holds(conn: AsyncConnection) -> None:
+        fenced.append(conn.in_transaction())
+
+    async def lost(conn: AsyncConnection) -> None:
+        raise Gone("the worker lost the run")
+
+    await store.record(model_call(REFUNDS, T0), fence=holds)
+    with pytest.raises(Gone):
+        await store.record(model_call(REFUNDS, T0, model="anthropic/claude-opus-5"), fence=lost)
+
+    [kept] = await store.model_hours("org-1", T0 - timedelta(hours=1), T0 + timedelta(hours=1))
+    assert (kept["model"], kept["calls"]) == ("openai/gpt-5.2", 1)
+    assert fenced == [True]  # asked on the connection that keeps it, in its transaction
 
 
 async def test_the_window_is_by_hour(store: UsageStore) -> None:

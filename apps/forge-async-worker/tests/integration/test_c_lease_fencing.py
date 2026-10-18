@@ -14,7 +14,8 @@ Two ways it happens, each played once and read by several tests:
   the step after.
 - **Both mid-step** (``overlapped``): as above, but the holder's model call
   answers while the new attempt's own is out: the holder's ADK session
-  append lands first, and the new attempt's is then refused as stale.
+  append would land first, making the new attempt's stale (ADK refuses an
+  append to a session that changed since it was read), were it not fenced.
 - **A frozen worker** (``frozen``): the holder is stopped (SIGSTOP) mid-step
   past its lease, another worker takes the run and finishes it, then the
   holder goes on (SIGCONT). Its watchdog's deadline has long passed: it
@@ -106,8 +107,8 @@ async def _play_taken_over(scenario: Scenario) -> dict[str, Any]:
     scenario.observe("its attempt ended", _ending(holder, run_id))
     scenario.observe("activity written after the takeover finished", written["activity"])
     scenario.observe("usage rows written after the takeover finished", written["usage"])
-    # Refused here by ADK's own check (the session changed since the attempt read it), not by the
-    # lease: see the overlapped scenario, where the old attempt writes first.
+    # Refused by the lease (fenced_sessions.py), before ADK's own check (the session changed since
+    # the attempt read it) would: see the overlapped scenario, where the old attempt writes first.
     scenario.observe("session events appended after the takeover finished", len(written["session"]))
     scenario.observe("run row changed after the takeover finished", written["run_changed"])
     scenario.observe("'after' step requests (its effect)", scenario.mock.count("after"))
@@ -149,12 +150,10 @@ def test_the_run_keeps_what_the_attempt_that_took_it_wrote(taken_over: dict[str,
     assert taken_over["written"]["run_changed"] == {}
 
 
-@pytest.mark.xfail(strict=True, reason="IT-4 (FINDINGS.md): RunStore.note isn't fenced on the lease")
 def test_an_attempt_whose_lease_ran_out_notes_nothing(taken_over: dict[str, Any]) -> None:
     assert taken_over["written"]["activity"] == []
 
 
-@pytest.mark.xfail(strict=True, reason="IT-4 (FINDINGS.md): usage rows (UsageStore.record) aren't fenced on the lease")
 def test_an_attempt_whose_lease_ran_out_records_no_usage(taken_over: dict[str, Any]) -> None:
     assert taken_over["written"]["usage"] == []
 
@@ -206,15 +205,10 @@ def overlapped(
     )
 
 
-@pytest.mark.xfail(strict=True, reason="IT-5 (FINDINGS.md): ADK session appends aren't fenced on the lease")
 def test_an_attempt_whose_lease_ran_out_appends_nothing_to_the_session(overlapped: dict[str, Any]) -> None:
     assert overlapped["stale"] == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="IT-5 (FINDINGS.md): the old attempt's session append makes the new attempt's stale; the run fails",
-)
 def test_an_attempt_whose_lease_ran_out_cant_fail_the_attempt_that_took_its_run(overlapped: dict[str, Any]) -> None:
     run = overlapped["run"]
     assert run["status"] == "succeeded", run["error"]

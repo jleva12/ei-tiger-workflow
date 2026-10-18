@@ -93,7 +93,7 @@ once their leases run out. How the job ends decides what becomes of the run:
 | is stopped by an abandonment | `abandoned`; whatever would carry it on (a pause, a wait, a retry) abandons it instead, and a run that ends first ends as it did |
 | raises anything else (a bug), or its payload doesn't fit | `failed` (`error`) |
 | is stopped as its worker stops | `queued` again at once (`interrupted`), for the next worker, once the job has stopped; or `abandoned`, when someone abandoned it |
-| loses its lease (it ran out, and another worker took the run), or can't renew it | left to whoever has it, or the maintenance: every write is fenced on the lease, and the job is stopped |
+| loses its lease (it ran out, and another worker took the run), or can't renew it | left to whoever has it, or the maintenance: every write is fenced on the lease (the run's row, its notes, its usage rows and its ADK session's events), and the job is stopped |
 
 What became of the run is written while its lease is held, each try taking
 10 seconds at most, up to 4 times while the database hiccups or hangs (1, 2

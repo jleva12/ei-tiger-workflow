@@ -41,6 +41,11 @@ person's answer, the timer), and every retry.
   checkpoint. A run notes MAX_NOTES lines at most, then one that says what
   it does next isn't noted; a note that can't be written is counted
   (``notes_lost``). Either way, its activity isn't all there.
+- **Its lease.** On the worker, the session's events and the notes land
+  only while the attempt has the run (its worker's lease on it, which the
+  control holds as they do: ``holding``, fenced_sessions.py). An attempt
+  that lost the run (another worker's now) stops at its next write, writing
+  nothing (``LostLease``, which is no failure of the run's).
 - **End.** The graph's finish (``{outcome, result}``) is the job's result,
   once its invocation has ended, every way of it: every ending's, when more
   than one way ended. A finish recorded while another way was still going
@@ -117,6 +122,7 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
+from forge_task_adk_workflows.fenced_sessions import FencedSessions
 from forge_task_adk_workflows.files import RunFile, copy_run_files
 from forge_task_adk_workflows.graph import (
     AgentBuildError,
@@ -142,6 +148,7 @@ from forge_task_adk_workflows.graph.names import BODY_KINDS, FINISH_NODE, adk_na
 from forge_task_adk_workflows.graph.pauses import REQUEST_CONFIRMATION, REQUEST_INPUT, TOOL_CONFIRMATION
 from forge_task_adk_workflows.graph.uses import agent_ref
 from forge_task_adk_workflows.models import RETRYABLE, UNANSWERED
+from forge_task_adk_workflows.run_store import LostLease
 from forge_task_adk_workflows.support.commands import NO_COMMANDS
 from forge_task_adk_workflows.workspaces import WorkspaceError, make_workspace, runs_commands, uses_file_system
 from forge_tasks.control import ControlSignal, Gate, JobControl
@@ -280,7 +287,9 @@ class AdkRun:
         self.payload = payload
         self.control = control
         self.services = services
-        self.sessions = sessions
+        # On the worker, each event lands while the attempt has the run (its lease held): fenced_sessions.py.
+        holding = getattr(control, "holding", None)
+        self.sessions = FencedSessions(sessions, holding) if holding is not None else sessions
         self.settings = settings
         self.artifacts = artifacts
         self.artifacts_unavailable = artifacts_unavailable
@@ -1105,8 +1114,8 @@ class AdkRun:
             message, attributes = f"{MAX_NOTES} notes so far: what the run does next isn't noted", {}
         try:
             await self.control.note(message[:500], **attributes)
-        except ControlSignal:
-            raise
+        except (ControlSignal, LostLease):
+            raise  # the run is another attempt's now: this one goes no further
         except Exception:
             self.state["notes_lost"] = int(self.state["notes_lost"]) + 1
             # Kept at once: the run's next write has it, its last one too.
@@ -1349,8 +1358,12 @@ def _classified(error: Exception) -> Exception:
     """What an error that stopped a run means for it: try again later
     (:class:`TransientError`), or the run can't go on (:class:`_Refused`).
     It's named by its root: what an error ADK wraps a step's in
-    (``DynamicNodeFailError``) wraps, with its HTTP status when it has one."""
+    (``DynamicNodeFailError``) wraps, with its HTTP status when it has one.
+    A lost lease (a write the attempt made once its run was another's: its
+    session's events) is no failure of the run's: it's passed on as it is."""
     error = _root(error)
+    if isinstance(error, LostLease):
+        return LostLease(str(error))
     message = str(getattr(error, "message", "") or error)[:MAX_ERROR] or type(error).__name__
     status = _status_of(error)
     kind = f"{type(error).__name__} (HTTP {status})" if status is not None else type(error).__name__

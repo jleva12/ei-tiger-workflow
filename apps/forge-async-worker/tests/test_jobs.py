@@ -13,10 +13,12 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
+from forge_common.adk.usage import Attribution, UsageCall, current_sink
 
 from forge_async_worker import jobs
 from forge_async_worker.jobs import MAX_ATTEMPTS, TIMED_OUT
 from forge_async_worker.watchdog import Watchdog
+from forge_task_adk_workflows import usage_store as usage
 from forge_task_adk_workflows.run_store import (
     ABANDONED,
     FAILED,
@@ -326,6 +328,28 @@ async def test_a_worker_that_lost_the_run_leaves_it_to_the_one_that_has_it(worke
     now = await worker.get(run["id"])
     assert (now["status"], now["lease_owner"], now["state"]) == (RUNNING, "w2", None)
     assert "succeeded" not in await worker.kinds(run["id"])
+
+
+async def test_a_worker_that_lost_the_run_records_no_more_usage(worker: Worker) -> None:
+    async with worker.store.engine.begin() as conn:
+        await conn.run_sync(usage.metadata.create_all)
+    run = await worker.start(HOOK, STEP)
+    who = Attribution("org-1", "workflow", "ag-1", "Support desk", run_id=run["id"])
+
+    async def taken(control: JobControl, index: int) -> None:
+        record = current_sink()
+        assert record is not None
+        await record(UsageCall(who, "model", "openai/gpt-5.2", "think", START))
+        await steal(worker, run["id"])
+        await record(UsageCall(who, "model", "openai/gpt-5.2", "think", START))  # another attempt's now: dropped
+
+    worker.task.hook = taken
+
+    assert await worker.run(run["id"]) == "dropped"
+
+    async with worker.store.engine.connect() as conn:
+        kept = (await conn.execute(sa.select(sa.func.count()).select_from(usage.calls))).scalar_one()
+    assert kept == 1
 
 
 async def test_a_lost_lease_stops_the_runs_job(worker: Worker, monkeypatch: pytest.MonkeyPatch) -> None:

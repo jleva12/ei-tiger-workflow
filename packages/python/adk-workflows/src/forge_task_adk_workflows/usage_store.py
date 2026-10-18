@@ -24,14 +24,14 @@ from __future__ import annotations
 import contextlib
 import logging
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
 import sqlalchemy as sa
 from forge_common.adk.usage import Attribution, UsageCall
 from sqlalchemy.dialects import mysql
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 log = logging.getLogger(__name__)
 
@@ -144,8 +144,17 @@ class UsageStore:
 
     # ------------------------------------------------------------------ writing
 
-    async def record(self, call: UsageCall) -> None:
-        """Keeps a model or tool call (a ``UsagePlugin``'s sink)."""
+    async def record(
+        self, call: UsageCall, *, fence: Callable[[AsyncConnection], Awaitable[None]] | None = None
+    ) -> None:
+        """
+        Keeps a model or tool call (a ``UsagePlugin``'s sink).
+
+        :param fence: Says, in the transaction that keeps it, whether the call
+            may be kept, raising when it mayn't: a run's, while the worker
+            whose attempt made it still has the run (``RunStore.hold``), so an
+            attempt that lost its run to another records nothing more.
+        """
         who = call.attribution
         values = {
             "organization_id": who.organization_id,
@@ -169,6 +178,8 @@ class UsageStore:
             "failed": call.failed,
         }
         async with self.engine.begin() as conn:
+            if fence is not None:
+                await fence(conn)
             await conn.execute(sa.insert(calls).values(values))
 
     @contextlib.asynccontextmanager

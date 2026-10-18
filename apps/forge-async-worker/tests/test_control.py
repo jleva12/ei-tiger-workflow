@@ -116,6 +116,23 @@ async def test_notes_go_on_the_runs_activity(store: RunStore) -> None:
     assert plain["attributes"] is None
 
 
+async def test_a_worker_that_lost_the_run_notes_nothing_and_holds_nothing(store: RunStore, clock: Clock) -> None:
+    run, control = await claimed(store)
+    async with control.holding():
+        await control.note("Step 1 finished")
+    clock.advance(61)  # its lease ran out on the maintenance's clock, and another worker took the run
+    await store.requeue(run["id"], owner=None, error={"message": "gone", "category": "interrupted"})
+    await store.claim(run["id"], owner="w2", lease_seconds=60)
+
+    with pytest.raises(LostLease):
+        await control.note("Step 2 finished")
+    with pytest.raises(LostLease):
+        async with control.holding():
+            pass
+    noted = [event["message"] for event in await store.events(run["id"]) if event["kind"] == "note"]
+    assert noted == ["Step 1 finished"]
+
+
 async def test_an_undecided_approval_pauses_the_run(store: RunStore) -> None:
     _, control = await claimed(store)
     details = {"kind": "approval", "approvers": "org:admin", "step": "review"}

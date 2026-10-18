@@ -46,6 +46,9 @@ control answers ``approval`` with; ``state`` is what the run keeps
 while it has a run is fenced on its lease, owned and not run out: a worker
 whose lease ran out (whether or not the run went to another yet) can't write
 to the run, nor renew its lease, as any other worker may take it by then.
+Its notes are too (``note`` with its ``owner``), and its writes elsewhere
+(its usage rows, its ADK session's events) land while it holds the run
+(``hold``, ``holding``): the run's row locked, so nobody takes it meanwhile.
 
 The admin API owns the tables: its Alembic migration ``0005adk_run_store``
 creates them as :data:`metadata` describes them. Times are UTC: stored naive,
@@ -54,9 +57,10 @@ read back aware.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import uuid
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -871,10 +875,52 @@ class RunStore:
         kind: str = "note",
         actor: Actor | None = None,
         attributes: dict[str, Any] | None = None,
+        owner: str | None = None,
     ) -> None:
-        """A line on the run's activity."""
+        """
+        A line on the run's activity.
+
+        :param owner: The worker noting it as it runs the run: it's noted only
+            while the run is its (fenced on its lease, as its writes are).
+        :raises LostLease: The owner lost the run, or its lease ran out.
+        """
         async with self.engine.begin() as conn:
+            if owner is not None:
+                await self.hold(conn, run_id, owner=owner)
             await self._event(conn, run_id, kind, message, actor=actor, at=self._now(), attributes=attributes)
+
+    async def hold(self, conn: AsyncConnection, run_id: str, *, owner: str) -> None:
+        """
+        The owner's lease on the run, held for the rest of ``conn``'s
+        transaction: it's the owner's and hasn't run out, and the run's row is
+        locked against writes until the transaction ends, so no worker takes
+        the run (nor does the maintenance queue it again) meanwhile. A write
+        of the owner's in that transaction lands while it has the run, or not
+        at all; a write elsewhere made before it ends (``holding``) lands
+        before anyone else can have the run.
+
+        :raises LostLease: The owner lost the run, or its lease ran out.
+        """
+        held = await conn.execute(
+            sa.select(runs.c.id).where(runs.c.id == run_id, *self._lease(owner, self._now())).with_for_update(read=True)
+        )
+        if held.first() is None:
+            raise LostLease(f"run {run_id} is no longer {owner}'s, or its lease ran out")
+
+    @contextlib.asynccontextmanager
+    async def holding(self, run_id: str, *, owner: str) -> AsyncIterator[None]:
+        """
+        While inside, the owner has the run (``hold``, on a connection of its
+        own): for a write elsewhere (the run's ADK session) that mustn't land
+        once another worker may have the run. Writes to the run, the owner's
+        own among them, wait until the block ends: keep it short, and never
+        write to the run inside it.
+
+        :raises LostLease: The owner lost the run, or its lease ran out.
+        """
+        async with self.engine.begin() as conn:
+            await self.hold(conn, run_id, owner=owner)
+            yield
 
     async def pause(
         self,
