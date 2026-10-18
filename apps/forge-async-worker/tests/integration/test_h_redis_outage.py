@@ -148,9 +148,6 @@ def test_workers_live_through_a_redis_outage(outage: dict[str, Any]) -> None:
     assert all(outage["alive"].values())
 
 
-@pytest.mark.xfail(
-    strict=True, reason="IT-8 (FINDINGS.md): SAQ's dequeue loop retries a Redis that's away with no pause"
-)
 def test_workers_dont_spin_while_redis_is_away(outage: dict[str, Any]) -> None:
     # A tenth of the outage's seconds in CPU, at most: retrying Redis, not spinning on it.
     assert all(used < OUTAGE / 10 for used in outage["used"].values()), outage["used"]

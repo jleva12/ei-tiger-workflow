@@ -4,6 +4,8 @@ cron. tests/test_saq_redis.py runs the same code on a real Redis."""
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import socket
 from datetime import timedelta
 from typing import Any
@@ -134,6 +136,73 @@ def test_the_job_queue_is_saqs_adk_workflows_queue_with_its_upkeeps() -> None:
     assert queue.job_options == JOB_OPTIONS
     documents = saq_worker.job_queue(worker_settings(), "documents")
     assert documents.queues == (documents.queue,) and documents.name == "documents"
+    assert all(isinstance(each, saq_worker.PatientQueue) for each in (*queue.queues, *documents.queues))
+
+
+async def test_a_worker_whose_redis_is_away_tries_it_again_a_moment_apart(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from saq import Worker as SaqWorker
+
+    monkeypatch.setattr(saq_worker, "DEQUEUE_PAUSE", 0.1)
+    monkeypatch.setattr(saq_worker, "DEQUEUE_PAUSE_MAX", 0.2)
+    tried: list[float] = []
+
+    class Counted(saq_worker.PatientQueue):
+        async def dequeue(self, timeout: float = 0.0, poll_interval: float = 0.0) -> Any:
+            tried.append(asyncio.get_running_loop().time())
+            return await super().dequeue(timeout, poll_interval)
+
+    queue = Counted.from_url("redis://127.0.0.1:1/0", name="away")  # nothing answers there
+    worker = SaqWorker(queue, functions=[saq_worker.run_job], concurrency=4)
+    stop = asyncio.Event()
+    asyncio.get_running_loop().call_later(1.0, stop.set)
+    with caplog.at_level(logging.WARNING, logger=saq_worker.log.name):
+        await saq_worker.run_workers([worker], grace_period=0, stop=stop)
+    await queue.redis.aclose()  # SAQ's disconnect asks Redis too
+
+    # Each of its four dequeues at once tries again 0.1 to 0.2 s after it failed:
+    # SAQ alone tries again at once, thousands of times a second.
+    assert 4 < len(tried) <= 4 * (1.0 / 0.1 + 1)
+    said = [record.getMessage() for record in caplog.records if record.name == saq_worker.log.name]
+    assert len(said) == 1 and said[0].startswith("queue away can't be read")
+
+
+async def test_a_queue_whose_redis_answers_again_dequeues_at_once(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from saq.queue.redis import RedisQueue
+
+    monkeypatch.setattr(saq_worker, "DEQUEUE_PAUSE", 0.01)
+    away = True
+
+    async def dequeue(self: RedisQueue, timeout: float = 0.0, poll_interval: float = 0.0) -> None:
+        if away:
+            raise ConnectionError("Connection refused")
+
+    async def ping() -> bool:
+        await dequeue(queue)
+        return True
+
+    monkeypatch.setattr(RedisQueue, "dequeue", dequeue)
+    queue = saq_worker.PatientQueue.from_url("redis://127.0.0.1:1/0", name="back")
+    monkeypatch.setattr(queue.redis, "ping", ping)
+
+    with caplog.at_level(logging.INFO, logger=saq_worker.log.name):
+        for _ in range(2):
+            with pytest.raises(ConnectionError):
+                await queue.dequeue()
+        assert queue.failing_since is not None
+        away = False
+        assert await queue.dequeue() is None
+        assert queue.failing_since is None
+        away = True  # away again, later: a new outage
+        with pytest.raises(ConnectionError):
+            await queue.dequeue()
+    await queue.redis.aclose()  # SAQ's disconnect asks Redis too
+
+    said = [record.getMessage().split(" (")[0] for record in caplog.records if record.name == saq_worker.log.name]
+    assert said == ["queue back can't be read", "queue back can be read again", "queue back can't be read"]
 
 
 async def test_runs_and_their_upkeep_have_a_worker_each(worker: Worker) -> None:

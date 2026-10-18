@@ -30,7 +30,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import sqlalchemy as sa
-from saq import CronJob, Queue, Worker
+from saq import CronJob, Job, Worker
+from saq.queue.redis import RedisQueue
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from forge_async_worker.config import WorkerSettings
@@ -49,6 +50,10 @@ CONTEXT_KEY = "forge"  # SAQ's context keeps its own worker under "worker"
 MAINTENANCE_CRON = "* * * * *"
 #: Upkeep jobs at once: the maintenance, and a pause's expiry beside it.
 UPKEEP_CONCURRENCY = 2
+#: After a dequeue fails (Redis is away), the queue's next waits as long as
+#: it has been failing so far: DEQUEUE_PAUSE seconds at least, DEQUEUE_PAUSE_MAX at most.
+DEQUEUE_PAUSE = 0.5
+DEQUEUE_PAUSE_MAX = 2.0
 NO_STORE = (
     "The worker keeps ADK workflow runs in the admin MySQL: set HYBRID_ADK_WORKFLOWS__SESSION_DATABASE_URL "
     "(mysql+aiomysql://...)"
@@ -205,10 +210,50 @@ class _NoFollowUps:
 # ----------------------------------------------------------------------------- queues and workers
 
 
+class PatientQueue(RedisQueue):
+    """
+    SAQ's Redis queue, but a dequeue that fails (Redis is away) waits before
+    it says so. SAQ's worker starts its next dequeue as soon as one fails, and
+    Redis's client gives up on a refused connection at once, so each of a
+    worker's jobs at once retried Redis with no pause: a CPU core's worth for
+    as long as Redis was away (the integration suite's IT-8). The pause grows
+    with the outage (DEQUEUE_PAUSE to DEQUEUE_PAUSE_MAX); once Redis answers
+    a ping, before the dequeue that waits for a job, dequeues go on at once.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        #: When its dequeues began failing, on the event loop's clock; None while they don't.
+        self.failing_since: float | None = None
+
+    async def dequeue(self, timeout: float = 0.0, poll_interval: float = 0.0) -> Job | None:
+        try:
+            if self.failing_since is not None:
+                await self.redis.ping()  # type: ignore[misc]  # redis-py types its async client as its sync one
+                self._answered()
+            return await super().dequeue(timeout, poll_interval)
+        except Exception as error:
+            await asyncio.sleep(self._failed(error))
+            raise
+
+    def _failed(self, error: Exception) -> float:
+        """:return: Seconds to wait before the failed dequeue says so."""
+        now = asyncio.get_running_loop().time()
+        if self.failing_since is None:
+            self.failing_since = now
+            log.warning("queue %s can't be read (%s): trying again until it can", self.name, error)
+        return min(max(now - self.failing_since, DEQUEUE_PAUSE), DEQUEUE_PAUSE_MAX)
+
+    def _answered(self) -> None:
+        if self.failing_since is not None:  # not already said by another of the worker's dequeues
+            log.info("queue %s can be read again", self.name)
+            self.failing_since = None
+
+
 def job_queue(settings: WorkerSettings, name: str = QUEUE) -> RunQueue:
     """The ``adk_workflows`` queue, with its upkeep's (or the queue ``name``), on HYBRID_REDIS_URL."""
-    upkeep = Queue.from_url(settings.redis_url, name=UPKEEP) if name == QUEUE else None
-    return RunQueue(Queue.from_url(settings.redis_url, name=name), upkeep=upkeep)
+    upkeep = PatientQueue.from_url(settings.redis_url, name=UPKEEP) if name == QUEUE else None
+    return RunQueue(PatientQueue.from_url(settings.redis_url, name=name), upkeep=upkeep)
 
 
 def serving(settings: WorkerSettings, requested: Sequence[str] | None = None) -> list[str]:
@@ -272,7 +317,7 @@ def build_workers(
             )
         else:
             worker = Worker(
-                Queue.from_url(state.settings.redis_url, name=name),
+                PatientQueue.from_url(state.settings.redis_url, name=name),
                 functions=[run_job],
                 concurrency=concurrency,
                 id=worker_id(name),

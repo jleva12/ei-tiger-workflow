@@ -57,6 +57,14 @@ NO_SESSIONS = (
     "ADK workflow runs aren't set up on this worker: set HYBRID_ADK_WORKFLOWS__SESSION_DATABASE_URL "
     "(the admin MySQL, mysql+aiomysql://...)"
 )
+#: The session database's isolation level. ADK's ``create_session`` makes a
+#: member's state row the first time (``_get_or_create_state``): it inserts,
+#: and should another session's insert win, reads the winner's row. At
+#: MySQL's REPEATABLE READ that read sees the snapshot from before the
+#: winner committed, finds nothing and raises, so all but one of a new
+#: member's first runs started together failed (the integration suite's
+#: IT-1). SQLite has no such level, nor the race (one writer at a time).
+SESSION_ISOLATION = "READ COMMITTED"
 
 __all__ = [
     "AdkWorkflowsTask",
@@ -280,16 +288,29 @@ def knowledge_search(ctx: TaskContext) -> Any:
 def build_sessions(settings: AdkWorkflowsSettings) -> tuple[BaseSessionService | None, str | None]:
     """
     :return: Where runs keep their ADK sessions (ADK's
-        ``DatabaseSessionService`` on ``session_database_url``), or None and why.
+        ``DatabaseSessionService`` on ``session_database_url``, at
+        SESSION_ISOLATION), or None and why.
     """
     if settings.session_database_url is None:
         return None, NO_SESSIONS
     from google.adk.sessions import DatabaseSessionService
 
+    url = settings.session_database_url.get_secret_value()
     try:
-        return DatabaseSessionService(db_url=settings.session_database_url.get_secret_value()), None
+        return DatabaseSessionService(db_url=url, **_isolation(url)), None
     except ValueError as error:  # ADK's message names the URL without its password
         return None, f"ADK workflow runs can't keep their sessions: {error}"
+
+
+def _isolation(url: str) -> dict[str, str]:
+    """The session engine's ``isolation_level`` (SESSION_ISOLATION), but SQLite's."""
+    from sqlalchemy.engine import make_url
+
+    try:
+        backend = make_url(url).get_backend_name()
+    except Exception:  # ADK says what's wrong with the URL
+        return {}
+    return {} if backend == "sqlite" else {"isolation_level": SESSION_ISOLATION}
 
 
 def build_artifacts(settings: AdkWorkflowsSettings) -> tuple[BaseArtifactService | None, str | None]:

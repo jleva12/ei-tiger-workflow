@@ -366,8 +366,9 @@ class Scenario:
 
     async def warm_sessions(self, *members: str) -> None:
         """ADK's app and user state rows for the members' runs, made before
-        any run's (``create_session`` makes them the first time, and runs
-        racing to make them fail: FINDINGS.md IT-1)."""
+        any run's (``create_session`` makes them the first time), so a
+        scenario about something else doesn't race for them too (they once
+        failed the runs: FINDINGS.md IT-1)."""
         from google.adk.sessions import DatabaseSessionService
 
         from forge_task_adk_workflows.runs import APP_NAME

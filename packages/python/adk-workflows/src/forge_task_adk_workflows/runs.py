@@ -1083,7 +1083,7 @@ class AdkRun:
         except (RunFailed, ControlSignal):
             raise
         except Exception as error:
-            raise _classified(error) from error
+            raise _classified(error, opening=True) from error
         own = [event for event in session.events if event.invocation_id == self.invocation_id]
         self.askers = {
             call.id: event.invocation_id for event in session.events for call in event.get_function_calls() if call.id
@@ -1345,16 +1345,19 @@ def _seconds_until(due: datetime | None, now: datetime) -> int | None:
     return max(0, math.ceil((due - now).total_seconds())) + DEADLINE_MARGIN
 
 
-def _classified(error: Exception) -> Exception:
+def _classified(error: Exception, *, opening: bool = False) -> Exception:
     """What an error that stopped a run means for it: try again later
     (:class:`TransientError`), or the run can't go on (:class:`_Refused`).
     It's named by its root: what an error ADK wraps a step's in
-    (``DynamicNodeFailError``) wraps, with its HTTP status when it has one."""
+    (``DynamicNodeFailError``) wraps, with its HTTP status when it has one.
+    ``opening``: the run's session was being opened, where a row's
+    IntegrityError is another session's taking a row both make (the member's
+    state, task.SESSION_ISOLATION) first: tried again, it's there."""
     error = _root(error)
     message = str(getattr(error, "message", "") or error)[:MAX_ERROR] or type(error).__name__
     status = _status_of(error)
     kind = f"{type(error).__name__} (HTTP {status})" if status is not None else type(error).__name__
-    if _transient(error):
+    if _transient(error) or (opening and _integrity(error)):
         return TransientError(f"The run can't go on for now ({kind}): {message}")
     log.warning("adk_workflows: a run stopped: %s", message, exc_info=error)
     return _Refused(f"{kind}: {message}")
@@ -1380,6 +1383,14 @@ def _status_of(error: BaseException) -> int | None:
         if isinstance(found, int) and not isinstance(found, bool) and 100 <= found <= 599:
             return found
     return None
+
+
+def _integrity(error: BaseException) -> bool:
+    try:
+        from sqlalchemy import exc as db
+    except ImportError:  # pragma: no cover - a dependency
+        return False
+    return isinstance(error, db.IntegrityError)
 
 
 def _transient(error: BaseException) -> bool:

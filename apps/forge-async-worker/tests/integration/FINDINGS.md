@@ -10,18 +10,20 @@ finding's tests are marked `xfail(strict=True)` with its ID: a fix turns
 them XPASS, which fails the suite until the marker comes off. Timelines are
 trimmed from the scenarios' reports (`.reports/<test>.txt`); times are
 seconds into the scenario. Workers run with a 6 s lease (the real one is
-120 s): every other timing in jobs.py is a fraction of it.
+120 s): every other timing in jobs.py is a fraction of it. A fixed
+finding's tests have lost their marker and pass: its section says what
+changed.
 
 | ID | Finding | Scenario | Tests |
 |----|---------|----------|-------|
-| [IT-1](#it-1) | A new member's first runs started together fail on ADK's state rows | (a) | `test_a_claim_race.py::test_a_new_members_first_runs_started_together_all_run` |
+| [IT-1](#it-1) | Fixed: a new member's first runs started together fail on ADK's state rows | (a) | `test_a_claim_race.py::test_a_new_members_first_runs_started_together_all_run` |
 | [IT-2](#it-2) | An HTTP step cut off mid-request is skipped when its run carries on: the run succeeds without its End | (b), (g) | `test_b_kill_recovery.py::test_a_run_killed_mid_http_step_…`, `test_g_sigterm.py::test_a_run_let_go_at_shutdown_goes_on_to_its_end` |
 | [IT-3](#it-3) | A killed worker's Bash command keeps running beside the step's rerun | (b) | `test_b_kill_recovery.py::test_a_run_killed_mid_bash_step_…` |
 | [IT-4](#it-4) | An attempt whose lease ran out still writes activity notes and usage rows | (c) | `test_c_lease_fencing.py::test_an_attempt_whose_lease_ran_out_notes_nothing`, `…_records_no_usage` |
 | [IT-5](#it-5) | An attempt whose lease ran out still appends to the ADK session, and fails the attempt that took its run | (c) | `test_c_lease_fencing.py::test_an_attempt_whose_lease_ran_out_appends_nothing_to_the_session`, `…_cant_fail_the_attempt_that_took_its_run` |
 | [IT-6](#it-6) | A parent waiting on its child holds the worker slot the child needs | (f) | `test_f_child_starvation.py::test_one_parent_on_a_worker_with_one_slot_…`, `test_two_parents_on_a_worker_with_two_slots_…` |
 | [IT-7](#it-7) | A worker draining for shutdown keeps taking new runs | (g) | `test_g_sigterm.py::test_a_worker_that_is_stopping_takes_no_new_runs` |
-| [IT-8](#it-8) | While Redis is away, each worker spins a CPU core | (h) | `test_h_redis_outage.py::test_workers_dont_spin_while_redis_is_away` |
+| [IT-8](#it-8) | Fixed: while Redis is away, each worker spins a CPU core | (h) | `test_h_redis_outage.py::test_workers_dont_spin_while_redis_is_away` |
 
 ## IT-1
 
@@ -46,6 +48,16 @@ hits `app_states` on a database where no run ever ran (the suite saw it on
 its first concurrent test). SQLite never shows it (one connection, no
 snapshots). The other scenarios make the rows first (`Scenario.warm_sessions`)
 so they test what they mean to.
+
+**Fixed.** The worker's session service (`task.build_sessions`) opens its
+engine at READ COMMITTED (`task.SESSION_ISOLATION`; SQLite aside): the
+re-read after a lost insert sees the winner's committed row. All 12 runs
+now succeed, each at its first attempt (the test checks both). Should a
+session database still race (one whose isolation isn't the worker's to
+set), an IntegrityError while a run opens its session is a hiccup
+(`runs._classified(opening=True)`): the run is tried again and finds the
+row. READ COMMITTED needs MySQL's binary log in ROW format (8.0's default)
+if the log is on.
 
 ## IT-2
 
@@ -207,9 +219,15 @@ those 120 s, while writing only a few log lines a second (the upkeep's
 starts the next dequeue at once: with Redis refusing connections, each of
 the worker's process tasks (its concurrency, and the upkeep worker's two)
 loops with no pause. Nothing else went wrong (see (h) below): the runs come
-through, and the workers recover by themselves. Fix: no session named yet
-(the worker could pause its dequeues after a failure; SAQ's `poll_interval`
-or a wrapper around the queue's `dequeue`).
+through, and the workers recover by themselves.
+
+**Fixed.** The worker's queues are `saq_worker.PatientQueue`s: a failed
+dequeue waits before it says so, as long as the queue has been failing so
+far (0.5 s to 2 s), and once Redis answers a ping dequeues go on at once
+(one warning when a queue can't be read, one line when it can again).
+SAQ's own `poll_interval` only paces its Postgres queue. The same outage
+now costs each worker 1.0 to 1.2 s of CPU in its 120 s, and the four runs
+end within 2.0 s of Redis being back (a dequeue's last pause, at most 2 s).
 
 ## What holds
 

@@ -37,9 +37,11 @@ from forge_task_adk_workflows.steps import run_steps
 from forge_task_adk_workflows.task import (
     NO_SESSIONS,
     SERVICES,
+    SESSION_ISOLATION,
     SESSIONS,
     AdkWorkflowsTask,
     AdkWorkflowsTaskFactory,
+    build_sessions,
 )
 from forge_tasks.control import (
     AwaitingDecision,
@@ -903,6 +905,37 @@ async def test_a_model_hiccup_is_retried_and_the_run_carries_on_where_it_stopped
     assert "The run carries on where it stopped" in w.control.said()
 
 
+async def test_a_run_whose_session_lost_the_race_for_its_members_state_row_tries_again(
+    sessions: DatabaseSessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    # Another run of the member's made the row first, where this one can't see it yet (task.SESSION_ISOLATION).
+    duplicate = IntegrityError(
+        "INSERT INTO user_states ...", {}, Exception("Duplicate entry for key 'user_states.PRIMARY'")
+    )
+    create, raced = sessions.create_session, []
+
+    async def racing(**options: Any) -> Any:
+        if not raced:
+            raced.append(options["user_id"])
+            raise duplicate
+        return await create(**options)
+
+    monkeypatch.setattr(sessions, "create_session", racing)
+    w = worker(sessions)
+    run = payload(line(transform("shape", "1"), end("done", "steps.shape.output")), {})
+
+    with pytest.raises(TransientError, match="IntegrityError"):
+        await w.run(run)
+    result = await w.run(run)
+
+    assert result.status is JobStatus.OK and raced == [MEMBER]
+    assert await w.session_ids() == [SESSION]
+    # Anywhere but opening the session, an IntegrityError is no hiccup.
+    assert not isinstance(runs._classified(duplicate), TransientError)
+
+
 async def test_a_hiccup_after_a_decision_carries_on_with_that_decision(sessions: DatabaseSessionService) -> None:
     llm = ScriptedLlm(turns=[overloaded(), [types.Part(text="Shipped")]])
     w = worker(sessions, model=llm)
@@ -1525,6 +1558,24 @@ async def test_the_factory_keeps_one_session_service_per_process(tmp_path: Path)
     finally:
         await second.services.http.aclose()  # type: ignore[union-attr]
         await first.close()
+
+
+def test_runs_keep_their_sessions_at_read_committed_but_on_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
+    import google.adk.sessions
+
+    made: list[dict[str, Any]] = []
+
+    class Recorded:
+        def __init__(self, **options: Any) -> None:
+            made.append(options)
+
+    monkeypatch.setattr(google.adk.sessions, "DatabaseSessionService", Recorded)
+    mysql, sqlite = "mysql+aiomysql://forge:secret@db:3306/forge_admin", "sqlite+aiosqlite:///sessions.db"
+    for url in (mysql, sqlite):
+        build_sessions(AdkWorkflowsSettings(session_database_url=url))
+
+    assert made == [{"db_url": mysql, "isolation_level": SESSION_ISOLATION}, {"db_url": sqlite}]
+    assert SESSION_ISOLATION == "READ COMMITTED"
 
 
 async def test_the_factory_takes_its_services_and_sessions_from_the_context(

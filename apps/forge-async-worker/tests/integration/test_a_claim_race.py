@@ -12,8 +12,6 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 
-import pytest
-
 from forge_task_adk_workflows.run_store import Actor, RunStore
 
 from .harness import workflows as w
@@ -75,9 +73,6 @@ async def test_worker_processes_given_the_same_run_run_it_once(scenario: Scenari
     assert skipped == 20
 
 
-@pytest.mark.xfail(
-    strict=True, reason="IT-1 (FINDINGS.md): ADK's state rows race on MySQL REPEATABLE READ; the run fails"
-)
 async def test_a_new_members_first_runs_started_together_all_run(scenario: Scenario) -> None:
     await scenario.spawn_all("w1", "w2", "w3", concurrency=4)
     await scenario.warm_sessions("someone-else")  # the app's state row is there; the member's isn't
@@ -91,4 +86,7 @@ async def test_a_new_members_first_runs_started_together_all_run(scenario: Scena
     failed = [run for run in finished if run["status"] != "succeeded"]
     scenario.observe("runs of the 12 that failed", len(failed))
     scenario.observe("their errors", sorted({str(run["error"]["message"])[:160] for run in failed}))
+    scenario.observe("runs of the 12 tried again", sum(run["attempt"] > 1 for run in finished))
     assert failed == []
+    # At their first attempt: the session's state rows don't race (IT-1's fix), not a hiccup tried again.
+    assert [run["attempt"] for run in finished] == [1] * 12
