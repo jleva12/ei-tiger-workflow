@@ -99,6 +99,7 @@ LOCAL_APPS := web admin async-worker worker codegraph-mcp
 .PHONY: web web-install web-check web-test web-build web-lint web-token
 .PHONY: admin admin-install admin-deps admin-migrate admin-check admin-test-mysql admin-fmt
 .PHONY: async-worker async-worker-install async-worker-deps async-worker-check async-worker-fmt async-worker-test-redis
+.PHONY: async-worker-test-integration async-worker-test-integration-down
 .PHONY: docs-eval docs-eval-check docs-eval-compare
 .PHONY: worker worker-install worker-deps worker-check worker-fmt worker-test-python worker-test-typescript worker-test-spanner worker-test-mysql worker-test-java
 .PHONY: worker-spanner-cloud worker-spanner-cloud-update worker-spanner-cloud-reset
@@ -144,6 +145,8 @@ help:
 	@echo "make async-worker-check Async worker and task packages: lint, format check, types and unit tests"
 	@echo "make async-worker-fmt   Format and autofix the async worker and task package sources"
 	@echo "make async-worker-test-redis  Start the shared Redis and run the SAQ worker integration tests"
+	@echo "make async-worker-test-integration  ADK runs on their own MySQL 8 and Redis with worker processes (minutes; IT_ARGS=\"-k claim\")"
+	@echo "make async-worker-test-integration-down  Remove the integration suite's MySQL and Redis"
 	@echo "make worker-install     Build the code graph worker's Python and TypeScript analyzers and download its Go modules"
 	@echo "make worker-deps        Start the Spanner emulator (127.0.0.1:19030) and the admin MySQL (its job queue) for native worker runs"
 	@echo "make worker             Run the code graph ingestion worker natively against the emulator (health probes on http://localhost:8090)"
@@ -525,6 +528,32 @@ async-worker-test-redis: env
 	$(COMPOSE) up -d --wait redis
 	@addr=$$($(COMPOSE) port redis 6379) && cd $(ASYNC_WORKER_DIR) && \
 	  HYBRID_TEST_REDIS_URL=redis://$$addr/15 $(UV) run pytest -m redis
+
+# The ADK workflow run machinery on a real MySQL 8 and Redis, with several
+# worker processes (apps/forge-async-worker/tests/integration, its README in
+# conftest.py and the findings in FINDINGS.md): a Compose project of its own
+# (forge-worker-it) on IT_MYSQL_PORT and IT_REDIS_PORT, clear of this stack's
+# and forge-aidlc-parent's, migrated with the admin API's migrations, then
+# the suite. Minutes long, and never part of make check. IT_ARGS passes pytest
+# arguments (IT_ARGS="-k claim" picks scenarios); its reports land in
+# tests/integration/.reports. async-worker-test-integration-down removes it.
+IT_MYSQL_PORT ?= 13346
+IT_REDIS_PORT ?= 16409
+IT_PORTS = FORGE_IT_MYSQL_PORT=$(IT_MYSQL_PORT) FORGE_IT_REDIS_PORT=$(IT_REDIS_PORT)
+IT_COMPOSE = $(DOCKER) compose -f $(CURDIR)/$(ASYNC_WORKER_DIR)/tests/integration/compose.yaml
+
+async-worker-test-integration:
+	$(IT_PORTS) $(IT_COMPOSE) up -d --wait
+	cd $(ADMIN_DIR) && FORGE_ENV_COMMON_FILE= FORGE_ADMIN_MYSQL_HOST=127.0.0.1 FORGE_ADMIN_MYSQL_PORT=$(IT_MYSQL_PORT) \
+	  FORGE_ADMIN_MYSQL_DATABASE=forge_admin FORGE_ADMIN_MYSQL_USER=forge_admin FORGE_ADMIN_MYSQL_PASSWORD=local-it \
+	  $(UV) run alembic upgrade head
+	cd $(ASYNC_WORKER_DIR) && $(IT_PORTS) \
+	  FORGE_IT_MYSQL_URL=mysql+aiomysql://forge_admin:local-it@127.0.0.1:$(IT_MYSQL_PORT)/forge_admin \
+	  FORGE_IT_REDIS_URL=redis://127.0.0.1:$(IT_REDIS_PORT)/0 FORGE_IT_COMPOSE="$(IT_COMPOSE)" \
+	  $(UV) run pytest -m integration tests/integration --timeout 900 $(IT_ARGS)
+
+async-worker-test-integration-down:
+	$(IT_PORTS) $(IT_COMPOSE) down -v
 
 # The code graph worker's Pyright and TypeScript compiler bridges (each into
 # its dist/, which the worker runs under Node), then its Go modules.

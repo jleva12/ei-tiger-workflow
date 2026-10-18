@@ -1,0 +1,36 @@
+# The integration suite's own MySQL 8 and Redis (make
+# async-worker-test-integration): a Compose project of its own
+# (forge-worker-it), on ports clear of this repository's stack (13326/16389)
+# and forge-aidlc-parent's (13316/16379), so neither stack's workers ever see
+# its runs or jobs. Throwaway: MySQL keeps its data in memory; Redis keeps its
+# append-only file in the container, so the Redis outage scenario's
+# stop/start keeps the queue, as a restarted Redis with AOF would.
+name: forge-worker-it
+services:
+  it-mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: forge_admin
+      MYSQL_USER: forge_admin
+      MYSQL_PASSWORD: local-it
+      MYSQL_ROOT_PASSWORD: local-it-root
+    ports:
+      - "127.0.0.1:${FORGE_IT_MYSQL_PORT:-13346}:3306"
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=local-it mysql --protocol=TCP -h 127.0.0.1 -u forge_admin -D forge_admin -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 3s
+      start_period: 30s
+      retries: 40
+  it-redis:
+    image: redis:8.8-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:${FORGE_IT_REDIS_PORT:-16409}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
