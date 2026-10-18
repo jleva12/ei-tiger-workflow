@@ -2,7 +2,10 @@
 
 What the integration suite (this folder; `make async-worker-test-integration`)
 found on 2026-10-18, running the run machinery of `main` (e3cad29) against
-MySQL 8.4 (REPEATABLE READ) and Redis 8.8 with real worker processes. Each
+MySQL 8.4 (REPEATABLE READ) and Redis 8.8 with real worker processes; and,
+the same tests on the main checkout's uncommitted working tree of that day
+(its venv, its migrations to 0032), the same: 20 passed, the same 12 xfailed,
+with the same numbers within a second. Each
 finding's tests are marked `xfail(strict=True)` with its ID: a fix turns
 them XPASS, which fails the suite until the marker comes off. Timelines are
 trimmed from the scenarios' reports (`.reports/<test>.txt`); times are
