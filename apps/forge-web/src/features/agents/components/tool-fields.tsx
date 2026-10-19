@@ -28,11 +28,12 @@ import {
   schemaCost,
   withRequired,
   type RichAnswerComponent,
-} from "@/components/forge/assistant/rich-answers-schema"
+} from "@/components/forge/generative-ui/catalog"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { useServiceInfo } from "@/lib/service-info"
 import type { ChatConfigs } from "@/features/agents/lib/model"
 import {
   editedParameters,
@@ -173,7 +174,58 @@ function WorkflowFields({
           onChange={(value) => set("version", value)}
         />
       )}
+      <WorkflowWaitField
+        value={config.wait_seconds ?? null}
+        onChange={(value) => set("wait_seconds", value ?? WORKFLOW_WAIT)}
+      />
     </>
+  )
+}
+
+/** How long a Workflow tool waits for its run when its node doesn't say. */
+const WORKFLOW_WAIT = 120
+
+/** Seconds as a person reads them: 90 s, 2 min, 1 min 30 s. */
+function duration(seconds: number) {
+  const minutes = Math.floor(seconds / 60)
+  const rest = Math.round(seconds % 60)
+  if (!minutes) return `${rest} s`
+  return rest ? `${minutes} min ${rest} s` : `${minutes} min`
+}
+
+/**
+ * How long the agent waits for the run before it's told the run is still
+ * going, with its ID: at most the deployment's cap, which the admin API says.
+ */
+function WorkflowWaitField({
+  value,
+  onChange,
+}: {
+  value: number | null
+  onChange: (value: number | null) => void
+}) {
+  const most = useServiceInfo().data?.agent_workflow_wait_max
+  const waits = value ?? WORKFLOW_WAIT
+  return (
+    <OptionalNumberField
+      issue="wait_seconds"
+      label="Wait up to (seconds)"
+      value={value}
+      min={1}
+      max={most}
+      integer
+      placeholder={String(WORKFLOW_WAIT)}
+      onChange={onChange}
+      description={
+        <>
+          The agent waits {duration(waits)} for the run to finish. If it
+          hasn&apos;t by then, the agent is told it&apos;s still running, with
+          its run&apos;s ID, and the run carries on.
+          {most !== undefined &&
+            ` This deployment waits at most ${duration(most)}.`}
+        </>
+      }
+    />
   )
 }
 

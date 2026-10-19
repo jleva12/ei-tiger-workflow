@@ -4,10 +4,11 @@ summed into them."""
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+from fastapi import HTTPException
 from forge_common.adk.usage import Attribution, UsageCall
 from forge_task_adk_workflows import run_store, usage_store
 from forge_task_adk_workflows.run_store import Actor, RunStore
@@ -15,6 +16,7 @@ from forge_task_adk_workflows.usage_store import UsageStore
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from forge_admin.api.routes.overview import _days
 from forge_admin.overview.recording import assistant_attribution
 from forge_admin.overview.report import Sources, build_overview, window, zone_of
 
@@ -60,6 +62,62 @@ def test_the_last_twelve_weeks_end_this_week() -> None:
         2026, 11, 2, tzinfo=NEW_YORK
     )
     assert win.weeks[-1][1] == NOW
+
+
+def test_picked_days_end_at_the_midnight_after_their_last() -> None:
+    win = window("custom", NEW_YORK, NOW, (date(2026, 9, 1), date(2026, 9, 10)))
+    assert (win.period, win.unit) == ("custom", "day")
+    assert (win.first, win.last) == (date(2026, 9, 1), date(2026, 9, 10))
+    assert [start.astimezone(NEW_YORK).day for start, _ in win.buckets] == list(
+        range(1, 11)
+    )
+    after = datetime(2026, 9, 11, tzinfo=NEW_YORK).astimezone(UTC)
+    assert win.end == win.buckets[-1][1] == after
+    # The 10 days before, as long.
+    assert win.previous == (
+        datetime(2026, 8, 22, tzinfo=NEW_YORK).astimezone(UTC),
+        win.buckets[0][0],
+    )
+    assert win.bucket_of(after - timedelta(seconds=1)) == 9
+    assert win.bucket_of(after) is None
+    # The ledger's weeks are still the last 12, to now.
+    assert win.weeks[-1][1] == NOW
+
+
+def test_picked_days_to_today_run_to_now_and_long_ones_go_by_week() -> None:
+    today = NOW.astimezone(NEW_YORK).date()
+    to_now = window("custom", NEW_YORK, NOW, (date(2026, 11, 1), date(2026, 12, 31)))
+    assert to_now.last == today
+    assert to_now.end == to_now.buckets[-1][1] == NOW
+    assert to_now.bucket_of(NOW) == len(to_now.buckets) - 1
+    long = window("custom", NEW_YORK, NOW, (date(2026, 1, 1), date(2026, 6, 30)))
+    assert long.unit == "week"
+    assert long.buckets[0][0].astimezone(NEW_YORK).date() == date(2026, 1, 1)
+    assert all(
+        start.astimezone(NEW_YORK).weekday() == 0 for start, _ in long.buckets[1:]
+    )
+    assert long.end == datetime(2026, 7, 1, tzinfo=NEW_YORK).astimezone(UTC)
+
+
+def test_picked_days_must_be_a_period() -> None:
+    today = date(2026, 11, 4)
+    assert _days(None, None, today) is None
+    assert _days(date(2026, 1, 1), date(2026, 1, 5), today) == (
+        date(2026, 1, 1),
+        date(2026, 1, 5),
+    )
+    for start, end in [
+        (date(2026, 1, 1), None),
+        (None, date(2026, 1, 1)),
+        (date(2026, 1, 5), date(2026, 1, 1)),
+        (date(2026, 11, 5), date(2026, 11, 6)),
+        (date(2025, 11, 1), date(2026, 11, 4)),
+    ]:
+        with pytest.raises(HTTPException) as caught:
+            _days(start, end, today)
+        assert caught.value.status_code == 422
+    # A year to today is as long as one goes.
+    assert _days(date(2025, 11, 4), date(2026, 12, 1), today)
 
 
 def test_a_time_lands_in_its_bucket_the_one_before_or_none() -> None:

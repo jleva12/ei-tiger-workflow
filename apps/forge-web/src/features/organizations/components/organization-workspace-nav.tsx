@@ -16,8 +16,8 @@ import {
 /**
  * An organization workspace's sub nav: Overview on top, then its sections:
  * Workflows and agents (Workflows, Agents), Integrations (MCP servers,
- * Credentials, Skills vault, Knowledge bases, with Code repositories as its second tab) and Settings: Members, for those who may see them, and API
- * keys, for those who manage them. Render it anywhere in the page: it goes
+ * Credentials, Skills vault, Knowledge bases, with Code repositories as its second tab) and Settings: Members and Agent access, for those who may see
+ * who holds what, and API keys, for those who manage them. Render it anywhere in the page: it goes
  * in the shell's pinned `ShellSidebarHeader`.
  */
 export function OrganizationWorkspaceNav({
@@ -30,7 +30,7 @@ export function OrganizationWorkspaceNav({
   organizationId: string
   /** The page open; none when it isn't one of them (an error page). */
   view?: WorkspaceView
-  /** You may see its members (`members:read`): show Members. */
+  /** You may see who holds what (`members:read`): show Members and Agent access. */
   members: boolean
   /** You manage its API keys (`api_keys:manage`): show API keys. */
   apiKeys: boolean
@@ -59,7 +59,7 @@ export function OrganizationWorkspaceNav({
     ...section,
     views: section.views.filter(
       (key) =>
-        (key !== "config" || members) &&
+        ((key !== "config" && key !== "agent-access") || members) &&
         (key !== "api-keys" || apiKeys) &&
         (key !== "conversations" || audit)
     ),

@@ -9,7 +9,7 @@ from typing import Any
 
 from forge_task_adk_workflows.run_store import RunStore, metadata
 from google.adk.artifacts import InMemoryArtifactService
-from key_world import ORG, OTHER_ORG, RUNTIME, World
+from key_world import MEMBER, ORG, OTHER_ORG, RUNTIME, World
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -129,6 +129,26 @@ class Workflows:
         found = self.versions.get((agent_id, number))
         return {"document": found} if found else None
 
+    async def set_access(
+        self,
+        organization_id: str,
+        document_id: str,
+        *,
+        permission_ids: list[int],
+        by: str,
+        by_name: str | None,
+    ) -> dict[str, Any] | None:
+        found = self.records.get(document_id)
+        if found is None or found["organization_id"] != organization_id:
+            return None
+        found["access"] = {
+            "permission_ids": permission_ids,
+            "updated_at": "2026-10-15T00:00:00Z",
+            "updated_by": by,
+            "updated_by_name": by_name,
+        }
+        return versioned(found)
+
 
 class Runtime:
     def __init__(self, world: World) -> None:
@@ -159,9 +179,10 @@ class Runtime:
         path: str,
         body: Any = None,
         *,
-        user: str | None = None,
+        user: str | None = MEMBER,
         key: str | None = None,
     ) -> Any:
+        """A call as a member of Acme (who runs its agents), a key, or anonymously (None)."""
         return self.world.call(
             method, f"/workflows{path}", user, body, key=key, prefix=RUNTIME
         )
@@ -170,7 +191,7 @@ class Runtime:
         self,
         ref: str = SHIP,
         *,
-        user: str | None = None,
+        user: str | None = MEMBER,
         key: str | None = None,
         **body: Any,
     ) -> Any:

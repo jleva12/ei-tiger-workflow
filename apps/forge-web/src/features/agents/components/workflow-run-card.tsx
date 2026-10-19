@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query"
 
 import { Icon } from "@/components/forge/icon"
 import { Button } from "@/components/ui/button"
+import { useDisclosureAnchor } from "@/components/assistant-ui/elements/use-disclosure-anchor"
 import { cn } from "@/lib/utils"
 import {
   isServedKind,
@@ -32,26 +33,16 @@ import "./workflow-run-card.css"
 
 /*
  * A call of one of the agent's workflow tools, drawn as the run it starts:
- * a mark a pulse runs through while it goes, what it's doing, and its steps
- * as it reaches them (the one at work turning, the line into it flowing),
+ * what it's doing, and a quiet timeline of its steps as it reaches them,
  * each with when it started and how long it took. Followed through the
  * runtime while the call waits, and after, while the run still goes.
  */
-
-const TONE: Record<RunPhase, string> = {
-  starting: "var(--wf-running)",
-  running: "var(--wf-running)",
-  waiting: "var(--wf-waiting)",
-  succeeded: "var(--wf-done)",
-  failed: "var(--wf-failed)",
-  stopped: "var(--muted-foreground)",
-}
 
 const PHASE_LABEL: Record<RunPhase, string> = {
   starting: "Starting",
   running: "Running",
   waiting: "Waiting",
-  succeeded: "Done",
+  succeeded: "Completed",
   failed: "Failed",
   stopped: "Stopped",
 }
@@ -131,43 +122,6 @@ function headline(
   }
 }
 
-/** The run's mark: a little graph a pulse runs through while it goes. */
-function RunMark({ phase }: { phase: RunPhase }) {
-  const ended = !isGoing(phase)
-  return (
-    <span
-      className="relative grid size-8 shrink-0 place-items-center rounded-(--radius-item) border bg-background"
-      aria-hidden="true"
-    >
-      <svg
-        data-slot="workflow-run-mark"
-        data-phase={phase}
-        viewBox="0 0 24 24"
-        className="size-6"
-        style={{ "--wf-tone": TONE[phase] } as React.CSSProperties}
-      >
-        <path className="wf-edge" d="M5 7 L12 17 L19 7" />
-        {(phase === "running" || phase === "starting") && (
-          <path className="wf-pulse" d="M5 7 L12 17 L19 7" pathLength={40} />
-        )}
-        <circle className="wf-node" cx="5" cy="7" r="2.6" />
-        <circle className="wf-node" cx="12" cy="17" r="2.6" />
-        <circle className="wf-node" cx="19" cy="7" r="2.6" />
-      </svg>
-      {ended && phase !== "stopped" && (
-        <span
-          className={cn(
-            "absolute -right-1 -bottom-1 grid size-3.5 place-items-center rounded-full text-background ring-2 ring-card",
-            phase === "succeeded" ? "bg-signal-success" : "bg-signal-failed"
-          )}
-        >
-          <Icon icon={phase === "succeeded" ? "check" : "close"} size={9} />
-        </span>
-      )}
-    </span>
-  )
-}
-
 /** A step's dot on the rail. */
 function StepDot({ state }: { state: TimelineStep["state"] }) {
   return (
@@ -175,10 +129,9 @@ function StepDot({ state }: { state: TimelineStep["state"] }) {
       data-slot="workflow-run-dot"
       data-state={state}
       className={cn(
-        "grid size-3.5 shrink-0 place-items-center rounded-full",
-        state === "done" && "bg-signal-success text-background",
-        state === "failed" && "bg-signal-failed text-background",
-        state === "waiting" && "bg-warning-surface text-notice-accent"
+        "grid size-4 shrink-0 place-items-center rounded-full text-muted-foreground",
+        state === "failed" && "bg-danger-surface text-danger-foreground",
+        state === "waiting" && "bg-warning-surface text-warning-foreground"
       )}
       role="img"
       aria-label={
@@ -191,9 +144,12 @@ function StepDot({ state }: { state: TimelineStep["state"] }) {
               : "Running"
       }
     >
-      {state === "done" && <Icon icon="check" size={9} />}
-      {state === "failed" && <Icon icon="close" size={9} />}
-      {state === "waiting" && <Icon icon="clock" size={10} />}
+      {state === "done" && <Icon icon="check" className="size-3" />}
+      {state === "failed" && <Icon icon="close" className="size-3" />}
+      {state === "waiting" && <Icon icon="clock" className="size-3" />}
+      {state === "running" && (
+        <Icon icon="loading" className="wf-spinner size-3.5" />
+      )}
     </span>
   )
 }
@@ -202,17 +158,12 @@ function StepRow({
   step,
   first,
   last,
-  flowIn,
-  flowOut,
   runStart,
   now,
 }: {
   step: TimelineStep
   first: boolean
   last: boolean
-  /** The run went on to this step and it's at work: the line into it flows. */
-  flowIn: false | "running" | "waiting"
-  flowOut: false | "running" | "waiting"
   runStart: number | undefined
   now: number
 }) {
@@ -233,34 +184,34 @@ function StepRow({
     <li
       data-slot="workflow-run-step"
       data-state={step.state}
-      className="grid grid-cols-[0.875rem_minmax(0,1fr)_auto] gap-x-2.5"
+      className="grid grid-cols-[1rem_minmax(0,1fr)_auto] gap-x-2.5"
     >
-      <span className="flex flex-col items-center" aria-hidden="true">
+      <span className="flex flex-col items-center">
         <span
           className={cn("wf-line h-2 shrink-0", first && "invisible")}
-          data-flow={flowIn || undefined}
+          aria-hidden="true"
         />
         <StepDot state={step.state} />
         <span
-          className={cn("wf-line min-h-1.5 flex-1", last && "invisible")}
-          data-flow={flowOut || undefined}
+          className={cn("wf-line min-h-2 flex-1", last && "invisible")}
+          aria-hidden="true"
         />
       </span>
-      <span className="flex min-w-0 items-baseline gap-1.5 pt-1 pb-1.5">
+      <span className="wf-step-label flex min-w-0 flex-wrap items-baseline gap-x-2 pt-1.5 pb-2">
         <span
           className={cn(
-            "truncate text-xs",
+            "min-w-0 text-xs wrap-anywhere",
             working ? "font-medium text-foreground" : "text-foreground"
           )}
         >
           {step.name}
         </span>
-        <span className="shrink-0 text-3xs text-subtle">
+        <span className="text-2xs text-muted-foreground">
           {kindLabel(step.kind)}
         </span>
       </span>
       <span
-        className="flex items-baseline gap-2 pt-1 pb-1.5 font-mono text-3xs text-muted-foreground tabular-nums"
+        className="flex items-baseline gap-3 pt-1.5 pb-2 text-2xs text-muted-foreground tabular-nums"
         title={
           step.startedAt !== undefined
             ? `Started ${new Date(step.startedAt).toLocaleTimeString()}`
@@ -268,16 +219,19 @@ function StepRow({
         }
       >
         {offset !== undefined && (
-          <span className="text-subtle">{offsetText(offset)}</span>
+          <span className="wf-step-offset text-subtle">
+            <span className="sr-only">Started after </span>
+            {offsetText(offset)}
+          </span>
         )}
         {took && (
           <span
             className={cn(
               "min-w-10 text-right",
-              step.state === "running" && "text-signal-running",
-              step.state === "waiting" && "text-notice-accent"
+              working && "font-medium text-foreground"
             )}
           >
+            <span className="sr-only">Duration </span>
             {took}
           </span>
         )}
@@ -300,15 +254,50 @@ export function WorkflowRunCard({
   result,
   status,
 }: ToolCallMessagePartProps) {
+  const answered =
+    workflowAnswerOf(result) !== undefined || status.type !== "running"
+  return (
+    <WorkflowRun
+      name={toolName}
+      callId={toolCallId}
+      result={result}
+      answered={answered}
+    />
+  )
+}
+
+/**
+ * A workflow's run, followed through the runtime by the call that started
+ * it: a workflow tool's call, or an intake agent's completing (`callId` from
+ * what it handed back). Without a call it shows how it ended (a run that
+ * couldn't start says why).
+ */
+export function WorkflowRun({
+  name,
+  title: named,
+  callId,
+  result,
+  answered,
+}: {
+  /** The tool the model called it by; for its title. */
+  name: string
+  /** Its title, when it isn't a tool's. */
+  title?: string
+  /** The call that started it: what the runtime knows the run by. */
+  callId?: string
+  /** What the call answered: where the run got to. */
+  result: unknown
+  /** The call has answered: no longer waiting on it. */
+  answered: boolean
+}) {
   const follower = React.useContext(WorkflowRunsContext)
   const sessionId = useSessionId()
   const answer = workflowAnswerOf(result)
-  const answered = answer !== undefined || status.type !== "running"
 
   const query = useQuery({
-    queryKey: ["workflow-run", follower?.key, sessionId, toolCallId],
-    queryFn: ({ signal }) => follower!.progress(sessionId!, toolCallId, signal),
-    enabled: Boolean(follower && sessionId && toolCallId),
+    queryKey: ["workflow-run", follower?.key, sessionId, callId],
+    queryFn: ({ signal }) => follower!.progress(sessionId!, callId!, signal),
+    enabled: Boolean(follower && sessionId && callId),
     refetchInterval: (q) => followEvery(q.state.data, answered),
     retry: false,
     refetchOnWindowFocus: false,
@@ -346,63 +335,113 @@ export function WorkflowRunCard({
   const took =
     start !== undefined && end !== undefined ? end - start : undefined
 
-  // Open: its steps are the point; folding keeps a long conversation short.
+  // Keep reached steps visible by default, with the same disclosure as chat tools.
   const [open, setOpen] = React.useState(true)
+  const cardRef = React.useRef<HTMLElement>(null)
+  const stepsId = React.useId()
+  const holdInPlace = useDisclosureAnchor(cardRef, 0)
+  const hasSteps = steps.length > 0
+  const Header = hasSteps ? "button" : "div"
   const title =
-    follower?.names[toolName] || progress?.workflow || humanize(toolName)
+    named || follower?.names[name] || progress?.workflow || humanize(name)
   const line = headline(phase, steps, progress, answer, took)
-  const tone = { "--wf-tone": TONE[phase] } as React.CSSProperties
   const href = progress && follower?.runHref?.(progress.run_id)
 
   return (
     <section
+      ref={cardRef}
       data-slot="workflow-run"
       data-phase={phase}
       aria-label={`Workflow ${title}`}
-      className="my-1.5 w-full max-w-xl overflow-hidden rounded-(--radius-card) border bg-card"
-      style={tone}
+      className="my-1.5 w-full min-w-0 rounded-(--radius-card) border bg-background"
     >
-      <header className="flex items-center gap-3 px-3 py-2.5">
-        <RunMark phase={phase} />
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <div className="flex min-w-0 items-baseline gap-2">
-            <span className="truncate text-sm font-medium text-foreground">
-              {title}
+      <header className="flex items-center">
+        <Header
+          type={hasSteps ? "button" : undefined}
+          data-slot="workflow-run-trigger"
+          aria-expanded={hasSteps ? open : undefined}
+          aria-controls={hasSteps ? stepsId : undefined}
+          onClick={
+            hasSteps
+              ? () => {
+                  holdInPlace()
+                  setOpen((value) => !value)
+                }
+              : undefined
+          }
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-3 rounded-(--radius-card) px-4 py-3 text-left",
+            hasSteps &&
+              "cursor-pointer transition-colors duration-150 hover:bg-muted/40"
+          )}
+        >
+          <Icon
+            icon="branch"
+            className="size-4 shrink-0 text-muted-foreground"
+          />
+          <span className="flex min-w-0 flex-1 flex-col gap-1">
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="min-w-0 text-sm font-medium wrap-anywhere text-foreground">
+                {title}
+              </span>
+              <span
+                data-slot="workflow-run-status"
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1 rounded-(--radius-chip) bg-muted px-1.5 py-0.5 text-3xs font-medium text-muted-foreground",
+                  phase === "failed" &&
+                    "bg-danger-surface text-danger-foreground",
+                  phase === "waiting" &&
+                    "bg-warning-surface text-warning-foreground"
+                )}
+              >
+                {phase === "succeeded" && (
+                  <Icon icon="check" className="size-3" />
+                )}
+                {phase === "failed" && (
+                  <Icon icon="warning" className="size-3" />
+                )}
+                {phase === "waiting" && (
+                  <Icon icon="clock" className="size-3" />
+                )}
+                {(phase === "running" || phase === "starting") && (
+                  <Icon icon="loading" className="wf-spinner size-3" />
+                )}
+                {PHASE_LABEL[phase]}
+              </span>
             </span>
             <span
               className={cn(
-                "shrink-0 text-2xs font-medium",
-                phase === "succeeded" && "text-success-foreground",
-                phase === "failed" && "text-danger-foreground",
-                (phase === "running" || phase === "starting") &&
-                  "text-signal-running",
-                phase === "waiting" && "text-notice-accent",
-                phase === "stopped" && "text-muted-foreground"
+                "text-xs wrap-anywhere text-muted-foreground",
+                phase === "failed" && "text-danger-foreground"
               )}
+              aria-live="polite"
             >
-              {PHASE_LABEL[phase]}
+              {line}
             </span>
-          </div>
-          <p
-            className="truncate text-xs text-muted-foreground"
-            aria-live="polite"
-            title={line}
-          >
-            {line}
-          </p>
-        </div>
-        {took !== undefined && (
-          <span
-            className="shrink-0 font-mono text-2xs text-muted-foreground tabular-nums"
-            aria-label={`${going ? "Running for" : "Took"} ${formatDuration(took)}`}
-          >
-            {clock(took)}
           </span>
-        )}
+          {going && took !== undefined && (
+            <span
+              className="shrink-0 text-2xs text-muted-foreground tabular-nums"
+              aria-label={`Running for ${formatDuration(took)}`}
+            >
+              {clock(took)}
+            </span>
+          )}
+          {hasSteps && (
+            <Icon
+              icon="down"
+              className={cn(
+                "wf-chevron size-3.5 shrink-0 text-muted-foreground",
+                !open && "-rotate-90"
+              )}
+            />
+          )}
+        </Header>
         {href && (
           <Button
             variant="ghost"
             size="icon-xs"
+            className="mr-3 shrink-0 text-muted-foreground"
             aria-label="Open the run's page"
             nativeButton={false}
             render={<a href={href} target="_blank" rel="noreferrer" />}
@@ -410,47 +449,24 @@ export function WorkflowRunCard({
             <Icon icon="external" />
           </Button>
         )}
-        {steps.length > 0 && (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-expanded={open}
-            aria-label={open ? "Hide the steps" : "Show the steps"}
-            onClick={() => setOpen(!open)}
-          >
-            <Icon icon={open ? "up" : "down"} />
-          </Button>
-        )}
       </header>
-      <div
-        data-slot="workflow-run-bar"
-        data-phase={phase}
-        data-going={going || undefined}
-        role="progressbar"
-        aria-label={PHASE_LABEL[phase]}
-        aria-busy={going}
-      />
-      {open && steps.length > 0 && (
-        <ol className="flex flex-col px-3 pt-2 pb-1.5" aria-label="Steps">
-          {steps.map((step, index) => {
-            const next = steps[index + 1]
-            const working = (s: TimelineStep | undefined) =>
-              s && (s.state === "running" || s.state === "waiting")
-                ? s.state
-                : false
-            return (
-              <StepRow
-                key={step.id}
-                step={step}
-                first={index === 0}
-                last={index === steps.length - 1}
-                flowIn={index > 0 && going ? working(step) : false}
-                flowOut={going ? working(next) : false}
-                runStart={start}
-                now={now}
-              />
-            )
-          })}
+      {hasSteps && (
+        <ol
+          id={stepsId}
+          hidden={!open}
+          className="border-t px-4 py-2"
+          aria-label={`${title} steps`}
+        >
+          {steps.map((step, index) => (
+            <StepRow
+              key={step.id}
+              step={step}
+              first={index === 0}
+              last={index === steps.length - 1}
+              runStart={start}
+              now={now}
+            />
+          ))}
         </ol>
       )}
     </section>

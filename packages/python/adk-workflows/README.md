@@ -99,7 +99,20 @@ session:
 5. **Interrupted.** When the run's invocation has events but no pending
    pause (the worker died mid-way, a hiccup, a failed run retried), it
    carries on where it stopped: ADK resumes the invocation, and a step that
-   was running, or failed, runs again. When ADK can't resume it, the run
+   failed runs again. A step that was running runs again when that's safe
+   (a GET, PUT or DELETE, a logic step, an agent, Create branch, Pi with
+   tools that only read). One whose effect may not be (a POST or PATCH,
+   Bash, Pi with tools that change things, Clone repository, Commit and
+   push, Open pull request) recorded that it began before it acted, so it
+   isn't: what it left running is stopped (its commands go with their
+   worker anyway, `forge_common.processes`), and it takes its Error way
+   with `may_have_run` in its error, or with none the run fails. Each step
+   execution has a key, the same for every attempt of it: a POST or PATCH
+   sends it as `Idempotency-Key`, Bash and Pi read it as
+   `FORGE_IDEMPOTENCY_KEY`. A run never ends as a success it can't show: a
+   step cut off that nothing ran again fails it, and without a finish it
+   succeeds (with no result) only where a way ended at a way out that leads
+   nowhere. When ADK can't resume it, the run
    fails, to be resubmitted; or, when its start says so (`start_over`), it
    starts over in a new session, `<session_id>-r<n>`, kept with the job and
    noted (with its `session_id`), and the result names it: its steps run

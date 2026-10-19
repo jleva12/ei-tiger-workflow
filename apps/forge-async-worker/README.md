@@ -93,7 +93,7 @@ once their leases run out. How the job ends decides what becomes of the run:
 | is stopped by an abandonment | `abandoned`; whatever would carry it on (a pause, a wait, a retry) abandons it instead, and a run that ends first ends as it did |
 | raises anything else (a bug), or its payload doesn't fit | `failed` (`error`) |
 | is stopped as its worker stops | `queued` again at once (`interrupted`), for the next worker, once the job has stopped; or `abandoned`, when someone abandoned it |
-| loses its lease (it ran out, and another worker took the run), or can't renew it | left to whoever has it, or the maintenance: every write is fenced on the lease, and the job is stopped |
+| loses its lease (it ran out, and another worker took the run), or can't renew it | left to whoever has it, or the maintenance: every write is fenced on the lease (the run's row, its notes, its usage rows and its ADK session's events), and the job is stopped |
 
 What became of the run is written while its lease is held, each try taking
 10 seconds at most, up to 4 times while the database hiccups or hangs (1, 2
@@ -202,9 +202,16 @@ forge-async-worker worker --check      # exit 1 unless this host serves the queu
 forge-async-worker prepare             # each installed task's prepare(): what it would download at runtime (image builds)
 ```
 
-On SIGINT or SIGTERM the worker waits up to `--grace-period` seconds for
-running runs; one still running then is queued again, and SAQ re-queues its
-job. Compose runs one service, `async-worker-adk-workflows`
+On SIGINT or SIGTERM the worker takes no more jobs (a dequeue out then comes
+back within a second, putting back a job it took), and waits up to
+`--grace-period` seconds for running runs; one still running then is
+stopped (its step has `STOP_SECONDS`, 30, to stop) and let go: queued again
+with a `run_adk` of its own, for the next worker to carry on. Being cut off
+is an interruption, not an attempt: a run's attempts (`MAX_ATTEMPTS`) are
+its hiccups', and it fails for interruptions only after `MAX_INTERRUPTIONS`
+in a row with its worker gone. A stop takes up to `--grace-period` plus 70
+seconds; Compose's `stop_grace_period` is 2 minutes
+(`ASYNC_WORKER_STOP_GRACE_PERIOD`). Compose runs one service, `async-worker-adk-workflows`
 (`ASYNC_WORKER_ADK_WORKFLOWS_CONCURRENCY` and `_REPLICAS` in `.env.compose`);
 replicas share the queue.
 
@@ -237,7 +244,11 @@ runs out, as its worker stops) holding its run, never let go, until the
 watchdog ends the process, and one holding the event loop ended by it too;
 the watchdog ending a process of its own (`test_watchdog.py`): at the
 deadline, and, while another thread holds the interpreter lock, by
-faulthandler's backstop; a stop letting the run go only once its job stopped;
+faulthandler's backstop; a stop letting the run go only once its job stopped,
+with a job of its own, spending no attempt (interruptions counted apart, in a
+row until the run waits); a worker that stops taking no new runs, a job one of
+its dequeues took as it stopped going back; SAQ never sweeping a running run's
+job (no heartbeat; its timeout past what its attempt may take);
 outcomes written again while the database hiccups, each try bounded, under a
 lease held throughout, and a failure kept for the maintenance before it's
 written (a write that hangs loses nothing; a stale one an earlier taking kept
@@ -254,9 +265,9 @@ approval and its decision, its timeout, a question and a failed step.
 **Verified on a real Redis** (`make async-worker-test-redis`): runs go
 concurrently up to the limit, a hiccup's retry is scheduled with backoff, the
 maintenance has its cron key on the upkeep's queue, a pause expires while runs
-fill every slot, the health check sees this host, a stop waits for running
-runs but not for idle workers, and a bare enqueue runs under the worker's
-settings.
+fill every slot, the health check sees this host, a stop takes no new runs
+(one a dequeue took goes back to the queue) and waits for running runs but
+not for idle workers, and a bare enqueue runs under the worker's settings.
 
 **Not yet run** against MySQL (the run store's tests use SQLite) or as the
 Compose stack.

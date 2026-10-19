@@ -526,11 +526,128 @@ def test_only_the_organizations_conversations_are_found(world: World) -> None:
         assert missing.json()["detail"] == "There's no such conversation"
 
 
+def test_partial_audit_does_not_return_other_organizations_state(world: World) -> None:
+    from google.adk.sessions import InMemorySessionService
+
+    from forge_admin.conversations.audit import Where, conversation
+
+    async def read() -> dict[str, Any]:
+        adk = InMemorySessionService()
+        session = await adk.create_session(
+            app_name="forge",
+            user_id=MEMBER,
+            session_id="s-assist",
+            state={"initial_secret": "Private initial state"},
+        )
+        for invocation, delta in (
+            (
+                "e-elsewhere",
+                {"forge:title": "Confidential acquisition", "page_context": "Globex"},
+            ),
+            ("e-in-acme", {"model": "public-model"}),
+            ("e-elsewhere", {"model": "private-model"}),
+        ):
+            await adk.append_event(
+                session,
+                Event(
+                    author="helper",
+                    invocation_id=invocation,
+                    actions=EventActions(state_delta=delta),
+                ),
+            )
+        result = await conversation(
+            world.client.app.state.engine,
+            adk,
+            Where(ACME),
+            app_name="forge",
+            user_id=MEMBER,
+            session_id="s-assist",
+        )
+        assert result is not None
+        return result
+
+    assert world.client.portal is not None
+    found = world.client.portal.call(read)
+    assert found["partial"] is True
+    assert found["state_before"] == {}
+    assert found["state_after"] == found["state"] == {"model": "public-model"}
+    assert [event["invocationId"] for event in found["adk_events"]] == ["e-in-acme"]
+
+
 def test_the_site_lists_every_assistant_conversation(world: World) -> None:
     assert world.ids("/conversations", ROOT) == {"s-assist"}
     page = world.get("/conversations", ROOT).json()
     # Both turns, wherever they were asked from.
     assert page["items"][0]["turns"] == 2 and page["items"][0]["input_tokens"] == 120
+
+
+def test_partial_replay_keeps_owned_terminal_outcomes_without_model_calls(
+    world: World,
+) -> None:
+    from forge_common.adk.turns import TURN_KEY
+    from google.adk.sessions import InMemorySessionService
+
+    from forge_admin.conversations.audit import Where, conversation
+
+    async def read() -> dict[str, Any]:
+        adk = InMemorySessionService()
+        session = await adk.create_session(
+            app_name="forge", user_id=MEMBER, session_id="s-assist"
+        )
+        engine = world.client.app.state.engine
+        async with engine.begin() as conn:
+            await conn.execute(sa.delete(calls).where(calls.c.session_id == "s-assist"))
+        for run_id, message in (
+            ("inv-6", "The assistant couldn't finish this request."),
+            ("inv-7", "Another organization's private failure"),
+            ("unknown-run", "An unowned failure"),
+        ):
+            await adk.append_event(
+                session,
+                Event(
+                    author="helper",
+                    invocation_id=f"no-model-call-{run_id}",
+                    content=text("model", "Unrelated private content"),
+                    actions=EventActions(state_delta={"secret": "private state"}),
+                    custom_metadata={
+                        "private": "metadata",
+                        TURN_KEY: {
+                            "version": 1,
+                            "runId": run_id,
+                            "status": "failed",
+                            "errorCode": "INTERNAL_ERROR",
+                            "errorMessage": message,
+                            "private": "extra field",
+                        },
+                    },
+                ),
+            )
+        result = await conversation(
+            engine,
+            adk,
+            Where(ACME),
+            app_name="forge",
+            user_id=MEMBER,
+            session_id="s-assist",
+        )
+        assert result is not None
+        return result
+
+    assert world.client.portal is not None
+    found = world.client.portal.call(read)
+    assert found["state"] == {}
+    assert len(found["adk_events"]) == 1
+    saved = found["adk_events"][0]
+    assert saved["customMetadata"][TURN_KEY] == {
+        "version": 1,
+        "runId": "inv-6",
+        "status": "failed",
+        "errorCode": "INTERNAL_ERROR",
+        "errorMessage": "The assistant couldn't finish this request.",
+    }
+    assert "content" not in saved
+    assert not saved["actions"].get("stateDelta")
+    assert "private" not in str(saved)
 
 
 def test_auditing_needs_agents_audit(world: World) -> None:

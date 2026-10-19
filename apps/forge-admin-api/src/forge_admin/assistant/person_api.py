@@ -2,10 +2,11 @@
 
 The assistant's tools reach Forge's records through the routes the web
 console uses, with a short-lived token minted for the person
-(``user_tokens.py``): each call is authenticated, authorized in its scope and
-audited as theirs, so a tool can do exactly what they could in the console
-and nothing more. The calls stay in the process, over an ASGI transport onto
-the app itself, and the token never leaves it.
+(``user_tokens.py``), naming the company groups their own sign-in names:
+each call is authenticated, authorized in its scope and audited as theirs,
+so a tool can do exactly what they could in the console and nothing more.
+The calls stay in the process, over an ASGI transport onto the app itself,
+and the token never leaves it.
 """
 
 from contextvars import ContextVar
@@ -15,6 +16,7 @@ import httpx2 as httpx
 from fastapi import FastAPI
 
 from forge_admin.assistant.user_tokens import UserTokens
+from forge_admin.auth.access import groups_of_caller
 from forge_admin.auth.tokens import TokenError
 from forge_admin.config import Settings
 
@@ -82,6 +84,7 @@ class PersonApi:
         *,
         params: dict[str, Any] | None = None,
         json: Any = None,
+        text: bool = False,
     ) -> Any:
         """
         One call, as the person.
@@ -91,12 +94,16 @@ class PersonApi:
         :param path: Below the API prefix, e.g. ``/organizations/<id>``.
         :param params: Query parameters; None values are left out.
         :param json: The body.
+        :param text: Answer the response's text rather than its JSON (a
+            stream of Server-Sent Events, read to its end).
         :return: The answer's JSON; None for an empty one.
         :raises Refusal: The API refused it (its status and detail), or no
             token can be minted for the person (status 0).
         """
         try:
-            token = self._tokens.token(user_id)
+            # Their groups, from their own sign-in to the request the
+            # assistant serves (none for anyone but the caller).
+            token = self._tokens.token(user_id, groups_of_caller(user_id))
         except TokenError as error:
             raise Refusal(0, f"Can't act as the person: {error}") from None
         headers = {"Authorization": f"Bearer {token}"}
@@ -112,6 +119,8 @@ class PersonApi:
         )
         if response.status_code >= 400:
             raise Refusal(response.status_code, _detail(response))
+        if text:
+            return response.text
         return response.json() if response.content else None
 
     async def aclose(self) -> None:

@@ -73,12 +73,14 @@ test("a workflow tool keeps the version it pins", () => {
   const notes = []
   assert.deepEqual(
     readSettings("adk_workflow", { workflow: "ag_a", version: 3 }, "config", notes),
-    { workflow: "ag_a", version: 3 }
+    // Saved before "Wait up to": the default wait.
+    { workflow: "ag_a", version: 3, wait_seconds: 120 }
   )
   // Saved before versions: the latest published.
   assert.deepEqual(readSettings("adk_workflow", { workflow: "ag_a" }, "config", notes), {
     workflow: "ag_a",
     version: null,
+    wait_seconds: 120,
   })
   assert.deepEqual(notes, [])
   readSettings("adk_workflow", { workflow: "ag_a", version: "latest" }, "config", notes)

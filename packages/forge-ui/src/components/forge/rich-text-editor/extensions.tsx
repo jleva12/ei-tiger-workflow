@@ -1,50 +1,37 @@
 import { Extension, type AnyExtension, type Editor } from "@tiptap/core"
-import { Audio } from "@tiptap/extension-audio"
 import { CodeBlockLowlight } from "@tiptap/extension-code-block-lowlight"
-import {
-  Details,
-  DetailsContent,
-  DetailsSummary,
-} from "@tiptap/extension-details"
-import { Emoji, gitHubEmojis, type EmojiItem } from "@tiptap/extension-emoji"
+import type { EmojiItem } from "@tiptap/extension-emoji"
 import { FileHandler } from "@tiptap/extension-file-handler"
 import { FindAndReplace } from "@tiptap/extension-find-and-replace"
-import { Highlight } from "@tiptap/extension-highlight"
-import { Image } from "@tiptap/extension-image"
 import { InvisibleCharacters } from "@tiptap/extension-invisible-characters"
-import { TaskItem, TaskList } from "@tiptap/extension-list"
-import { BlockMath, InlineMath } from "@tiptap/extension-mathematics"
-import { Mention } from "@tiptap/extension-mention"
-import { Subscript } from "@tiptap/extension-subscript"
-import { Superscript } from "@tiptap/extension-superscript"
-import { TableKit } from "@tiptap/extension-table"
-import { TextAlign } from "@tiptap/extension-text-align"
-import { TextStyleKit } from "@tiptap/extension-text-style"
-import { Twitch } from "@tiptap/extension-twitch"
-import { Typography } from "@tiptap/extension-typography"
-import { UniqueID } from "@tiptap/extension-unique-id"
-import { Youtube } from "@tiptap/extension-youtube"
 import {
   CharacterCount,
   Focus,
   Placeholder,
   Selection,
 } from "@tiptap/extensions"
-import { Markdown } from "@tiptap/markdown"
+import { keydownHandler } from "@tiptap/pm/keymap"
+import { Plugin, PluginKey } from "@tiptap/pm/state"
 import { ReactNodeViewRenderer } from "@tiptap/react"
-import { StarterKit } from "@tiptap/starter-kit"
 
 import { CodeBlockView } from "./code-block-view"
-import { AUDIO_TYPES, IMAGE_TYPES } from "./files"
+import {
+  createActionContext,
+  type ActionRegistry,
+} from "./core/action-registry"
+import { createDocumentExtensions } from "./core/schema"
+import { IMAGE_TYPES } from "./files"
 import { lowlight } from "./lowlight"
 import { MarkdownPaste } from "./markdown-paste"
 import { SlashCommand } from "./slash-command"
 import { suggestionRenderer } from "./suggestion"
 import type {
+  EditorController,
+  EditorUiHandlers,
   MentionItem,
   MentionSource,
-  RichTextActions,
-  RichTextFeatures,
+  ResolvedEditorFeatures,
+  UrlPolicy,
 } from "./types"
 
 /**
@@ -53,58 +40,92 @@ import type {
  * for a new callback.
  */
 export interface EditorHandlers {
-  actions: RichTextActions
+  ui: () => EditorUiHandlers
+  registry: ActionRegistry
+  controller: EditorController
   insertFiles: (editor: Editor, files: File[], pos?: number) => void
-  isEditable: () => boolean
   placeholder: () => string
   mentions: MentionSource
-  isFullscreen: () => boolean
+  urlPolicy: () => UrlPolicy | undefined
+  onUnsafeContent: (removed: number) => void
 }
 
 export interface ExtensionConfig {
-  features: RichTextFeatures
+  features: ResolvedEditorFeatures
   maxLength?: number
   /** Whether `@` suggests people (the source itself comes from handlers). */
   mentions: boolean
+  urlPolicy?: UrlPolicy
   handlers: EditorHandlers
+  /** The app's own extensions, added last. */
+  extensions?: AnyExtension[]
 }
 
 /**
  * Editor-level keys: ⌘K links, ⌘F finds, ⌘⇧Enter toggles full screen and
  * Escape leaves it. Low priority, so open suggestion menus get Escape first.
  */
-const Shortcuts = Extension.create<{
-  handlers: EditorHandlers
-  features: RichTextFeatures
-}>({
+const Shortcuts = Extension.create<{ handlers: EditorHandlers }>({
   name: "richTextShortcuts",
   priority: 10,
 
   addKeyboardShortcuts() {
-    const { handlers, features } = this.options
-    const { actions } = handlers
+    const { registry, controller, ui } = this.options.handlers
+    const run = (id: string) => {
+      if (!registry.get(id)) return false
+      void registry.run(id, createActionContext(controller, "shortcut"))
+      return true
+    }
     return {
-      "Mod-k": ({ editor }) => {
-        if (!editor.isEditable || editor.isActive("codeBlock")) return false
-        actions.openDialog({ kind: "link" })
-        return true
-      },
-      "Mod-f": () => {
-        if (!features.findReplace) return false
-        actions.toggleFind(true)
-        return true
-      },
-      "Mod-Shift-Enter": () => {
-        if (!features.fullscreen) return false
-        actions.toggleFullscreen()
-        return true
-      },
+      "Mod-k": () => run("link"),
+      "Mod-f": () => run("find"),
+      "Mod-Shift-Enter": () => run("fullscreen"),
       Escape: () => {
-        if (!handlers.isFullscreen()) return false
-        actions.toggleFullscreen(false)
+        if (!ui().viewState().fullscreen) return false
+        ui().toggleFullscreen(false)
         return true
       },
     }
+  },
+})
+
+/**
+ * Binds the shortcuts of the app's own actions. Built-in actions keep the
+ * bindings their extensions own; an app action with the same keys wins.
+ */
+const ActionShortcuts = Extension.create<{ handlers: EditorHandlers }>({
+  name: "actionShortcuts",
+  priority: 1000,
+
+  addProseMirrorPlugins() {
+    const { registry, controller } = this.options.handlers
+    let version = -1
+    let handler: ReturnType<typeof keydownHandler> | null = null
+    return [
+      new Plugin({
+        key: new PluginKey("actionShortcuts"),
+        props: {
+          handleKeyDown: (view, event) => {
+            if (registry.getVersion() !== version) {
+              version = registry.getVersion()
+              const bindings: Record<string, () => boolean> = {}
+              for (const action of registry.list()) {
+                if (!action.shortcut || registry.isBuiltIn(action.id)) continue
+                bindings[action.shortcut] = () => {
+                  void registry.run(
+                    action.id,
+                    createActionContext(controller, "shortcut")
+                  )
+                  return true
+                }
+              }
+              handler = keydownHandler(bindings)
+            }
+            return handler?.(view, event) ?? false
+          },
+        },
+      }),
+    ]
   },
 })
 
@@ -119,171 +140,58 @@ function emojiItems(emojis: EmojiItem[], query: string) {
     .slice(0, 8)
 }
 
-/** Every extension the editor loads, trimmed to the enabled features. */
-export function createExtensions({
+/**
+ * Every extension the editor loads: the document's (shared with the
+ * tests), the views and suggestion menus that need React, then the tools.
+ */
+export function createEditorExtensions({
   features,
   maxLength,
   mentions,
+  urlPolicy,
   handlers,
+  extensions: custom = [],
 }: ExtensionConfig): AnyExtension[] {
-  const extensions: AnyExtension[] = [
-    Shortcuts.configure({ handlers, features }),
-    StarterKit.configure({
-      heading: features.headings ? { levels: [1, 2, 3, 4, 5, 6] } : false,
-      // Replaced by the highlighted code block below when that's on.
-      codeBlock: features.codeHighlighting ? false : {},
-      link: {
-        openOnClick: false,
-        autolink: true,
-        linkOnPaste: true,
-        defaultProtocol: "https",
-      },
-      dropcursor: { color: "var(--focus)", width: 2 },
-      undoRedo: { depth: 200 },
-    }),
-    Placeholder.configure({
-      includeChildren: true,
-      placeholder: ({ editor, node }) => {
-        if (node.type.name === "heading") return `Heading ${node.attrs.level}`
-        if (node.type.name === "detailsSummary") return "Summary"
-        if (editor.isEmpty) return handlers.placeholder()
-        return features.slashCommands ? "Type / for commands" : ""
-      },
-    }),
-    CharacterCount.configure({ limit: maxLength ?? null }),
-    Focus.configure({ className: "has-focus", mode: "shallowest" }),
-    Selection.configure({ className: "selection" }),
-    Markdown,
-    MarkdownPaste,
-  ]
-
-  if (features.textStyle) {
-    extensions.push(TextStyleKit, Highlight.configure({ multicolor: true }))
-  }
-  if (features.alignment) {
-    extensions.push(TextAlign.configure({ types: ["heading", "paragraph"] }))
-  }
-  if (features.scripts) extensions.push(Subscript, Superscript)
-  if (features.typography) extensions.push(Typography)
-  if (features.taskLists) {
-    extensions.push(TaskList, TaskItem.configure({ nested: true }))
-  }
-  if (features.tables) {
-    extensions.push(TableKit.configure({ table: { resizable: true } }))
-  }
-  if (features.codeHighlighting) {
-    extensions.push(
-      CodeBlockLowlight.extend({
-        addNodeView: () => ReactNodeViewRenderer(CodeBlockView),
-      }).configure({ lowlight, enableTabIndentation: true, tabSize: 2 })
-    )
-  }
-  if (features.images) {
-    extensions.push(
-      Image.configure({
-        allowBase64: true,
-        resize: {
-          enabled: true,
-          directions: ["top-left", "top-right", "bottom-left", "bottom-right"],
-          minWidth: 48,
-          minHeight: 48,
-          alwaysPreserveAspectRatio: true,
-        },
-      })
-    )
-  }
-  if (features.media) {
-    extensions.push(
-      Youtube.configure({ nocookie: true, width: 640, height: 360 }),
-      Twitch.configure({ width: 640, height: 360 }),
-      Audio.configure({ allowBase64: true, controls: true })
-    )
-  }
-  if (features.images || features.media) {
-    const allowedMimeTypes = [
-      ...(features.images ? IMAGE_TYPES : []),
-      ...(features.media ? AUDIO_TYPES : []),
-    ]
-    extensions.push(
-      FileHandler.configure({
-        allowedMimeTypes,
-        onDrop: (editor, files, pos) =>
-          handlers.insertFiles(editor, files, pos),
-        // A copy that also carries HTML (an image copied from a web page)
-        // pastes through the HTML; only bare files are inserted here.
-        onPaste: (editor, files, html) => {
-          if (!html) handlers.insertFiles(editor, files)
-        },
-      })
-    )
-  }
-  if (features.math) {
-    const edit =
-      (kind: "inlineMath" | "blockMath") =>
-      (node: { attrs: Record<string, unknown> }, pos: number) => {
-        if (!handlers.isEditable()) return
-        handlers.actions.openDialog({
+  const extensions = createDocumentExtensions({
+    features,
+    urlPolicy,
+    onUnsafeContent: handlers.onUnsafeContent,
+    codeBlock: features.codeHighlighting
+      ? CodeBlockLowlight.extend({
+          addNodeView: () => ReactNodeViewRenderer(CodeBlockView),
+        }).configure({ lowlight, enableTabIndentation: true, tabSize: 2 })
+      : undefined,
+    onMathClick: (kind, node, pos) => {
+      if (!handlers.controller.isReadOnly()) {
+        handlers.ui().openDialog({
           kind,
           pos,
           initial: String(node.attrs.latex ?? ""),
         })
       }
-    // Configured apart, so blocks render in KaTeX display mode.
-    extensions.push(
-      InlineMath.configure({
-        katexOptions: { throwOnError: false },
-        onClick: edit("inlineMath"),
+    },
+    emojiSuggestion: {
+      items: ({ editor, query }) =>
+        emojiItems(editor.storage.emoji.emojis, query),
+      render: suggestionRenderer<EmojiItem>({
+        label: "Emoji",
+        empty: "No matching emoji",
+        getKey: (item) => item.name,
+        renderItem: (item) => (
+          <>
+            <span className="grid w-5 place-items-center text-base leading-none">
+              {item.emoji ??
+                (item.fallbackImage && (
+                  <img src={item.fallbackImage} alt="" className="size-4" />
+                ))}
+            </span>
+            <span className="truncate">:{item.shortcodes[0]}:</span>
+          </>
+        ),
       }),
-      BlockMath.configure({
-        katexOptions: { throwOnError: false, displayMode: true },
-        onClick: edit("blockMath"),
-      })
-    )
-  }
-  if (features.details) {
-    extensions.push(
-      Details.configure({
-        persist: true,
-        HTMLAttributes: { class: "details" },
-      }),
-      DetailsSummary,
-      DetailsContent
-    )
-  }
-  if (features.emoji) {
-    extensions.push(
-      Emoji.configure({
-        emojis: gitHubEmojis,
-        enableEmoticons: true,
-        suggestion: {
-          items: ({ editor, query }) =>
-            emojiItems(editor.storage.emoji.emojis, query),
-          render: suggestionRenderer<EmojiItem>({
-            label: "Emoji",
-            empty: "No matching emoji",
-            getKey: (item) => item.name,
-            renderItem: (item) => (
-              <>
-                <span className="grid w-5 place-items-center text-base leading-none">
-                  {item.emoji ??
-                    (item.fallbackImage && (
-                      <img src={item.fallbackImage} alt="" className="size-4" />
-                    ))}
-                </span>
-                <span className="truncate">:{item.shortcodes[0]}:</span>
-              </>
-            ),
-          }),
-        },
-      })
-    )
-  }
-  if (mentions) {
-    extensions.push(
-      Mention.configure({
-        HTMLAttributes: { class: "mention" },
-        deleteTriggerWithBackspace: true,
-        suggestion: {
+    },
+    mention: mentions
+      ? {
           debounce: 150,
           items: ({ query, signal }) => handlers.mentions(query, signal),
           render: suggestionRenderer<MentionItem>({
@@ -301,13 +209,50 @@ export function createExtensions({
               </span>
             ),
           }),
+        }
+      : undefined,
+  })
+
+  extensions.push(
+    Shortcuts.configure({ handlers }),
+    ActionShortcuts.configure({ handlers }),
+    Placeholder.configure({
+      includeChildren: true,
+      placeholder: ({ editor, node }) => {
+        if (node.type.name === "heading") return `Heading ${node.attrs.level}`
+        if (editor.isEmpty) return handlers.placeholder()
+        return features.slashCommands ? "Type / for commands" : ""
+      },
+    }),
+    CharacterCount.configure({ limit: maxLength ?? null }),
+    Focus.configure({ className: "has-focus", mode: "shallowest" }),
+    Selection.configure({ className: "selection" }),
+    MarkdownPaste.configure({
+      getUrlPolicy: handlers.urlPolicy,
+      onUnsafe: handlers.onUnsafeContent,
+    })
+  )
+
+  if (features.images) {
+    extensions.push(
+      FileHandler.configure({
+        allowedMimeTypes: IMAGE_TYPES,
+        onDrop: (editor, files, pos) =>
+          handlers.insertFiles(editor, files, pos),
+        // A copy that also carries HTML (an image copied from a web page)
+        // pastes through the HTML; only bare files are inserted here.
+        onPaste: (editor, files, html) => {
+          if (!html) handlers.insertFiles(editor, files)
         },
       })
     )
   }
   if (features.slashCommands) {
     extensions.push(
-      SlashCommand.configure({ getActions: () => handlers.actions })
+      SlashCommand.configure({
+        registry: handlers.registry,
+        controller: handlers.controller,
+      })
     )
   }
   if (features.findReplace) {
@@ -316,10 +261,5 @@ export function createExtensions({
   if (features.invisibleCharacters) {
     extensions.push(InvisibleCharacters.configure({ visible: false }))
   }
-  if (features.uniqueIds) {
-    extensions.push(
-      UniqueID.configure({ attributeName: "data-id", types: "all" })
-    )
-  }
-  return extensions
+  return [...extensions, ...custom]
 }

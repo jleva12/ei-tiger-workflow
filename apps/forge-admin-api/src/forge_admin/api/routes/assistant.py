@@ -19,15 +19,17 @@ when malformed, and whether to suggest follow-up questions after the reply
 
 import contextlib
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from forge_agent_runtime.server import KEEPALIVE_SECONDS, stream_events
 from forge_common.adk.follow_ups import REQUEST_KEY as FOLLOW_UPS_REQUEST
 from forge_common.adk.titles import TITLE_KEY, with_title
+from forge_common.adk.turns import TurnOutcome, current_turn, persist_turn
 from forge_common.adk.usage import Attribution, attributed
 from forge_common.model_provider import ModelProviderAuthError
 from forge_task_adk_workflows.usage_store import UsageStore
@@ -37,7 +39,7 @@ from google.adk.agents.run_config import (
     RunConfig,
     StreamingMode,  # pyright: ignore[reportPrivateImportUsage]
 )
-from google.adk.events import Event
+from google.adk.events import Event, EventActions
 from google.adk.runners import Runner
 from google.adk.sessions import Session, State
 from google.adk.sessions.base_session_service import GetSessionConfig
@@ -52,7 +54,7 @@ from forge_admin.assistant.person import PERSON
 from forge_admin.assistant.person_api import CALLER_BASE_URL
 from forge_admin.assistant.runtime import AgentRuntime
 from forge_admin.assistant.screens import STICKY, page_of
-from forge_admin.assistant.wire import sse, to_wire
+from forge_admin.assistant.wire import to_wire
 from forge_admin.auth.access import CurrentPerson
 from forge_admin.overview.recording import ASSISTANT_CHANNEL, assistant_attribution
 
@@ -386,6 +388,8 @@ async def delete_session(mine: Mine, session_id: SessionId) -> None:
     for name in await artifacts.list_artifact_keys(
         app_name=app_name, user_id=user_id, session_id=session_id
     ):
+        if name.startswith("user:"):
+            continue
         await artifacts.delete_artifact(
             app_name=app_name, user_id=user_id, session_id=session_id, filename=name
         )
@@ -503,24 +507,22 @@ async def _stream(
     *,
     usage: UsageStore | None = None,
     attribution: Attribution | None = None,
+    keepalive: float | None = KEEPALIVE_SECONDS,
 ) -> AsyncIterator[str]:
-    # A comment first, so the response starts even while the model thinks.
-    yield ":ok\n\n"
-    mode = StreamingMode.SSE if body.streaming else StreamingMode.NONE
-    # The turn, and its model and tool calls, count for the organization it
-    # was asked from (forge_admin.overview.recording).
-    recorded = (
-        usage.invocation(
-            attribution,
-            session_id=body.session_id,
-            user_id=body.user_id,
-            channel=ASSISTANT_CHANNEL,
+    async def events() -> AsyncGenerator[Event]:
+        mode = StreamingMode.SSE if body.streaming else StreamingMode.NONE
+        # This context runs in the shared stream's producer task, where the
+        # turn outcome and its correlation ID are bound for the audit too.
+        recorded = (
+            usage.invocation(
+                attribution,
+                session_id=body.session_id,
+                user_id=body.user_id,
+                channel=ASSISTANT_CHANNEL,
+            )
+            if usage is not None and attribution is not None
+            else contextlib.nullcontext()
         )
-        if usage is not None and attribution is not None
-        else contextlib.nullcontext()
-    )
-    try:
-        # aclosing ends the run when the client goes away (Stop).
         with attributed(attribution):
             async with (
                 recorded,
@@ -536,16 +538,94 @@ async def _stream(
                 ) as events,
             ):
                 async for event in events:
-                    yield sse(event)
-    except Exception as error:
-        logger.exception(
-            "Run of %s failed in session %s", runner.app_name, body.session_id
+                    yield event
+
+    async def persist(outcome: TurnOutcome) -> None:
+        await persist_turn(
+            outcome,
+            sessions=runner.session_service,
+            app_name=runner.app_name,
+            user_id=body.user_id,
+            session_id=body.session_id,
+            author=runner.app_name,
+            invocation_id=body.invocation_id,
         )
-        yield sse(_error_event(runner.app_name, error))
+
+    async with aclosing(
+        stream_events(
+            events(),
+            runner.app_name,
+            keepalive=keepalive,
+            failure=_error_event,
+            persist=persist,
+        )
+    ) as stream:
+        async for chunk in stream:
+            yield chunk
 
 
-async def _refuse(author: str, reason: str) -> AsyncIterator[str]:
-    yield sse(Event(author=author, error_code="NOT_CONFIGURED", error_message=reason))
+async def _refuse(
+    runner: Runner,
+    body: RunRequest,
+    reason: str,
+    *,
+    state_delta: dict[str, Any] | None = None,
+    usage: UsageStore | None = None,
+    attribution: Attribution | None = None,
+) -> AsyncIterator[str]:
+    async def events() -> AsyncGenerator[Event]:
+        recorded = (
+            usage.invocation(
+                attribution,
+                session_id=body.session_id,
+                user_id=body.user_id,
+                channel=ASSISTANT_CHANNEL,
+            )
+            if usage is not None and attribution is not None
+            else contextlib.nullcontext()
+        )
+        async with recorded:
+            outcome = current_turn()
+            invocation_id = body.invocation_id or (outcome.run_id if outcome else "")
+            if body.new_message is not None:
+                session = await runner.session_service.get_session(
+                    app_name=runner.app_name,
+                    user_id=body.user_id,
+                    session_id=body.session_id,
+                )
+                if session is not None:
+                    await runner.session_service.append_event(
+                        session=session,
+                        event=Event(
+                            author="user",
+                            invocation_id=invocation_id,
+                            content=body.new_message,
+                            actions=EventActions(state_delta=state_delta or {}),
+                        ),
+                    )
+            yield Event(
+                author=runner.app_name,
+                invocation_id=invocation_id,
+                error_code="NOT_CONFIGURED",
+                error_message=reason,
+            )
+
+    async def persist(outcome: TurnOutcome) -> None:
+        await persist_turn(
+            outcome,
+            sessions=runner.session_service,
+            app_name=runner.app_name,
+            user_id=body.user_id,
+            session_id=body.session_id,
+            author=runner.app_name,
+            invocation_id=body.invocation_id,
+        )
+
+    async with aclosing(
+        stream_events(events(), runner.app_name, persist=persist)
+    ) as stream:
+        async for chunk in stream:
+            yield chunk
 
 
 @router.post(
@@ -575,18 +655,25 @@ async def run_sse(
     mine = Conversations(runtime, body.app_name, body.user_id)
     session = await _existing(mine, body.session_id)
     state_delta = await _titled(mine, session, state_delta, body.new_message)
+    person = await _person(runtime, user)
+    attribution = assistant_attribution(
+        (state_delta or {}).get(PAGE_CONTEXT),
+        (person or {}).get("organizations"),
+        user,
+    )
     if runtime.unavailable:
-        events = _refuse(runner.app_name, runtime.unavailable)
+        events = _refuse(
+            runner,
+            body,
+            runtime.unavailable,
+            state_delta=state_delta,
+            usage=runtime.usage,
+            attribution=attribution,
+        )
     else:
         # Who they are, for this run only (``temp:``), from their sign-in.
-        person = await _person(runtime, user)
         if person is not None:
             state_delta = {**(state_delta or {}), PERSON: person}
-        attribution = assistant_attribution(
-            (state_delta or {}).get(PAGE_CONTEXT),
-            (person or {}).get("organizations"),
-            user,
-        )
         events = _stream(
             runner,
             body,

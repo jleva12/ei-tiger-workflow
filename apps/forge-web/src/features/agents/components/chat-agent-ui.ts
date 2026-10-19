@@ -31,6 +31,16 @@ function detailOf(step: ChatStep, lookups: ChatLookups): string {
       return modelLine(step.config, lookups)
     case "sub_agent":
       return `${HAND_OFF[step.config.mode]} · ${modelLine(step.config, lookups)}`
+    case "intake_agent": {
+      const count = step.config.fields.length
+      const fields = count === 1 ? "1 field" : `${count} fields`
+      const sections = step.config.sections.length
+      return sections
+        ? `${fields} in ${sections === 1 ? "1 section" : `${sections} sections`}`
+        : count
+          ? fields
+          : "No fields yet"
+    }
     case "saved_agent": {
       const name = lookups.agents[step.config.agent]
       return name ? `Uses ${name}` : "No agent picked"
@@ -87,6 +97,16 @@ function summaryOf(step: ChatStep): NodeSummary | null {
       return step.config.instruction.trim()
         ? { text: step.config.instruction.trim() }
         : null
+    case "intake_agent": {
+      if (step.config.description.trim())
+        return { text: step.config.description.trim() }
+      const labels = step.config.fields.map((f) => f.label.trim() || f.key)
+      return labels.length
+        ? {
+            text: `Collects ${labels.slice(0, 4).join(", ")}${labels.length > 4 ? ` and ${labels.length - 4} more` : ""}`,
+          }
+        : null
+    }
     case "http_tool":
       return {
         tag: step.config.method,

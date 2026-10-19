@@ -1,8 +1,13 @@
-import { RICH_ANSWER_COMPONENTS } from "@/components/forge/assistant/rich-answers-schema"
+import { RICH_ANSWER_COMPONENTS } from "@/components/forge/generative-ui/catalog"
+
+/** A team UI component's key: `org.` and lowercase words joined by hyphens (forge_agent_runtime.generative_ui). */
+const TEAM_COMPONENT_KEY = "^org\\.[a-z0-9]+(?:-[a-z0-9]+)*$"
 import { HTTP_METHODS, THINKING_LEVELS } from "@/features/steps/lib/model"
 import { chatKindInfo, KNOWN_CHAT_KINDS } from "./catalog"
 import { CHAT_AGENT_FORMAT } from "./document"
-import { HANDS_OFF, TOOLS, type ChatKind } from "./model"
+import { MAX_RULE_DEPTH } from "./access"
+import { INTAKE_FIELD_TYPES } from "./intake"
+import { HANDS_OFF, ON_COMPLETE, TOOLS, type ChatKind } from "./model"
 
 /*
  * The chat agent format as a JSON Schema (draft 2020-12): what
@@ -61,6 +66,40 @@ const LLM = {
   },
 }
 
+/** One permission, or a group of rules: `depth` more groups may nest in it. */
+const accessRule = (depth: number): Record<string, unknown> => {
+  const permission = {
+    type: "object",
+    required: ["permission"],
+    additionalProperties: false,
+    properties: {
+      permission: {
+        type: "integer",
+        minimum: 1,
+        description: "One of the organization's agent permissions, by ID.",
+      },
+    },
+  }
+  if (depth === 0) return permission
+  const items = { type: "array", minItems: 1, items: accessRule(depth - 1) }
+  const group = (key: "all" | "any") => ({
+    type: "object",
+    required: [key],
+    additionalProperties: false,
+    properties: { [key]: items },
+  })
+  return { oneOf: [permission, group("all"), group("any")] }
+}
+
+/** Who may use an agent: its node's rule (`features/agents/lib/access.ts`). */
+const ACCESS = {
+  access: {
+    oneOf: [{ type: "null" }, accessRule(MAX_RULE_DEPTH)],
+    description:
+      'Which of the organization\'s agent permissions someone needs to use it: {"permission": <id>}, {"all": [rules]} (every one) or {"any": [rules]} (at least one), groups nesting 3 deep. Null: anyone who may call the agent.',
+  },
+}
+
 /** Each kind's settings: a workflow's LLM agents' tools take them too. */
 export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
   agent: {
@@ -68,6 +107,7 @@ export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
     state_schema: jsonSchema(
       "A JSON Schema of the state the chat sends in stateDelta besides model and thinking_level; {} declares none."
     ),
+    ...ACCESS,
   },
   sub_agent: {
     ...LLM,
@@ -82,12 +122,109 @@ export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
       ...oneOf("default", "none"),
       description: "none: it sees only what it's given.",
     },
+    ...ACCESS,
+  },
+  intake_agent: {
+    ...LLM,
+    fields: {
+      type: "array",
+      description:
+        "The record it collects, in the order it asks: each field's key, type, whether it's required and when it applies.",
+      items: {
+        type: "object",
+        required: ["key"],
+        additionalProperties: false,
+        properties: {
+          id: {
+            ...text,
+            description: "The builder's, for telling fields apart.",
+          },
+          key: {
+            type: "string",
+            pattern: "^[a-z][a-z0-9_]{0,63}$",
+            description: "What the record and the model call it.",
+          },
+          label: text,
+          type: oneOf(...INTAKE_FIELD_TYPES),
+          options: {
+            type: "array",
+            items: text,
+            description: "A choice's options.",
+          },
+          description: {
+            ...text,
+            description: "What it is, and how to ask for it.",
+          },
+          why: {
+            ...text,
+            description: "Why it's asked, for when the person asks.",
+          },
+          required: bool,
+          when: {
+            ...text,
+            description:
+              "A JSONata condition on the record's values: it applies only when this holds. Empty: always.",
+          },
+          infer: {
+            ...bool,
+            description:
+              "The model may work it out from what the person said; the person confirms it.",
+          },
+          confirm: {
+            ...bool,
+            description:
+              "The person confirms its value before the intake finishes.",
+          },
+          prefill: {
+            ...bool,
+            description: "The agent handing off may fill it in.",
+          },
+          section: {
+            ...text,
+            description: "Its section's ID; empty for none.",
+          },
+        },
+      },
+    },
+    sections: {
+      type: "array",
+      description: "Fields asked together, each unlocked on a condition.",
+      items: {
+        type: "object",
+        required: ["id"],
+        additionalProperties: false,
+        properties: {
+          id: text,
+          title: text,
+          when: {
+            ...text,
+            description:
+              "A JSONata condition on the record's values: its fields apply only when this holds. Empty: always.",
+          },
+        },
+      },
+    },
+    confirm_summary: {
+      ...bool,
+      description:
+        "It reads back a summary and waits for the person's yes before it finishes.",
+    },
+    allow_cancel: {
+      ...bool,
+      description: "The person may stop it: it hands back as cancelled.",
+    },
+    allow_escalate: {
+      ...bool,
+      description: "It may hand back as escalated, for a person.",
+    },
+    ...ACCESS,
   },
   saved_agent: {
     agent: {
       ...text,
       description: "Another of the organization's agents, by ID.",
     },
+    ...ACCESS,
   },
   adk_workflow: {
     workflow: {
@@ -103,6 +240,12 @@ export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
       ],
       description:
         "Which of its versions runs: a published one, its draft, or null for its latest published (as each run starts).",
+    },
+    wait_seconds: {
+      type: "integer",
+      minimum: 1,
+      description:
+        "Seconds the agent waits for the run before it's told the run is still going, with its ID; at most the deployment's cap (FORGE_AGENT_WORKFLOW_WAIT_MAX). Missing: the deployment's default.",
     },
   },
   memory: {
@@ -219,10 +362,21 @@ export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
   rich_answers: {
     components: {
       type: "array",
-      items: { enum: [...RICH_ANSWER_COMPONENTS] },
+      items: {
+        anyOf: [
+          { enum: [...RICH_ANSWER_COMPONENTS] },
+          {
+            type: "string",
+            pattern: TEAM_COMPONENT_KEY,
+            maxLength: 64,
+            description:
+              "One of the organization's team UI components, by key: found where it runs (forge_agent_runtime.generative_ui).",
+          },
+        ],
+      },
       uniqueItems: true,
       description:
-        "The Generative UI components the agent may draw with present; only these go into its model calls.",
+        "The Generative UI components the agent may draw with present, base ones by name and the organization's team ones by key (org.…); only these go into its model calls.",
     },
   },
   code_execution: {
@@ -289,6 +443,13 @@ const FORMAT = {
         "The skills its Skills tools (and its saved agents') use, by ID, each with its name, description, instructions and files: what an exported agent needs to run on its own.",
       additionalProperties: { type: "object" },
     },
+    ui_components: {
+      type: "object",
+      description:
+        "The team UI components its Rich answers nodes (and its saved agents') pick, by key, each a published forge.ui_component/v1 definition: what an exported agent needs to run on its own. The hosted runtime uses the organization's instead.",
+      propertyNames: { pattern: TEAM_COMPONENT_KEY },
+      additionalProperties: { type: "object" },
+    },
   },
   $defs: {
     nodeId: {
@@ -310,7 +471,7 @@ const FORMAT = {
         config: { type: "object" },
         outputs: {
           type: "array",
-          description: `An agent's ways out: ${TOOLS} (what it can call) and ${HANDS_OFF} (who it hands off to); none for the rest.`,
+          description: `An agent's ways out: ${TOOLS} (what it can call) and ${HANDS_OFF} (who it hands off to); an intake agent's ${TOOLS} and ${ON_COMPLETE} (the workflows it starts when it completes); none for the rest.`,
           items: text,
         },
       },
@@ -326,7 +487,7 @@ const FORMAT = {
       properties: {
         id: text,
         source: { $ref: "#/$defs/nodeId" },
-        source_output: { enum: [TOOLS, HANDS_OFF] },
+        source_output: { enum: [TOOLS, HANDS_OFF, ON_COMPLETE] },
         target: { $ref: "#/$defs/nodeId" },
       },
     },

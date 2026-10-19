@@ -20,6 +20,10 @@ export type ChatPageSettings = {
   hide_top_bar: boolean
   /** It suggests follow-up questions after each reply. */
   follow_ups: boolean
+  /** A button that opens its agent in the desktop app, for visitors who have it. */
+  desktop_link: boolean
+  /** Replies stream as the model writes them; off, each arrives whole and is written in. */
+  streaming: boolean
   /** The name over the page and in the browser's tab; "" for the agent's. */
   title: string
   /** The welcome's heading; "" for "Talk to <name>". */
@@ -46,6 +50,8 @@ export const PAGE_DEFAULTS: ChatPageSettings = {
   hide_history: false,
   hide_top_bar: false,
   follow_ups: true,
+  desktop_link: false,
+  streaming: true,
   title: "",
   welcome_title: "",
   welcome_message: "",

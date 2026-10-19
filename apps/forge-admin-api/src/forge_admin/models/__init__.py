@@ -4,6 +4,11 @@ Define each model on forge_admin.db.base.AuditBase in a module of this package a
 import that module here, so Alembic autogenerate sees every table.
 """
 
+from forge_admin.models.agent_access import (
+    AgentCasbinRule,
+    AgentGroupLink,
+    AgentPermission,
+)
 from forge_admin.models.api_credentials import ApiCredential, ApiCredentialOAuthFlow
 from forge_admin.models.api_keys import ApiKey
 from forge_admin.models.authorization import (
@@ -12,8 +17,12 @@ from forge_admin.models.authorization import (
     PermissionGroupLink,
     Role,
 )
+from forge_admin.models.chat_turns import ChatTurnLease, WorkflowStartIntent
 from forge_admin.models.code_repositories import CodeIngestionJob, CodeRepository
+from forge_admin.models.dashboard_layouts import DashboardLayout, SharedWidget
+from forge_admin.models.helpers import HelperJob
 from forge_admin.models.hierarchy import Organization
+from forge_admin.models.intake_requests import IntakeRequest
 from forge_admin.models.knowledge import (
     KnowledgeBase,
     KnowledgeBaseCodeLink,
@@ -25,16 +34,23 @@ from forge_admin.models.knowledge import (
     KnowledgeDocument,
 )
 from forge_admin.models.mcp_servers import McpOAuthFlow, McpServer
-from forge_admin.models.skills import Skill, SkillCreatorJob
+from forge_admin.models.skills import Skill
 from forge_admin.models.users import User
 
 __all__ = [
+    "AgentCasbinRule",
+    "AgentGroupLink",
+    "AgentPermission",
     "ApiCredential",
     "ApiCredentialOAuthFlow",
     "ApiKey",
     "CasbinRule",
+    "ChatTurnLease",
     "CodeIngestionJob",
     "CodeRepository",
+    "DashboardLayout",
+    "HelperJob",
+    "IntakeRequest",
     "KnowledgeBase",
     "KnowledgeBaseCodeLink",
     "KnowledgeBaseComponent",
@@ -49,7 +65,8 @@ __all__ = [
     "Permission",
     "PermissionGroupLink",
     "Role",
+    "SharedWidget",
     "Skill",
-    "SkillCreatorJob",
     "User",
+    "WorkflowStartIntent",
 ]

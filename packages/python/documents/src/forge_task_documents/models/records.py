@@ -39,6 +39,7 @@ class DocumentRecord(BaseModel):
     chunker_version: str | None = None
     embedding_model: str | None = None
     run_seq: int = 0  # fencing token of the latest run
+    published_run_seq: int | None = 0  # 0: none published; None: legacy; positive: selected generation
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)

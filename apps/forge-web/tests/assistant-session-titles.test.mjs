@@ -9,7 +9,7 @@ const server = await createServer({
   resolve: {
     alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
   },
-  server: { middlewareMode: true, watch: null },
+  server: { middlewareMode: true, watch: null, hmr: false, ws: false },
   optimizeDeps: { noDiscovery: true, include: [] },
 })
 const { TITLE_KEY, titleOf, withSessionTitles } = await server.ssrLoadModule(
@@ -37,7 +37,6 @@ test("conversations are listed and fetched with their titles", async () => {
       return Response.json([
         { id: "s2", state: { [TITLE_KEY]: "Where are the stores?" } },
         { id: "s1", state: {} },
-        { state: {} },
       ])
     return Response.json({
       id: "s2",
@@ -73,6 +72,21 @@ test("conversations are listed and fetched with their titles", async () => {
     // What it doesn't change is the package's own.
     assert.equal(adapter.rename, kept.rename)
     assert.equal(adapter.delete, kept.delete)
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+
+test("a malformed list or wrong conversation fails instead of silently dropping history", async () => {
+  const original = globalThis.fetch
+  let response = [{ id: "s1" }, { state: {} }]
+  globalThis.fetch = async () => Response.json(response)
+  try {
+    const adapter = withSessionTitles({}, { url: "https://forge.example", appName: "app", userId: "user", headers: () => ({}) })
+    await assert.rejects(adapter.list(), /no ID/)
+    response = { id: "someone-else", events: [] }
+    await assert.rejects(adapter.fetch("s1"), /Invalid ADK session fetch/)
   } finally {
     globalThis.fetch = original
   }

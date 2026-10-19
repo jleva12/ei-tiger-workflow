@@ -1,9 +1,13 @@
-"""The calling user: who they are, and their access, which the web console loads."""
+"""The calling user: who they are, and their access, which the web console
+loads; and the agents of their organizations, which the desktop app offers."""
 
+import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query, Request, status
+from forge_agent_runtime import AgentNotFound
 from pydantic import BaseModel
+from pymongo.errors import PyMongoError
 
 from forge_admin.api.routes.common import Session
 from forge_admin.api.routes.users import UserRead
@@ -17,7 +21,17 @@ from forge_admin.auth.access import (
     organization_memberships,
 )
 from forge_admin.auth.authorization import assignments_of, load_access
+from forge_admin.chat_agents.pages import (
+    ModelWindow,
+    agent_names,
+    entry_model,
+    workflow_names,
+)
+from forge_admin.chat_agents.runtime import NOT_SET_UP, UNAVAILABLE, executor_of
+from forge_admin.chat_agents.store import ChatAgentStore
 from forge_admin.models import User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -58,6 +72,25 @@ class MyOrganization(BaseModel):
     description: str
     # The caller's roles in the organization, e.g. ``org:member``.
     roles: list[str]
+
+
+class MyChatAgent(BaseModel):
+    """A published chat agent of one of the caller's organizations."""
+
+    #: Its ID: the ``appName`` the runtime runs its latest published version as.
+    id: str
+    organization_id: str
+    organization_name: str
+    name: str
+    description: str
+    #: The published version it runs now.
+    version: int
+    #: Its agents by the names ADK calls them, as the canvas names them.
+    agents: dict[str, str]
+    #: Its workflow tools by the names the model calls them, as the canvas names them.
+    workflows: dict[str, str]
+    #: The model it starts on: the context meter's window before the first reply.
+    model: ModelWindow
 
 
 @router.get("")
@@ -134,3 +167,58 @@ async def get_my_organizations(
         )
         for membership in await organization_memberships(session, user)
     ]
+
+
+@router.get("/chat-agents")
+async def get_my_chat_agents(
+    request: Request, user: CurrentUser, session: Session
+) -> list[MyChatAgent]:
+    """
+    List the published chat agents of the organizations the caller is a
+    member of, each as its latest published version has it: what the
+    desktop app offers to add, and runs as the caller through the runtime
+    (their conversations are theirs: ``userId`` their subject). Whether they
+    may run one is the runtime's to say, as it runs it.
+    \f
+    :param request: The request.
+    :param user: The caller.
+    :param session: The request's database session.
+    :return: The agents, by organization name, then agent name.
+    :raises HTTPException: 503 when chat agents aren't set up or MongoDB
+        isn't answering.
+    """
+    store: ChatAgentStore | None = getattr(request.app.state, "chat_agents", None)
+    if store is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, NOT_SET_UP)
+    executor = executor_of(request)
+    memberships = await organization_memberships(session, user)
+    found: list[MyChatAgent] = []
+    try:
+        for membership in memberships:
+            organization = membership.organization
+            for record in await store.list(organization.id):
+                if record.get("published_version") is None:
+                    continue
+                try:
+                    agent = await executor.resolve(record["_id"])
+                except AgentNotFound:
+                    continue
+                found.append(
+                    MyChatAgent(
+                        id=agent.document.id,
+                        organization_id=organization.id,
+                        organization_name=organization.name,
+                        name=agent.document.name,
+                        description=agent.document.description,
+                        version=int(record["published_version"]),
+                        agents=agent_names(agent.document),
+                        workflows=workflow_names(agent.document),
+                        model=entry_model(executor, agent),
+                    )
+                )
+    except PyMongoError as error:
+        logger.warning("Couldn't list the caller's chat agents: %s", error)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, UNAVAILABLE) from error
+    return sorted(
+        found, key=lambda agent: (agent.organization_name.lower(), agent.name.lower())
+    )

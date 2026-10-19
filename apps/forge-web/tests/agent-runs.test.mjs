@@ -183,3 +183,142 @@ test("a run's steps refresh quickly while it goes or was just acted on, slowly w
   assert.equal(runs.stepsPollMs({ status: "succeeded" }, false), false)
   assert.equal(runs.stepsPollMs(undefined, false), false)
 })
+
+test("a run's start in words: what started it, who asked, via what, for whom", () => {
+  const asked = { requested_by: { id: "chat-agent:ca_desk", name: "Chat agent Desk" }, resubmit_of: null }
+  const chat = runs.provenanceWords({
+    ...asked,
+    provenance: {
+      trigger_type: "chat_agent",
+      channel: "page",
+      on_behalf_of: { id: "visitor-9", name: "", verified: false },
+      via: { agent_id: "ca_desk", version: "3" },
+      api_key_id: null,
+      auth_method: "anonymous",
+    },
+  })
+  assert.deepEqual(chat, {
+    how: "By a chat agent",
+    by: "Chat agent Desk",
+    via: "ca_desk v3",
+    onBehalfOf: "visitor-9",
+    verified: false,
+    channel: "a chat page",
+    credential: "None (anonymous caller)",
+  })
+  assert.equal(
+    runs.provenanceLine(chat),
+    "By a chat agent · Chat agent Desk · via ca_desk v3 · on behalf of visitor-9 (unverified)"
+  )
+  // A person's own test run is theirs: nobody else to name.
+  const tested = runs.provenanceWords({
+    requested_by: { id: "u-1", name: "Mia" },
+    resubmit_of: null,
+    provenance: {
+      trigger_type: "builder_test",
+      channel: "console",
+      on_behalf_of: { id: "u-1", name: "Mia", verified: true },
+      via: null,
+      api_key_id: null,
+      auth_method: "jwt",
+    },
+  })
+  assert.equal(runs.provenanceLine(tested), "Test run from the builder · Mia")
+  assert.equal(tested.credential, "Sign-in")
+  // A key's, by its ID; a run from before, by its trigger.
+  const keyed = runs.provenanceWords({
+    requested_by: { id: "apikey:k-1", name: "API key CI" },
+    resubmit_of: null,
+    provenance: {
+      trigger_type: "api_key",
+      channel: "api",
+      on_behalf_of: { id: "apikey:k-1", name: "API key CI", verified: true },
+      via: null,
+      api_key_id: "k-1",
+      auth_method: "api_key",
+    },
+  })
+  assert.equal(keyed.credential, "API key k-1")
+  assert.equal(runs.provenanceLine(keyed), "With an API key · API key CI")
+  assert.equal(
+    runs.provenanceLine(runs.provenanceWords({ ...asked, trigger: { type: "runtime", protocol: "a2a" } })),
+    "Over A2A · Chat agent Desk"
+  )
+  assert.equal(runs.provenanceWords({ ...asked, resubmit_of: "r-0" }).how, "Resubmitted")
+})
+
+test("the runs' filters are read from the address, leaving out what couldn't be one", () => {
+  assert.deepEqual(
+    runs.readRunFilters({
+      workflow: "ag_ship",
+      trigger: "builder_test",
+      person: "  u-1 ",
+      via: "ca_desk",
+      apiKey: "k-1",
+      root: "r".repeat(32),
+      startedFrom: "2026-10-01",
+      startedTo: "2026-10-03",
+      view: "agents",
+    }),
+    {
+      workflow: "ag_ship",
+      trigger: "builder_test",
+      person: "u-1",
+      via: "ca_desk",
+      apiKey: "k-1",
+      root: "r".repeat(32),
+      startedFrom: "2026-10-01",
+      startedTo: "2026-10-03",
+    }
+  )
+  // A way runs aren't started, a day that isn't one, blanks and non-text are dropped.
+  assert.deepEqual(
+    runs.readRunFilters({
+      trigger: "sideways",
+      startedFrom: "Oct 1",
+      startedTo: "2026-02-30",
+      person: "   ",
+      via: 7,
+    }),
+    {}
+  )
+  // Days the wrong way round are the same days.
+  assert.deepEqual(runs.readRunFilters({ startedFrom: "2026-10-09", startedTo: "2026-10-02" }), {
+    startedFrom: "2026-10-02",
+    startedTo: "2026-10-09",
+  })
+  assert.equal(runs.hasRunFilters({}), false)
+  assert.equal(runs.hasRunFilters({ root: "r-1" }), true)
+})
+
+test("the runs' filters become the runs API's query, days as the reader's", () => {
+  const filters = {
+    workflow: "ag_ship",
+    trigger: "chat_agent",
+    person: "visitor-9",
+    via: "ca_desk",
+    apiKey: "k-1",
+    root: "r-1",
+    startedFrom: "2026-10-01",
+    startedTo: "2026-10-03",
+  }
+  assert.deepEqual(runs.runFilterParams(filters), {
+    agent_id: "ag_ship",
+    trigger_type: "chat_agent",
+    on_behalf_of: "visitor-9",
+    via_agent_id: "ca_desk",
+    api_key_id: "k-1",
+    root_run_id: "r-1",
+    // From the first day's midnight to the day after the last's, here.
+    created_from: new Date(2026, 9, 1).toISOString(),
+    created_to: new Date(2026, 9, 4).toISOString(),
+  })
+  // Refused starts make no tree.
+  assert.equal(runs.runFilterParams(filters, { refusals: true }).root_run_id, undefined)
+  // A month's last day runs to the next month's first.
+  assert.equal(
+    runs.runFilterParams({ startedTo: "2026-10-31" }).created_to,
+    new Date(2026, 10, 1).toISOString()
+  )
+  assert.deepEqual(runs.runFilterParams({}), {})
+})

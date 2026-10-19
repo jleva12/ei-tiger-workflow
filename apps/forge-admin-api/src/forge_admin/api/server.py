@@ -8,6 +8,7 @@ from importlib.metadata import version
 
 from fastapi import APIRouter, Depends, FastAPI
 from forge_agent_runtime.a2a import task_store
+from forge_agent_runtime.mcp_guard import mcp_client_factory
 from forge_common.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
 from forge_mcp_servers.api_credentials import ApiCredentials
 from forge_mcp_servers.secrets import SecretBox
@@ -24,21 +25,31 @@ from forge_admin.adk_workflows.documents import AgentStore
 from forge_admin.adk_workflows.files import workflow_artifacts
 from forge_admin.adk_workflows.queue import Embedding
 from forge_admin.api.routes import health, info
+from forge_admin.assistant.forge import APP_NAME
+from forge_admin.assistant.language_models import accepted_names
 from forge_admin.assistant.runtime import AgentRuntime
 from forge_admin.auth.authorization import create_enforcer
 from forge_admin.auth.runtime_access import runtime_dependencies
 from forge_admin.auth.security import authenticate, identify
 from forge_admin.chat_agents import pages as chat_pages
 from forge_admin.chat_agents import runtime as chat_agent_runtime
-from forge_admin.chat_agents.source import create_executor
+from forge_admin.chat_agents.source import OrganizationWorkflows, create_executor
+from forge_admin.chat_agents.starts import StartUpkeep
 from forge_admin.chat_agents.store import ChatAgentStore
 from forge_admin.config import Settings
-from forge_admin.db.session import create_engine, create_sessionmaker
+from forge_admin.db.session import (
+    adk_session_engine,
+    create_engine,
+    create_sessionmaker,
+)
+from forge_admin.helpers import registry as helper_registry
 from forge_admin.knowledge.graph import check_codegraph, codegraph_from
 from forge_admin.knowledge.queue import KnowledgeQueue
 from forge_admin.knowledge.search import KnowledgeSearch
 from forge_admin.knowledge.storage import DocumentStore
 from forge_admin.mcp_servers import defaults as mcp_server_defaults
+from forge_admin.mcp_servers.toolset import network_policy as mcp_network_policy
+from forge_admin.ui_components.store import UiComponentStore
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +137,13 @@ class ApiServer:
             key = self.settings.secrets_key
             app.state.mcp_servers = (
                 McpServers(
-                    SecretBox(key.get_secret_value()), timeout=self.settings.mcp_timeout
+                    SecretBox(key.get_secret_value()),
+                    timeout=self.settings.mcp_timeout,
+                    # Checking a server and signing in to it connect only
+                    # where its agents may (forge_agent_runtime.mcp_guard).
+                    client_factory=mcp_client_factory(
+                        mcp_network_policy(self.settings)
+                    ),
                 )
                 if key
                 else None
@@ -177,16 +194,30 @@ class ApiServer:
         # Tests set their own (a scripted model, in-memory sessions).
         if getattr(app.state, "agents", None) is None:
             app.state.agents = AgentRuntime.create(self.settings, engine, app)
+        # The helper agents the web console calls by name, on the assistant's
+        # models: a bad file stops the API here. Tests set their own.
+        if getattr(app.state, "helpers", None) is None:
+            models = app.state.agents.models.get(APP_NAME)
+            app.state.helpers = helper_registry.load(
+                self.settings.agent_helpers,
+                models=accepted_names(models) if models is not None else None,
+            )
         # ADK workflow runs' sessions, which the async worker's ADK workflows
         # task keeps in this database too: a run's steps are read from them.
         # Tests set their own.
         if getattr(app.state, "adk_run_sessions", None) is None:
-            app.state.adk_run_sessions = DatabaseSessionService(db_engine=engine)
+            app.state.adk_run_sessions = DatabaseSessionService(
+                db_engine=adk_session_engine(engine)
+            )
         # Organizations' chat agents (drafts and published versions) in MongoDB,
         # and the runtime that runs them by ID; None without MongoDB. Tests set
         # their own.
         if getattr(app.state, "chat_agents", None) is None:
             app.state.chat_agents = ChatAgentStore.from_settings(self.settings)
+        # Organizations' team UI components and their versions, in MongoDB
+        # beside the agents that pick them; None without MongoDB. Tests set their own.
+        if getattr(app.state, "ui_components", None) is None:
+            app.state.ui_components = UiComponentStore.from_settings(self.settings)
         if getattr(app.state, "agent_executor", None) is None:
             app.state.agent_executor = (
                 create_executor(
@@ -202,10 +233,26 @@ class ApiServer:
                     knowledge_search=app.state.knowledge_search,
                     codegraph=app.state.codegraph,
                     run_sessions=app.state.adk_run_sessions,
+                    ui_components=app.state.ui_components,
                 )
                 if app.state.chat_agents is not None
                 else None
             )
+        # The workflow runs intakes start, written down until they're started:
+        # those a stopped process left are started (or dropped) by this upkeep,
+        # which every process runs.
+        upkeep = None
+        executor = app.state.agent_executor
+        starting = executor.services.workflows if executor is not None else None
+        if (
+            isinstance(starting, OrganizationWorkflows)
+            and starting.intents is not None
+            and getattr(app.state, "start_upkeep", None) is None
+        ):
+            app.state.start_upkeep = StartUpkeep(
+                starting, starting.intents, app.state.sessionmaker, executor.sessions
+            )
+            upkeep = asyncio.create_task(app.state.start_upkeep.run_forever())
         # Chat agents' A2A tasks, in this database (a2a_tasks, 0010a2a). Tests
         # set their own.
         if getattr(app.state, "a2a_tasks", None) is None:
@@ -225,11 +272,15 @@ class ApiServer:
         try:
             yield
         finally:
+            if upkeep is not None:
+                upkeep.cancel()
             await app.state.agents.close()
             if app.state.agent_executor is not None:
                 await app.state.agent_executor.close()
             if app.state.chat_agents is not None:
                 await app.state.chat_agents.aclose()
+            if app.state.ui_components is not None:
+                await app.state.ui_components.aclose()
             if app.state.embedding is not None:
                 await app.state.embedding.aclose()
             if app.state.knowledge_queue is not None:
@@ -267,9 +318,9 @@ class ApiServer:
             )
         for router in self.public_routers:
             app.include_router(router)
-        # The runtime, over ADK's run API and A2A: public unless the settings
-        # say otherwise, and then an API key or a sign-in with agents:run in
-        # the organization called (forge_admin.auth.runtime_access).
+        # The runtime, over ADK's run API and A2A: an API key or a sign-in
+        # with agents:run in the organization called (agents:manage for a
+        # draft), let in before the agent is read (forge_admin.auth.runtime_access).
         runtime = runtime_dependencies(self.settings)
         app.include_router(
             chat_agent_runtime.router,
@@ -290,8 +341,8 @@ class ApiServer:
             dependencies=runtime,
         )
         # Chat agents shared as chat pages: the link is the credential, so
-        # they answer whether or not the runtime is public, to anyone who
-        # has it (forge_admin.chat_agents.pages).
+        # they answer anyone who has it, each visitor as the token the API
+        # signed for them says (forge_admin.chat_agents.pages).
         app.include_router(
             chat_pages.router,
             prefix=f"{self.settings.api_prefix}/runtime",

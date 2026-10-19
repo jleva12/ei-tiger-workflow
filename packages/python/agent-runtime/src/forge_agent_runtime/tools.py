@@ -6,35 +6,53 @@ oversized answer is cut down to fit.
 
 An HTTP tool's URL and body are templates its author writes
 (:mod:`.http_templates`) and the model fills in with its arguments, so a
-request must not reach the runtime's own network: private,
-loopback, link-local (cloud metadata), multicast and reserved addresses are
-refused unless the deployment allows the host or private networks. Redirects
+request must not reach the runtime's own network: anything but a globally
+reachable address (private, loopback, link-local and carrier-grade NAT, where
+clouds' metadata services are, multicast and reserved) is refused unless the
+deployment allows the host or private networks. Redirects
 are followed one hop at a time, each checked the same way.
 
 One HTTP client serves every conversation (hosted, every organization's), so
 it keeps no cookies (:func:`http_client`): a cookie one response sets never
 goes out with anyone else's request.
+
+A built agent's toolsets serve every conversation too, until whatever holds
+the agent closes it, so an agent called as a tool owns the toolsets of the
+agents it runs (:class:`CalledAgent`): each call's own runner, which closes
+what it finds as the call ends, is only lent them.
 """
 
 from __future__ import annotations
 
-import asyncio
-import ipaddress
+import copy
 import json
+import logging
 import re
-import socket
 from collections.abc import Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin
 
 import httpx
+from google.adk.agents import BaseAgent, LlmAgent
 from google.adk.agents.readonly_context import ReadonlyContext
+from google.adk.auth.auth_tool import AuthConfig
+from google.adk.models.llm_request import LlmRequest
+from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
+from forge_agent_runtime.http_guard import (
+    GuardedClient,
+    network_policy,
+    redirect_headers,
+    send_guarded,
+)
+from forge_agent_runtime.http_guard import (
+    check_url as check_network_url,
+)
 from forge_agent_runtime.http_templates import (
     BODY_METHODS,
     OMITTED,
@@ -58,6 +76,8 @@ from forge_agent_runtime.services import (
 from forge_common.adk import ForgeBaseToolset, ToolFailure
 from forge_common.urls import with_query
 
+log = logging.getLogger(__name__)
+
 #: The most redirects one request follows.
 MAX_REDIRECTS = 5
 #: ``${NAME}``: a secret or setting, filled in from the environment.
@@ -70,7 +90,7 @@ def http_client(**options: Any) -> httpx.AsyncClient:
     :return: An HTTP client that keeps no cookies: whoever's request it sends
         next, it sends none that an earlier response set.
     """
-    return httpx.AsyncClient(cookies=CookieJar(policy=DefaultCookiePolicy(allowed_domains=[])), **options)
+    return GuardedClient(cookies=CookieJar(policy=DefaultCookiePolicy(allowed_domains=[])), **options)
 
 
 class MissingSetting(LookupError):
@@ -104,48 +124,9 @@ def header_dict(rows: Any, environment: Mapping[str, str], *, where: str, note: 
     return headers
 
 
-def _refused(address: str) -> bool:
-    ip = ipaddress.ip_address(address)
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    return (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_multicast
-        or ip.is_reserved
-        or ip.is_unspecified
-    )
-
-
 async def check_url(url: str, services: RuntimeServices) -> str:
-    """
-    :return: The URL, when a tool may call it.
-    :raises ToolFailure: It isn't http(s), has no host, or its host is (or
-        resolves to) an address tools may not reach.
-    """
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https"):
-        raise ToolFailure(f"Its URL must start with http:// or https://, not {url[:80]!r}")
-    host = parts.hostname
-    if not host:
-        raise ToolFailure(f"Its URL has no host: {url[:80]!r}")
-    if services.allow_private or host.lower() in {h.lower() for h in services.allowed_hosts}:
-        return url
-    try:
-        ipaddress.ip_address(host)
-        addresses = [host]
-    except ValueError:
-        try:
-            infos = await asyncio.get_running_loop().getaddrinfo(
-                host, parts.port or None, type=socket.SOCK_STREAM
-            )
-        except socket.gaierror as exc:
-            raise ToolFailure(f"{host} can't be found: {exc.strerror or exc}") from exc
-        addresses = sorted({str(info[4][0]) for info in infos})
-    if any(_refused(address) for address in addresses):
-        raise ToolFailure(f"{host} is on a private network, which tools can't reach.")
-    return url
+    """Validate a destination. Socket connections independently enforce the same policy."""
+    return await check_network_url(url, network_policy(services))
 
 
 def _body(raw: bytes, content_type: str) -> Any:
@@ -217,6 +198,8 @@ class HttpTool(BaseTool):
         self.query = parse_query(
             query, lambda n: fill(n, where=f"{label!r}'s query"), what=f"{label!r}'s query parameter"
         )
+        # Its headers go only where its author's URL says: never a host the model picks.
+        self.url.check_origin(headers=bool(headers), what=f"{label!r}'s URL")
         self.headers = headers
         names, required = self.url.arguments()
         in_query, query_needs = query_arguments(self.query)
@@ -267,6 +250,7 @@ class HttpTool(BaseTool):
             await render_url(self.url, args, values), await render_query(self.query, args, values)
         )
         body = OMITTED if self.body is None else await render_body(self.body, args, values)
+        headers = dict(self.headers)
         for hop in range(MAX_REDIRECTS + 1):
             await check_url(url, self.services)
             signed = await self._signed(url, first=hop == 0)
@@ -275,14 +259,16 @@ class HttpTool(BaseTool):
                 self.method,
                 # Added to the URL's own query (httpx's params would replace it).
                 httpx.URL(url).copy_merge_params(params) if params else url,
-                headers={**self.headers, **signed.headers},
+                headers={**headers, **signed.headers},
                 json=None if body is OMITTED else body,
                 timeout=self.services.http_timeout,
             )
-            response = await self.http.send(request, stream=True)
+            response = await send_guarded(self.http, request, self.services)
             try:
                 if response.is_redirect and "location" in response.headers:
-                    url = urljoin(url, response.headers["location"])
+                    following = urljoin(url, response.headers["location"])
+                    headers = redirect_headers(headers, url, following)
+                    url = following
                     continue
                 raw = b""
                 async for chunk in response.aiter_bytes():
@@ -299,7 +285,16 @@ class HttpTool(BaseTool):
 
 
 class WorkflowTool(BaseTool):
-    """One of the organization's workflows, run with the input the model gives its start."""
+    """
+    One of the organization's workflows, run with the input the model gives its start.
+
+    A runner may wait for the run apart from the call (its ``waits_apart``,
+    for a call made in a context: a workflow run's worker, whose run pauses
+    until the run it started ends, giving its worker back meanwhile). Such a
+    call is long-running (:class:`WorkflowTools`): the runner answers it
+    later, and the call itself returns nothing; should it fail, the runner is
+    handed its failure to answer it with (its ``refused``).
+    """
 
     def __init__(
         self,
@@ -310,12 +305,15 @@ class WorkflowTool(BaseTool):
         organization_id: str | None,
         schema: dict[str, Any],
         runner: WorkflowRunner,
+        wait: float | None = None,
     ) -> None:
+        """:param wait: Seconds to wait for each run; None for the runner's default."""
         super().__init__(name=name, description=description)
         self.workflow_id = workflow_id
         self.organization_id = organization_id
         self.schema = schema if schema else {"type": "object", "properties": {}}
         self.runner = runner
+        self.wait = wait
 
     def _get_declaration(self) -> types.FunctionDeclaration:
         return types.FunctionDeclaration(
@@ -324,8 +322,17 @@ class WorkflowTool(BaseTool):
 
     async def run_async(self, *, args: dict[str, Any], tool_context: ToolContext) -> Any:
         return await self.runner.run(
-            self.workflow_id, dict(args), organization_id=self.organization_id, context=tool_context
+            self.workflow_id,
+            dict(args),
+            organization_id=self.organization_id,
+            context=tool_context,
+            wait=self.wait,
         )
+
+    def waits_apart(self, context: ReadonlyContext | None) -> bool:
+        """:return: Whether its runner waits for a run started in ``context`` apart from the call."""
+        waits = getattr(self.runner, "waits_apart", None)
+        return context is not None and callable(waits) and bool(waits(context))
 
 
 class KnowledgeBaseTool(BaseTool):
@@ -455,7 +462,10 @@ class GuardedTools(ForgeBaseToolset):
     async def get_raw_tools(self, readonly_context: ReadonlyContext | None = None) -> list[BaseTool]:
         tools: list[BaseTool] = []
         for item in self.items:
-            if isinstance(item, BaseToolset):
+            if isinstance(item, ForgeBaseToolset):
+                # Its tools failing to list are this toolset's to give or raise, as its caller asks.
+                tools.extend(await item.get_tools_or_raise(readonly_context))
+            elif isinstance(item, BaseToolset):
                 tools.extend(await item.get_tools(readonly_context))
             else:
                 tools.append(item)
@@ -465,6 +475,131 @@ class GuardedTools(ForgeBaseToolset):
         return tools
 
     async def close(self) -> None:
-        for item in self.items:
-            if isinstance(item, BaseToolset):
-                await item.close()
+        try:
+            for item in self.items:
+                if isinstance(item, BaseToolset):
+                    await item.close()
+        finally:
+            # The results it kept whole in files go too, however its items' closing ended.
+            await super().close()
+
+
+class WorkflowTools(GuardedTools):
+    """
+    A workflow tool, guarded as every tool is. Where its runner waits for the
+    run apart from the call (:meth:`WorkflowTool.waits_apart`, asked of each
+    model request's context), the model is given a long-running copy of it:
+    ADK pauses its agent at the call, and the runner answers it once the run
+    ends. A call ADK pauses at can't answer itself, so one that fails (input
+    that doesn't fit the workflow's start, a run that can't be started) hands
+    its runner its failure, as the guard words it, and returns nothing too;
+    and it has no time limit, its call only starting the run. Anywhere else
+    (a chat agent's runtime, a sub-agent's own runner) it's the tool as it
+    is, its call waiting for the run.
+    """
+
+    def __init__(self, tool: WorkflowTool, *, timeout_seconds: float | None = None) -> None:
+        super().__init__([tool], timeout_seconds=timeout_seconds)
+        self.tool = tool
+
+    async def get_raw_tools(self, readonly_context: ReadonlyContext | None = None) -> list[BaseTool]:
+        if not self.tool.waits_apart(readonly_context):
+            return [self.tool]
+        apart = copy.copy(self.tool)
+        apart.is_long_running = True
+        run = apart.run_async
+        refused = getattr(self.tool.runner, "refused", None)
+
+        async def run_async(*, args: dict[str, Any], tool_context: ToolContext) -> Any:
+            try:
+                return await run(args=args, tool_context=tool_context)
+            except Exception as error:
+                if not callable(refused):
+                    raise
+                refused(tool_context, dict(self._failed(apart, args, error)))
+                return None
+
+        apart.run_async = run_async  # type: ignore[method-assign]
+        return [apart]
+
+    def timeout_for(self, tool: BaseTool) -> float | None:
+        # A long-running copy's call only starts its run: its wait is its runner's.
+        return None if tool.is_long_running else super().timeout_for(tool)
+
+
+class LentToolset(BaseToolset):
+    """
+    A toolset lent to a runner that doesn't own it: its tools and what it
+    adds to model requests are the toolset's own, and closing it does
+    nothing, its owner closing the toolset itself.
+    """
+
+    def __init__(self, toolset: BaseToolset) -> None:
+        super().__init__()
+        self.toolset = toolset
+        # The toolset keeps its tools for an invocation, or not, as it does.
+        self._use_invocation_cache = False
+
+    async def get_tools(self, readonly_context: ReadonlyContext | None = None) -> list[BaseTool]:
+        return await self.toolset.get_tools_with_prefix(readonly_context)
+
+    async def process_llm_request(self, *, tool_context: ToolContext, llm_request: LlmRequest) -> None:
+        await self.toolset.process_llm_request(tool_context=tool_context, llm_request=llm_request)
+
+    def get_auth_config(self) -> AuthConfig | None:
+        return self.toolset.get_auth_config()
+
+    async def close(self) -> None:
+        """Leaves the toolset open: its owner closes it."""
+
+
+class CalledAgent(BaseToolset):
+    """
+    An agent called as a tool (ADK's ``AgentTool``), with the toolsets of
+    the agents it runs, which it owns.
+
+    ADK runs each call on a runner of its own, which closes every toolset it
+    finds on the agents as the call ends. Those agents are part of a built
+    graph every conversation shares, so one chat's call ending would close
+    an MCP session another chat's call is using. Their toolsets are lent to
+    those runners instead (:class:`LentToolset`), and closed with this
+    toolset by whatever owns the graph: the runner it's built for, a
+    workflow's run.
+    """
+
+    def __init__(self, agent: BaseAgent) -> None:
+        super().__init__()
+        self.owned = _lent(agent)
+        self.tool = AgentTool(agent)
+
+    async def get_tools(self, readonly_context: ReadonlyContext | None = None) -> list[BaseTool]:
+        return [self.tool]
+
+    async def close(self) -> None:
+        """Closes the toolsets it owns, each though another's closing fails."""
+        for toolset in self.owned:
+            try:
+                await toolset.close()
+            except Exception:
+                log.warning("Closing %s of %s failed", type(toolset).__name__, self.tool.name, exc_info=True)
+
+
+def _lent(agent: BaseAgent) -> list[BaseToolset]:
+    """
+    Give an agent, and the agents it hands off to, lent toolsets in place of
+    their own (:class:`LentToolset`).
+
+    :return: Their own, for their owner to close.
+    """
+    owned: list[BaseToolset] = []
+    if isinstance(agent, LlmAgent):
+        tools: list[Any] = []
+        for tool in agent.tools:
+            if isinstance(tool, BaseToolset):
+                owned.append(tool)
+                tool = LentToolset(tool)
+            tools.append(tool)
+        agent.tools = tools
+    for sub_agent in agent.sub_agents:
+        owned.extend(_lent(sub_agent))
+    return owned

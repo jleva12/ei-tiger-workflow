@@ -13,6 +13,10 @@ import {
 import { Icon } from "@/components/forge/icon"
 import { PageContextChip } from "@/features/assistant/components/page-context-chip"
 import { useAssistantLauncher } from "@/features/assistant/lib/assistant-launcher"
+import {
+  sendInNewConversation,
+  useAssistantAsks,
+} from "@/features/assistant/lib/assistant-asks"
 import { assistantSources } from "@/features/knowledge/lib/sources"
 import {
   openAssistantWindow,
@@ -81,6 +85,11 @@ function AssistantPanel({
   const suggestions = useSuggestedPrompts(userId, seen)
   const [, setPlacement] = useAssistantPlacement()
   const [open, setOpen] = React.useState(false)
+  // A page's button asked it something: in a new conversation, shown.
+  useAssistantAsks((prompt) => {
+    setOpen(true)
+    void sendInNewConversation(runtime, prompt)
+  })
 
   // The window handed the conversation back: show it here.
   const [docked, setDocked] = React.useState<DockRequest | null>(null)

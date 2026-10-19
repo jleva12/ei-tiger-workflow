@@ -149,8 +149,23 @@ async def run_command(args: argparse.Namespace, rt: Any) -> None:
             print(f"--- #{c.ordinal} {c.kind} tokens={c.token_count} path={' > '.join(c.section_path)}")
             print(c.text)
     elif args.action == "ingest":
+        from forge_task_documents.models import DocumentRecord
+
         for p in args.paths:
             doc_id = hashlib.sha1(str(p.resolve()).encode()).hexdigest()[:16]
+            # A fresh CLI invocation explicitly recreates a deleted path;
+            # queued jobs themselves may never revive tombstones.
+            if await rt.documents.storage.documents.get(args.tenant, doc_id) is None:
+                await rt.documents.storage.documents.register(
+                    DocumentRecord(
+                        tenant_id=args.tenant,
+                        doc_id=doc_id,
+                        filename=p.name,
+                        source_uri=str(p),
+                        sha256="",
+                        size_bytes=0,
+                    )
+                )
             spec = JobSpec(
                 task_type="documents",
                 kind="ingest",

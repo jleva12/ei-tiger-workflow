@@ -16,7 +16,9 @@ sets them is the turn's last, so the chat has them as soon as the turn ends.
 
 Each turn starts by clearing the last turn's, so they always follow the last
 reply. A turn that ends waiting on the person (a question, an approval, a
-sign-in) or without a reply gets none, and so does a run that didn't ask: an
+sign-in) or without a reply gets none, and so does a reply whose
+``custom_metadata`` sets :data:`QUIET_KEY` (an intake's questions, which the
+person answers rather than follows up), and so does a run that didn't ask: an
 A2A call, another client, or an agent another runs as a tool (``AgentTool``),
 which is given the caller's state but not its request.
 
@@ -49,6 +51,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_INSTRUCTION",
     "MOST",
+    "QUIET_KEY",
     "REQUEST_KEY",
     "STATE_KEY",
     "FollowUpsPlugin",
@@ -67,6 +70,10 @@ STATE_KEY = "forge:follow_ups"
 
 #: The most follow-ups a run may ask for.
 MOST = 5
+
+#: A reply whose ``custom_metadata`` sets this to true gets none: it's a
+#: question the person answers (an intake's), not a reply to follow up.
+QUIET_KEY = "forge:no_follow_ups"
 
 DEFAULT_INSTRUCTION = (
     "You suggest what a person might say next in a chat with an AI assistant. "
@@ -271,6 +278,8 @@ def _reply(turn: Iterable[Event]) -> Event | None:
         if event.author != "user" and not event.partial and event.content and event.content.parts:
             last = event
     if last is None or last.error_code or last.long_running_tool_ids or last.get_function_calls():
+        return None
+    if (last.custom_metadata or {}).get(QUIET_KEY):
         return None
     parts = last.content.parts if last.content else None
     return last if any(part.text and not part.thought for part in parts or ()) else None

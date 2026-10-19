@@ -23,8 +23,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Icon } from "../icon"
-import { BLOCK_COMMANDS, hasExtension } from "./commands"
-import type { RichTextActions } from "./types"
+import { ActionIcon } from "./controls"
+import { useRichTextEditorContext } from "./context"
+import { createActionContext } from "./core/action-registry"
 
 // Blocks "Turn into" can convert: text blocks, lists and quotes.
 const CONVERTIBLE = new Set([
@@ -37,16 +38,17 @@ const CONVERTIBLE = new Set([
   "taskList",
 ])
 
+// The registry's actions "Turn into" offers, when their features are on.
 const TURN_INTO = [
   "paragraph",
-  "heading-1",
-  "heading-2",
-  "heading-3",
-  "bullet-list",
-  "ordered-list",
-  "task-list",
-  "quote",
-  "code-block",
+  "heading1",
+  "heading2",
+  "heading3",
+  "bulletList",
+  "orderedList",
+  "taskList",
+  "blockquote",
+  "codeBlock",
 ]
 
 type Target = { node: PMNode | null; pos: number }
@@ -56,13 +58,8 @@ type Target = { node: PMNode | null; pos: number }
  * `/` menu; the grip drags the block, and clicking it opens a menu to turn
  * it into another kind, move, duplicate or delete it.
  */
-export function BlockHandle({
-  editor,
-  actions,
-}: {
-  editor: Editor
-  actions: RichTextActions
-}) {
+export function BlockHandle({ editor }: { editor: Editor }) {
+  const { registry, controller } = useRichTextEditorContext()
   const target = React.useRef<Target>({ node: null, pos: -1 })
   const [menuOpen, setMenuOpen] = React.useState(false)
   const [menuTarget, setMenuTarget] = React.useState<Target | null>(null)
@@ -123,10 +120,9 @@ export function BlockHandle({
 
   const turnInto = (id: string) => {
     const block = current()
-    const command = BLOCK_COMMANDS.find((c) => c.id === id)
-    if (!block || !command) return
+    if (!block) return
     selectBlock(block.node, block.pos)
-    command.run(editor, actions)
+    void registry.run(id, createActionContext(controller, "api"))
   }
 
   const move = (direction: -1 | 1) => {
@@ -172,11 +168,10 @@ export function BlockHandle({
       .run()
   }
 
-  const turnIntoCommands = BLOCK_COMMANDS.filter(
-    (command) =>
-      TURN_INTO.includes(command.id) &&
-      (!command.requires || hasExtension(editor, command.requires))
-  )
+  const turnIntoActions = TURN_INTO.flatMap((id) => {
+    const action = registry.get(id)
+    return action ? [action] : []
+  })
   const menuNode = menuTarget?.node ?? null
   const index =
     menuTarget && menuTarget.pos >= 0
@@ -243,13 +238,13 @@ export function BlockHandle({
                       Turn into
                     </DropdownMenuSubTrigger>
                     <DropdownMenuSubContent className="min-w-48">
-                      {turnIntoCommands.map((command) => (
+                      {turnIntoActions.map((action) => (
                         <DropdownMenuItem
-                          key={command.id}
-                          onClick={() => turnInto(command.id)}
+                          key={action.id}
+                          onClick={() => turnInto(action.id)}
                         >
-                          <Icon icon={command.icon} />
-                          {command.label}
+                          <ActionIcon icon={action.icon} />
+                          {action.label}
                         </DropdownMenuItem>
                       ))}
                     </DropdownMenuSubContent>

@@ -36,6 +36,9 @@ class HybridSearchRequest(BaseModel):
 class SearchHit(BaseModel):
     chunk: Chunk
     score: float  # fused (RRF) score: its rank, not its relevance
+    # Storage generation read by this hit, used to pin later section expansion.
+    # Internal only: stable chunk IDs and the public search response stay unchanged.
+    generation: int | None = Field(default=None, exclude=True)
     rerank_score: float | None = None
     # Its relevance by meaning: the cosine of its vector and the question's,
     # when it's embedded with the question's model.

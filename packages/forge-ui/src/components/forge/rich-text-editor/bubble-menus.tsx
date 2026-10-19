@@ -1,21 +1,13 @@
+import * as React from "react"
 import {
   Delete02Icon,
   DeleteColumnIcon,
   DeleteRowIcon,
-  HighlighterIcon,
   InsertColumnLeftIcon,
   InsertColumnRightIcon,
   InsertRowDownIcon,
   InsertRowUpIcon,
-  Layout2ColumnIcon,
-  Layout2RowIcon,
-  SourceCodeIcon,
-  TableCellsMergeIcon,
-  TableCellsSplitIcon,
-  TextBoldIcon,
-  TextItalicIcon,
-  TextStrikethroughIcon,
-  TextUnderlineIcon,
+  SparklesIcon,
   Unlink02Icon,
 } from "@hugeicons/core-free-icons"
 import { NodeSelection } from "@tiptap/pm/state"
@@ -24,42 +16,128 @@ import { useEditorState, type Editor } from "@tiptap/react"
 import { BubbleMenu } from "@tiptap/react/menus"
 import { cn } from "cn"
 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+} from "@/components/ui/dropdown-menu"
 import { Icon } from "../icon"
-import { hasExtension } from "./commands"
-import { ToolbarAction, ToolbarSeparator, ToolbarToggle } from "./controls"
-import type { RichTextActions } from "./types"
+import {
+  ToolbarAction,
+  ToolbarMenuTrigger,
+  ToolbarSeparator,
+  ToolbarToggle,
+} from "./controls"
+import {
+  useEditorActions,
+  useRichTextEditorContext,
+  useRunAction,
+} from "./context"
+import { isAlive } from "./core/lifecycle"
+import { MenuEntries } from "./menu-items"
+import { DEFAULT_BUBBLE_ITEMS, tidySeparators } from "./menu-model"
+import type { EditorUiHandlers, ToolbarItem } from "./types"
 
 const MENU =
   "z-30 flex items-center gap-0.5 rounded-(--radius-band) border border-border bg-popover p-1 text-popover-foreground shadow-(--shadow-float)"
 
 type MenuProps = {
   editor: Editor
-  actions: RichTextActions
+  ui: () => EditorUiHandlers
   scrollTarget: HTMLElement
 }
 
-/** Formatting for a text selection: marks, highlight and link. */
-function TextMenu({ editor, actions, scrollTarget }: MenuProps) {
-  const state = useEditorState({
-    editor,
-    selector: ({ editor }) => ({
-      bold: editor.isActive("bold"),
-      italic: editor.isActive("italic"),
-      underline: editor.isActive("underline"),
-      strike: editor.isActive("strike"),
-      code: editor.isActive("code"),
-      highlight: editor.isActive("highlight"),
-      link: editor.isActive("link"),
-    }),
-  })
-  const chain = () => editor.chain().focus()
-  const highlight = hasExtension(editor, "highlight")
+const hasNode = (editor: Editor, name: string) =>
+  Boolean(editor.schema.nodes[name])
+
+/**
+ * Formatting for a text selection, drawn from `items` through the action
+ * registry; `"ai"` opens the AI actions.
+ */
+function TextMenu({
+  editor,
+  scrollTarget,
+  items,
+  hidden,
+}: Omit<MenuProps, "ui"> & { items: ToolbarItem[]; hidden: boolean }) {
+  const { registry } = useRichTextEditorContext()
+  const ids = items.filter(
+    (item): item is string =>
+      typeof item === "string" && item !== "separator" && item !== "ai"
+  )
+  const resolved = useEditorActions(ids, "bubbleMenu")
+  const byId = new Map(resolved.map((entry) => [entry.id, entry]))
+  const run = useRunAction("bubbleMenu")
+  const aiIds = registry
+    .list()
+    .filter((action) => action.id.startsWith("ai."))
+    .map((action) => action.id)
+
+  type Entry = { separator: boolean; node: React.ReactNode }
+  const entries = tidySeparators(
+    items.flatMap((item): Entry[] => {
+      if (item === "separator") return [{ separator: true, node: null }]
+      if (item === "ai") {
+        if (!aiIds.length) return []
+        return [
+          {
+            separator: false,
+            node: (
+              <DropdownMenu key="ai">
+                <ToolbarMenuTrigger icon={SparklesIcon} label="AI" value="AI" />
+                <DropdownMenuContent
+                  finalFocus={() => editor.view.dom as HTMLElement}
+                  className="min-w-56"
+                >
+                  <MenuEntries
+                    items={aiIds}
+                    kind="dropdown"
+                    source="bubbleMenu"
+                    onRun={run}
+                  />
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ),
+          },
+        ]
+      }
+      if (typeof item !== "string") return []
+      const entry = byId.get(item)
+      if (!entry?.state.visible) return []
+      const { action, state } = entry
+      return [
+        {
+          separator: false,
+          node: action.isActive ? (
+            <ToolbarToggle
+              key={item}
+              icon={action.icon}
+              label={action.label}
+              shortcut={action.shortcut}
+              pressed={state.active}
+              disabled={!state.enabled}
+              onPressedChange={() => run(action.id)}
+            />
+          ) : (
+            <ToolbarAction
+              key={item}
+              icon={action.icon}
+              label={action.label}
+              shortcut={action.shortcut}
+              disabled={!state.enabled}
+              busy={state.running}
+              onClick={() => run(action.id)}
+            />
+          ),
+        },
+      ]
+    })
+  )
 
   return (
     <BubbleMenu
       editor={editor}
       pluginKey="richTextSelectionMenu"
-      className={MENU}
+      className={cn(MENU, hidden && "hidden")}
       options={{ placement: "top", offset: 8, scrollTarget }}
       shouldShow={({ editor, state, from, to, view }) => {
         if (!editor.isEditable || from === to || !view.hasFocus()) return false
@@ -70,64 +148,15 @@ function TextMenu({ editor, actions, scrollTarget }: MenuProps) {
         return state.doc.textBetween(from, to, " ").trim().length > 0
       }}
     >
-      <ToolbarToggle
-        icon={TextBoldIcon}
-        label="Bold"
-        shortcut="Mod-b"
-        pressed={state.bold}
-        onPressedChange={() => chain().toggleBold().run()}
-      />
-      <ToolbarToggle
-        icon={TextItalicIcon}
-        label="Italic"
-        shortcut="Mod-i"
-        pressed={state.italic}
-        onPressedChange={() => chain().toggleItalic().run()}
-      />
-      <ToolbarToggle
-        icon={TextUnderlineIcon}
-        label="Underline"
-        shortcut="Mod-u"
-        pressed={state.underline}
-        onPressedChange={() => chain().toggleUnderline().run()}
-      />
-      <ToolbarToggle
-        icon={TextStrikethroughIcon}
-        label="Strikethrough"
-        shortcut="Mod-Shift-s"
-        pressed={state.strike}
-        onPressedChange={() => chain().toggleStrike().run()}
-      />
-      <ToolbarToggle
-        icon={SourceCodeIcon}
-        label="Inline code"
-        shortcut="Mod-e"
-        pressed={state.code}
-        onPressedChange={() => chain().toggleCode().run()}
-      />
-      {highlight && (
-        <ToolbarToggle
-          icon={HighlighterIcon}
-          label="Highlight"
-          shortcut="Mod-Shift-h"
-          pressed={state.highlight}
-          onPressedChange={() => chain().toggleHighlight().run()}
-        />
+      {entries.map((entry, index) =>
+        entry.separator ? <ToolbarSeparator key={index} /> : entry.node
       )}
-      <ToolbarSeparator />
-      <ToolbarToggle
-        icon="link"
-        label={state.link ? "Edit link" : "Link"}
-        shortcut="Mod-k"
-        pressed={state.link}
-        onPressedChange={() => actions.openDialog({ kind: "link" })}
-      />
     </BubbleMenu>
   )
 }
 
 /** Shown with the caret in a link: where it goes, edit, copy, remove. */
-function LinkMenu({ editor, actions, scrollTarget }: MenuProps) {
+function LinkMenu({ editor, ui, scrollTarget }: MenuProps) {
   const href = useEditorState({
     editor,
     selector: ({ editor }) =>
@@ -164,7 +193,7 @@ function LinkMenu({ editor, actions, scrollTarget }: MenuProps) {
         icon="settings"
         label="Edit link"
         shortcut="Mod-k"
-        onClick={() => actions.openDialog({ kind: "link" })}
+        onClick={() => ui().openDialog({ kind: "link" })}
       />
       <ToolbarAction
         icon="copy"
@@ -189,19 +218,20 @@ function tableElement(editor: Editor) {
   return element?.closest(".tableWrapper") ?? element?.closest("table") ?? null
 }
 
-/** Rows, columns, headers and cells of the table under the caret. */
+/**
+ * Rows and columns of the table under the caret. GFM tables have one header
+ * row and no merged cells, so those are all the menu offers.
+ */
 function TableMenu({ editor, scrollTarget }: MenuProps) {
   const can = useEditorState({
     editor,
     selector: ({ editor }) =>
-      editor.isDestroyed
-        ? { merge: false, split: false, deleteRow: false, deleteColumn: false }
-        : {
-            merge: editor.can().mergeCells(),
-            split: editor.can().splitCell(),
+      isAlive(editor)
+        ? {
             deleteRow: editor.can().deleteRow(),
             deleteColumn: editor.can().deleteColumn(),
-          },
+          }
+        : { deleteRow: false, deleteColumn: false },
   })
   const chain = () => editor.chain().focus()
   return (
@@ -259,29 +289,6 @@ function TableMenu({ editor, scrollTarget }: MenuProps) {
       />
       <ToolbarSeparator />
       <ToolbarAction
-        icon={TableCellsMergeIcon}
-        label="Merge cells"
-        disabled={!can.merge}
-        onClick={() => chain().mergeCells().run()}
-      />
-      <ToolbarAction
-        icon={TableCellsSplitIcon}
-        label="Split cell"
-        disabled={!can.split}
-        onClick={() => chain().splitCell().run()}
-      />
-      <ToolbarAction
-        icon={Layout2RowIcon}
-        label="Header row"
-        onClick={() => chain().toggleHeaderRow().run()}
-      />
-      <ToolbarAction
-        icon={Layout2ColumnIcon}
-        label="Header column"
-        onClick={() => chain().toggleHeaderColumn().run()}
-      />
-      <ToolbarSeparator />
-      <ToolbarAction
         icon={Delete02Icon}
         label="Delete table"
         onClick={() => chain().deleteTable().run()}
@@ -291,14 +298,12 @@ function TableMenu({ editor, scrollTarget }: MenuProps) {
   )
 }
 
-/** A selected image: alt text, original size, open, delete. */
-function ImageMenu({ editor, actions, scrollTarget }: MenuProps) {
-  const image = useEditorState({
+/** A selected image: alt text and source, open, delete. */
+function ImageMenu({ editor, ui, scrollTarget }: MenuProps) {
+  const src = useEditorState({
     editor,
-    selector: ({ editor }) => ({
-      src: (editor.getAttributes("image").src as string | undefined) ?? "",
-      resized: Boolean(editor.getAttributes("image").width),
-    }),
+    selector: ({ editor }) =>
+      (editor.getAttributes("image").src as string | undefined) ?? "",
   })
   return (
     <BubbleMenu
@@ -316,31 +321,17 @@ function ImageMenu({ editor, actions, scrollTarget }: MenuProps) {
         icon="settings"
         label="Alt text and source"
         onClick={() =>
-          actions.openDialog({
+          ui().openDialog({
             kind: "image",
             pos: editor.state.selection.from,
           })
         }
       />
-      <ToolbarAction
-        icon="refresh"
-        label="Original size"
-        disabled={!image.resized}
-        onClick={() =>
-          editor
-            .chain()
-            .focus()
-            .updateAttributes("image", { width: null, height: null })
-            .run()
-        }
-      />
-      {!image.src.startsWith("data:") && (
+      {!src.startsWith("data:") && (
         <ToolbarAction
           icon="external"
           label="Open image"
-          onClick={() =>
-            window.open(image.src, "_blank", "noopener,noreferrer")
-          }
+          onClick={() => window.open(src, "_blank", "noopener,noreferrer")}
         />
       )}
       <ToolbarSeparator />
@@ -355,14 +346,35 @@ function ImageMenu({ editor, actions, scrollTarget }: MenuProps) {
 }
 
 /** Every contextual menu the editor shows, for the features it has. */
-export function RichTextBubbleMenus(props: MenuProps) {
-  const { editor } = props
+export function EditorBubbleMenu({
+  scrollTarget,
+  items = DEFAULT_BUBBLE_ITEMS,
+}: {
+  scrollTarget: HTMLElement
+  /** What the selection menu shows. */
+  items?: ToolbarItem[]
+}) {
+  const { editor, ui, ai } = useRichTextEditorContext()
+  // While the AI panel is open, focus is there: the selection menu would
+  // float over the text with nothing to act on. Hidden, not unmounted: its
+  // AI menu may still be closing, and unmounting it would send focus back
+  // to the text instead of the prompt box.
+  const aiOpen = React.useSyncExternalStore(
+    ai.subscribe,
+    () => ai.getState().status !== "idle"
+  )
+  const props = { editor, ui, scrollTarget }
   return (
     <>
-      <TextMenu {...props} />
-      <LinkMenu {...props} />
-      {hasExtension(editor, "table") && <TableMenu {...props} />}
-      {hasExtension(editor, "image") && <ImageMenu {...props} />}
+      <TextMenu
+        editor={editor}
+        scrollTarget={scrollTarget}
+        items={items}
+        hidden={aiOpen}
+      />
+      {editor.schema.marks.link && <LinkMenu {...props} />}
+      {hasNode(editor, "table") && <TableMenu {...props} />}
+      {hasNode(editor, "image") && <ImageMenu {...props} />}
     </>
   )
 }

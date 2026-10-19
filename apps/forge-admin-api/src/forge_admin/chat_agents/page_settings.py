@@ -5,7 +5,10 @@ what the page reads (``GET /runtime/pages/{token}``).
 
 - Its words: the name over it, the welcome an empty conversation shows, the
   message box's placeholder, a note under the box, the prompts it offers.
-- What it shows: the visitor's conversations, its top bar, follow-up questions.
+- What it shows: the visitor's conversations, its top bar, follow-up
+  questions, a button that opens the agent in the desktop app.
+- How it replies: streamed as the model writes, or each reply whole once
+  it's done.
 - Its look: light, dark or the visitor's own, and whether visitors can switch
   it; an accent colour; how the visitor's messages are drawn; its corners,
   font and width.
@@ -55,6 +58,13 @@ class ChatPageSettings(BaseModel):
     hide_top_bar: bool = False
     #: The page suggests follow-up questions after each reply.
     follow_ups: bool = True
+    #: A button on the page that opens its agent in the Forge Agents desktop
+    #: app (``forge-agents://add?…``), for visitors who have it.
+    desktop_link: bool = False
+    #: Replies stream as the model writes them; off, each arrives whole once
+    #: the model is done (and the page writes it in word by word). The page's
+    #: turns run so whatever its chat asks (``pages.page_streaming``).
+    streaming: bool = True
     #: The name over the page and in the browser's tab; "" for the agent's.
     title: str = ""
     #: The welcome's heading; "" for "Talk to <name>".
@@ -97,6 +107,8 @@ class ChatPageSettingsChange(BaseModel):
     hide_history: bool | None = None
     hide_top_bar: bool | None = None
     follow_ups: bool | None = None
+    desktop_link: bool | None = None
+    streaming: bool | None = None
     title: Title | None = None
     welcome_title: Heading | None = None
     welcome_message: Message | None = None

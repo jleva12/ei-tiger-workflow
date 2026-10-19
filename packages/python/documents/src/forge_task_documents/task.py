@@ -151,6 +151,8 @@ class IngestFileJob:
 
     async def run(self, payload: IngestFilePayload) -> JobResult:
         t = self.task
+        before = await t.storage.documents.get(payload.tenant_id, payload.doc_id)
+        expected_run_seq = before.run_seq if before is not None else 0
         try:
             source = await t.loader.load(
                 payload.uri,
@@ -164,15 +166,21 @@ class IngestFileJob:
             if isinstance(exc, TaskError) and not exc.permanent:
                 raise
             # no run exists yet: fail the record only if it's still PENDING
-            await t.storage.documents.fail_run(payload.tenant_id, payload.doc_id, None, error=f"load failed: {exc}")
+            await t.storage.documents.fail_run(
+                payload.tenant_id,
+                payload.doc_id,
+                None,
+                error=f"load failed: {exc}",
+                expected_run_seq=expected_run_seq,
+            )
             return JobResult.failed(f"load failed: {exc}", doc_id=payload.doc_id)
         try:
-            result = await t.pipeline.ingest(source, force=payload.force)
+            result = await t.pipeline.ingest(source, force=payload.force, expected_run_seq=expected_run_seq)
         except StaleRunError:
             return JobResult(status=JobStatus.SUPERSEDED, detail={"doc_id": payload.doc_id})
         detail = result.model_dump(mode="json", exclude={"tenant_id"})
         if result.skipped:
-            return skipped(result.reason or "skipped", **detail)
+            return skipped(detail.pop("reason") or "skipped", **detail)
         return ok(**detail)
 
 

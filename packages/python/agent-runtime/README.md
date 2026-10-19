@@ -50,6 +50,42 @@ curl -N -X POST localhost:8000/run_sse -H 'content-type: application/json' -d '{
 | `GET /apps/{app}/users/{user}/sessions/{id}/workflow-runs/{call}` | How the workflow a call in it started is going: its steps so far (hosted runtime: `WorkflowRunner.progress`) |
 | `POST /run_sse` | Run a turn; ADK events as Server-Sent Events |
 
+Each streamed turn begins and ends with an ADK control event whose
+`customMetadata["forge:turn"]` contains `version: 1`, a 32-character `runId`,
+and `status`. The start status is `running`; the terminal status is
+`succeeded`, `failed`, or `cancelled`. Failed outcomes also carry `errorCode`
+and `errorMessage`. These events have no conversation content. They surround
+all model, tool, sub-agent, and follow-up events, and the terminal event follows
+execution and audit cleanup. A tool-confirmation pause successfully ends the
+current invocation while its ADK long-running call remains open.
+
+A conversation runs one turn at a time: `run_sse` takes the conversation's
+lease before it streams, and a turn sent while another runs waits a moment
+(`AgentExecutor(turn_wait=…)`, 5 seconds) then answers 409 with
+`Retry-After`; A2A rejects the message. Leases are this process's
+(`MemoryTurnLeases`) unless the executor is given shared ones (the hosted
+runtime keeps them in MySQL), and run out unless renewed, so a stopped
+process frees its conversations.
+
+Clients must treat EOF without a terminal event as an interrupted response,
+keep partial text, and show an error. A model's final text event is not the
+whole invocation's completion signal. Forge UIs opt into this check with
+`requireTurnOutcome: true`; deploy the server protocol before those clients.
+Generic ADK connections can omit this option. Quiet streams send a keepalive
+comment every 15 seconds, including the hosted assistant. On disconnect the
+server cancels execution and finalizes its audit as cancelled (or retains an
+already observed failure); it cannot deliver a terminal event to a disconnected
+client. Hosted audit rows use the same `runId` for correlation.
+
+Failed and cancelled turns also save a contentless terminal event in their
+ADK session, including failures after the final model message. Reopening a
+conversation therefore retains its outcome and any saved partial answer.
+The outer transport (or the executor for direct calls) owns this write, after
+error mapping and cleanup. Writes are bounded to five seconds; storage failures
+are logged without replacing the original failure or indefinitely holding the
+stream open. Native error messages remain in the session, and the UI avoids
+showing the terminal marker as a duplicate error.
+
 `forge-agent serve ./agents/` serves every agent in a folder. When it holds
 several versions of an agent, `ca_x` runs the newest, and `ca_x@3` pins one.
 `--a2a` serves them over A2A too (below).
@@ -71,6 +107,15 @@ Settings are flags or `FORGE_AGENT_*` variables:
 | `FORGE_AGENT_A2A` | `true` serves Google's A2A protocol too, at `/a2a` (`--a2a`; the `a2a` extra) |
 | `FORGE_AGENT_A2A_TASKS` | Where A2A tasks are kept: `memory`, or a database URL; the conversations' database by default |
 | `FORGE_AGENT_PUBLIC_URL` | The address A2A cards give callers (`https://agent.example.com`); the one each request came to by default |
+
+HTTP tools and OpenAPI requests validate DNS at connection time and connect only
+to the checked IP addresses, while retaining the original Host header and TLS
+hostname. Custom headers carrying credentials are dropped when a redirect changes
+the scheme, host, or port. Deployment host allowlists still permit private endpoints.
+When supplying an HTTP client to the runtime, use `forge_agent_runtime.http_client()`;
+an ordinary HTTPX network transport is refused. `MockTransport` and `ASGITransport`
+are supported for tests. Configured HTTP proxy routes are refused because the proxy
+would resolve the destination outside the IP guard; they are never bypassed silently.
 
 ## Over A2A
 
@@ -100,8 +145,10 @@ curl -X POST localhost:8000/a2a -H 'content-type: application/json' -H 'A2A-Vers
   message's `metadata.state` (as a chat sends `stateDelta`); anything else is rejected.
 - An A2A conversation (`contextId`, at most 36 characters) is the agent's ADK session of
   that ID, so the run API sees it too. Its user is the caller when the server knows who's
-  calling (an API key, a sign-in setting `request.state.user_id`), and `A2A_USER_<contextId>`
-  otherwise, as ADK's own A2A server names them.
+  calling (a sign-in setting `request.state.user_id`, or each API key a caller of its
+  own, `api-key:<hash>`), and `A2A_USER_<contextId>` otherwise, as ADK's own A2A server
+  names them: on a server that asks for neither, whoever knows a conversation's ID
+  reaches it.
 - Each message is a task: completed with the reply as its artifact, failed saying why, or
   `input-required` on a tool that asks for confirmation. Tasks are kept per agent and
   caller (`task_store`: memory or a database); listing them needs a caller the server
@@ -263,13 +310,34 @@ or use `build_app(document, models=…)` to get the ADK `App` for your own
 `Runner`. An `AgentSource` is anything with
 `async get(AgentRef) -> ResolvedAgent`, so agents can come from your own store.
 
-To decide per agent who may call it, pass `authorize=` to both routers: an
-`AuthorizeCall`, `async (request, agent, *, action, user_id) -> None`, called
-once the agent is found and before anything is built or run, for each
-action (`agent`, `sessions`, `run`, `card`, `a2a`; `user_id` is ADK's
-`userId` when the call reads or adds to someone's conversations). It refuses
-by raising `HTTPException`. The hosted runtime uses it to allow only callers
-with `agents:run` in the agent's organization, into their own conversations.
+To decide who may call an agent, pass these to both routers; each refuses by
+raising `HTTPException`:
+
+- `admit=`: an `AdmitCall`, `async (request, agent, *, action) -> None`,
+  called first with only the agent's reference and organization
+  (`LocatedAgent`, from `AgentExecutor.locate`: a source with `locate(ref)`
+  answers without reading the definition). Nothing of an agent a caller
+  isn't let in to is read for them; an agent that can't be built answers
+  without why (the server logs it).
+- `authorize=`: an `AuthorizeCall`, `async (request, agent, *, action,
+  user_id) -> None`, once the agent is found and before anything is built or
+  run, for each action (`agent`, `sessions`, `run`, `card`, `a2a`).
+- `owner=` (run API): a `ConversationOwner`, `async (request, user_id) ->
+  str`: the user ID the conversations a call names are kept under, from who
+  the caller is. Every route uses it, so a caller reaches only their own;
+  `owned_by(caller, user_id)` keeps an API key's end users apart from every
+  other caller's (`<caller>/<user>`). Responses show the `userId` the call
+  named. The standalone server (`AgentServer`) binds each key's or
+  `with_auth` caller's conversations so.
+
+The hosted runtime admits callers with `agents:run` in the agent's
+organization (`agents:manage` for its draft), into their own conversations.
+Every turn checks the chat agent's rule as it starts (`AgentExecutor.refusal`,
+403 before the stream), and each agent's rule holds with those of the agents
+above it, so taking access away stops a conversation already handed on. A
+published version never runs a workflow's draft, and an HTTP tool's host is
+its author's to write: the model's arguments can't pick it, and a run's
+value may only for a tool sending no headers of its own.
 
 Other kinds of agent can share the A2A router's URLs, by their names'
 prefix: pass `services=[A2aService(prefix, find, card, executor)]` (the
@@ -298,6 +366,17 @@ organization's MCP servers and knowledge bases with it.
 
 Exports never carry secrets: write them as `${NAME}` in the builder, and set
 them in the environment the agent runs in.
+
+Any agent node may have an access rule (`config.access`): which of the
+organization's agent permissions, by ID, someone needs to use it, as
+`{"permission": 12}`, `{"all": [...]}` or `{"any": [...]}`, nesting three
+deep. The runtime checks it each time the agent starts, for whoever the call
+is for (`RuntimeServices(access=…)`, `forge_agent_runtime.access`): an agent
+they may not use answers with what it needs, and an agent handing off to
+it, calling it or giving it a task is answered that instead, so the
+conversation stays with it. Without an `access` service nobody holds any
+permission, so an exported agent's nodes with rules refuse until you pass
+one.
 
 ## Checks
 

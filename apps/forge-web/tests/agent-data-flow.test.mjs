@@ -186,7 +186,16 @@ test("an Error way hands on nothing: why is in the step's error", () => {
   const scope = agentTypes(toGraph(doc)).scopeOf("oops")
   assert.equal(label(scope.roots.get("previous").type), "null")
   assert.match(scope.roots.get("previous").type.description, /steps\.fetch\.error/)
-  assert.deepEqual(labels(scope, "steps.fetch.error."), ["message", "status", "body", "method", "url", "expression"])
+  assert.deepEqual(labels(scope, "steps.fetch.error."), [
+    "message",
+    "status",
+    "body",
+    "method",
+    "url",
+    "expression",
+    "may_have_run",
+    "idempotency_key",
+  ])
   assert.match(problems(scope, "steps.fetch.error.reason")[0], /has no reason/)
   assert.match(problems(scope, "previous.status")[0], /null/)
 })

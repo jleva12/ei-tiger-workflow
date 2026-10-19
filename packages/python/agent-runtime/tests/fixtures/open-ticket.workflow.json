@@ -1,0 +1,151 @@
+{
+  "format": "forge.agent/v1",
+  "id": "ag_openticket",
+  "name": "Open ticket (intake example)",
+  "description": "Started by the Northwind service desk's intakes when a request is submitted: opens a ticket with the team that handles it.",
+  "nodes": [
+    {
+      "id": "start",
+      "kind": "start",
+      "name": "Start",
+      "outputs": [
+        "next"
+      ],
+      "config": {
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "requester_email"
+          ],
+          "properties": {
+            "requester_email": {
+              "type": "string",
+              "description": "Your work email."
+            },
+            "department": {
+              "type": "string",
+              "description": "Department."
+            },
+            "manager_email": {
+              "type": "string",
+              "description": "Manager's email."
+            },
+            "application": {
+              "type": "string",
+              "description": "Application."
+            },
+            "access_level": {
+              "type": "string",
+              "description": "Access level."
+            },
+            "admin_justification": {
+              "type": "string",
+              "description": "Why admin access."
+            },
+            "access_until": {
+              "type": "string",
+              "description": "Access until."
+            },
+            "cost_center": {
+              "type": "string",
+              "description": "Cost center."
+            },
+            "laptop_model": {
+              "type": "string",
+              "description": "Model."
+            },
+            "replacing": {
+              "type": "boolean",
+              "description": "Replacing a laptop."
+            },
+            "work_location": {
+              "type": "string",
+              "description": "Works from."
+            },
+            "shipping_address": {
+              "type": "string",
+              "description": "Shipping address."
+            },
+            "needed_by": {
+              "type": "string",
+              "description": "Needed by."
+            },
+            "report_title": {
+              "type": "string",
+              "description": "Report."
+            },
+            "data_sources": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Data from."
+            },
+            "refresh": {
+              "type": "string",
+              "description": "Refreshed."
+            },
+            "details": {
+              "type": "string",
+              "description": "What it should show."
+            }
+          }
+        },
+        "allow_files": false,
+        "file_types": [],
+        "allow_file_system": false,
+        "start_over": false
+      }
+    },
+    {
+      "id": "route",
+      "kind": "transform",
+      "name": "Route to a team",
+      "outputs": [
+        "next"
+      ],
+      "config": {
+        "expression": "{\"ticket\": \"REQ-\" & $string($floor($random() * 900000) + 100000), \"team\": input.application ? \"Identity & Access\" : input.laptop_model ? \"IT hardware\" : input.report_title ? \"Analytics\" : \"Service desk\", \"approver\": input.manager_email}",
+        "output_schema": {}
+      }
+    },
+    {
+      "id": "opened",
+      "kind": "end",
+      "name": "Opened",
+      "outputs": [],
+      "config": {
+        "outcome": "succeeded",
+        "result": "{\"ticket\": steps.route.output.ticket, \"team\": steps.route.output.team, \"approver\": steps.route.output.approver, \"for\": input.requester_email}"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "start:next->route",
+      "source": "start",
+      "source_output": "next",
+      "target": "route"
+    },
+    {
+      "id": "route:next->opened",
+      "source": "route",
+      "source_output": "next",
+      "target": "opened"
+    }
+  ],
+  "layout": {
+    "start": {
+      "x": 0,
+      "y": 0
+    },
+    "route": {
+      "x": 320,
+      "y": 0
+    },
+    "opened": {
+      "x": 640,
+      "y": 0
+    }
+  }
+}

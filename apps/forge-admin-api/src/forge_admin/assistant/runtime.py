@@ -8,6 +8,7 @@ from forge_common.adk.attachments import AttachmentsPlugin
 from forge_common.adk.context_window import ContextWindowPlugin, windows_from
 from forge_common.adk.follow_ups import FollowUpsPlugin
 from forge_common.adk.models import ProviderModels
+from forge_common.adk.turns import TurnOutcomePlugin
 from forge_common.adk.usage import UsagePlugin, price_from
 from forge_task_adk_workflows.usage_store import UsageStore
 from google.adk.apps import App
@@ -20,6 +21,7 @@ from forge_admin.assistant import forge
 from forge_admin.assistant.person import PersonLookup, database_people
 from forge_admin.assistant.screens import Screens
 from forge_admin.config import Settings
+from forge_admin.db.session import adk_session_engine
 
 NO_API_KEY = (
     "The assistant isn't set up yet: it needs a Gemini API key. Set "
@@ -95,7 +97,7 @@ class AgentRuntime:
         )
         runtime = cls.of(
             [assistant],
-            sessions=DatabaseSessionService(db_engine=engine),
+            sessions=DatabaseSessionService(db_engine=adk_session_engine(engine)),
             artifacts=InMemoryArtifactService(),
             # The shared configuration has its own keys, each required.
             unavailable=(
@@ -138,6 +140,9 @@ class AgentRuntime:
                  along with the session and artifact services.
         """
         apps = list(apps)
+        for app in apps:
+            if not any(isinstance(plugin, TurnOutcomePlugin) for plugin in app.plugins):
+                app.plugins.insert(0, TurnOutcomePlugin())
         runners = {
             app.name: Runner(
                 app=app, session_service=sessions, artifact_service=artifacts

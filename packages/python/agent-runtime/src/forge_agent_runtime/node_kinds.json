@@ -25,7 +25,8 @@
         "thinking_level": "",
         "max_output_tokens": null,
         "ask_person": false,
-        "state_schema": {}
+        "state_schema": {},
+        "access": null
       }
     },
     {
@@ -52,7 +53,37 @@
         "mode": "chat",
         "disallow_transfer_to_parent": false,
         "disallow_transfer_to_peers": false,
-        "include_contents": "default"
+        "include_contents": "default",
+        "access": null
+      }
+    },
+    {
+      "kind": "intake_agent",
+      "label": "Intake agent",
+      "group": "agents",
+      "icon": "check-list",
+      "summary": "Walks the person through an intake you design: it collects a record in whatever order they give it, then hands it back to the agent that handed off.",
+      "keywords": "intake form questionnaire collect record onboarding slot filling fields task hand off",
+      "id_prefix": "intake",
+      "orb": 3,
+      "outputs": [
+        { "id": "tools", "label": "Tools", "branch": true },
+        { "id": "on_complete", "label": "On complete", "branch": true }
+      ],
+      "handed_to": true,
+      "defaults": {
+        "description": "",
+        "instruction": "",
+        "model": { "provider": "", "name": "" },
+        "thinking_level": "",
+        "max_output_tokens": null,
+        "ask_person": true,
+        "fields": [],
+        "sections": [],
+        "confirm_summary": true,
+        "allow_cancel": true,
+        "allow_escalate": false,
+        "access": null
       }
     },
     {
@@ -66,7 +97,7 @@
       "outputs": [],
       "handed_to": true,
       "workflow_tool": true,
-      "defaults": { "agent": "" }
+      "defaults": { "agent": "", "access": null }
     },
     {
       "kind": "memory",
@@ -161,7 +192,7 @@
       "id_prefix": "workflow",
       "outputs": [],
       "workflow_tool": true,
-      "defaults": { "workflow": "", "version": null }
+      "defaults": { "workflow": "", "version": null, "wait_seconds": 120 }
     },
     {
       "kind": "code_execution",

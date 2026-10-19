@@ -2,12 +2,14 @@
 assistant did and used, bucketed into the reader's days.
 
 The period is the last 7 or 30 days (by day) or 90 days (by week, Monday to
-Monday), the last running to now, in the reader's time zone; the period
-before it is what changes compare with; the last 12 weeks give the ledger's
-bars. Workflow runs come from the run store (counted when they were created,
-by how they've ended so far); agent and assistant invocations, and model and
-tool calls, from the usage store, whose hourly sums land in the bucket their
-hour starts in.
+Monday), the last running to now, in the reader's time zone; or days the
+reader picks, up to a year (by day up to two months, by week beyond), the
+last running to its midnight, or to now when it's today. The period before,
+as long, is what changes compare with; the last 12 weeks, to now whatever
+the period, give the ledger's bars. Workflow runs come from the run store
+(counted when they were created, by how they've ended so far); agent and
+assistant invocations, and model and tool calls, from the usage store, whose
+hourly sums land in the bucket their hour starts in.
 
 :func:`window` works out the buckets; :func:`build_overview` reads the stores
 and sums them into what the web console draws (``OverviewOut``), which sums
@@ -26,10 +28,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from forge_task_adk_workflows.run_store import (
     ABANDONED,
+    CHILD_RUN,
     FAILED,
     PAUSED,
     SUCCEEDED,
     RunStore,
+    open_gates,
 )
 from forge_task_adk_workflows.usage_store import CANCELLED, RUNNING, UsageStore
 from forge_task_adk_workflows.usage_store import FAILED as INVOCATION_FAILED
@@ -43,6 +47,10 @@ PERIODS: dict[str, tuple[int, Literal["day", "week"]]] = {
     "90d": (90, "week"),
 }
 WEEKS = 12
+#: The most days a period of the reader's own may have.
+MAX_DAYS = 366
+#: The most days a period goes by day; a longer one goes by week.
+MAX_DAILY = 62
 #: An invocation still running after this long had its process go.
 STALE = timedelta(hours=2)
 #: The most workflow runs a period reads; beyond, the oldest are left out.
@@ -72,10 +80,15 @@ class Window:
     unit: Literal["day", "week"]
     zone: ZoneInfo
     now: datetime
-    #: The period's buckets, oldest first; the last ends now.
+    #: When the period ends: now, or a past midnight when it ended before today.
+    end: datetime
+    #: The period's buckets, oldest first; the last ends at ``end``.
     buckets: list[tuple[datetime, datetime]]
     previous: tuple[datetime, datetime]
     weeks: list[tuple[datetime, datetime]]
+    #: Its first and last days, in the reader's time zone.
+    first: date
+    last: date
 
     @property
     def start(self) -> datetime:
@@ -88,7 +101,8 @@ class Window:
 
     def bucket_of(self, when: datetime) -> int | None:
         """:return: The bucket ``when`` is in; -1 for the period before; None for neither."""
-        if self.start <= when <= self.now:
+        # To now, inclusive; to a past midnight, the next day's, exclusive.
+        if self.start <= when and (when < self.end or when == self.end == self.now):
             index = bisect.bisect_right([start for start, _ in self.buckets], when) - 1
             return max(0, index)
         if self.previous[0] <= when < self.previous[1]:
@@ -106,33 +120,47 @@ def _midnight(day: date, zone: ZoneInfo) -> datetime:
     return datetime.combine(day, time(), tzinfo=zone).astimezone(UTC)
 
 
-def window(period: str, zone: ZoneInfo, now: datetime) -> Window:
+def window(
+    period: str,
+    zone: ZoneInfo,
+    now: datetime,
+    days: tuple[date, date] | None = None,
+) -> Window:
     """
-    :param period: ``7d``, ``30d`` or ``90d``.
+    :param period: ``7d``, ``30d`` or ``90d``; ``custom`` with ``days``.
     :param zone: The reader's time zone, whose midnights and Mondays bound the buckets.
     :param now: When it's read.
+    :param days: A period of the reader's own: its first and last day, a last
+        after today being today. At most ``MAX_DAYS``.
     :return: Its buckets: the period's days (or weeks, Monday to Monday, the
-        first from its first day), the last running to now.
+        first from its first day), the last running to its end: now, or the
+        midnight after its last day when that's passed.
     """
-    days, unit = PERIODS[period]
     now = now.astimezone(UTC)
     today = now.astimezone(zone).date()
-    first = today - timedelta(days=days - 1)
+    if days is None:
+        length, unit = PERIODS[period]
+        first, last = today - timedelta(days=length - 1), today
+    else:
+        first, last = days[0], min(days[1], today)
+        length = (last - first).days + 1
+        unit = "day" if length <= MAX_DAILY else "week"
+    end = now if last >= today else _midnight(last + timedelta(days=1), zone)
     if unit == "day":
-        starts = [first + timedelta(days=offset) for offset in range(days)]
+        starts = [first + timedelta(days=offset) for offset in range(length)]
     else:
         mondays = [
             day
-            for offset in range(1, days)
+            for offset in range(1, length)
             if (day := first + timedelta(days=offset)).weekday() == 0
         ]
         starts = [first, *mondays]
     bounds = [_midnight(day, zone) for day in starts]
     buckets = [
-        (start, bounds[index + 1] if index + 1 < len(bounds) else now)
+        (start, bounds[index + 1] if index + 1 < len(bounds) else end)
         for index, start in enumerate(bounds)
     ]
-    previous = (_midnight(first - timedelta(days=days), zone), bounds[0])
+    previous = (_midnight(first - timedelta(days=length), zone), bounds[0])
     monday = today - timedelta(days=today.weekday())
     week_starts = [
         _midnight(monday - timedelta(weeks=WEEKS - 1 - index), zone)
@@ -142,7 +170,7 @@ def window(period: str, zone: ZoneInfo, now: datetime) -> Window:
         (start, week_starts[index + 1] if index + 1 < WEEKS else now)
         for index, start in enumerate(week_starts)
     ]
-    return Window(period, unit, zone, now, buckets, previous, weeks)
+    return Window(period, unit, zone, now, end, buckets, previous, weeks, first, last)
 
 
 def subject_key(kind: str, subject_id: str) -> str:
@@ -211,11 +239,13 @@ async def build_overview(
     )
     model_hours = await sources.usage.model_hours(organization_id, since, now)
     invocation_hours = await sources.usage.invocation_hours(organization_id, since, now)
-    authors = await sources.usage.authors(organization_id, start, now)
-    tools = await sources.usage.tools(organization_id, start, now)
-    people_rows = await sources.usage.people(organization_id, start, now)
+    # Over the period: to its end, which is now unless it's a past one.
+    end = win.end
+    authors = await sources.usage.authors(organization_id, start, end)
+    tools = await sources.usage.tools(organization_id, start, end)
+    people_rows = await sources.usage.people(organization_id, start, end)
     failures_of_invocations = await sources.usage.invocation_failures(
-        organization_id, start, now
+        organization_id, start, end
     )
     used_subjects = await sources.usage.subjects(organization_id)
     latest_runs = await sources.runs.latest_by_agent(organization_id)
@@ -434,7 +464,12 @@ async def build_overview(
 
     waiting = []
     for run in paused:
-        pause = run.get("pause") if isinstance(run.get("pause"), Mapping) else {}
+        # What it waits for someone at first: a run waiting only for runs it
+        # started (workflows its LLM agents called) waits on nobody.
+        asks = [gate for gate in open_gates(run) if gate.get("kind") != CHILD_RUN]
+        if open_gates(run) and not asks:
+            continue
+        pause = asks[0] if asks else {}
         kind = (
             pause.get("kind")
             if pause.get("kind") in ("approval", "human_input")
@@ -464,6 +499,8 @@ async def build_overview(
 
     return {
         "period": win.period,
+        "first_day": win.first.isoformat(),
+        "last_day": win.last.isoformat(),
         "unit": win.unit,
         "time_zone": win.zone.key,
         "as_of": _iso(now),

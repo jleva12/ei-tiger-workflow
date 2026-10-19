@@ -1,7 +1,5 @@
 import * as React from "react"
 import { Upload01Icon } from "@hugeicons/core-free-icons"
-import { isValidTwitchUrl } from "@tiptap/extension-twitch"
-import { isValidYoutubeUrl } from "@tiptap/extension-youtube"
 import type { Editor } from "@tiptap/react"
 import katex from "katex"
 
@@ -26,9 +24,10 @@ import { Textarea } from "@/components/ui/textarea"
 import { Icon } from "../icon"
 import { formatShortcut } from "./shortcuts"
 import type {
+  EditorUiHandlers,
   InsertDialogKind,
   InsertDialogRequest,
-  RichTextActions,
+  UrlPolicy,
 } from "./types"
 
 const COPY: Record<
@@ -46,24 +45,6 @@ const COPY: Record<
     description: "Upload an image, or link one that's already online.",
     field: "Image URL",
     placeholder: "https://example.com/diagram.png",
-  },
-  youtube: {
-    title: "YouTube video",
-    description: "Paste the link to a video, a Short or a playlist.",
-    field: "Video URL",
-    placeholder: "https://www.youtube.com/watch?v=…",
-  },
-  twitch: {
-    title: "Twitch",
-    description: "Paste the link to a channel, a video or a clip.",
-    field: "Twitch URL",
-    placeholder: "https://www.twitch.tv/videos/…",
-  },
-  audio: {
-    title: "Audio",
-    description: "Upload an audio file, or link one that's already online.",
-    field: "Audio URL",
-    placeholder: "https://example.com/episode.mp3",
   },
   inlineMath: {
     title: "Inline formula",
@@ -88,14 +69,6 @@ function normalizeHref(value: string) {
   return `https://${href}`
 }
 
-function isHttpUrl(value: string) {
-  try {
-    return ["http:", "https:"].includes(new URL(value).protocol)
-  } catch {
-    return false
-  }
-}
-
 function initialValues(editor: Editor, request: InsertDialogRequest) {
   const { from, to, empty } = editor.state.selection
   switch (request.kind) {
@@ -116,19 +89,21 @@ function initialValues(editor: Editor, request: InsertDialogRequest) {
 }
 
 /**
- * The one dialog behind every insert that needs input: links, images,
- * embeds, audio and formulas. Saving writes to the editor and returns focus
+ * The one dialog behind every insert that needs input: links, images and
+ * formulas. Saving writes to the editor and returns focus
  * to where the caret was.
  */
 export function InsertDialog({
   editor,
   request,
-  actions,
+  ui,
+  urlPolicy,
   onClose,
 }: {
   editor: Editor
   request: InsertDialogRequest | null
-  actions: RichTextActions
+  ui: () => EditorUiHandlers
+  urlPolicy: UrlPolicy
   onClose: () => void
 }) {
   // Keep the last request while the dialog animates closed.
@@ -178,6 +153,7 @@ export function InsertDialog({
           chain().extendMarkRange("link").unsetLink().run()
           return null
         }
+        if (!urlPolicy(href, "link")) return "That link isn't allowed."
         if (editor.state.selection.empty && !editor.isActive("link")) {
           return chain()
             .insertContent({
@@ -194,7 +170,7 @@ export function InsertDialog({
           : "That link isn't allowed."
       }
       case "image": {
-        if (!isHttpUrl(input) && !input.startsWith("data:image/")) {
+        if (!urlPolicy(input, "image")) {
           return "Enter an http or https address."
         }
         const alt = text.trim() || null
@@ -209,18 +185,6 @@ export function InsertDialog({
             .run()
         return null
       }
-      case "youtube":
-        if (!isValidYoutubeUrl(input)) return "That isn't a YouTube link."
-        chain().setYoutubeVideo({ src: input }).run()
-        return null
-      case "twitch":
-        if (!isValidTwitchUrl(input)) return "That isn't a Twitch link."
-        chain().setTwitchVideo({ src: input }).run()
-        return null
-      case "audio":
-        if (!isHttpUrl(input)) return "Enter an http or https address."
-        chain().setAudio({ src: input }).run()
-        return null
       case "inlineMath":
         if (pos !== undefined) {
           if (!input) chain().deleteInlineMath({ pos }).run()
@@ -243,7 +207,7 @@ export function InsertDialog({
     else onClose()
   }
 
-  const upload = kind === "image" || kind === "audio" ? kind : null
+  const upload = kind === "image"
   const showText =
     kind === "link" && editor.state.selection.empty && !editor.isActive("link")
   const showAlt = kind === "image"
@@ -270,11 +234,11 @@ export function InsertDialog({
                   variant="outline"
                   onClick={() => {
                     onClose()
-                    actions.pickFiles(upload)
+                    ui().pickImages()
                   }}
                 >
                   <Icon icon={Upload01Icon} data-icon="inline-start" />
-                  Upload {upload === "image" ? "an image" : "an audio file"}
+                  Upload an image
                 </Button>
                 <div className="flex items-center gap-3 text-2xs text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">
                   or link one

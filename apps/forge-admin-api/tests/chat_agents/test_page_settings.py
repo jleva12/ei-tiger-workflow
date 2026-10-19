@@ -1,6 +1,9 @@
 """A chat page's settings (``chat_agents.page_settings``): what a change
 names, and how a page kept before a setting existed reads."""
 
+from types import SimpleNamespace
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 
@@ -9,6 +12,7 @@ from forge_admin.chat_agents.page_settings import (
     ChatPageSettingsChange,
     page_settings,
 )
+from forge_admin.chat_agents.pages import page_streaming
 
 
 def test_a_change_names_only_what_it_sets() -> None:
@@ -29,6 +33,8 @@ def test_a_change_names_only_what_it_sets() -> None:
     }
     # A null accent goes back to Forge's ink.
     assert ChatPageSettingsChange(accent=None).changes() == {"accent": None}
+    assert ChatPageSettingsChange(desktop_link=True).changes() == {"desktop_link": True}
+    assert ChatPageSettingsChange(streaming=False).changes() == {"streaming": False}
     assert ChatPageSettingsChange().changes() == {}
 
 
@@ -46,6 +52,7 @@ def test_a_change_names_only_what_it_sets() -> None:
         {"suggestions": [f"Q{n}" for n in range(7)]},
         {"suggestions": ["  "]},
         {"sparkles": True},
+        {"streaming": "sometimes"},
     ],
 )
 def test_a_change_that_doesnt_fit_is_refused(wrong: dict) -> None:
@@ -64,9 +71,32 @@ def test_a_page_kept_before_a_setting_existed_has_its_default() -> None:
     assert set(read) == set(PAGE_DEFAULTS)
     assert (read["suggestions"], read["hide_history"]) == (["Hi"], True)
     assert (read["theme"], read["accent"], read["follow_ups"]) == ("light", None, True)
-    # Visitors can switch its theme until it's turned off.
+    # Visitors can switch its theme until it's turned off; it offers the
+    # desktop app only once it's turned on.
     assert read["theme_toggle"] is True
+    assert read["desktop_link"] is False
+    # Its replies stream, as every page's did before it could be set.
+    assert read["streaming"] is True
     # What it reads is its own: changing it changes neither the page nor the defaults.
     read["suggestions"].append("More")
     assert older["suggestions"] == ["Hi"] and PAGE_DEFAULTS["suggestions"] == []
     assert page_settings(None) == PAGE_DEFAULTS
+
+
+@pytest.mark.parametrize(
+    ("page", "streams"),
+    [
+        ({"token": "cp_x"}, True),
+        ({"streaming": True}, True),
+        ({"streaming": False}, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_pages_turns_reply_as_it_is_set_to(
+    page: dict[str, Any], streams: bool
+) -> None:
+    # The page its link found, as admitting the turn left it on the request.
+    request = SimpleNamespace(
+        state=SimpleNamespace(chat_page={"_id": "ca_x", "chat_page": page})
+    )
+    assert await page_streaming(request, agent=None) is streams  # type: ignore[arg-type]

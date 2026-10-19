@@ -19,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.dependencies.utils import request_params_to_args
 from fastapi.routing import APIRoute
 from google.adk.agents import LlmAgent
+from google.adk.apps import App
 from google.adk.events.event_actions import EventActions
 from google.adk.runners import InMemoryRunner
 from google.genai import types
@@ -30,6 +31,7 @@ from forge_admin.api.routes import authz, me, members, roles, users
 from forge_admin.assistant import access_tools
 from forge_admin.assistant.access_tools import AccessToolset
 from forge_admin.assistant.person_api import PersonApi
+from forge_admin.assistant.route_tools import AskInWords
 from forge_admin.auth.tokens import verify_token
 from forge_admin.config import Settings
 
@@ -797,7 +799,9 @@ def test_a_change_waits_for_the_person_to_confirm_it(signing: Settings) -> None:
         ]
     )
     agent = LlmAgent(name="forge", model=llm, tools=[toolset])
-    runner = InMemoryRunner(agent=agent, app_name="forge")
+    runner = InMemoryRunner(
+        app=App(name="forge", root_agent=agent, plugins=[AskInWords()])
+    )
 
     async def main() -> list[Any]:
         session = await runner.session_service.create_session(
@@ -815,14 +819,20 @@ def test_a_change_waits_for_the_person_to_confirm_it(signing: Settings) -> None:
 
     events = asyncio.run(main())
     asked = [
-        call.name
+        call
         for event in events
         for call in event.get_function_calls()
         if call.name == "adk_request_confirmation"
     ]
-    assert asked == ["adk_request_confirmation"]
-    # No role is taken away until the person says so.
-    assert api.calls == []
+    assert [call.name for call in asked] == ["adk_request_confirmation"]
+    # The person is asked in words, by name, not in ADK's own terms.
+    assert asked[0].args["toolConfirmation"]["hint"] == (
+        "Take the “Admin” role away from Ada Lovelace in “Acme”?\n"
+        "They can no longer do what it allows there, unless another of their "
+        "roles allows it too."
+    )
+    # No role is taken away until the person says so: it only read names.
+    assert {request.method for request in api.calls} == {"GET"}
 
 
 def test_the_instruction_says_how_to_explain_a_refusal() -> None:

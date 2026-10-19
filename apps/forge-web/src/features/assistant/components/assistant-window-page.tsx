@@ -20,6 +20,10 @@ import {
   useSuggestedPrompts,
 } from "@/features/assistant/lib/assistant-capabilities"
 import { useForgeAgent } from "@/features/assistant/lib/forge-agent"
+import {
+  sendInNewConversation,
+  takePendingAsk,
+} from "@/features/assistant/lib/assistant-asks"
 import { assistantSources } from "@/features/knowledge/lib/sources"
 import { useMe } from "@/lib/users"
 
@@ -67,10 +71,13 @@ function AssistantWindow({
   onThreadShown: () => void
 }) {
   const runtimeRef = React.useRef<AssistantRuntime | null>(null)
+  // A page asked something: how many times, to take each request.
+  const [asked, setAsked] = React.useState(0)
   const linked = useLinkedPage({
     onShowThread: (next) => {
       if (runtimeRef.current) void showConversation(runtimeRef.current, next)
     },
+    onAsk: () => setAsked((count) => count + 1),
   })
   const { runtime, artifacts, connected, sharing, setSharing, modelSection } =
     useForgeAgent(userId, linked.read)
@@ -85,6 +92,15 @@ function AssistantWindow({
     report()
     return runtime.thread.subscribe(report)
   }, [runtime, setRunning])
+
+  // A page asked something: sent once the page it was asked from is known,
+  // so the agent sees it.
+  const knowsPage = linked.page !== null
+  React.useEffect(() => {
+    if (!knowsPage || !connected) return
+    const prompt = takePendingAsk()
+    if (prompt) void sendInNewConversation(runtime, prompt)
+  }, [asked, knowsPage, connected, runtime])
 
   // Opened from the panel: carry on its conversation.
   React.useEffect(() => {

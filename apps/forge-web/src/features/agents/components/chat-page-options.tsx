@@ -5,7 +5,8 @@ import { cn } from "@/lib/utils"
 import type { ChatPageChange } from "@/features/agents/lib/api"
 import type { ChatPageSettings } from "@/features/agents/lib/page-settings"
 
-type Option = "hide_history" | "hide_top_bar" | "follow_ups"
+type Option =
+  "hide_history" | "hide_top_bar" | "follow_ups" | "streaming" | "desktop_link"
 
 const OPTIONS: { key: Option; label: string; about: string }[] = [
   {
@@ -26,15 +27,31 @@ const OPTIONS: { key: Option; label: string; about: string }[] = [
     about:
       "After each reply, a few questions to ask next, a click each. Writing them takes a model call of its own.",
   },
+  {
+    key: "streaming",
+    label: "Stream replies",
+    about:
+      "Words appear as the model writes them. Off, each reply arrives once the model is done and is written in word by word.",
+  },
+  {
+    key: "desktop_link",
+    label: "Offer the desktop app",
+    about:
+      "A button that opens the agent in the Forge Agents desktop app, which asks the visitor before adding it. Turn it on when the people you share the page with have the app: without it, the button does nothing.",
+  },
 ]
 
-/** A page without these settings yet: everything shown, follow-ups on. */
+/** On until they're turned off: a page set before they existed has them. */
+const ON_BY_DEFAULT: ReadonlySet<Option> = new Set(["follow_ups", "streaming"])
+
+/** A page without these settings yet: everything shown, follow-ups and streaming on, no desktop app. */
 const valueOf = (page: Pick<ChatPageSettings, Option>, key: Option) =>
-  key === "follow_ups" ? page.follow_ups !== false : Boolean(page[key])
+  ON_BY_DEFAULT.has(key) ? page[key] !== false : Boolean(page[key])
 
 /**
- * How a chat page looks beyond its conversation: what it leaves out, and
- * whether it suggests follow-up questions. Each switch saves at once.
+ * How a chat page looks beyond its conversation: what it leaves out,
+ * whether it suggests follow-up questions, whether its replies stream, and
+ * whether it offers the desktop app. Each switch saves at once.
  */
 export function ChatPageOptions({
   page,

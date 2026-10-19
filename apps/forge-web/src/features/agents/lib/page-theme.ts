@@ -23,10 +23,12 @@ export function useSystemTheme(): "light" | "dark" {
 /**
  * Shows the whole document in a theme while it's mounted, so what opens
  * outside the page's region (menus, tooltips) matches it; the theme it had
- * comes back after.
+ * comes back after. Not while `active` is false: a page kept out of sight
+ * (the desktop app's chats still replying) leaves it to the one showing.
  */
-export function useDocumentTheme(theme: "light" | "dark") {
+export function useDocumentTheme(theme: "light" | "dark", active = true) {
   React.useLayoutEffect(() => {
+    if (!active) return
     const root = document.documentElement
     const had = ["light", "dark"].filter((name) =>
       root.classList.contains(name)
@@ -37,7 +39,7 @@ export function useDocumentTheme(theme: "light" | "dark") {
       root.classList.remove("light", "dark")
       root.classList.add(...had)
     }
-  }, [theme])
+  }, [theme, active])
 }
 
 type Theme = "light" | "dark"

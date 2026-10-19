@@ -104,6 +104,41 @@ export function urlArguments(url: string): {
   return { names, required }
 }
 
+/**
+ * Why a URL can't say where an HTTP tool calls, as the runtime refuses it
+ * (`UrlTemplate.check_origin`); undefined when it can. Its scheme and host
+ * are its author's to write out: the model's arguments never pick them, and
+ * a run's value may only for a tool sending no headers of its own, which go
+ * only to a host written in its URL.
+ */
+export function originProblem(
+  url: string,
+  sendsHeaders: boolean
+): string | undefined {
+  const path: Part[] = []
+  for (const part of partsOf(url)) {
+    if (typeof part === "string" && part.includes("?")) {
+      path.push(part.slice(0, part.indexOf("?")))
+      break
+    }
+    path.push(part)
+  }
+  const lead = typeof path[0] === "string" ? path[0] : ""
+  const cut = lead.indexOf("://")
+  const rest = cut > 0 ? lead.slice(cut + 3) : undefined
+  if (
+    path.every((part) => typeof part === "string") ||
+    (rest !== undefined && /[/?#\\]/.test(rest))
+  )
+    return undefined
+  const first = path.find((part) => typeof part !== "string")
+  if (first && typeof first === "object" && "argument" in first)
+    return `{${first.argument}} would let the model pick where it calls: write the host out, and put arguments in the path or query.`
+  return sendsHeaders
+    ? "Its host comes from a run's value, and its headers go only to a host written in its URL: write the host out, or take the headers away."
+    : undefined
+}
+
 /** A listed query parameter: its name and its value, templates. */
 type QueryRow = { name: string; value: string }
 

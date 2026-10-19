@@ -11,7 +11,12 @@ import {
 } from "@/components/forge/assistant"
 import { toast } from "@/components/ui/toast"
 
-import { mockAdkStream, mockArtifacts, mockSignIn } from "./assistant-mock"
+import {
+  mockAdkStream,
+  mockArtifacts,
+  mockSignIn,
+  mockWholeAdkStream,
+} from "./assistant-mock"
 import { WorkspacePreview } from "./workspace-preview"
 
 const welcome = {
@@ -107,10 +112,19 @@ const suggestions = [
   },
 ]
 
-/** The full-screen assistant, wired to the simulated ADK agent. */
-export function AssistantPreview({ className }: { className?: string }) {
+/**
+ * The full-screen assistant, wired to the simulated ADK agent; `whole`, on a
+ * server that sends each reply whole instead of streaming it.
+ */
+export function AssistantPreview({
+  className,
+  whole = false,
+}: {
+  className?: string
+  whole?: boolean
+}) {
   const { runtime, modelSettings } = useAdkAssistant({
-    stream: mockAdkStream,
+    stream: whole ? mockWholeAdkStream : mockAdkStream,
     models,
     onFeedback: recordFeedback,
     suggestFollowUps: true,

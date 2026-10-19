@@ -37,8 +37,9 @@ export {
 /**
  * How to talk to the agent: the runtime's address and the app name each
  * version answers to (ADK's run API: POST run_sse), and each one's A2A card
- * (Google's A2A protocol, 1.0 and 0.3), which says where to call it; and
- * its chat page, for people to talk to it at a link.
+ * (Google's A2A protocol, 1.0 and 0.3), which says where to call it; and its
+ * chat page, for people to talk to it at a link. Who may use each of its
+ * agents is the rule on that agent's node (`access-rule-field.tsx`).
  */
 export function RunInfo({
   record,
@@ -114,6 +115,13 @@ function ChatPageSharing({
   const setting = useChatPageSetting(record.organization_id, record.id)
   const [replacing, setReplacing] = React.useState(false)
   const page = useChatPage(record)
+  // Its visitors are nobody the organization knows: the page of an agent
+  // whose chat agent node has a rule doesn't answer.
+  const limited = record.document.nodes.some(
+    (node) =>
+      node.kind === "agent" &&
+      (node.config as { access?: unknown }).access != null
+  )
   const published = record.published_version !== null
   const enabled = Boolean(page?.enabled)
   const link = page ? chatPageLink(page.token) : undefined
@@ -176,6 +184,14 @@ function ChatPageSharing({
             : "Share it as a full-page chat at a link of its own: anyone with the link can talk to its latest published version, without signing in to Forge."
           : "Publish it to share it as a full-page chat at a link of its own."}
       </p>
+      {limited && (
+        <p className="rounded-(--radius-control) bg-warning-surface px-2.5 py-2 text-xs/[1.6] text-foreground">
+          Its chat agent lets in only those holding some permissions, so its
+          chat page doesn&apos;t answer: its visitors don&apos;t sign in. Let
+          anyone use the chat agent node for the page to work; its other agents
+          with rules tell visitors what they need.
+        </p>
+      )}
       {/* Its words, prompts and look, set up beside a live preview of it. */}
       <Button
         variant="outline"

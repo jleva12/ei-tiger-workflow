@@ -14,9 +14,14 @@ import {
 } from "@/features/builder/components/chrome"
 import { DetailsResizer } from "@/features/builder/components/details-resizer"
 import { ImportDialog } from "@/features/builder/components/import-dialog"
+import {
+  RunOverlayContext,
+  type RunOverlay,
+} from "@/features/builder/components/run-overlay"
 import { BuilderJson } from "@/features/builder/components/json-view"
 import { StepLibrary } from "@/features/builder/components/library"
 import { StepDialog } from "@/features/builder/components/step-dialog"
+import { selectedStep } from "@/features/builder/components/store"
 import { BuilderUiContext } from "@/features/builder/components/ui"
 import {
   DETAILS_PANEL_ID,
@@ -87,11 +92,19 @@ import {
 } from "@/features/agents/lib/document"
 import { CHAT_AGENTS_ICON } from "@/features/agents/lib/model"
 import { chatAgentJsonSchema } from "@/features/agents/lib/schema"
-import { usePageContext } from "@/features/assistant/lib/page-context"
+import {
+  changeSummary,
+  useAgentChanges,
+} from "@/features/assistant/lib/builder-changes"
+import {
+  usePageContext,
+  usePageFocus,
+} from "@/features/assistant/lib/page-context"
 import { useAgentStepModels } from "@/features/steps/lib/models"
 import { ChatAgentDetails } from "./chat-agent-details"
 import { StandaloneDialog } from "./chat-agent-standalone"
 import { ChatAgentTestPanel } from "./chat-agent-test"
+import { DescribeAgentCard } from "./describe-agent"
 import {
   PublishDialog,
   ReadOnlyBanner,
@@ -182,7 +195,45 @@ export function ChatAgentBuilderPage({
   usePageContext({
     entities: [
       { kind: "organization", id: organizationId, label: organization?.name },
+      {
+        kind: "chat_agent",
+        id: agentId,
+        label: agent.data?.document.name,
+        detail:
+          version !== undefined
+            ? `published version ${version}`
+            : agent.data?.has_draft
+              ? "draft"
+              : agent.data?.status,
+      },
     ],
+  })
+  const navigate = useNavigate()
+  // The assistant changed the draft of an agent open without one: open it.
+  useAgentChanges(organizationId, agentId, (change) => {
+    if (!record || (record.has_draft && version === undefined)) return
+    if (version !== undefined) {
+      // They're looking at a published version, which never changes.
+      toast.add({
+        title: "The assistant changed this agent's draft",
+        description: changeSummary(change),
+        type: "success",
+        actionProps: {
+          children: "Open the draft",
+          onClick: () =>
+            void navigate({
+              to: "/organizations/$organizationId/chat-agents/$chatAgentId",
+              params: { organizationId, chatAgentId: agentId },
+              search: {},
+            }),
+        },
+      })
+      return
+    }
+    void agent.refetch().then((found) => {
+      if (found.data?.has_draft)
+        setRecord((kept) => ({ ...found.data, versions: kept?.versions ?? [] }))
+    })
   })
 
   if (
@@ -434,6 +485,8 @@ function Builder({
   const [publishing, setPublishing] = React.useState(false)
   const [discarding, setDiscarding] = React.useState(false)
   const [testing, setTesting] = React.useState(false)
+  // The test chat's turns, drawn over the canvas while it's open.
+  const [testRun, setTestRun] = React.useState<RunOverlay | null>(null)
   // The format, as the node catalog describes its kinds.
   const schema = React.useMemo(() => chatAgentJsonSchema(), [])
   const [standalone, setStandalone] = React.useState(false)
@@ -445,6 +498,52 @@ function Builder({
     "forge.chat-agents.detailsWidth"
   )
   const saving = useChatAgentAutosave(organization.id, record)
+  // A new agent (just its chat agent, told nothing yet) offers to have the
+  // assistant build it from a description, until they close the offer.
+  const blank = useChatBuilder((s) => {
+    const [only] = s.nodes
+    return (
+      s.nodes.length === 1 &&
+      s.edges.length === 0 &&
+      only?.data.kind === "agent" &&
+      !only.data.config.instruction.trim()
+    )
+  })
+  const [offering, setOffering] = React.useState(true)
+  const selectedNode = useChatBuilder((s) => selectedStep(s))
+  // The node they selected is what "this tool" or "this sub-agent" means to
+  // the assistant.
+  usePageFocus(
+    selectedNode
+      ? {
+          kind: "chat_agent_node",
+          id: selectedNode.id,
+          label: selectedNode.data.name,
+          detail: selectedNode.data.kind,
+        }
+      : null
+  )
+  // A draft the assistant saved shows here at once, as one step undo takes back.
+  useAgentChanges(organization.id, record.id, (change) => {
+    if (readOnly) return
+    void (async () => {
+      // The person's own edits are saved first; if theirs meet the
+      // assistant's, the conflict asks them which to keep.
+      const at = await saving.flush()
+      if (at === null || at >= change.revision) return
+      await saving.loadTheirs()
+      requestAnimationFrame(() => api.getState().requestFit())
+      toast.add({
+        title: "The assistant changed this agent",
+        description: changeSummary(change),
+        type: "success",
+        actionProps: {
+          children: "Undo",
+          onClick: () => api.getState().undo(),
+        },
+      })
+    })()
+  })
   const copy = useDuplicateChatAgent(organization.id)
   const drop = useDeleteChatAgent(organization.id)
   const lifecycle = useChatAgentLifecycle(organization.id, record.id)
@@ -704,7 +803,12 @@ function Builder({
           )}
           inert={view === "json" || undefined}
         >
-          <BuilderCanvas needsLayout={needsLayout} />
+          <RunOverlayContext.Provider value={testRun}>
+            <BuilderCanvas needsLayout={needsLayout} />
+          </RunOverlayContext.Provider>
+          {blank && offering && !readOnly && !testing && (
+            <DescribeAgentCard onDismiss={() => setOffering(false)} />
+          )}
           {readOnly && shownVersion !== undefined && (
             <ReadOnlyBanner
               version={shownVersion}
@@ -782,6 +886,7 @@ function Builder({
                 : record.id
           }
           onClose={() => setTesting(false)}
+          onProgress={setTestRun}
         />
       )}
 

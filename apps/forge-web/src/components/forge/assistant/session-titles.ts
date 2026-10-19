@@ -58,18 +58,18 @@ export function withSessionTitles(
           "Invalid ADK session list response: expected an array of sessions."
         )
       return {
-        threads: sessions.flatMap((session) => {
+        threads: sessions.map((session) => {
           const id = idOf(session)
-          return id
-            ? [
-                {
-                  status: "regular" as const,
-                  remoteId: id,
-                  externalId: id,
-                  title: titleOf(session),
-                },
-              ]
-            : []
+          if (!id)
+            throw new Error(
+              "Invalid ADK session list response: a conversation has no ID."
+            )
+          return {
+            status: "regular" as const,
+            remoteId: id,
+            externalId: id,
+            title: titleOf(session),
+          }
         }),
       }
     },
@@ -80,7 +80,7 @@ export function withSessionTitles(
       if (!res.ok) throw new Error(`Session not found: ${res.status}`)
       const session: unknown = await res.json()
       const id = idOf(session)
-      if (!id)
+      if (!id || id !== threadId)
         throw new Error(
           'Invalid ADK session fetch response: expected an object with a non-empty string "id".'
         )

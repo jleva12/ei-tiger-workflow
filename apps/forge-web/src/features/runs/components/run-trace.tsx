@@ -31,6 +31,8 @@ import { downloadBlob } from "@/features/builder/components/utils"
 import {
   downloadAdkRunFile,
   failureTitle,
+  provenanceLine,
+  provenanceWords,
   shortId,
   stepKindOf,
   stepNameOf,
@@ -1288,7 +1290,22 @@ function WorkerView({ trace, run }: { trace: AdkRunTrace; run: AdkRunDetail }) {
       {run.trigger && (
         <section>
           <h2 className="mb-3 text-lg font-[550]">What started it</h2>
+          <p className="mb-3 max-w-[75ch] text-xs text-muted-foreground">
+            {provenanceLine(provenanceWords(run))}. The trigger as the run
+            carries it
+            {run.original_trigger
+              ? ", and its first run's, which it was resubmitted from"
+              : ""}
+            :
+          </p>
           <ValueTree value={run.trigger} openDepth={2} className="max-h-80" />
+          {run.original_trigger && (
+            <ValueTree
+              value={run.original_trigger}
+              openDepth={2}
+              className="mt-3 max-h-80"
+            />
+          )}
         </section>
       )}
       <section>

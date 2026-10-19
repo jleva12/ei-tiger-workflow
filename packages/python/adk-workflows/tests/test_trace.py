@@ -181,4 +181,42 @@ def test_a_conversations_trace_lists_every_turn_or_only_those_asked_for(tmp_path
 
     first = trace.session_trace(session, invocations={turns[0]})
     assert all(event["text"] != '{"n": 2}' for event in first["events"])
-    assert public(first["state_after"]) == {"input": {"n": 1}} and first["later_changes"]
+    assert public(first["state_after"]) == {"input": {"n": 1}}
+    assert first["state"] == first["state_after"] and not first["later_changes"]
+
+
+def test_partial_conversation_state_contains_only_authorized_changes(monkeypatch: Any) -> None:
+    from google.adk.events import Event, EventActions
+    from google.adk.sessions import Session
+
+    def change(turn: str, **delta: Any) -> Event:
+        return Event(author="helper", invocation_id=turn, actions=EventActions(state_delta=delta))
+
+    session = Session(
+        id="s",
+        app_name="forge",
+        user_id="u",
+        state={"initial_secret": "private", "title": "other organization", "model": "hidden", "count": 2},
+        events=[
+            change("hidden", title="other organization"),
+            change("allowed", model="public", count=1),
+            change("hidden", model="hidden", private_context="secret"),
+            change("allowed", count=2),
+        ],
+    )
+    partial = trace.session_trace(session, invocations={"allowed"})
+    assert partial["state_before"] == {}
+    assert partial["state_after"] == partial["state"] == {"model": "public", "count": 2}
+    assert len(partial["events"]) == 2
+    assert session.state["initial_secret"] == "private"  # The original session is untouched.
+
+    empty = trace.session_trace(session, invocations=set())
+    assert empty["events"] == []
+    assert empty["state_before"] == empty["state_after"] == empty["state"] == {}
+
+    # Pagination retains earlier authorized deltas without reintroducing hidden ones.
+    monkeypatch.setattr(trace, "MAX_EVENTS", 1)
+    truncated = trace.session_trace(session, invocations={"allowed"})
+    assert truncated["omitted"] == 1
+    assert truncated["state_before"] == {"model": "public", "count": 1}
+    assert truncated["state_after"] == {"model": "public", "count": 2}

@@ -17,8 +17,8 @@ import type { ChatConfigs, ChatKind } from "./model"
  * admin API serves them (`GET /chat-agent-node-kinds`, the agent runtime's
  * node catalog, packages/python/agent-runtime's node_kinds.json): each
  * kind's words, its library group, its ways out (an agent's tools and who
- * it hands off to), whether it can be handed off to, whether a workflow's
- * LLM agent may have it as a tool, and what a new one starts with
+ * it hands off to), whether it can be handed off to, whether an agent can
+ * call it as a tool, whether a workflow's LLM agent may have it as a tool, and what a new one starts with
  * (builder/lib/catalog). The canvas and a workflow's LLM agents' tools read
  * them from here once it's installed (NodeCatalogGate).
  */
@@ -27,6 +27,8 @@ import type { ChatConfigs, ChatKind } from "./model"
 export type ChatCatalogKind = CatalogKind & {
   /** Whether an agent can hand off to it. */
   handed_to?: boolean
+  /** Whether an agent can call it as a tool (an intake agent: file requests to it); not when it's only handed off to. */
+  tool?: boolean
   /** Whether a workflow's LLM agent may have it as a tool. */
   workflow_tool?: boolean
 }
@@ -46,6 +48,7 @@ export type ChatKindInfo<K extends ChatKind = ChatKind> = KindInfo & {
 const SET_UP: Record<ChatKind, true> = {
   agent: true,
   sub_agent: true,
+  intake_agent: true,
   saved_agent: true,
   memory: true,
   knowledge_base: true,
@@ -99,6 +102,9 @@ export const isAgentLike = (kind: ChatKind) =>
 /** Whether an agent can hand off to a kind. */
 export const isHandedTo = (kind: ChatKind) =>
   Boolean(catalog.entry(kind).handed_to)
+
+/** Whether an agent can call a kind as a tool. */
+export const isTool = (kind: ChatKind) => catalog.entry(kind).tool !== false
 
 /** Whether a workflow's LLM agent may have a kind as a tool. */
 export const isWorkflowTool = (kind: string) =>

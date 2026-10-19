@@ -5,7 +5,11 @@ import {
   EmptyWorkspace,
   PageEmpty,
 } from "@/components/forge/empty-state"
-import { ErrorCallout, LoadMore } from "@/components/forge/feedback"
+import {
+  ActiveFilters,
+  ErrorCallout,
+  LoadMore,
+} from "@/components/forge/feedback"
 import type { IconProp } from "@/components/forge/icons"
 import { StatusBadge } from "@/components/forge/status"
 import {
@@ -28,6 +32,8 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
+  provenanceLine,
+  provenanceWords,
   shortId,
   type AdkRun,
   type useOrganizationAdkRuns,
@@ -62,6 +68,8 @@ type RunRow = {
   status: TaskStatus
   statusLabel: string
   note: string | undefined
+  /** How it was started, and for whom: what Details shows when nothing stands out. */
+  startedHow: string
   started: string | undefined
   duration: string | undefined
 }
@@ -75,6 +83,7 @@ function toRow(run: AdkRun): RunRow {
     status: shown.status,
     statusLabel: shown.label,
     note: runNote(run),
+    startedHow: provenanceLine(provenanceWords(run)),
     started: run.started_at ? formatShortDateTime(run.started_at) : undefined,
     duration:
       run.duration_ms === null ? undefined : formatDuration(run.duration_ms),
@@ -139,7 +148,12 @@ function RunTable({
                   {run.note}
                 </span>
               ) : (
-                <span className="text-2xs text-subtle">—</span>
+                <span
+                  className="block truncate text-2xs text-subtle"
+                  title={run.startedHow}
+                >
+                  {run.startedHow}
+                </span>
               )}
             </TaskTableCell>
             <TaskTableCell>
@@ -178,6 +192,9 @@ export function RunList({
   words,
   onOpenRun,
   onShowOverview,
+  filters,
+  filtered = false,
+  onClearFilters,
 }: {
   organizationName: string
   /** The organization's runs (`useOrganizationAdkRuns`), shared with the tab's count. */
@@ -186,6 +203,11 @@ export function RunList({
   words: RunListWords
   onOpenRun: (runId: string) => void
   onShowOverview: () => void
+  /** The filters over the list (RunFiltersBar), under its title. */
+  filters?: React.ReactNode
+  /** Whether they narrow it: the runs are those that match. */
+  filtered?: boolean
+  onClearFilters?: () => void
 }) {
   const rows = React.useMemo(
     () => runs.data?.items.map(toRow),
@@ -226,9 +248,47 @@ export function RunList({
     )
   }
 
-  if (!rows) return <TaskListSkeleton />
+  const header = (
+    <header className="mb-4 flex flex-col gap-3 px-4">
+      <div>
+        <h2 className="text-sm font-[550]">{words.title}</h2>
+        <p className="mt-0.5 text-2xs text-muted-foreground">
+          Every run of {organizationName}'s {words.docs}, by status and newest
+          first. Open one to follow it, decide what it waits for, or retry it.
+        </p>
+      </div>
+      {filters}
+    </header>
+  )
 
-  if (rows.length === 0) {
+  if (!rows)
+    return (
+      <>
+        {filters && header}
+        <TaskListSkeleton />
+      </>
+    )
+
+  const loaded = rows.length
+  const total = runs.data?.total ?? loaded
+
+  if (filtered) {
+    if (rows.length === 0)
+      return (
+        <>
+          {header}
+          <PageEmpty
+            illustration="search"
+            title={`No ${words.list} match`}
+            description="None was started that way, for them, through that agent or key, or on those days."
+          >
+            <Button variant="outline" size="sm" onClick={onClearFilters}>
+              Clear filters
+            </Button>
+          </PageEmpty>
+        </>
+      )
+  } else if (rows.length === 0) {
     return (
       <EmptyWorkspace
         illustration={<EmptyIllustration name="waiting" />}
@@ -248,18 +308,15 @@ export function RunList({
     )
   }
 
-  const loaded = rows.length
-  const total = runs.data?.total ?? loaded
-
   return (
     <>
-      <header className="mb-4 px-4">
-        <h2 className="text-sm font-[550]">{words.title}</h2>
-        <p className="mt-0.5 text-2xs text-muted-foreground">
-          Every run of {organizationName}'s {words.docs}, by status and newest
-          first. Open one to follow it, decide what it waits for, or retry it.
-        </p>
-      </header>
+      {header}
+      {filtered && (
+        <ActiveFilters className="px-4" onClear={onClearFilters}>
+          {total.toLocaleString()} {total === 1 ? "run matches" : "runs match"}
+          {runs.isFetching && !runs.isFetchingNextPage ? " · updating…" : ""}
+        </ActiveFilters>
+      )}
       <TaskList>
         {groups.map((group) => (
           <TaskGroup

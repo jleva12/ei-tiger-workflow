@@ -19,6 +19,8 @@ const {
   runEndOf,
   runStartOf,
   timelineOf,
+  startedRunsOf,
+  submittedRunsOf,
   workflowAnswerOf,
   workflowRunFollower,
 } = await server.ssrLoadModule("/src/features/agents/lib/workflow-runs.ts")
@@ -247,4 +249,83 @@ test("a document's workflow tools are named as the model calls them", () => {
     ],
   }
   assert.deepEqual(workflowNamesOf(doc), { ship_order: "Ship order" })
+})
+
+test("an intake's completing names the workflows it started, to follow by their calls", () => {
+  // Its finish_task call's arguments, as the runtime fills them in.
+  const handedBack = {
+    status: "completed",
+    record: { full_name: "Sam Lee" },
+    workflows: [
+      {
+        workflow: "File claim",
+        run_id: "r1",
+        status: "running",
+        call_id: "call_9-0",
+      },
+      { workflow: "Notify team", error: "Its start needs a team." },
+      { name: "not a run" },
+    ],
+  }
+  const runs = startedRunsOf(handedBack)
+  assert.deepEqual(
+    runs.map((run) => [run.workflow, run.call_id]),
+    [
+      ["File claim", "call_9-0"],
+      ["Notify team", undefined],
+    ]
+  )
+  // A run that couldn't start says why, and has no call to follow.
+  assert.deepEqual(workflowAnswerOf(runs[1]), {
+    error: "Its start needs a team.",
+  })
+  assert.deepEqual(workflowAnswerOf(runs[0]), {
+    runId: "r1",
+    status: "running",
+  })
+  assert.equal(startedRunsOf(JSON.stringify(handedBack)).length, 2)
+  // A call that completed nothing (refused, or handed back early) starts nothing.
+  assert.deepEqual(startedRunsOf({ status: "interrupted", workflows: [] }), [])
+  // Another agent's answer starts nothing.
+  assert.deepEqual(startedRunsOf({ result: "Done." }), [])
+  assert.deepEqual(startedRunsOf("Done."), [])
+})
+
+test("submitted requests name the workflows each started, with their intake", () => {
+  // submit_requests' answer, as the runtime gives it.
+  const answer = {
+    submitted: [
+      {
+        id: "q1",
+        intake: "Access request",
+        record: {},
+        workflows: [
+          { workflow: "Open ticket", run_id: "r1", call_id: "call_4-0-0" },
+        ],
+      },
+      { id: "q2", intake: "Laptop request", record: {}, workflows: [] },
+      {
+        id: "q3",
+        intake: "Badge request",
+        workflows: [{ workflow: "Open ticket", error: "No queue." }],
+      },
+    ],
+    not_ready: [{ id: "q4", intake: "Parking", still_needed: ["plate"] }],
+  }
+  assert.deepEqual(
+    submittedRunsOf(answer).map((run) => [
+      run.intake,
+      run.workflow,
+      run.call_id,
+    ]),
+    [
+      ["Access request", "Open ticket", "call_4-0-0"],
+      ["Badge request", "Open ticket", undefined],
+    ]
+  )
+  assert.equal(submittedRunsOf(JSON.stringify(answer)).length, 2)
+  // Nothing submitted, or another tool's answer: no runs.
+  assert.deepEqual(submittedRunsOf({ submitted: [], not_ready: [] }), [])
+  assert.deepEqual(submittedRunsOf({ workflows: [{ workflow: "x" }] }), [])
+  assert.deepEqual(submittedRunsOf("Done."), [])
 })

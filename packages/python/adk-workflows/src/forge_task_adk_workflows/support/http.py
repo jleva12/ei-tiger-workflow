@@ -14,16 +14,15 @@ to is refused. Redirects are followed the same way, one hop at a time.
 
 from __future__ import annotations
 
-import asyncio
-import ipaddress
 import json
 import re
-import socket
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import urlsplit
 
 import httpx
+from forge_agent_runtime.http_guard import NetworkPolicy
+from forge_agent_runtime.http_guard import check_url as check_network_url
+from forge_common.adk import ToolFailure
 
 from forge_task_adk_workflows.support.errors import StepFailed
 
@@ -35,46 +34,12 @@ RETRYABLE = {408, 425, 429, 500, 502, 503, 504}
 _CODE = re.compile(r"^(?:([1-5])xx|([1-5]\d\d)(?:-([1-5]\d\d))?)$", re.IGNORECASE)
 
 
-def _refused(address: str) -> bool:
-    """Whether an IP address is one a request may not reach (an IPv4-mapped IPv6 address as its IPv4)."""
-    ip = ipaddress.ip_address(address)
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
-
-
 async def check_url(url: str, *, allow_private: bool, allowed_hosts: list[str]) -> str:
-    """
-    :param url: Where the request goes.
-    :param allow_private: Whether private networks may be reached.
-    :param allowed_hosts: Hosts always allowed, unresolved.
-    :return: The URL, when a request may go there.
-    :raises StepFailed: It isn't http(s), has no host, its host can't be
-        found, or any address its host resolves to is refused.
-    """
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https"):
-        raise StepFailed(f"Its URL must start with http:// or https://, not {url[:80]!r}")
-    host = parts.hostname
-    if not host:
-        raise StepFailed(f"Its URL has no host: {url[:80]!r}")
-    if allow_private or host.lower() in {h.lower() for h in allowed_hosts}:
-        return url
+    """Validate a destination; the HTTP transport checks again at connection time."""
     try:
-        ipaddress.ip_address(host)
-        addresses = [host]
-    except ValueError:
-        try:
-            infos = await asyncio.get_running_loop().getaddrinfo(host, parts.port or None, type=socket.SOCK_STREAM)
-        except socket.gaierror as exc:
-            raise StepFailed(f"{host} can't be found: {exc.strerror or exc}") from exc
-        addresses = sorted({str(info[4][0]) for info in infos})
-    if any(_refused(address) for address in addresses):
-        raise StepFailed(
-            f"{host} is on a private network, which HTTP steps can't reach "
-            "(a deployment can allow it with HYBRID_ADK_WORKFLOWS__HTTP_ALLOWED_HOSTS)"
-        )
-    return url
+        return await check_network_url(url, NetworkPolicy(allow_private, tuple(h.lower() for h in allowed_hosts)))
+    except ToolFailure as error:
+        raise StepFailed(str(error)) from error
 
 
 async def read_body(response: httpx.Response, limit: int) -> bytes:

@@ -8,7 +8,7 @@ Guarantees:
   document). Chunk writes never overwrite a newer run's chunks, stale runs
   can't mark the document READY, and they clean up what they wrote.
 - Search sees whole versions: a run's new chunks are unpublished until it
-  completes, then published at once with the old version's removed. Until
+  completes, then selected atomically. Old generations are cleaned up later. Until
   then the document's last version keeps answering; a run that fails or is
   superseded never shows.
 - Every component is injected via its protocol; nothing here knows about
@@ -62,16 +62,20 @@ class IngestionPipeline:
         self.storage = storage
         self.config = config or PipelineConfig()
 
-    async def ingest(self, source: SourceFile, *, force: bool = False) -> IngestResult:
+    async def ingest(
+        self, source: SourceFile, *, force: bool = False, expected_run_seq: int | None = None
+    ) -> IngestResult:
         tenant_id, doc_id = source.tenant_id, source.doc_id
         timings: dict[str, float] = {}
         docs = self.storage.documents
 
         existing = await docs.get(tenant_id, doc_id)
+        current_seq = existing.run_seq if existing is not None else 0
+        if expected_run_seq is not None and expected_run_seq != current_seq:
+            raise StaleRunError("document changed while its source was loading")
         if not force and existing is not None and self._is_unchanged(existing, source):
-            # Its run completed; publishing it again repairs one that stopped
-            # between completing and publishing.
-            await self.storage.chunks.publish_run(tenant_id, doc_id, existing.run_seq)
+            # Its run completed; retry optional collection of old generations.
+            await self._cleanup(tenant_id, doc_id, existing.run_seq)
             return IngestResult(
                 tenant_id=tenant_id,
                 doc_id=doc_id,
@@ -100,7 +104,7 @@ class IngestionPipeline:
             size_bytes=source.size_bytes,
             metadata=source.metadata,
         )
-        run_seq = await docs.begin_run(record)
+        run_seq = await docs.begin_run(record, expected_run_seq=current_seq)
         log_ctx = {"tenant_id": tenant_id, "doc_id": doc_id, "run_seq": run_seq}
         log.info("ingest start", extra=log_ctx)
         wrote = False
@@ -151,9 +155,10 @@ class IngestionPipeline:
             )
             if not completed:
                 raise StaleRunError(f"run {run_seq} superseded during write")
-            # Only now does search see the new version, all of it at once.
+            # complete_run switched the authoritative generation atomically.
+            # Cleanup is optional; retained old generations stay invisible.
             with _timer(timings, "publish_ms"):
-                deleted_stale = await self.storage.chunks.publish_run(tenant_id, doc_id, run_seq)
+                deleted_stale = await self._cleanup(tenant_id, doc_id, run_seq)
         except Exception as exc:
             if isinstance(exc, StaleRunError):
                 if wrote:  # remove anything we wrote that a newer run won't overwrite
@@ -176,6 +181,13 @@ class IngestionPipeline:
         )
         log.info("ingest done", extra=result.model_dump(mode="json"))
         return result
+
+    async def _cleanup(self, tenant_id: str, doc_id: str, run_seq: int) -> int:
+        try:
+            return await self.storage.chunks.publish_run(tenant_id, doc_id, run_seq)
+        except Exception:
+            log.warning("published document generation cleanup failed", exc_info=True)
+            return 0
 
     async def delete(self, tenant_id: str, doc_id: str) -> int:
         # Tombstone first: advances the fence so an in-flight run can't complete

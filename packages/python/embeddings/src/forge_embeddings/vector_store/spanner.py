@@ -308,10 +308,15 @@ class Search:
             score = "+".join(terms)
             condition += " AND (" + " OR ".join(matches) + ")"
         rows = await self.db.query(
-            f"SELECT Payload, {score} AS Score FROM {VECTORS} WHERE {condition} ORDER BY Score DESC, TenantId, ScopeId, Id LIMIT @limit",
+            f"SELECT Payload, {score} AS Score, RunSeq FROM {VECTORS} WHERE {condition} ORDER BY Score DESC, TenantId, ScopeId, Id LIMIT @limit",
             p,
         )
-        return [(payload(row[0]), float(row[1])) for row in rows]
+        # Document section expansion must use the exact generation returned by
+        # search, including legacy rows whose payload predates publication fences.
+        return [
+            (payload(row[0]) | ({"_generation": int(row[2])} if self.namespace == "chunks" else {}), float(row[1]))
+            for row in rows
+        ]
 
     async def fused(
         self, *, weights: dict[str, float], limit: int, leg_limit: int, **kwargs: Any

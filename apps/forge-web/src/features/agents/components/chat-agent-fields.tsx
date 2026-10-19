@@ -9,7 +9,7 @@ import {
 } from "@/features/builder/components/fields/basic-fields"
 import { IssueMessages } from "@/features/builder/components/fields/field-issues"
 import { useFieldIssues } from "@/features/builder/components/fields/field-issues-context"
-import { ExpressionField } from "@/features/builder/components/fields/expression-field"
+import { MarkdownTemplateField } from "@/features/builder/components/fields/markdown-template-field"
 import { ModelFields } from "@/features/builder/components/fields/model-fields"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
@@ -17,15 +17,19 @@ import { adkName } from "@/features/adk-workflows/lib/model"
 import { chatScope } from "@/features/agents/lib/input"
 import {
   isAgentLike,
+  type Guarded,
   type ChatAgentSettings,
   type ChatConfigs,
   type ChatKind,
   type ChatStep,
 } from "@/features/agents/lib/model"
+import { instructionEditor } from "@/features/agents/lib/instruction-writer"
 import { chatInstructionBrief } from "./chat-agent-brief"
 import { useChatBuilder, useChatBuilderApi } from "./chat-agent-store"
 import { InputSchemaField } from "./input-schema-field"
+import { IntakeAgentFields } from "./intake-agent-fields"
 import { InstructionWriter } from "./instruction-writer"
+import { AccessRuleField } from "./access-rule-field"
 import { ToolFields, type ToolKind } from "./tool-fields"
 
 /*
@@ -119,57 +123,95 @@ function useChatScope() {
 }
 
 /**
- * An agent's instruction, a template completed and checked against what
- * the chat sends: the run request, and the state the chat agent declares.
- * Its ✨ has the instruction writer write it, for the agent as it's set up.
+ * An agent's instruction, a Markdown template checked against what the chat
+ * sends: the run request, and the state the chat agent declares. Its first
+ * lines show here; Open editor writes it in the rich text editor in a card
+ * beside. Its ✨ has the instruction writer write it, for the agent as it's
+ * set up.
  */
 function InstructionField({
   id,
   value,
   onChange,
+  writer = true,
+  placeholder = "Who it is, what it does, and how it answers.",
+  description,
 }: {
   /** The agent's node. */
   id: string
   value: string
   onChange: (value: string) => void
+  /** Its ✨ has the instruction writer write it. */
+  writer?: boolean
+  placeholder?: string
+  description?: React.ReactNode
 }) {
   const scope = useChatScope()
   const store = useChatBuilderApi()
   const client = useQueryClient()
   const organizationId = useChatBuilder((s) => s.meta.organization_id)
+  const name = useChatBuilder(
+    (s) => s.nodes.find((n) => n.id === id)?.data.name
+  )
   // Its issues, but for its template's: it checks those itself.
   const { issues, key } = useFieldIssues("instruction")
   return (
-    <ExpressionField
+    <MarkdownTemplateField
       label="Instruction"
       value={value}
       onChange={onChange}
-      actions={
-        <InstructionWriter
-          organizationId={organizationId}
-          value={value}
-          onApply={onChange}
-          brief={() => chatInstructionBrief(store.getState(), id, client)}
-        />
+      writer={
+        writer
+          ? ({ value: current, onApply }) => (
+              <InstructionWriter
+                organizationId={organizationId}
+                value={current}
+                onApply={onApply}
+                brief={() => chatInstructionBrief(store.getState(), id, client)}
+              />
+            )
+          : undefined
       }
-      mode="template"
-      check={{ textual: true }}
+      ai={
+        organizationId
+          ? instructionEditor(
+              organizationId,
+              writer
+                ? () => chatInstructionBrief(store.getState(), id, client)
+                : undefined
+            )
+          : undefined
+      }
       scope={scope}
-      multiline
-      rows={7}
-      placeholder="Who it is, what it does, and how it answers. {{ opens a reference."
-      description={
+      check={INSTRUCTION_CHECK}
+      placeholder={placeholder}
+      editorTitle={
+        name?.trim() ? `${name.trim()}'s instruction` : "Instruction"
+      }
+      editorDescription={
         <>
-          Its system instruction: what it&apos;s told before every conversation.{" "}
+          What it&apos;s told before every conversation, in Markdown.{" "}
           {code("{{ state.… }}")} puts in what the chat sends,{" "}
           {code("{{ request.… }}")} who&apos;s chatting.
         </>
+      }
+      description={
+        description ?? (
+          <>
+            Its system instruction: what it&apos;s told before every
+            conversation. {code("{{ state.… }}")} puts in what the chat sends,{" "}
+            {code("{{ request.… }}")} who&apos;s chatting.
+          </>
+        )
       }
       issues={issues.filter((i) => !i.id.includes(":field:"))}
       field={key}
     />
   )
 }
+
+/** A template writes text: an object in it reads as JSON. */
+const INSTRUCTION_CHECK = { textual: true }
 
 /** An LLM agent's own settings: the chat agent's, or a sub-agent's. */
 function LlmSettings({
@@ -229,7 +271,7 @@ function LlmSettings({
   )
 }
 
-function AgentFields({ id, config }: Props<"agent">) {
+function AgentFields({ id, config, name }: Props<"agent"> & { name: string }) {
   const set = useSet<"agent">(id)
   return (
     <>
@@ -238,6 +280,7 @@ function AgentFields({ id, config }: Props<"agent">) {
         schema={config.state_schema}
         onChange={(schema) => set("state_schema", schema)}
       />
+      <AccessFields id={id} config={config} name={name} />
       <p className="text-xs/[1.6] text-muted-foreground">
         Connect its <span className="font-medium text-foreground">Tools</span>{" "}
         way to what it can call, and its{" "}
@@ -291,6 +334,61 @@ function SubAgentFields({ id, config }: Props<"sub_agent">) {
           />
         </>
       )}
+    </>
+  )
+}
+
+/**
+ * An intake agent's model settings: its tone (an optional instruction; the
+ * intake's own is worked out from its design), its model and whether it may
+ * ask with a form.
+ */
+function IntakeModelSettings({
+  id,
+  config,
+}: {
+  id: string
+  config: ChatConfigs["intake_agent"]
+}) {
+  const set = useSet<"intake_agent">(id)
+  const updateStep = useChatBuilder((s) => s.updateStep)
+  return (
+    <>
+      <InstructionField
+        id={id}
+        value={config.instruction}
+        onChange={(value) => set("instruction", value)}
+        writer={false}
+        placeholder="Warm and brief. Explain any jargon."
+        description="Optional: its tone, and anything else it should know. What to collect, what's in and what to ask next are added for it before every call."
+      />
+      <ModelFields
+        model={config.model}
+        thinkingLevel={config.thinking_level}
+        onChange={(values, key) =>
+          updateStep(
+            id,
+            (step) =>
+              ({ ...step, config: { ...step.config, ...values } }) as ChatStep,
+            key
+          )
+        }
+      />
+      <OptionalNumberField
+        issue="max_output_tokens"
+        label="Most tokens"
+        value={config.max_output_tokens}
+        min={1}
+        integer
+        placeholder="Model's limit"
+        onChange={(value) => set("max_output_tokens", value)}
+      />
+      <CheckField
+        label="Asks with forms"
+        checked={config.ask_person}
+        onChange={(on) => set("ask_person", on)}
+        description="For a choice, a date or a yes or no it may show a form in the chat instead of asking in words."
+      />
     </>
   )
 }
@@ -351,12 +449,43 @@ function ChatToolFields<K extends ToolKind>({
 function kindFields(id: string, step: ChatStep) {
   switch (step.kind) {
     case "agent":
-      return <AgentFields id={id} config={step.config} />
+      return <AgentFields id={id} config={step.config} name={step.name} />
     case "sub_agent":
       return <SubAgentFields id={id} config={step.config} />
+    case "intake_agent":
+      return (
+        <IntakeAgentFields
+          id={id}
+          config={step.config}
+          model={<IntakeModelSettings id={id} config={step.config} />}
+        />
+      )
     default:
       return <ChatToolFields id={id} kind={step.kind} config={step.config} />
   }
+}
+
+/** Who may use an agent, of any kind on the canvas: the rule on its node. */
+function AccessFields({
+  id,
+  config,
+  name,
+}: {
+  id: string
+  config: Guarded
+  name: string
+}) {
+  const set = useSet<"agent">(id)
+  const organizationId = useChatBuilder((s) => s.meta.organization_id)
+  if (!organizationId) return null
+  return (
+    <AccessRuleField
+      organizationId={organizationId}
+      label={name}
+      rule={config.access}
+      onChange={(rule) => set("access", rule)}
+    />
+  )
 }
 
 /** The settings of a node, for its kind. */
@@ -365,6 +494,10 @@ export function ChatAgentFields({ id, step }: { id: string; step: ChatStep }) {
     <>
       <NodeName id={id} step={step} />
       {kindFields(id, step)}
+      {/* The chat agent's is among its own settings, above the canvas hint. */}
+      {step.kind !== "agent" && "access" in step.config && (
+        <AccessFields id={id} config={step.config} name={step.name} />
+      )}
     </>
   )
 }

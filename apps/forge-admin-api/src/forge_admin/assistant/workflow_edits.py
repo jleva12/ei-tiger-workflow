@@ -327,12 +327,18 @@ def _settle(edited: Edited) -> None:
         else:
             edited.dropped.append(_edge_label(doc, edge))
     doc["edges"] = kept
-    _place(doc, edited.added)
+    place_new_nodes(doc, edited.added)
 
 
-def _place(doc: dict[str, Any], added: list[str]) -> None:
-    # Each new node right of the node that leads to it (or of the rightmost
-    # one), moved down until it's clear of the others.
+def place_new_nodes(doc: dict[str, Any], added: list[str]) -> None:
+    """
+    Places each new node on the canvas: right of the node that leads to it
+    (or of the rightmost one), moved down until it's clear of the others.
+    A node already placed stays where it is.
+
+    :param doc: A workflow's or a chat agent's document, changed in place.
+    :param added: The new nodes, by ID, in the order they were added.
+    """
     layout = doc.get("layout")
     if not isinstance(layout, dict):
         layout = doc["layout"] = {}

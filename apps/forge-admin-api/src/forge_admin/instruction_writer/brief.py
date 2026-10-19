@@ -5,8 +5,9 @@ where it runs, its tools with the settings that say what they do, the agents
 it hands off to and the one above it, and the values its instruction can put
 in with ``{{ }}``. :func:`resolve` fills in what they only have IDs for, from
 the organization's own records: an MCP server's tools (as last listed), a
-knowledge base's name and description, and an agent's or workflow's name,
-description and what it takes. :func:`render` writes it all out for the
+knowledge base's name and description, an agent's or workflow's name,
+description and what it takes, and a team UI component's name and what it's
+for (its latest published version). :func:`render` writes it all out for the
 model, each tool under the name the model will call it by
 (``forge_agent_runtime.build``'s naming), so the instruction can name them.
 """
@@ -20,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
 from forge_agent_runtime.document import KINDS
+from forge_agent_runtime.generative_ui import is_team_key
 from forge_agent_runtime.names import adk_name
 from forge_agent_runtime.present import components_of
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
@@ -77,7 +79,7 @@ class BriefAgent(BaseModel):
     id: Ref | None = None
     name: Short
     description: Text = ""
-    #: agent, sub_agent, saved_agent; llm, sequential, parallel, loop_agent.
+    #: agent, sub_agent, intake_agent, saved_agent; llm, sequential, parallel, loop_agent.
     kind: Annotated[str, StringConstraints(max_length=32)] = "sub_agent"
     #: chat, task, single_turn; tool when it's called as one.
     mode: Annotated[str, StringConstraints(max_length=32)] | None = None
@@ -130,8 +132,6 @@ class SavedAgent:
     """An agent from the Agents page, as its document has it."""
 
     name: str
-    #: Its entry agent's ADK name: what it's called by, as a tool or a hand-off.
-    adk_name: str
     description: str
 
 
@@ -153,6 +153,9 @@ class Resolved:
     workflows: dict[str, Workflow] = field(default_factory=dict)
     #: Its skills, by ID: name and description.
     skills: dict[str, tuple[str, str]] = field(default_factory=dict)
+    #: Its team UI components agents may use, by key: name and description.
+    #: None when they couldn't be read, so none is said to be gone.
+    ui_components: dict[str, tuple[str, str]] | None = field(default_factory=dict)
 
 
 def _ids(values: Iterable[object]) -> set[str]:
@@ -166,6 +169,7 @@ async def resolve(
     *,
     chat_agents: Any = None,
     workflows: Any = None,
+    ui_components: Any = None,
 ) -> Resolved:
     """
     :param brief: The brief.
@@ -174,6 +178,8 @@ async def resolve(
     :param chat_agents: The chat agents' store (``ChatAgentStore``); None
         without MongoDB, when agents go by the names the brief gives.
     :param workflows: The workflows' store (``AgentStore``); likewise.
+    :param ui_components: The team UI components' store
+        (``UiComponentStore``); likewise.
     :return: What its IDs are. One that can't be read is left out.
     """
     found = Resolved()
@@ -229,6 +235,34 @@ async def resolve(
         document = await _document(workflows, organization_id, workflow_id)
         if document is not None:
             found.workflows[workflow_id] = _workflow(document)
+    keys = sorted(
+        {
+            name
+            for t in brief.tools
+            if t.kind == "rich_answers"
+            for name in _list(t.config.get("components"))
+            if is_team_key(name)
+        }
+    )
+    if keys and ui_components is None:
+        found.ui_components = None
+    elif keys:
+        try:
+            live = await ui_components.find_live(organization_id, keys)
+        except Exception:
+            logger.warning(
+                "Couldn't read the team UI components for the instruction writer",
+                exc_info=True,
+            )
+            found.ui_components = None
+        else:
+            found.ui_components = {
+                key: (
+                    str(definition.get("display_name") or key),
+                    str(definition.get("description") or ""),
+                )
+                for key, definition in live.items()
+            }
     return found
 
 
@@ -258,11 +292,9 @@ def _saved_agent(document: Mapping[str, Any]) -> SavedAgent:
         (n for n in nodes if isinstance(n, Mapping) and n.get("kind") == "agent"), None
     )
     config = entry.get("config") if isinstance(entry, Mapping) else None
-    entry_name = str(entry.get("name", "")) if isinstance(entry, Mapping) else ""
     description = config.get("description") if isinstance(config, Mapping) else ""
     return SavedAgent(
         name=str(document.get("name", "")),
-        adk_name=adk_name(entry_name),
         description=str(description or document.get("description") or ""),
     )
 
@@ -323,11 +355,43 @@ def _fields(schema: object) -> str:
 
 
 def _components(config: Mapping[str, Any]) -> tuple[str, ...]:
-    """:return: A Rich answers node's components, with what they need; the defaults for none."""
+    """
+    :return: A Rich answers node's base components, with what they need;
+        the defaults for none.
+    """
+    picked = config.get("components")
     try:
-        return components_of(config.get("components"))
+        if picked is None:
+            return components_of(None)
+        return components_of([name for name in _list(picked) if not is_team_key(name)])
     except ValueError:
         return ()
+
+
+def _team_lines(config: Mapping[str, Any], found: Resolved) -> list[str]:
+    """How a Rich answers node's team components read: what each is for, or
+    that it can't be used."""
+    lines = []
+    for key in dict.fromkeys(
+        n for n in _list(config.get("components")) if is_team_key(n)
+    ):
+        known = (
+            found.ui_components.get(str(key))
+            if found.ui_components is not None
+            else None
+        )
+        if known is not None:
+            name, description = known
+            lines.append(f'  - `{key}` ("{name}"): {_clip(description, 300)}')
+        elif found.ui_components is None:
+            lines.append(f"  - `{key}`: one of the organization's team components.")
+        else:
+            lines.append(
+                f"  - `{key}`: not one of the organization's team components it can use "
+                "(archived, disabled or not published): the agent won't run until it's "
+                "picked again or taken out."
+            )
+    return lines
 
 
 def _called(name: str, fallback: str) -> str:
@@ -455,7 +519,8 @@ def _tool_lines(tool: BriefTool, found: Resolved) -> list[str]:
             ]
         case "saved_agent":
             saved = found.agents.get(str(c.get("agent") or ""))
-            name = (saved.adk_name if saved else "") or _called(tool.name, "agent")
+            # Called after the node it's placed at, as the runtime names it.
+            name = _called(tool.name, "agent")
             about = saved.description if saved else ""
             title = f' (the Agents page\'s "{saved.name}")' if saved else ""
             return [
@@ -466,6 +531,20 @@ def _tool_lines(tool: BriefTool, found: Resolved) -> list[str]:
             return [
                 f"- `{_called(tool.name, 'agent')}(request)`: a sub-agent, called with a "
                 f"request; it answers back. {_clip(c.get('description'))}".rstrip()
+            ]
+        case "intake_agent":
+            fields = [f for f in _list(c.get("fields")) if isinstance(f, dict)]
+            asks = ", ".join(
+                f"{f.get('label') or f.get('key')} ({f.get('key')})"
+                for f in fields[:24]
+            )
+            return [
+                f'- Intake "{tool.name}" (`{_called(tool.name, "intake")}`): it files the '
+                "person's requests to it itself, asking its fields: `start_requests`, "
+                "`answer_requests` (a key several open requests share goes to each), "
+                "`review_requests`, `submit_requests` (starts its workflows), "
+                "`cancel_requests`, `list_requests` (theirs, from earlier conversations too). "
+                f"It asks for: {asks or '(no fields yet)'}. {_clip(c.get('description'))}".rstrip()
             ]
         case "adk_workflow":
             flow = found.workflows.get(str(c.get("workflow") or ""))
@@ -509,12 +588,22 @@ def _tool_lines(tool: BriefTool, found: Resolved) -> list[str]:
                 "and answers what it printed and its errors." + _confirm(c)
             ]
         case "rich_answers":
-            return [
+            base = _components(c)
+            team = _team_lines(c, found)
+            picks = ", ".join(base) if base else "none of the base ones"
+            lines = [
                 "- `present(...)`: shows the person a composition the chat draws, of the "
-                f"components its Rich answers node picks ({', '.join(_components(c))}); what the "
+                f"components its Rich answers node picks ({picks}); what the "
                 "person clicks or fills in comes back as their next message. It's told by itself "
                 "how, and to write a sentence about it too, so say when to use it, not how."
             ]
+            if team:
+                lines.append(
+                    "  Its team's own components too, each a set layout it gives inputs to; "
+                    "say when each fits:"
+                )
+                lines.extend(team)
+            return lines
         case _:
             return []
 
@@ -541,7 +630,8 @@ _WORKFLOW_MODES = {
 
 def _hand_off_line(agent: BriefAgent, brief: Brief, found: Resolved) -> str:
     saved = found.agents.get(agent.agent or "") if agent.kind == "saved_agent" else None
-    name = (saved.adk_name if saved else "") or _called(agent.name, "agent")
+    # A saved agent too is called after the node it's placed at.
+    name = _called(agent.name, "agent")
     about = _clip(agent.description or (saved.description if saved else ""), 300)
     if brief.where == "workflow":
         kind = {
@@ -554,6 +644,12 @@ def _hand_off_line(agent: BriefAgent, brief: Brief, found: Resolved) -> str:
             f'- `{name}` ({kind}): reached with `transfer_to_agent(agent_name="{name}")`'
             f"{kept}. {about}".rstrip()
         )
+    if agent.kind == "intake_agent":
+        return (
+            f"- `{name}` (an intake): the tool `{name}(background, …)` hands it the person, "
+            "with what they've already said; it collects its record with them, in any order, "
+            f"and hands back `{{status, note, record, missing}}`. {about}"
+        ).rstrip()
     mode = agent.mode or "chat"
     how = {
         "chat": f'`transfer_to_agent(agent_name="{name}")` hands it the conversation',
@@ -625,3 +721,268 @@ def render(brief: Brief, found: Resolved) -> str:
     else:
         lines.append("- None.")
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# A chat agent's brief, from its document
+# --------------------------------------------------------------------------
+
+#: What every chat turn's request carries, as the builder lists it.
+_REQUEST_FIELDS = (
+    (
+        "appName",
+        "string",
+        "The agent's ID as the runtime knows it (ca_…): not a name to show people.",
+    ),
+    ("userId", "string", "Who's chatting: the signed-in person's ID."),
+    ("sessionId", "string", "The conversation, created before its first message."),
+    ("newMessage", "object", "The person's turn: a Gemini Content."),
+)
+#: The state every chat has, whatever its agent declares.
+_FIXED_STATE = (
+    (
+        "model",
+        "string",
+        "The model the person picked, provider/model; empty for the default.",
+    ),
+    ("thinking_level", "string", "How long the model thinks."),
+)
+#: How deep a declared state field's fields are listed.
+_STATE_DEPTH = 2
+_MOST_REFERENCES = 80
+
+
+def _type_label(schema: Mapping[str, Any]) -> str:
+    kind = schema.get("type", "any")
+    if isinstance(kind, list):
+        kind = " | ".join(str(each) for each in kind)
+    if kind == "array" and isinstance(schema.get("items"), Mapping):
+        return f"array of {_type_label(schema['items'])}"
+    if isinstance(schema.get("enum"), list):
+        return f"{kind}: one of {', '.join(json.dumps(v) for v in schema['enum'][:12])}"
+    return str(kind)
+
+
+def _chat_references(state_schema: object) -> list[BriefReference]:
+    """The values a chat agent's instruction can put in, as the builder offers them."""
+    found = [
+        BriefReference(
+            path="request",
+            type="object",
+            description=(
+                "The run request: who's chatting, in which conversation, and "
+                "their message."
+            ),
+        )
+    ]
+    found += [
+        BriefReference(path=f"request.{name}", type=kind, description=about)
+        for name, kind, about in _REQUEST_FIELDS
+    ]
+    found.append(
+        BriefReference(
+            path="state",
+            type="object",
+            description=(
+                "The session's state: what the chat sends in stateDelta, kept "
+                "for the conversation."
+            ),
+        )
+    )
+    found += [
+        BriefReference(path=f"state.{name}", type=kind, description=about)
+        for name, kind, about in _FIXED_STATE
+    ]
+    fixed = {name for name, _, _ in _FIXED_STATE}
+
+    def add(path: str, schema: Mapping[str, Any], depth: int) -> None:
+        if len(found) >= _MOST_REFERENCES:
+            return
+        description = schema.get("description")
+        found.append(
+            BriefReference(
+                path=path[:300],
+                type=_type_label(schema)[:200],
+                description=_clip(description, 500) if description else None,
+            )
+        )
+        properties = schema.get("properties")
+        if depth >= _STATE_DEPTH or not isinstance(properties, Mapping):
+            return
+        for name, inner in properties.items():
+            if isinstance(inner, Mapping):
+                add(f"{path}.{name}", inner, depth + 1)
+
+    properties = (
+        state_schema.get("properties") if isinstance(state_schema, Mapping) else None
+    )
+    for name, schema in (properties or {}).items():
+        if name not in fixed and isinstance(schema, Mapping):
+            add(f"state.{name}", schema, 1)
+    return found
+
+
+def _url_only(url: object) -> str:
+    # Where it calls, without a query string that might hold a key.
+    return str(url or "").split("?")[0]
+
+
+def _config(node: Mapping[str, Any]) -> Mapping[str, Any]:
+    config = node.get("config")
+    return config if isinstance(config, Mapping) else {}
+
+
+def _chat_tool(
+    node: Mapping[str, Any], operations: Mapping[str, list[dict[str, Any]]]
+) -> BriefTool:
+    """A tool node as the brief has it: what says what it does, nothing that signs it in."""
+    kind = str(node.get("kind"))
+    name = str(node.get("name") or "")
+    c = _config(node)
+    config: dict[str, Any]
+    match kind:
+        case "http_tool":
+            config = {
+                key: c.get(key)
+                for key in ("description", "method", "parameters", "confirm")
+            }
+            config["url"] = _url_only(c.get("url"))
+        case "mcp":
+            config = {
+                "server": c.get("server") or "",
+                "url": "" if c.get("server") else _url_only(c.get("url")),
+                "tools": c.get("tools") or "",
+                "confirm": bool(c.get("confirm")),
+            }
+        case "openapi":
+            wanted = [
+                each.strip()
+                for each in str(c.get("operations") or "").split(",")
+                if each.strip()
+            ]
+            config = {
+                "url": _url_only(c.get("url"))
+                if c.get("source", "url") == "url"
+                else "",
+                "operations": [
+                    {
+                        "name": o.get("name"),
+                        "method": o.get("method"),
+                        "path": o.get("path"),
+                        "summary": o.get("summary")
+                        or str(o.get("description") or "")[:200],
+                    }
+                    for o in operations.get(str(node.get("id")), [])
+                    if not wanted
+                    or o.get("name") in wanted
+                    or o.get("operation_id") in wanted
+                ][:60],
+                "only": wanted,
+                "confirm": bool(c.get("confirm")),
+            }
+        case "saved_agent":
+            config = {"agent": c.get("agent") or ""}
+        case _:
+            # The rest say nothing that signs them in.
+            config = dict(c)
+    return BriefTool(kind=kind, name=name[:200], config=config)
+
+
+def _chat_agent(node: Mapping[str, Any], mode: str | None = None) -> BriefAgent:
+    kind = str(node.get("kind"))
+    config = _config(node)
+    name = str(node.get("name") or "")[:200]
+    description = _clip(config.get("description"), 4_000)
+    match kind:
+        case "sub_agent":
+            return BriefAgent(
+                name=name,
+                description=description,
+                kind=kind,
+                mode=mode or str(config.get("mode") or "chat"),
+            )
+        case "intake_agent":
+            return BriefAgent(
+                name=name, description=description, kind=kind, mode="task"
+            )
+        case "saved_agent":
+            return BriefAgent(
+                name=name,
+                kind=kind,
+                agent=str(config.get("agent") or "")[:64] or None,
+                mode=mode,
+            )
+        case _:
+            return BriefAgent(name=name, description=description, kind=kind)
+
+
+def chat_agent_brief(
+    document: Mapping[str, Any],
+    node_id: str,
+    *,
+    operations: Mapping[str, list[dict[str, Any]]] | None = None,
+) -> Brief:
+    """
+    The instruction writer's brief of one of a chat agent's agents (the agent
+    people talk to, or a sub-agent), as the Agents builder makes it
+    (``chat-agent-brief.ts``): what's on its tools and hands-off ways, who
+    hands off to it, and what its instruction can put in.
+
+    :param document: The chat agent's document.
+    :param node_id: The agent's node, by ID.
+    :param operations: OpenAPI tools' operations, by the tool's node ID, as
+        the spec route reads them; none are listed without.
+    :raises ValueError: There's no such agent (or sub-agent) in it.
+    """
+    nodes = {
+        str(node.get("id")): node
+        for node in _list(document.get("nodes"))
+        if isinstance(node, Mapping)
+    }
+    node = nodes.get(node_id)
+    if node is None or node.get("kind") not in ("agent", "sub_agent"):
+        raise ValueError(f"{node_id!r} isn't the chat agent or one of its sub-agents.")
+    edges = [edge for edge in _list(document.get("edges")) if isinstance(edge, Mapping)]
+
+    def out(way: str) -> list[Mapping[str, Any]]:
+        return [
+            nodes[str(edge.get("target"))]
+            for edge in edges
+            if edge.get("source") == node_id
+            and edge.get("source_output") == way
+            and str(edge.get("target")) in nodes
+        ]
+
+    into = next(
+        (
+            edge
+            for edge in edges
+            if edge.get("target") == node_id
+            and edge.get("source_output") in ("agents", "tools")
+        ),
+        None,
+    )
+    parent = nodes.get(str(into.get("source"))) if into is not None else None
+    root = next((each for each in nodes.values() if each.get("kind") == "agent"), {})
+    config = _config(node)
+    is_sub = node.get("kind") == "sub_agent"
+    # A sub-agent called as a tool is used as one, whatever its mode says.
+    mode = None
+    if is_sub:
+        called = into is not None and into.get("source_output") == "tools"
+        mode = "tool" if called else str(config.get("mode") or "chat")
+    return Brief(
+        where="chat",
+        role="sub_agent" if is_sub else "chat_agent",
+        name=str(node.get("name") or "")[:200],
+        description=_clip(config.get("description"), 4_000),
+        container=str(document.get("name") or "")[:200],
+        mode=mode,
+        ask_person=bool(config.get("ask_person")),
+        sees_only_given=is_sub and config.get("include_contents") == "none",
+        files=False,
+        tools=[_chat_tool(tool, operations or {}) for tool in out("tools")][:50],
+        hand_offs=[_chat_agent(agent) for agent in out("agents")][:30],
+        parent=_chat_agent(parent) if parent is not None else None,
+        references=_chat_references(_config(root).get("state_schema")),
+    )

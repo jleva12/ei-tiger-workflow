@@ -33,6 +33,7 @@ the **assistant** (the AI helper on every page).
 | The app's frame: layout, sub nav, scope switcher, settings | `apps/forge-web/src/app/` |
 | The ADK workflow builder's nodes and fields, and the ADK workflow format | `apps/forge-web/src/features/adk-workflows/` |
 | The agent (chat agent) builder and its format | `apps/forge-web/src/features/agents/` |
+| The desktop app (Tauri) for agents' chat pages | `apps/forge-desktop/` (the Rust shell, [README](apps/forge-desktop/README.md)), `apps/forge-web/src/desktop/` (its screen) |
 | A run's page, lists of runs, starting a run, approvals and answers | `apps/forge-web/src/features/runs/` |
 | The canvas, library, step dialog, layout and lines both builders share | `apps/forge-web/src/features/builder/` |
 | Forge's steps (Approval, HTTP request, Transform, If / else…) and JSONata expressions | `apps/forge-web/src/features/steps/` |
@@ -92,8 +93,8 @@ the **assistant** (the AI helper on every page).
   (`/api/v1/runtime`, [forge-agent-runtime](packages/python/agent-runtime/README.md))
   runs `ca_x`, `ca_x@3` or `ca_x@draft` over ADK's run API (`run_sse`, for chat
   UIs) and Google's A2A protocol (`/runtime/a2a/{agent}`: JSON-RPC, A2A 1.0
-  and 0.3, and each agent's card, for other agents), both public unless
-  `FORGE_ADMIN_AGENT_RUNTIME_PUBLIC=false`. **Generate standalone agent**
+  and 0.3, and each agent's card, for other agents), both for callers with
+  an organization's API key or a Forge sign-in. **Generate standalone agent**
   downloads the agent as a project of its own that speaks both too. A
   published agent's **Chat page** switch shares it as a full-page chat at a
   link of its own (`/chat/{token}`), for anyone who has the link.

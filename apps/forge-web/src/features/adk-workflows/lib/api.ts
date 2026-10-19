@@ -13,6 +13,7 @@ import {
   installChatNodeCatalog,
   type ChatNodeCatalog,
 } from "@/features/agents/lib/catalog"
+import type { DocumentAccess } from "@/features/agent-access/lib/api"
 import { installNodeCatalog, type NodeCatalog } from "./catalog"
 import type { AgentDocument } from "./document"
 
@@ -50,6 +51,8 @@ export type AgentRecord = {
   updated_by: string
   /** Who saved it last, by name as they were then. */
   updated_by_name: string | null
+  /** Who may run it; null (or absent) when that was never set: anyone. */
+  access?: DocumentAccess | null
 }
 
 /** One published version. */
@@ -195,6 +198,47 @@ export function getAgentVersion(
 }
 
 /** One published version, to show read-only. */
+/**
+ * Who may run it as it is now: the builder keeps the record it opened, but
+ * this changes beside it (`useWorkflowAccessSetting`), in the cached detail.
+ */
+export function useWorkflowAccess(record: AgentRecord): DocumentAccess | null {
+  const { data } = organizationAgents
+    .scope({ organizationId: record.organization_id })
+    // Only read: the builder's own query fetches it.
+    .useDetail(record.id, { enabled: false })
+  return (data ? data.access : record.access) ?? null
+}
+
+/**
+ * Saying which of the organization's agent permissions let someone run it.
+ * Only that changes in the cache: the record the builder saves from stays as
+ * it is.
+ */
+export function useWorkflowAccessSetting(organizationId: string, id: string) {
+  const client = useQueryClient()
+  const scoped = organizationAgents.scope({ organizationId })
+  return useMutation({
+    mutationFn: (permissionIds: number[]) =>
+      api.put<AgentRecord, { permission_ids: number[] }>(
+        `${agentPath(organizationId, id)}/access`,
+        { permission_ids: permissionIds },
+        { silent: true }
+      ),
+    onSuccess: ({ access }) => {
+      client.setQueryData<AgentRecord>(
+        scoped.keys.detail(id),
+        (kept) => kept && { ...kept, access }
+      )
+      client.setQueriesData<AgentRecord[]>(
+        { queryKey: scoped.keys.lists() },
+        (list) => list?.map((r) => (r.id === id ? { ...r, access } : r))
+      )
+    },
+    meta: { silent: true },
+  })
+}
+
 export function useAgentVersion(
   organizationId: string,
   id: string,

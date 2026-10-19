@@ -476,3 +476,30 @@ def test_a_published_version_runs_only_published_workflows(
     )
     assert refused.status_code == 422
     assert "draft" in refused.json()["detail"]["problems"][0]
+
+
+def test_who_may_run_an_agent_is_kept_beside_it(organizations: Organizations) -> None:
+    made = create(organizations)
+    access = f"{API}/organizations/{organizations.id}/agent-access"
+    shipping = organizations.org_admin.post(
+        f"{access}/permissions", json={"key": "shipping:run"}
+    )
+    assert shipping.status_code == 201, shipping.text
+    shipping_id = shipping.json()["id"]
+    url = f"{organizations.agents}/{made['id']}/access"
+
+    assert (
+        organizations.viewer.put(
+            url, json={"permission_ids": [shipping_id]}
+        ).status_code
+        == 403
+    )
+    limited = organizations.member.put(url, json={"permission_ids": [shipping_id]})
+    assert limited.status_code == 200, limited.text
+    assert limited.json()["access"]["permission_ids"] == [shipping_id]
+    # It isn't a change to the agent.
+    assert limited.json()["revision"] == 1
+    stored = organizations.stored(made["id"])
+    assert stored is not None and stored["access"]["permission_ids"] == [shipping_id]
+    read = organizations.viewer.get(f"{organizations.agents}/{made['id']}")
+    assert read.json()["access"]["permission_ids"] == [shipping_id]

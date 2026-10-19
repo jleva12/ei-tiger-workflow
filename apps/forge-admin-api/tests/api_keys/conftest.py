@@ -15,8 +15,8 @@ from forge_admin.config import Settings
 def make_world(settings: Settings, tmp_path: Path) -> Iterator[Callable[..., World]]:
     clients: list[TestClient] = []
 
-    def make(*, public: bool = True, **changes: Any) -> World:
-        world = build_world(settings, tmp_path, public=public, **changes)
+    def make(**changes: Any) -> World:
+        world = build_world(settings, tmp_path, **changes)
         clients.append(world.client)
         return world
 

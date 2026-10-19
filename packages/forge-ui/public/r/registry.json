@@ -1221,6 +1221,26 @@
       ]
     },
     {
+      "name": "streaming-text",
+      "type": "registry:ui",
+      "title": "Streaming Text",
+      "description": "Iconiq's word-by-word streaming text: each word fades in wearing a blue gradient, then settles into the foreground.",
+      "dependencies": [
+        "@base-ui/react@^1.8.0",
+        "class-variance-authority@^0.7.1",
+        "cn@^0.4.0",
+        "motion@^13.5.1"
+      ],
+      "registryDependencies": [],
+      "files": [
+        {
+          "path": "src/components/ui/streaming-text.tsx",
+          "type": "registry:ui",
+          "target": "@ui/streaming-text.tsx"
+        }
+      ]
+    },
+    {
       "name": "switch",
       "type": "registry:ui",
       "title": "Switch",
@@ -2319,7 +2339,7 @@
       "name": "assistant-thread",
       "type": "registry:component",
       "title": "Assistant thread",
-      "description": "assistant-ui thread, composer, conversation list, floating modal and trigger popover: streaming markdown, reasoning, tool groups, attachments, dictation, and slots for message headers, composer actions and triggers.",
+      "description": "assistant-ui thread, composer, conversation list, floating modal and trigger popover: streaming markdown (a reply that arrives whole is written in word by word), reasoning, tool groups, attachments, dictation, and slots for message headers, composer actions and triggers.",
       "dependencies": [
         "@base-ui/react@^1.8.0",
         "class-variance-authority@^0.7.1",
@@ -2345,10 +2365,12 @@
         "@forge-ui/input",
         "@forge-ui/popover",
         "@forge-ui/skeleton",
+        "@forge-ui/streaming-text",
         "@forge-ui/textarea",
         "@forge-ui/tooltip",
         "@forge-ui/icon",
-        "@forge-ui/attachments"
+        "@forge-ui/attachments",
+        "@forge-ui/toast"
       ],
       "files": [
         {
@@ -2472,6 +2494,11 @@
           "target": "@components/assistant-ui/elements/use-reasoning-duration.ts"
         },
         {
+          "path": "src/components/assistant-ui/elements/whole-replies.ts",
+          "type": "registry:component",
+          "target": "@components/assistant-ui/elements/whole-replies.ts"
+        },
+        {
           "path": "src/hooks/use-attachment-src.ts",
           "type": "registry:hook",
           "target": "@hooks/use-attachment-src.ts"
@@ -2524,6 +2551,16 @@
           "target": "@components/forge/assistant/adk.tsx"
         },
         {
+          "path": "src/components/forge/assistant/approvals.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/approvals.ts"
+        },
+        {
+          "path": "src/components/forge/assistant/artifact-feedback.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/artifact-feedback.ts"
+        },
+        {
           "path": "src/components/forge/assistant/ask-person.ts",
           "type": "registry:component",
           "target": "@components/forge/assistant/ask-person.ts"
@@ -2574,6 +2611,26 @@
           "target": "@components/forge/assistant/follow-ups.ts"
         },
         {
+          "path": "src/components/forge/assistant/history-context.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/history-context.ts"
+        },
+        {
+          "path": "src/components/forge/assistant/history-feedback.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/history-feedback.ts"
+        },
+        {
+          "path": "src/components/forge/assistant/history-snapshot.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/history-snapshot.ts"
+        },
+        {
+          "path": "src/components/forge/assistant/history-status.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/history-status.tsx"
+        },
+        {
           "path": "src/components/forge/assistant/index.ts",
           "type": "registry:component",
           "target": "@components/forge/assistant/index.ts"
@@ -2602,6 +2659,16 @@
           "path": "src/components/forge/assistant/sources.tsx",
           "type": "registry:component",
           "target": "@components/forge/assistant/sources.tsx"
+        },
+        {
+          "path": "src/components/forge/assistant/turn-lifecycle.ts",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/turn-lifecycle.ts"
+        },
+        {
+          "path": "src/components/forge/assistant/turn-status.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/assistant/turn-status.tsx"
         },
         {
           "path": "src/components/forge/assistant/use-adk-assistant.ts",
@@ -2861,7 +2928,7 @@
       "name": "rich-text-editor",
       "type": "registry:component",
       "title": "Rich text editor",
-      "description": "Tiptap editor in the workspace look: toolbar, bubble menus, / commands, mentions, tables, code with highlighting, maths, media, find and replace, outline, drag handles and Markdown in and out.",
+      "description": "Markdown rich text editor on Tiptap: Markdown in and out, a configurable toolbar, selection, right-click and / menus on one action registry, a controller ref for inserting content, and optional streamed AI with preview and approval.",
       "dependencies": [
         "@base-ui/react@^1.8.0",
         "class-variance-authority@^0.7.1",
@@ -2869,10 +2936,8 @@
         "@hugeicons/react@^1.1.10",
         "@hugeicons/core-free-icons@^4.3.5",
         "@tiptap/core@^3.31.4",
-        "@tiptap/extension-audio@^3.31.4",
         "@tiptap/extension-bubble-menu@^3.31.4",
         "@tiptap/extension-code-block-lowlight@^3.31.4",
-        "@tiptap/extension-details@^3.31.4",
         "@tiptap/extension-drag-handle@^3.31.4",
         "@tiptap/extension-drag-handle-react@^3.31.4",
         "@tiptap/extension-emoji@^3.31.4",
@@ -2889,12 +2954,8 @@
         "@tiptap/extension-subscript@^3.31.4",
         "@tiptap/extension-superscript@^3.31.4",
         "@tiptap/extension-table@^3.31.4",
-        "@tiptap/extension-text-align@^3.31.4",
         "@tiptap/extension-text-style@^3.31.4",
-        "@tiptap/extension-twitch@^3.31.4",
         "@tiptap/extension-typography@^3.31.4",
-        "@tiptap/extension-unique-id@^3.31.4",
-        "@tiptap/extension-youtube@^3.31.4",
         "@tiptap/extensions@^3.31.4",
         "@tiptap/markdown@^3.31.4",
         "@tiptap/pm@^3.31.4",
@@ -2903,10 +2964,12 @@
         "@tiptap/suggestion@^3.31.4",
         "highlight.js@^11.12.0",
         "katex@^0.18.10",
-        "lowlight@^3.3.0"
+        "lowlight@^3.3.0",
+        "marked@^17.0.1"
       ],
       "registryDependencies": [
         "@forge-ui/button",
+        "@forge-ui/context-menu",
         "@forge-ui/dialog",
         "@forge-ui/dropdown-menu",
         "@forge-ui/field",
@@ -2924,6 +2987,31 @@
       ],
       "files": [
         {
+          "path": "src/components/forge/rich-text-editor/ai-preview.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/ai-preview.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/ai/ai-actions.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/ai/ai-actions.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/ai/ai-controller.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/ai/ai-controller.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/ai/ai-defaults.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/ai/ai-defaults.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/ai/ai-types.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/ai/ai-types.ts"
+        },
+        {
           "path": "src/components/forge/rich-text-editor/block-handle.tsx",
           "type": "registry:component",
           "target": "@components/forge/rich-text-editor/block-handle.tsx"
@@ -2939,14 +3027,14 @@
           "target": "@components/forge/rich-text-editor/code-block-view.tsx"
         },
         {
-          "path": "src/components/forge/rich-text-editor/commands.ts",
+          "path": "src/components/forge/rich-text-editor/context-menu.tsx",
           "type": "registry:component",
-          "target": "@components/forge/rich-text-editor/commands.ts"
+          "target": "@components/forge/rich-text-editor/context-menu.tsx"
         },
         {
-          "path": "src/components/forge/rich-text-editor/content.ts",
+          "path": "src/components/forge/rich-text-editor/context.ts",
           "type": "registry:component",
-          "target": "@components/forge/rich-text-editor/content.ts"
+          "target": "@components/forge/rich-text-editor/context.ts"
         },
         {
           "path": "src/components/forge/rich-text-editor/controls.tsx",
@@ -2954,14 +3042,69 @@
           "target": "@components/forge/rich-text-editor/controls.tsx"
         },
         {
+          "path": "src/components/forge/rich-text-editor/core/action-registry.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/core/action-registry.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/core/builtin-actions.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/core/builtin-actions.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/core/clipboard.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/core/clipboard.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/core/editor-controller.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/core/editor-controller.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/core/features.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/core/features.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/core/lifecycle.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/core/lifecycle.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/core/markdown-sync.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/core/markdown-sync.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/core/markdown.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/core/markdown.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/core/schema.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/core/schema.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/core/security.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/core/security.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/core/selection-manager.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/core/selection-manager.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/editor-content.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/editor-content.tsx"
+        },
+        {
           "path": "src/components/forge/rich-text-editor/extensions.tsx",
           "type": "registry:component",
           "target": "@components/forge/rich-text-editor/extensions.tsx"
-        },
-        {
-          "path": "src/components/forge/rich-text-editor/features.ts",
-          "type": "registry:component",
-          "target": "@components/forge/rich-text-editor/features.ts"
         },
         {
           "path": "src/components/forge/rich-text-editor/files.ts",
@@ -2972,6 +3115,11 @@
           "path": "src/components/forge/rich-text-editor/find-replace.tsx",
           "type": "registry:component",
           "target": "@components/forge/rich-text-editor/find-replace.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/headless.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/headless.ts"
         },
         {
           "path": "src/components/forge/rich-text-editor/index.ts",
@@ -2999,14 +3147,24 @@
           "target": "@components/forge/rich-text-editor/markdown-paste.ts"
         },
         {
+          "path": "src/components/forge/rich-text-editor/menu-items.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/menu-items.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/menu-model.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/menu-model.ts"
+        },
+        {
           "path": "src/components/forge/rich-text-editor/outline.tsx",
           "type": "registry:component",
           "target": "@components/forge/rich-text-editor/outline.tsx"
         },
         {
-          "path": "src/components/forge/rich-text-editor/palette.ts",
+          "path": "src/components/forge/rich-text-editor/provider.tsx",
           "type": "registry:component",
-          "target": "@components/forge/rich-text-editor/palette.ts"
+          "target": "@components/forge/rich-text-editor/provider.tsx"
         },
         {
           "path": "src/components/forge/rich-text-editor/rich-text-editor.css",
@@ -3019,6 +3177,11 @@
           "target": "@components/forge/rich-text-editor/rich-text-editor.tsx"
         },
         {
+          "path": "src/components/forge/rich-text-editor/runtime.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/runtime.ts"
+        },
+        {
           "path": "src/components/forge/rich-text-editor/shortcuts.ts",
           "type": "registry:component",
           "target": "@components/forge/rich-text-editor/shortcuts.ts"
@@ -3027,6 +3190,11 @@
           "path": "src/components/forge/rich-text-editor/slash-command.tsx",
           "type": "registry:component",
           "target": "@components/forge/rich-text-editor/slash-command.tsx"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/status-bar.tsx",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/status-bar.tsx"
         },
         {
           "path": "src/components/forge/rich-text-editor/suggestion-menu.tsx",
@@ -3047,6 +3215,11 @@
           "path": "src/components/forge/rich-text-editor/types.ts",
           "type": "registry:component",
           "target": "@components/forge/rich-text-editor/types.ts"
+        },
+        {
+          "path": "src/components/forge/rich-text-editor/use-rich-text-editor.ts",
+          "type": "registry:component",
+          "target": "@components/forge/rich-text-editor/use-rich-text-editor.ts"
         }
       ]
     },
@@ -3085,6 +3258,7 @@
         "@forge-ui/sheet",
         "@forge-ui/skeleton",
         "@forge-ui/spinner",
+        "@forge-ui/streaming-text",
         "@forge-ui/switch",
         "@forge-ui/table",
         "@forge-ui/tabs",
@@ -3195,6 +3369,7 @@
         "@forge-ui/sheet",
         "@forge-ui/skeleton",
         "@forge-ui/spinner",
+        "@forge-ui/streaming-text",
         "@forge-ui/switch",
         "@forge-ui/table",
         "@forge-ui/tabs",

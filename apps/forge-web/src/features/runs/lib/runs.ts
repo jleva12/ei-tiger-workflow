@@ -1,5 +1,6 @@
 import * as React from "react"
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -63,13 +64,56 @@ export type AdkRunStatus =
 /** Who did something to a run; no ID for the timer (an approval nobody decided in time). */
 export type AdkRunActor = { id: string | null; name: string }
 
+/**
+ * What started a run: the console (`manual`), the builder's test panel, the
+ * assistant (for a person), an organization's API key on the admin API, the
+ * runtime's workflow API or A2A, a chat agent's Workflow tool or an intake
+ * it completed, another run (`workflow`), or a resubmission.
+ */
+export type AdkRunTriggerType =
+  | "manual"
+  | "builder_test"
+  | "assistant"
+  | "api_key"
+  | "runtime_rest"
+  | "a2a"
+  | "chat_agent"
+  | "intake"
+  | "workflow"
+  | "resubmit"
+
+/** How a run was started, for an audit; each part null when unknown (a run from before). */
+export type AdkRunProvenance = {
+  trigger_type: AdkRunTriggerType
+  /** console, api, a2a, page (a chat page), assistant, worker (another run). */
+  channel: string | null
+  /**
+   * Whom it's for: the person, else the API key (`apikey:<id>`) or caller
+   * (`anonymous`). Not verified when the ID was only passed on: a public
+   * runtime's caller, an API key's end user, a chat page's visitor.
+   */
+  on_behalf_of: { id: string; name: string; verified: boolean | null } | null
+  /** The chat agent (`ca_…`), or the workflow whose run started it (`ag_…`). */
+  via: { agent_id: string; version: string | null } | null
+  api_key_id: string | null
+  /** jwt, api_key, anonymous, local. */
+  auth_method: string | null
+}
+
+/** Where the request that started a run came from. */
+export type AdkRunOrigin = {
+  client_ip: string | null
+  user_agent: string | null
+  request_id: string | null
+}
+
 /** Who an approval node asks to decide. */
 export type Approvers = "org:admin" | "org:member"
 
 /** What a paused run asks, as its node put it. */
 export type AdkPauseDetails = {
-  /** A decision (approve or reject), or a person's answer. */
-  kind?: "approval" | "human_input"
+  /** A decision (approve or reject), a person's answer, or a run it started ending. */
+  kind?: "approval" | "human_input" | "child_run"
   approvers?: Approvers
   /** When an approval's time is up: it's rejected then. */
   expires_at?: string
@@ -85,6 +129,10 @@ export type AdkPauseDetails = {
   args?: Record<string, unknown>
   /** A Decision board's choice: the board, and which of its choices. */
   board?: BoardChoiceAsked
+  /** A workflow its LLM agent called: the run that call started, which it waits for. */
+  child_run_id?: string
+  child_workflow_id?: string
+  child_workflow_name?: string
 } & Record<string, unknown>
 
 /** Which of a Decision board's choices a gate asks, and of what board. */
@@ -104,7 +152,12 @@ export type BoardChoiceAsked = {
 export type AdkRunPause = {
   /** Names it in a decision or an answer, so one never lands on a later one. */
   id: string
-  kind: "approval" | "human_input"
+  /**
+   * A decision, a person's answer, or (`child_run`) a workflow its LLM agent
+   * called, waiting for the run that started: nobody decides it, that run's
+   * end does.
+   */
+  kind: "approval" | "human_input" | "child_run"
   /** What to decide or answer, e.g. "Refund 40 EUR?". */
   reason: string
   details: AdkPauseDetails
@@ -171,6 +224,10 @@ export type AdkRun = {
   parent_run_id?: string | null
   /** A run queued again after a hiccup isn't tried again before then (its backoff). */
   next_attempt_at?: string | null
+  /** How it was started; null for a run from before that couldn't tell. Missing from older APIs. */
+  provenance?: AdkRunProvenance | null
+  /** The top of its parent chain: itself, for a run nothing started. */
+  root_run_id?: string | null
 }
 
 /** One page of runs, newest first. */
@@ -187,6 +244,7 @@ export type AdkRunEventKind =
   | "answered"
   | "declined"
   | "timed_out"
+  | "child_ended"
   | "waiting"
   | "succeeded"
   | "failed"
@@ -237,6 +295,10 @@ export type AdkRunDetail = AdkRun & {
   document: unknown
   /** What started it, e.g. `{type: "manual", by}`. */
   trigger: Record<string, unknown> | null
+  /** A resubmission's first run's trigger. */
+  original_trigger?: Record<string, unknown> | null
+  /** Where the request that started it came from. */
+  origin?: AdkRunOrigin | null
   /** Its activity, oldest first. */
   events: AdkRunEvent[]
   /** Its activity misses notes: it noted as many as a run may, or some couldn't be saved. */
@@ -320,6 +382,7 @@ const EVENT_TITLES: Record<string, string> = {
   answered: "Answered",
   declined: "Declined",
   timed_out: "Timed out",
+  child_ended: "Its called run ended",
   waiting: "Waiting",
   succeeded: "Succeeded",
   failed: "Failed",
@@ -351,10 +414,115 @@ export const failureTitle = (
 /* -------------------------------------------------------------------------- */
 
 /** The workflows page's tabs; Overview is the default. */
-export type AgentsTab = "overview" | "runs"
+export type AgentsTab = "overview" | "runs" | "refused"
 
 export const isAgentsTab = (value: unknown): value is AgentsTab =>
-  value === "overview" || value === "runs"
+  value === "overview" || value === "runs" || value === "refused"
+
+/**
+ * What the Runs and Refused starts tabs are narrowed to, as the page's
+ * address keeps it: one workflow, how they were started, for whom, through
+ * which agent, with which API key, under which run (runs only), and the days
+ * they started (`YYYY-MM-DD`, the reader's days, both included).
+ */
+export type RunFilters = {
+  workflow?: string
+  trigger?: AdkRunTriggerType
+  person?: string
+  via?: string
+  apiKey?: string
+  root?: string
+  startedFrom?: string
+  startedTo?: string
+}
+
+const RUN_FILTER_KEYS = [
+  "workflow",
+  "trigger",
+  "person",
+  "via",
+  "apiKey",
+  "root",
+  "startedFrom",
+  "startedTo",
+] as const satisfies readonly (keyof RunFilters)[]
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/
+
+/** The filters an address says; anything that couldn't be one is left out. */
+export function readRunFilters(search: Record<string, unknown>): RunFilters {
+  const filters: RunFilters = {}
+  for (const key of RUN_FILTER_KEYS) {
+    const value = search[key]
+    if (typeof value !== "string" || !value.trim() || value.length > 255)
+      continue
+    if (key === "trigger") {
+      if (Object.hasOwn(TRIGGER_LABELS, value))
+        filters.trigger = value as AdkRunTriggerType
+    } else if (key === "startedFrom" || key === "startedTo") {
+      if (isDay(value)) filters[key] = value
+    } else filters[key] = value.trim()
+  }
+  // Days the wrong way round are the same days.
+  if (
+    filters.startedFrom &&
+    filters.startedTo &&
+    filters.startedFrom > filters.startedTo
+  )
+    [filters.startedFrom, filters.startedTo] = [
+      filters.startedTo,
+      filters.startedFrom,
+    ]
+  return filters
+}
+
+/** Whether any filter narrows the list. */
+export const hasRunFilters = (filters: RunFilters) =>
+  RUN_FILTER_KEYS.some((key) => filters[key] !== undefined)
+
+/** Whether a text is a day there is (not Feb 30th rolled into March). */
+const isDay = (value: string) => {
+  if (!DAY.test(value)) return false
+  const day = dayStart(value)
+  const [year, month, date] = value.split("-").map(Number)
+  return (
+    day.getFullYear() === year &&
+    day.getMonth() === month - 1 &&
+    day.getDate() === date
+  )
+}
+
+/** A day's first moment, the reader's midnight. */
+const dayStart = (day: string) => {
+  const [year, month, date] = day.split("-").map(Number)
+  return new Date(year, month - 1, date)
+}
+
+/**
+ * The runs API's query for the filters: the days as the instants they
+ * start and end in the reader's time zone (the last one's end excluded).
+ * Refusals have no run tree: `root` is left out of theirs.
+ */
+export function runFilterParams(
+  filters: RunFilters,
+  { refusals = false }: { refusals?: boolean } = {}
+): Record<string, string> {
+  const params: Record<string, string> = {}
+  if (filters.workflow) params.agent_id = filters.workflow
+  if (filters.trigger) params.trigger_type = filters.trigger
+  if (filters.person) params.on_behalf_of = filters.person
+  if (filters.via) params.via_agent_id = filters.via
+  if (filters.apiKey) params.api_key_id = filters.apiKey
+  if (filters.root && !refusals) params.root_run_id = filters.root
+  if (filters.startedFrom)
+    params.created_from = dayStart(filters.startedFrom).toISOString()
+  if (filters.startedTo) {
+    const end = dayStart(filters.startedTo)
+    end.setDate(end.getDate() + 1)
+    params.created_to = end.toISOString()
+  }
+  return params
+}
 
 /** A run's page's tabs; Overview is the default. Trace is its admins'. */
 export type AdkRunTab = "overview" | "steps" | "activity" | "trace"
@@ -619,7 +787,21 @@ export function stepNameOf(
  * (`approval`, also what a pause the console doesn't know is taken for).
  */
 export const pauseKindOf = (pause: Pick<AdkRunPause, "kind">) =>
-  pause.kind === "human_input" ? "human_input" : "approval"
+  pause.kind === "human_input" || pause.kind === "child_run"
+    ? pause.kind
+    : "approval"
+
+/** Whether a run waits only for runs it started (no person decides anything it waits at). */
+export const waitsOnlyForRuns = (
+  run: Pick<AdkRun, "status" | "pause"> & Partial<Pick<AdkRun, "gates">>
+) => {
+  const gates = run.gates ?? (run.pause ? [run.pause] : [])
+  return (
+    run.status === "paused" &&
+    gates.length > 0 &&
+    gates.every((gate) => gate.kind === "child_run")
+  )
+}
 
 /** Every approval and question an unfinished run waits at, each decided on its own. */
 export function openGatesOf(
@@ -692,8 +874,10 @@ export const adkRunKeys = {
     organizationId: string,
     filters: { agentId?: string; limit?: number }
   ) => [...adkRunKeys.all(organizationId), "list", filters] as const,
-  pages: (organizationId: string) =>
-    [...adkRunKeys.all(organizationId), "pages"] as const,
+  pages: (organizationId: string, filters: RunFilters = {}) =>
+    [...adkRunKeys.all(organizationId), "pages", filters] as const,
+  refusals: (organizationId: string, filters: RunFilters, page: number) =>
+    [...adkRunKeys.all(organizationId), "refusals", filters, page] as const,
   detail: (organizationId: string, runId: string) =>
     [...adkRunKeys.all(organizationId), "run", runId] as const,
   steps: (organizationId: string, runId: string) =>
@@ -746,14 +930,24 @@ function loadedRuns(data: InfiniteData<AdkRunPage, number>): AdkRunPage {
  * (`fetchNextPage` for more). Refreshes every few seconds while one is
  * still going, else every 30 s. `data` is the loaded runs and how many there are.
  */
-export function useOrganizationAdkRuns(organizationId: string) {
+export function useOrganizationAdkRuns(
+  organizationId: string,
+  /** Only the runs these say (`runFilterParams`). */
+  filters: RunFilters = {}
+) {
   return useInfiniteQuery({
-    queryKey: adkRunKeys.pages(organizationId),
+    queryKey: adkRunKeys.pages(organizationId, filters),
     queryFn: ({ pageParam, signal }) =>
       api.get<AdkRunPage>(runsPath(organizationId), {
-        params: { limit: ADK_RUNS_PAGE, offset: pageParam },
+        params: {
+          limit: ADK_RUNS_PAGE,
+          offset: pageParam,
+          ...runFilterParams(filters),
+        },
         signal,
       }),
+    // Narrowing the list keeps the last one up until the new one is in.
+    placeholderData: keepPreviousData,
     initialPageParam: 0,
     getNextPageParam: (last, pages) => {
       const loaded = pages.reduce((sum, page) => sum + page.items.length, 0)
@@ -769,6 +963,58 @@ export function useOrganizationAdkRuns(organizationId: string) {
           ? OPEN_POLL_MS
           : IDLE_POLL_MS,
     meta: { errorTitle: "Couldn't refresh the workflow runs" },
+  })
+}
+
+/** How many refused starts a page of them has. */
+export const ADK_RUN_REFUSALS_PAGE = 50
+
+/**
+ * A start the organization refused: no run was made. 403: who asked may
+ * not (without agents:run, or an agent they may not use); 422: what it'd
+ * run doesn't fit or build.
+ */
+export type AdkRunRefusal = {
+  id: number
+  organization_id: string
+  /** The workflow it'd have run, and which version (when it was known). */
+  agent_id: string
+  version: string | null
+  status_code: number
+  reason: string
+  /** Who asked, as a run would have it. */
+  requested_by: AdkRunActor | null
+  provenance: AdkRunProvenance | null
+  origin: AdkRunOrigin | null
+  at: string
+}
+
+export type AdkRunRefusalPage = { items: AdkRunRefusal[]; total: number }
+
+/** The starts the organization refused, newest first, a page at a time. */
+export function useAdkRunRefusals(
+  organizationId: string,
+  filters: RunFilters,
+  page: number,
+  { enabled = true }: { enabled?: boolean } = {}
+) {
+  return useQuery({
+    queryKey: adkRunKeys.refusals(organizationId, filters, page),
+    queryFn: ({ signal }) =>
+      api.get<AdkRunRefusalPage>(
+        `/organizations/${encodeURIComponent(organizationId)}/adk-run-refusals`,
+        {
+          params: {
+            limit: ADK_RUN_REFUSALS_PAGE,
+            offset: page * ADK_RUN_REFUSALS_PAGE,
+            ...runFilterParams(filters, { refusals: true }),
+          },
+          signal,
+        }
+      ),
+    enabled: enabled && Boolean(organizationId),
+    placeholderData: keepPreviousData,
+    meta: { errorTitle: "Couldn't load the refused starts" },
   })
 }
 
@@ -884,6 +1130,14 @@ export function useAdkRunSteps(
 
 type MutationMeta = { meta?: { silent?: boolean; errorTitle?: string } }
 
+/**
+ * What the console says it is when it starts a run (`X-Forge-Client`), so
+ * the run's record tells the builder's test panel from the rest of the
+ * console, and both from an outside caller of the API.
+ */
+const CLIENT_HEADER = "X-Forge-Client"
+type ConsoleClient = "builder" | "console"
+
 /** What a run starts with: its input, and the files its start takes. */
 export type RunStart = { input: unknown; files?: File[] }
 
@@ -899,22 +1153,26 @@ export function useRunAdkWorkflow(
   organizationId: string,
   agentId: string,
   /** Which version runs: a published one, or the draft; the builder's when omitted. */
-  version?: number | "draft"
+  version?: number | "draft",
+  /** Where it's started from, for the run's record: the builder's test panel by default. */
+  from: ConsoleClient = "builder"
 ) {
   const client = useQueryClient()
   return useMutation({
     mutationFn: ({ input, files = [] }: RunStart) => {
       const path = `${agentPath(organizationId, agentId)}/runs`
+      const headers = { [CLIENT_HEADER]: from }
       if (!files.length)
-        return api.post<AdkRun>(path, {
-          input,
-          ...(version !== undefined ? { version } : {}),
-        })
+        return api.post<AdkRun>(
+          path,
+          { input, ...(version !== undefined ? { version } : {}) },
+          { headers }
+        )
       const form = new FormData()
       form.append("input", JSON.stringify(input ?? null))
       if (version !== undefined) form.append("version", String(version))
       for (const file of files) form.append("files", file, file.name)
-      return api.post<AdkRun, FormData>(path, form)
+      return api.post<AdkRun, FormData>(path, form, { headers })
     },
     meta: { silent: true },
     onSuccess: (run) => void refreshAdkRuns(client, organizationId, run.id),
@@ -1111,7 +1369,13 @@ export function useResubmitAdkRun(organizationId: string, runId: string) {
   const client = useQueryClient()
   return useMutation({
     mutationFn: () =>
-      api.post<AdkRun>(`${runPath(organizationId, runId)}/resubmit`),
+      api.post<AdkRun>(
+        `${runPath(organizationId, runId)}/resubmit`,
+        undefined,
+        {
+          headers: { [CLIENT_HEADER]: "console" satisfies ConsoleClient },
+        }
+      ),
     meta: { errorTitle: "Couldn't resubmit the run" },
     onSuccess: async (run) => {
       await refreshAdkRuns(client, organizationId, run.id)
@@ -1157,6 +1421,118 @@ export function versionLabel(
   if (typeof run.version === "number") return `v${run.version}`
   if (run.version === "draft") return `Draft · revision ${run.revision}`
   return `Revision ${run.revision}`
+}
+
+/** Each way a run is started, in words. */
+export const TRIGGER_LABELS: Record<AdkRunTriggerType, string> = {
+  manual: "From the console",
+  builder_test: "Test run from the builder",
+  assistant: "By the assistant",
+  api_key: "With an API key",
+  runtime_rest: "Over the workflow API",
+  a2a: "Over A2A",
+  chat_agent: "By a chat agent",
+  intake: "By an intake",
+  workflow: "By another run",
+  resubmit: "Resubmitted",
+}
+
+/** Through what a run came in, in words. */
+const CHANNEL_LABELS: Record<string, string> = {
+  console: "the console",
+  api: "the API",
+  a2a: "A2A",
+  page: "a chat page",
+  assistant: "the assistant",
+  worker: "a worker",
+}
+
+/** How the starter proved who they are, in words. */
+const AUTH_LABELS: Record<string, string> = {
+  jwt: "Sign-in",
+  api_key: "API key",
+  anonymous: "None (anonymous caller)",
+  local: "Local development user",
+}
+
+/** How a run was started, in words, as its record shows it. */
+export type ProvenanceWords = {
+  /** What started it: "Test run from the builder". */
+  how: string
+  /** Who asked: the requester. */
+  by: string
+  /** The agent it was started through: "ca_desk v3". */
+  via?: string
+  /** Whom it's for, when that isn't who asked. */
+  onBehalfOf?: string
+  /** Whether that's who their credential said; null when unknown. */
+  verified?: boolean | null
+  /** Through what it came in: "a chat page". */
+  channel?: string
+  /** The credential: "API key k-1", "Sign-in". */
+  credential?: string
+}
+
+/**
+ * How a run was started: what started it, who asked, through which agent,
+ * and for whom (and whether that person is who their credential said). A
+ * run from before says only what its trigger does.
+ */
+export function provenanceWords(
+  run: Pick<AdkRun, "requested_by" | "resubmit_of" | "provenance"> & {
+    trigger?: Record<string, unknown> | null
+  }
+): ProvenanceWords {
+  const by = run.requested_by.name || run.requested_by.id || "Unknown"
+  const started = run.provenance
+  if (!started) {
+    const how = run.resubmit_of
+      ? TRIGGER_LABELS.resubmit
+      : (triggerLabel(run.trigger) ?? "Started")
+    return { how, by }
+  }
+  const person = started.on_behalf_of
+  const key = started.api_key_id
+  const auth = started.auth_method
+  return {
+    how: TRIGGER_LABELS[started.trigger_type] ?? humanize(started.trigger_type),
+    by,
+    via: started.via
+      ? `${started.via.agent_id}${viaVersion(started.via.version)}`
+      : undefined,
+    onBehalfOf:
+      person && person.id !== run.requested_by.id
+        ? person.name || person.id
+        : undefined,
+    verified: person ? person.verified : undefined,
+    channel: started.channel
+      ? (CHANNEL_LABELS[started.channel] ?? started.channel)
+      : undefined,
+    credential: key
+      ? `API key ${key}`
+      : auth
+        ? (AUTH_LABELS[auth] ?? auth)
+        : undefined,
+  }
+}
+
+const viaVersion = (version: string | null) =>
+  version === null ? "" : version === "draft" ? " (draft)" : ` v${version}`
+
+/**
+ * The run's start in a line: "By a chat agent · Chat agent Desk · via
+ * ca_desk v3 · on behalf of visitor-9 (unverified)".
+ */
+export function provenanceLine(words: ProvenanceWords): string {
+  return [
+    words.how,
+    words.by,
+    words.via && `via ${words.via}`,
+    words.onBehalfOf &&
+      `on behalf of ${words.onBehalfOf}${words.verified === false ? " (unverified)" : ""}`,
+  ]
+    .filter(Boolean)
+    .join(" · ")
 }
 
 /** How a run came to be, from its trigger: by hand, over the API or A2A, from an agent or a workflow. */

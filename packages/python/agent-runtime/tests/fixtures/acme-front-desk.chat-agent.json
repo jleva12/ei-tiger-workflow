@@ -1,0 +1,523 @@
+{
+  "format": "forge.chat_agent/v1",
+  "id": "ca_acmefrontdesk",
+  "name": "Acme front desk (intake example)",
+  "description": "An insurer's front desk that answers simple questions itself and hands claims and contact changes to two intake agents; the claim intake reads its summary back as a table to confirm, and starts the File claim workflow (file-claim.workflow.json) when it completes.",
+  "nodes": [
+    {
+      "id": "agent",
+      "kind": "agent",
+      "name": "Front desk",
+      "outputs": [
+        "tools",
+        "agents"
+      ],
+      "config": {
+        "model": {
+          "provider": "",
+          "name": ""
+        },
+        "thinking_level": "",
+        "max_output_tokens": null,
+        "ask_person": false,
+        "state_schema": {},
+        "description": "Acme Insurance's front desk.",
+        "instruction": "You're the front desk of Acme Insurance. Be friendly and brief.\n\nAnswer general questions yourself:\n- Premiums are due on the 1st of each month; paying online at acme.example/pay is free.\n- Claims are usually decided within 5 to 7 business days.\n- The claims line is 0800 555 0100, open 8am to 8pm.\n\nWhen someone wants to file a claim, hand off to claim_intake. When they want to change their email, phone or address, hand off to contact_update. Pass along what they've already told you (their name, policy number, what happened) so they aren't asked again.\n\nWhen an intake hands back:\n- completed: thank them and recap what was recorded in a short list. A claim intake starts the File claim workflow when it completes: give them the claim_number and team from its run's result (in workflows); if the run is still going, say the number is on its way by email. For a contact change, give a reference: CHG- and six digits you make up.\n- interrupted: answer what they asked, then offer to carry on where they left off.\n- cancelled: say that's fine and nothing was filed.\n- escalated: tell them a claims specialist will call them today, and why."
+      }
+    },
+    {
+      "id": "intake_claim",
+      "kind": "intake_agent",
+      "name": "Claim intake",
+      "outputs": [
+        "tools",
+        "on_complete"
+      ],
+      "config": {
+        "model": {
+          "provider": "",
+          "name": ""
+        },
+        "thinking_level": "",
+        "max_output_tokens": null,
+        "ask_person": true,
+        "description": "Files a new insurance claim: who's claiming, what happened and when, and the details of an auto, home or travel claim.",
+        "instruction": "Be warm and calm: people filing a claim are often shaken. Ask a few related things at a time.\nIf anyone was injured, record it, then finish as escalated with a note, so a specialist calls them today; what they've told you goes with it.",
+        "fields": [
+          {
+            "id": "f_full_name",
+            "key": "full_name",
+            "label": "Full name",
+            "type": "text",
+            "options": [],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": true,
+            "section": ""
+          },
+          {
+            "id": "f_email",
+            "key": "email",
+            "label": "Email",
+            "type": "email",
+            "options": [],
+            "description": "",
+            "why": "We send your claim number and every update there.",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_phone",
+            "key": "phone",
+            "label": "Phone",
+            "type": "text",
+            "options": [],
+            "description": "A number we can call if we have questions.",
+            "why": "",
+            "required": false,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_policy_number",
+            "key": "policy_number",
+            "label": "Policy number",
+            "type": "text",
+            "options": [],
+            "description": "On their insurance card or renewal letter, like PN-12345.",
+            "why": "It's how we find your policy and check what it covers.",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": true,
+            "prefill": true,
+            "section": ""
+          },
+          {
+            "id": "f_claim_type",
+            "key": "claim_type",
+            "label": "Claim type",
+            "type": "choice",
+            "options": [
+              "Auto",
+              "Home",
+              "Travel"
+            ],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": true,
+            "confirm": false,
+            "prefill": false,
+            "section": "s_what"
+          },
+          {
+            "id": "f_date_of_loss",
+            "key": "date_of_loss",
+            "label": "Date of loss",
+            "type": "date",
+            "options": [],
+            "description": "The day it happened.",
+            "why": "Your cover depends on the policy in force that day.",
+            "required": true,
+            "when": "",
+            "infer": true,
+            "confirm": false,
+            "prefill": false,
+            "section": "s_what"
+          },
+          {
+            "id": "f_description",
+            "key": "description",
+            "label": "What happened",
+            "type": "text",
+            "options": [],
+            "description": "What happened, in their own words: a sentence or two.",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": "s_what"
+          },
+          {
+            "id": "f_injuries",
+            "key": "injuries",
+            "label": "Anyone injured",
+            "type": "boolean",
+            "options": [],
+            "description": "",
+            "why": "If anyone was hurt, a claims specialist calls you today.",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": "s_what"
+          },
+          {
+            "id": "f_vehicle_plate",
+            "key": "vehicle_plate",
+            "label": "Plate",
+            "type": "text",
+            "options": [],
+            "description": "The plate of the car that was damaged.",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": "s_auto"
+          },
+          {
+            "id": "f_police_report",
+            "key": "police_report",
+            "label": "Police report filed",
+            "type": "boolean",
+            "options": [],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": "s_auto"
+          },
+          {
+            "id": "f_drivable",
+            "key": "drivable",
+            "label": "Car still drivable",
+            "type": "boolean",
+            "options": [],
+            "description": "",
+            "why": "If it isn't, we can arrange a tow and a hire car.",
+            "required": false,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": "s_auto"
+          },
+          {
+            "id": "f_property_address",
+            "key": "property_address",
+            "label": "Property address",
+            "type": "text",
+            "options": [],
+            "description": "The address of the damaged home.",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": "s_home"
+          },
+          {
+            "id": "f_damage_kinds",
+            "key": "damage_kinds",
+            "label": "Kind of damage",
+            "type": "choices",
+            "options": [
+              "Water",
+              "Fire",
+              "Storm",
+              "Theft",
+              "Other"
+            ],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": "s_home"
+          },
+          {
+            "id": "f_trip_destination",
+            "key": "trip_destination",
+            "label": "Trip destination",
+            "type": "text",
+            "options": [],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": "s_travel"
+          },
+          {
+            "id": "f_amount_claimed",
+            "key": "amount_claimed",
+            "label": "Amount claimed",
+            "type": "number",
+            "options": [],
+            "description": "What they're claiming, in dollars.",
+            "why": "Travel cover has a limit per trip.",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": "s_travel"
+          },
+          {
+            "id": "f_notes",
+            "key": "notes",
+            "label": "Anything else",
+            "type": "text",
+            "options": [],
+            "description": "",
+            "why": "",
+            "required": false,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": "s_more"
+          }
+        ],
+        "sections": [
+          {
+            "id": "s_what",
+            "title": "What happened",
+            "when": ""
+          },
+          {
+            "id": "s_auto",
+            "title": "Vehicle",
+            "when": "claim_type = \"Auto\""
+          },
+          {
+            "id": "s_home",
+            "title": "Home",
+            "when": "claim_type = \"Home\""
+          },
+          {
+            "id": "s_travel",
+            "title": "Travel",
+            "when": "claim_type = \"Travel\""
+          },
+          {
+            "id": "s_more",
+            "title": "Anything else",
+            "when": ""
+          }
+        ],
+        "confirm_summary": true,
+        "allow_cancel": true,
+        "allow_escalate": true
+      }
+    },
+    {
+      "id": "intake_contact",
+      "kind": "intake_agent",
+      "name": "Contact update",
+      "outputs": [
+        "tools",
+        "on_complete"
+      ],
+      "config": {
+        "model": {
+          "provider": "",
+          "name": ""
+        },
+        "thinking_level": "",
+        "max_output_tokens": null,
+        "ask_person": true,
+        "description": "Updates a policyholder's contact details: their email, phone or mailing address.",
+        "instruction": "Keep it quick: this is a small change. Read each new detail back exactly as you recorded it.",
+        "fields": [
+          {
+            "id": "f_policy_number",
+            "key": "policy_number",
+            "label": "Policy number",
+            "type": "text",
+            "options": [],
+            "description": "On their insurance card, like PN-12345.",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": true,
+            "section": ""
+          },
+          {
+            "id": "f_what_to_update",
+            "key": "what_to_update",
+            "label": "What's changing",
+            "type": "choices",
+            "options": [
+              "Email",
+              "Phone",
+              "Address"
+            ],
+            "description": "Which of their details are changing.",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_new_email",
+            "key": "new_email",
+            "label": "New email",
+            "type": "email",
+            "options": [],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "\"Email\" in what_to_update",
+            "infer": false,
+            "confirm": true,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_new_phone",
+            "key": "new_phone",
+            "label": "New phone",
+            "type": "text",
+            "options": [],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "\"Phone\" in what_to_update",
+            "infer": false,
+            "confirm": true,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_new_address",
+            "key": "new_address",
+            "label": "New address",
+            "type": "text",
+            "options": [],
+            "description": "The full mailing address, with postcode.",
+            "why": "",
+            "required": true,
+            "when": "\"Address\" in what_to_update",
+            "infer": false,
+            "confirm": true,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_effective_date",
+            "key": "effective_date",
+            "label": "Takes effect",
+            "type": "date",
+            "options": [],
+            "description": "When the change takes effect; today if they don't say.",
+            "why": "",
+            "required": false,
+            "when": "",
+            "infer": true,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          }
+        ],
+        "sections": [],
+        "confirm_summary": false,
+        "allow_cancel": true,
+        "allow_escalate": false
+      }
+    },
+    {
+      "id": "rich_summary",
+      "kind": "rich_answers",
+      "name": "Summary table",
+      "outputs": [],
+      "config": {
+        "components": [
+          "Card",
+          "Table",
+          "Choices"
+        ]
+      }
+    },
+    {
+      "id": "wf_file_claim",
+      "kind": "adk_workflow",
+      "name": "File claim",
+      "outputs": [],
+      "config": {
+        "workflow": "ag_fileclaim",
+        "version": "draft",
+        "wait_seconds": 30
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_claim",
+      "source": "agent",
+      "source_output": "agents",
+      "target": "intake_claim"
+    },
+    {
+      "id": "e_contact",
+      "source": "agent",
+      "source_output": "agents",
+      "target": "intake_contact"
+    },
+    {
+      "id": "e_summary",
+      "source": "intake_claim",
+      "source_output": "tools",
+      "target": "rich_summary"
+    },
+    {
+      "id": "e_file_claim",
+      "source": "intake_claim",
+      "source_output": "on_complete",
+      "target": "wf_file_claim"
+    }
+  ],
+  "layout": {
+    "agent": {
+      "x": 0,
+      "y": 60
+    },
+    "intake_claim": {
+      "x": 440,
+      "y": -60
+    },
+    "intake_contact": {
+      "x": 440,
+      "y": 200
+    },
+    "rich_summary": {
+      "x": 880,
+      "y": -60
+    },
+    "wf_file_claim": {
+      "x": 880,
+      "y": 80
+    }
+  }
+}

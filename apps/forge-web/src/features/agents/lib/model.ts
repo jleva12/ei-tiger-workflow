@@ -8,12 +8,14 @@ import type {
   HttpMethod,
   ThinkingLevel,
 } from "@/features/steps/lib/model"
+import type { AccessRule } from "./access"
 import {
   chatKindInfo,
   chatWaysOut,
   isAgentLike,
   isHandedTo,
   isServedChatKind,
+  isTool,
 } from "./catalog"
 
 /*
@@ -23,7 +25,8 @@ import {
  * endpoints, an OpenAPI spec, an MCP server, a workflow, another agent, code
  * execution), and
  * the agents it hands off to (sub-agents it transfers the conversation
- * to, or gives a task). A sub-agent has the same two ways out, so a
+ * to, or gives a task, and intake agents, which collect a record you design
+ * and hand it back). A sub-agent has the same two ways out, so a
  * specialist can have tools of its own. What each kind is called, its ways
  * out, what can be handed off to and what a new one starts with are the
  * admin API's node catalog's (`catalog.ts`).
@@ -53,35 +56,117 @@ export type ChatAgentSettings = {
 /** How a sub-agent is handed to, when it's on the Hands off to way. */
 export type HandOff = "chat" | "task" | "single_turn"
 
+/** What an intake field's value is (forge_agent_runtime.intake). */
+export type IntakeFieldType =
+  | "text"
+  | "number"
+  | "integer"
+  | "boolean"
+  | "date"
+  | "email"
+  | "choice"
+  | "choices"
+
+/** One field of an intake agent's record. */
+export type IntakeField = {
+  /** The builder's, for telling fields apart while their keys change. */
+  id: string
+  /** What the record and the model call it: lower-case letters, digits and _. */
+  key: string
+  /** What people call it; the key when empty. */
+  label: string
+  type: IntakeFieldType
+  /** A choice's options. */
+  options: string[]
+  /** What it is, and how to ask for it. */
+  description: string
+  /** Why it's asked: what the agent says when the person asks. */
+  why: string
+  /** The intake isn't done without it (when it applies). */
+  required: boolean
+  /** A JSONata condition on the record: it applies only when this holds. Empty: always. */
+  when: string
+  /** The model may work it out from what the person said; the person confirms it. */
+  infer: boolean
+  /** The person confirms its value before the intake finishes. */
+  confirm: boolean
+  /** The agent handing off may fill it in, from what the person already said. */
+  prefill: boolean
+  /** Its section's ID; empty for none. */
+  section: string
+}
+
+/** Fields asked together, unlocked on a condition of their own. */
+export type IntakeSection = {
+  id: string
+  title: string
+  /** A JSONata condition on the record: its fields apply only when this holds. Empty: always. */
+  when: string
+}
+
+/**
+ * Who may use an agent: the rule on its node, checked for whoever the call
+ * is for as it runs (`access.ts`); null lets in anyone who may call the agent.
+ */
+export type Guarded = { access: AccessRule | null }
+
 export type ChatConfigs = {
-  agent: ChatAgentSettings & {
-    /**
-     * A JSON Schema of the state the chat sends in stateDelta besides the
-     * model picker's (agents/lib/input.ts): what its instructions read as
-     * `state.<field>`. `{}` declares none.
-     */
-    state_schema: Record<string, unknown>
-  }
-  sub_agent: ChatAgentSettings & {
-    /**
-     * chat: it takes over the conversation; task: it does one task, asking
-     * the person if it must, and hands back; single_turn: it answers once.
-     */
-    mode: HandOff
-    /** It doesn't hand the conversation back to the agent that handed it over. */
-    disallow_transfer_to_parent: boolean
-    /** It doesn't hand the conversation to the agent's other sub-agents. */
-    disallow_transfer_to_peers: boolean
-    /** `none`: it sees only what it's given, not the conversation so far. */
-    include_contents: "default" | "none"
-  }
+  agent: ChatAgentSettings &
+    Guarded & {
+      /**
+       * A JSON Schema of the state the chat sends in stateDelta besides the
+       * model picker's (agents/lib/input.ts): what its instructions read as
+       * `state.<field>`. `{}` declares none.
+       */
+      state_schema: Record<string, unknown>
+    }
+  sub_agent: ChatAgentSettings &
+    Guarded & {
+      /**
+       * chat: it takes over the conversation; task: it does one task, asking
+       * the person if it must, and hands back; single_turn: it answers once.
+       */
+      mode: HandOff
+      /** It doesn't hand the conversation back to the agent that handed it over. */
+      disallow_transfer_to_parent: boolean
+      /** It doesn't hand the conversation to the agent's other sub-agents. */
+      disallow_transfer_to_peers: boolean
+      /** `none`: it sees only what it's given, not the conversation so far. */
+      include_contents: "default" | "none"
+    }
+  /**
+   * An agent that walks the person through an intake: it's handed off to,
+   * collects the record designed here in whatever order the person gives
+   * it, and hands it back. Used as a tool instead, the agent using it asks
+   * the questions and files the person's requests to it
+   * (forge_agent_runtime.requests).
+   */
+  intake_agent: ChatAgentSettings &
+    Guarded & {
+      fields: IntakeField[]
+      sections: IntakeSection[]
+      /** It reads back a summary and waits for the person's yes before it finishes. */
+      confirm_summary: boolean
+      /** The person may stop it: it hands back as cancelled. */
+      allow_cancel: boolean
+      /** It may hand back as escalated: for a person, or what it can't record. */
+      allow_escalate: boolean
+    }
   /** Another of the organization's agents, by ID, used whole. */
-  saved_agent: { agent: string }
+  saved_agent: Guarded & { agent: string }
   /**
    * One of the organization's workflows, by ID, called as a tool, at a
    * version: a published one, its draft, or null for its latest published.
    */
-  adk_workflow: { workflow: string; version: number | "draft" | null }
+  adk_workflow: {
+    workflow: string
+    version: number | "draft" | null
+    /**
+     * Seconds the agent waits for the run before it's told it's still
+     * running (with its ID); at most the deployment's cap.
+     */
+    wait_seconds: number
+  }
   memory: {
     /** on_demand: it looks things up when it decides to; every_turn: what's relevant comes with each message. */
     mode: "on_demand" | "every_turn"
@@ -188,7 +273,7 @@ export type ChatConfigs = {
   /**
    * Answers the chat draws (Generative UI): the agent gets the `present`
    * tool, whose call is a composition of the components picked here
-   * (`rich-answers-schema.ts`), drawn beside its text; what the person
+   * (`components/forge/generative-ui/catalog.ts`), drawn beside its text; what the person
    * clicks or fills in comes back as their next message.
    */
   rich_answers: {
@@ -211,6 +296,8 @@ export type ChatStep<K extends ChatKind = ChatKind> = {
 /** An agent's ways out: what it can call, and who it hands off to. */
 export const TOOLS = "tools"
 export const HANDS_OFF = "agents"
+/** An intake agent's way out to the workflows it starts when it completes. */
+export const ON_COMPLETE = "on_complete"
 
 /** Whether a kind is one a chat agent can have now: served, and set up here. */
 export const isChatKind = isServedChatKind
@@ -222,10 +309,25 @@ export function outputsOf(step: ChatStep): StepOutput[] {
   return chatWaysOut(step.kind)
 }
 
-/** Whether an agent's way out takes a kind: only agents are handed off to. */
+/**
+ * Whether an agent's way out takes a kind: a way it has (an intake agent
+ * has tools, but hands off to no one), where only agents are handed off to,
+ * an intake agent doesn't use another, and only workflows start when an
+ * intake completes.
+ */
 export function accepts(step: ChatStep, output: string, kind: ChatKind) {
-  if (!isAgentLike(step.kind) || kind === "agent") return false
-  return output === HANDS_OFF ? isHandedTo(kind) : output === TOOLS
+  if (kind === "agent" || !chatWaysOut(step.kind).some((o) => o.id === output))
+    return false
+  if (output === ON_COMPLETE) return kind === "adk_workflow"
+  if (step.kind === "intake_agent" && kind === "intake_agent") return false
+  return output === HANDS_OFF
+    ? isHandedTo(kind)
+    : output === TOOLS && isTool(kind)
+}
+
+/** Whether a kind is an agent of its own: the agents, sub-agents, intake agents and saved agents. */
+export function isAgent(kind: ChatKind) {
+  return isAgentLike(kind) || isHandedTo(kind)
 }
 
 /* -------------------------------------------------------------------------- */

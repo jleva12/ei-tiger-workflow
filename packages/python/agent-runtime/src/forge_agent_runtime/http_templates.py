@@ -18,7 +18,9 @@ percent-encoded, so it can't add a path or a query of its own; a run's value
 goes in as it is (it may be a base URL: ``$encodeUrlComponent`` encodes
 one). A query parameter that is one argument, ``?status={status}``, is left
 out when the model doesn't send it; any other argument the URL names must
-be sent.
+be sent. Where a URL calls is the tool's author's to say, not the model's:
+an argument can't be in its scheme or host, and a run's value there is only
+for a tool sending no headers of its own (:meth:`UrlTemplate.check_origin`).
 
 Query parameters may also be listed by name and value (:func:`parse_query`),
 each a template: they're filled in, then each name and value is
@@ -44,7 +46,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
-from forge_agent_runtime.templating import TemplateError, as_text, evaluate, template_data
+from forge_agent_runtime.templating import TemplateError, as_text, evaluate_async, template_data
 from forge_common.adk import ToolFailure
 
 if TYPE_CHECKING:
@@ -237,6 +239,37 @@ class UrlTemplate:
             else:
                 query[-1].append(part)
         return cls(tuple(path), tuple(tuple(pair) for pair in query or () if pair))
+
+    def check_origin(self, *, headers: bool, what: str = "Its URL") -> None:
+        """
+        Check where it sends requests: its scheme and host are written out,
+        or, for a tool sending no headers, one of the run's values gives
+        them. The model's arguments never do: an argument there would send
+        the request, and the secrets its headers carry, wherever the model
+        was talked into.
+
+        :param headers: The tool sends headers of its own, which go only to
+            the host its URL names as it's written.
+        :raises TemplateProblem: An argument in its scheme or host; a run's
+            value there, with headers.
+        """
+        lead = self.path[0] if self.path and isinstance(self.path[0], str) else ""
+        scheme, written, rest = lead.partition("://")
+        if all(isinstance(part, str) for part in self.path) or (
+            written and scheme and any(mark in rest for mark in "/?#\\")
+        ):
+            return
+        first = next(part for part in self.path if not isinstance(part, str))
+        if isinstance(first, Argument):
+            raise TemplateProblem(
+                f"{what} lets the model pick where it calls ({{{first.name}}} in its scheme or host): "
+                "write its host out, and put arguments in its path or query."
+            )
+        if headers:
+            raise TemplateProblem(
+                f"{what} takes its host from a run's value and the tool sends headers, which go only "
+                "to a host written in its URL: write the host out, or take the headers away."
+            )
 
     def arguments(self) -> tuple[list[str], set[str]]:
         """:return: The arguments it names, in order, and those it must have: all but a query pair's own."""
@@ -479,7 +512,7 @@ def chat_values(context: ToolContext | None, *, what: str) -> Callable[[str], An
     async def value(expression: str) -> Any:
         state = context.state.to_dict() if context is not None else {}
         try:
-            return evaluate(expression, template_data(state), what=what)
+            return await evaluate_async(expression, template_data(state), what=what)
         except TemplateError as exc:
             raise ToolFailure(str(exc)) from None
 

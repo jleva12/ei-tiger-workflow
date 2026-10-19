@@ -117,7 +117,15 @@ def test_index_definitions():
         "similarity": "dotProduct",
         "quantization": "scalar",
     }
-    assert {f["path"] for f in v["fields"][1:]} == {"tenant_id", "doc_id", "source_type", "kind", "metadata.tags"}
+    assert {f["path"] for f in v["fields"][1:]} == {
+        "tenant_id",
+        "doc_id",
+        "source_type",
+        "kind",
+        "metadata.tags",
+        "run_seq",
+        "live",
+    }
     assert all(f["type"] == "filter" for f in v["fields"][1:])
 
 
@@ -232,3 +240,107 @@ async def test_falls_back_to_client_fusion_when_rank_fusion_unsupported():
     hits = await storage.search.hybrid_search(req())
     assert [h.chunk.id for h in hits] == ["c1"]
     assert storage.search.fusion_mode == "client"
+
+
+@pytest.mark.parametrize("write_errors", [[], [{"code": 11000, "errmsg": "duplicate"}]])
+async def test_bulk_write_concern_failures_are_not_suppressed(monkeypatch, write_errors):
+    from pymongo.errors import BulkWriteError
+
+    from forge_task_documents.storage.mongo.schema import doc_to_chunk
+    from forge_tasks.errors import TaskError
+
+    storage = MongoStorage(AsyncMongoMockClient(), database="db")
+
+    async def uncertain(*args, **kwargs):
+        raise BulkWriteError(
+            {
+                "writeErrors": write_errors,
+                "writeConcernErrors": [{"code": 64, "errmsg": "replication acknowledgement timed out"}],
+            }
+        )
+
+    monkeypatch.setattr(storage.chunks._c, "bulk_write", uncertain)
+    with pytest.raises(TaskError, match="replication acknowledgement"):
+        await storage.chunks.replace_document_chunks("t1", "d", 1, [doc_to_chunk(_doc(1))])
+
+
+async def test_legacy_rows_survive_reingestion_but_never_reappear_after_deletion():
+    from forge_task_documents.models import DocumentRecord
+    from forge_task_documents.storage.mongo.schema import doc_to_chunk
+
+    storage = MongoStorage(AsyncMongoMockClient(), database="db")
+    key = {"tenant_id": "t1", "doc_id": "d"}
+    record = DocumentRecord(**key, filename="d.md", sha256="old", size_bytes=3)
+    legacy = record.model_dump(mode="python", exclude={"published_run_seq"})
+    legacy.update(status="ready", run_seq=1)
+    await storage.documents._c.update_one(key, {"$set": legacy}, upsert=True)
+    await storage.chunks._c.update_one({"_id": "c1"}, {"$set": {**_doc(1), "run_seq": 1}}, upsert=True)
+    assert (await storage.documents.get("t1", "d")).published_run_seq is None
+    assert (await storage.chunks.get_chunks("t1", ["c1"]))[0].text == "chunk 1"
+
+    seq = await storage.documents.begin_run(record, expected_run_seq=1)
+    replacement = doc_to_chunk({**_doc(1), "text": "new content"})
+    await storage.chunks.replace_document_chunks("t1", "d", seq, [replacement])
+    assert (await storage.chunks.get_chunks("t1", ["c1"]))[0].text == "chunk 1"
+    assert await storage.documents.complete_run("t1", "d", seq, fields={})
+    assert (await storage.chunks.get_chunks("t1", ["c1"]))[0].text == "new content"
+
+    # Intentionally retain every physical generation, including pre-upgrade
+    # rows: neither a tombstone nor explicit recreation can make them visible.
+    await storage.documents.delete("t1", "d")
+    await storage.documents.register(record)
+    assert (await storage.documents.get("t1", "d")).published_run_seq == 0
+    assert await storage.chunks.get_chunks("t1", ["c1"]) == []
+    await storage.documents.register(record.model_copy(update={"doc_id": "new"}))
+    assert (await storage.documents.get("t1", "new")).published_run_seq == 0
+
+
+async def test_hybrid_search_uses_one_generation_snapshot_before_candidate_limits():
+    from forge_task_documents.models import DocumentRecord
+    from forge_task_documents.storage.mongo.schema import doc_to_chunk
+
+    storage = MongoStorage(AsyncMongoMockClient(), database="db", fusion_mode="client")
+    record = DocumentRecord(tenant_id="t1", doc_id="d", filename="d.md", sha256="a", size_bytes=1)
+    first = await storage.documents.begin_run(record)
+    await storage.chunks.replace_document_chunks("t1", "d", first, [doc_to_chunk(_doc(1))])
+    await storage.documents.complete_run("t1", "d", first, fields={})
+    second = await storage.documents.begin_run(record)
+    await storage.chunks.replace_document_chunks("t1", "d", second, [doc_to_chunk(_doc(i)) for i in range(2, 10)])
+    calls = 0
+
+    def aggregate(pipe):
+        nonlocal calls
+        calls += 1
+        filters = [stage["$match"] for stage in pipe if "$match" in stage]
+        if "$vectorSearch" in pipe[0]:
+            filters.append(pipe[0]["$vectorSearch"]["filter"])
+        # Execute generated Mongo predicates against all retained generations.
+        # Unpublished candidates cannot consume this one-result limit.
+        selected = list(storage.chunks._c._c.find({"$and": filters}))[:1]
+        if calls == 1:
+            # Simulate publication between the concurrently issued legs.
+            storage.documents._c._c.update_one(
+                {"tenant_id": "t1", "doc_id": "d"}, {"$set": {"published_run_seq": second}}
+            )
+        return [{**row, "_score": 1.0} for row in selected]
+
+    storage.search._c.aggregate_results = aggregate
+    hits = await storage.search.hybrid_search(req(limit=1, per_leg_limit=1))
+    assert calls == 2
+    assert len(hits) == 1 and hits[0].chunk.id == "c1" and hits[0].generation == first
+    assert hits[0].ranks == {"vector": 1, "text": 1}
+
+
+async def test_registering_a_legacy_record_without_run_seq_advances_its_default_fence():
+    from forge_task_documents.errors import StaleRunError
+    from forge_task_documents.models import DocumentRecord
+
+    storage = MongoStorage(AsyncMongoMockClient(), database="db")
+    record = DocumentRecord(tenant_id="t1", doc_id="d", filename="d.md", sha256="a", size_bytes=1)
+    legacy = record.model_dump(mode="python", exclude={"run_seq", "published_run_seq"})
+    await storage.documents._c.update_one({"tenant_id": "t1", "doc_id": "d"}, {"$set": legacy}, upsert=True)
+    before = await storage.documents.get("t1", "d")
+    assert before.run_seq == 0
+    await storage.documents.register(record)
+    with pytest.raises(StaleRunError):
+        await storage.documents.begin_run(record, expected_run_seq=before.run_seq)

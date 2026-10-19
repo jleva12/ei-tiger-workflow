@@ -90,6 +90,16 @@
       "additionalProperties": {
         "type": "object"
       }
+    },
+    "ui_components": {
+      "type": "object",
+      "description": "The team UI components its Rich answers nodes (and its saved agents') pick, by key, each a published forge.ui_component/v1 definition: what an exported agent needs to run on its own. The hosted runtime uses the organization's instead.",
+      "propertyNames": {
+        "pattern": "^org\\.[a-z0-9]+(?:-[a-z0-9]+)*$"
+      },
+      "additionalProperties": {
+        "type": "object"
+      }
     }
   },
   "$defs": {
@@ -115,6 +125,7 @@
           "enum": [
             "agent",
             "sub_agent",
+            "intake_agent",
             "saved_agent",
             "memory",
             "knowledge_base",
@@ -136,7 +147,7 @@
         },
         "outputs": {
           "type": "array",
-          "description": "An agent's ways out: tools (what it can call) and agents (who it hands off to); none for the rest.",
+          "description": "An agent's ways out: tools (what it can call) and agents (who it hands off to); an intake agent's tools and on_complete (the workflows it starts when it completes); none for the rest.",
           "items": {
             "type": "string"
           }
@@ -171,6 +182,22 @@
             "properties": {
               "config": {
                 "$ref": "#/$defs/config_sub_agent"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "intake_agent"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "$ref": "#/$defs/config_intake_agent"
               }
             }
           }
@@ -356,7 +383,8 @@
         "source_output": {
           "enum": [
             "tools",
-            "agents"
+            "agents",
+            "on_complete"
           ]
         },
         "target": {
@@ -374,7 +402,8 @@
         "thinking_level",
         "max_output_tokens",
         "ask_person",
-        "state_schema"
+        "state_schema",
+        "access"
       ],
       "additionalProperties": false,
       "properties": {
@@ -431,6 +460,434 @@
         "state_schema": {
           "type": "object",
           "description": "A JSON Schema of the state the chat sends in stateDelta besides model and thinking_level; {} declares none."
+        },
+        "access": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "permission"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "permission": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "One of the organization's agent permissions, by ID."
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "all"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "all": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "permission"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "permission": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "One of the organization's agent permissions, by ID."
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "all"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "all": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "any"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "any": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "any"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "any": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "permission"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "permission": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "One of the organization's agent permissions, by ID."
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "all"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "all": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "any"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "any": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "description": "Which of the organization's agent permissions someone needs to use it: {\"permission\": <id>}, {\"all\": [rules]} (every one) or {\"any\": [rules]} (at least one), groups nesting 3 deep. Null: anyone who may call the agent."
         }
       }
     },
@@ -447,7 +904,8 @@
         "mode",
         "disallow_transfer_to_parent",
         "disallow_transfer_to_peers",
-        "include_contents"
+        "include_contents",
+        "access"
       ],
       "additionalProperties": false,
       "properties": {
@@ -523,6 +981,1044 @@
             "none"
           ],
           "description": "none: it sees only what it's given."
+        },
+        "access": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "permission"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "permission": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "One of the organization's agent permissions, by ID."
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "all"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "all": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "permission"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "permission": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "One of the organization's agent permissions, by ID."
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "all"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "all": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "any"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "any": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "any"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "any": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "permission"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "permission": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "One of the organization's agent permissions, by ID."
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "all"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "all": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "any"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "any": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "description": "Which of the organization's agent permissions someone needs to use it: {\"permission\": <id>}, {\"all\": [rules]} (every one) or {\"any\": [rules]} (at least one), groups nesting 3 deep. Null: anyone who may call the agent."
+        }
+      }
+    },
+    "config_intake_agent": {
+      "type": "object",
+      "description": "Walks the person through an intake you design: it collects a record in whatever order they give it, then hands it back to the agent that handed off.",
+      "required": [
+        "description",
+        "instruction",
+        "model",
+        "thinking_level",
+        "max_output_tokens",
+        "ask_person",
+        "fields",
+        "sections",
+        "confirm_summary",
+        "allow_cancel",
+        "allow_escalate",
+        "access"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "What it's for: what agents read when they hand off to it, or call it."
+        },
+        "instruction": {
+          "type": "string",
+          "description": "Its system instruction."
+        },
+        "model": {
+          "type": "object",
+          "description": "One of the models Forge offers: its provider's key and its id. Both empty: the default.",
+          "required": [
+            "provider",
+            "name"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "provider": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        "thinking_level": {
+          "type": "string",
+          "enum": [
+            "",
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "description": "How long the model thinks: the nearest level it offers. Empty: the model's own."
+        },
+        "max_output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "description": "Null: the model's limit."
+        },
+        "ask_person": {
+          "type": "boolean",
+          "description": "It may stop mid-turn to ask the person something (ADK's adk_request_input); the chat shows a form for the answer. Not in workflows' runs."
+        },
+        "fields": {
+          "type": "array",
+          "description": "The record it collects, in the order it asks: each field's key, type, whether it's required and when it applies.",
+          "items": {
+            "type": "object",
+            "required": [
+              "key"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "The builder's, for telling fields apart."
+              },
+              "key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,63}$",
+                "description": "What the record and the model call it."
+              },
+              "label": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text",
+                  "number",
+                  "integer",
+                  "boolean",
+                  "date",
+                  "email",
+                  "choice",
+                  "choices"
+                ]
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "A choice's options."
+              },
+              "description": {
+                "type": "string",
+                "description": "What it is, and how to ask for it."
+              },
+              "why": {
+                "type": "string",
+                "description": "Why it's asked, for when the person asks."
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "when": {
+                "type": "string",
+                "description": "A JSONata condition on the record's values: it applies only when this holds. Empty: always."
+              },
+              "infer": {
+                "type": "boolean",
+                "description": "The model may work it out from what the person said; the person confirms it."
+              },
+              "confirm": {
+                "type": "boolean",
+                "description": "The person confirms its value before the intake finishes."
+              },
+              "prefill": {
+                "type": "boolean",
+                "description": "The agent handing off may fill it in."
+              },
+              "section": {
+                "type": "string",
+                "description": "Its section's ID; empty for none."
+              }
+            }
+          }
+        },
+        "sections": {
+          "type": "array",
+          "description": "Fields asked together, each unlocked on a condition.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "when": {
+                "type": "string",
+                "description": "A JSONata condition on the record's values: its fields apply only when this holds. Empty: always."
+              }
+            }
+          }
+        },
+        "confirm_summary": {
+          "type": "boolean",
+          "description": "It reads back a summary and waits for the person's yes before it finishes."
+        },
+        "allow_cancel": {
+          "type": "boolean",
+          "description": "The person may stop it: it hands back as cancelled."
+        },
+        "allow_escalate": {
+          "type": "boolean",
+          "description": "It may hand back as escalated, for a person."
+        },
+        "access": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "permission"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "permission": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "One of the organization's agent permissions, by ID."
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "all"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "all": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "permission"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "permission": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "One of the organization's agent permissions, by ID."
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "all"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "all": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "any"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "any": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "any"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "any": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "permission"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "permission": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "One of the organization's agent permissions, by ID."
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "all"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "all": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "any"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "any": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "description": "Which of the organization's agent permissions someone needs to use it: {\"permission\": <id>}, {\"all\": [rules]} (every one) or {\"any\": [rules]} (at least one), groups nesting 3 deep. Null: anyone who may call the agent."
         }
       }
     },
@@ -530,13 +2026,442 @@
       "type": "object",
       "description": "Another of the organization's agents, whole: handed off to, or called as a tool.",
       "required": [
-        "agent"
+        "agent",
+        "access"
       ],
       "additionalProperties": false,
       "properties": {
         "agent": {
           "type": "string",
           "description": "Another of the organization's agents, by ID."
+        },
+        "access": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "permission"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "permission": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "One of the organization's agent permissions, by ID."
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "all"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "all": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "permission"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "permission": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "One of the organization's agent permissions, by ID."
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "all"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "all": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "any"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "any": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "any"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "any": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "permission"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "permission": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "One of the organization's agent permissions, by ID."
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "all"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "all": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "required": [
+                              "any"
+                            ],
+                            "additionalProperties": false,
+                            "properties": {
+                              "any": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "permission"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "permission": {
+                                          "type": "integer",
+                                          "minimum": 1,
+                                          "description": "One of the organization's agent permissions, by ID."
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "all"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "all": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "any"
+                                      ],
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "any": {
+                                          "type": "array",
+                                          "minItems": 1,
+                                          "items": {
+                                            "type": "object",
+                                            "required": [
+                                              "permission"
+                                            ],
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "permission": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "description": "One of the organization's agent permissions, by ID."
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ],
+          "description": "Which of the organization's agent permissions someone needs to use it: {\"permission\": <id>}, {\"all\": [rules]} (every one) or {\"any\": [rules]} (at least one), groups nesting 3 deep. Null: anyone who may call the agent."
         }
       }
     },
@@ -791,7 +2716,8 @@
       "description": "One of the organization's workflows, as a tool: the agent runs it with its input and gets its result.",
       "required": [
         "workflow",
-        "version"
+        "version",
+        "wait_seconds"
       ],
       "additionalProperties": false,
       "properties": {
@@ -813,6 +2739,11 @@
             }
           ],
           "description": "Which of its versions runs: a published one, its draft, or null for its latest published (as each run starts)."
+        },
+        "wait_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Seconds the agent waits for the run before it's told the run is still going, with its ID; at most the deployment's cap (FORGE_AGENT_WORKFLOW_WAIT_MAX). Missing: the deployment's default."
         }
       }
     },
@@ -864,47 +2795,57 @@
         "components": {
           "type": "array",
           "items": {
-            "enum": [
-              "Card",
-              "Row",
-              "Col",
-              "Tabs",
-              "Carousel",
-              "Box",
-              "Spacer",
-              "Divider",
-              "Header",
-              "Text",
-              "Caption",
-              "Markdown",
-              "Badge",
-              "Icon",
-              "Alert",
-              "Citation",
-              "Fact",
-              "Table",
-              "Chart",
-              "Steps",
-              "Timeline",
-              "ListView",
-              "ListViewItem",
-              "Image",
-              "Diagram",
-              "Map",
-              "Choices",
-              "Button",
-              "Select",
-              "Input",
-              "DatePicker",
-              "Checkbox",
-              "Slider",
-              "RadioGroup",
-              "CheckboxGroup",
-              "Form"
+            "anyOf": [
+              {
+                "enum": [
+                  "Card",
+                  "Row",
+                  "Col",
+                  "Tabs",
+                  "Carousel",
+                  "Box",
+                  "Spacer",
+                  "Divider",
+                  "Header",
+                  "Text",
+                  "Caption",
+                  "Markdown",
+                  "Badge",
+                  "Icon",
+                  "Alert",
+                  "Citation",
+                  "Fact",
+                  "Table",
+                  "Chart",
+                  "Steps",
+                  "Timeline",
+                  "ListView",
+                  "ListViewItem",
+                  "Image",
+                  "Diagram",
+                  "Map",
+                  "Choices",
+                  "Button",
+                  "Select",
+                  "Input",
+                  "DatePicker",
+                  "Checkbox",
+                  "Slider",
+                  "RadioGroup",
+                  "CheckboxGroup",
+                  "Form"
+                ]
+              },
+              {
+                "type": "string",
+                "pattern": "^org\\.[a-z0-9]+(?:-[a-z0-9]+)*$",
+                "maxLength": 64,
+                "description": "One of the organization's team UI components, by key: found where it runs (forge_agent_runtime.generative_ui)."
+              }
             ]
           },
           "uniqueItems": true,
-          "description": "The Generative UI components the agent may draw with present; only these go into its model calls."
+          "description": "The Generative UI components the agent may draw with present, base ones by name and the organization's team ones by key (org.…); only these go into its model calls."
         }
       }
     }

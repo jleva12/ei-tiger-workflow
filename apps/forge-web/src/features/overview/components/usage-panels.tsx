@@ -1,5 +1,12 @@
 import * as React from "react"
-import { BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
+import {
+  AreaChart,
+  BarChart,
+  CartesianGrid,
+  LineChart,
+  XAxis,
+  YAxis,
+} from "recharts"
 
 import {
   ChartContainer,
@@ -23,6 +30,8 @@ import {
   Legend,
   Panel,
   SplitSwitch,
+  SeriesLines,
+  StackedAreas,
   StackedBars,
   VolumeDelta,
   type BarListRow,
@@ -37,6 +46,7 @@ import {
   usd,
   type Unit,
 } from "@/features/overview/lib/format"
+import { ChartTypeContext } from "@/features/overview/lib/chart-type"
 import {
   SUBJECT_KINDS,
   type BucketTotals,
@@ -68,7 +78,14 @@ function kindsIn(
   )
 }
 
-/** A period's stacked bars, with their table twin for screen readers. */
+const CHARTS = { bars: BarChart, area: AreaChart, line: LineChart }
+
+/**
+ * A period's series as the widget's chart type has them (stacked bars by
+ * default), with their table twin for screen readers. Lines and areas sit
+ * on the same bands as bars, so every chart of the scope lines up date for
+ * date whatever its type.
+ */
 export function UsageChart({
   config,
   keys,
@@ -83,7 +100,8 @@ export function UsageChart({
 }: {
   config: ChartConfig
   keys: string[]
-  rows: Record<string, number>[]
+  /** Each bucket's values at `start`; null leaves a gap (a rate with none). */
+  rows: Record<string, number | null>[]
   unit: Unit
   ticks: number[]
   format: (value: number) => string
@@ -93,13 +111,16 @@ export function UsageChart({
   /** Ticks between whole numbers (dollars); counts stay whole. */
   decimals?: boolean
 }) {
+  const type = React.useContext(ChartTypeContext)
+  const Chart = CHARTS[type]
   return (
     <>
       <ChartContainer config={config} aria-hidden="true" className={chartClass}>
-        <BarChart data={rows} margin={chartMargin}>
+        <Chart data={rows} margin={chartMargin}>
           <CartesianGrid vertical={false} />
           <XAxis
             dataKey="start"
+            scale="band"
             ticks={ticks}
             interval={0}
             tickFormatter={tick}
@@ -113,7 +134,8 @@ export function UsageChart({
             {...axisProps}
           />
           <ChartTooltip
-            cursor={false}
+            // Lines and areas are read across: a hairline at the date.
+            cursor={type === "bars" ? false : { stroke: "var(--border)" }}
             content={
               <ChartTooltipContent
                 labelFormatter={(_, payload) =>
@@ -126,8 +148,12 @@ export function UsageChart({
               />
             }
           />
-          {StackedBars({ keys, stackId })}
-        </BarChart>
+          {type === "bars"
+            ? StackedBars({ keys, stackId })
+            : type === "area"
+              ? StackedAreas({ keys, stackId })
+              : SeriesLines({ keys })}
+        </Chart>
       </ChartContainer>
       <ChartTable
         caption={caption}
@@ -136,8 +162,11 @@ export function UsageChart({
           ...keys.map((key) => String(config[key]?.label ?? key)),
         ]}
         rows={rows.map((row) => [
-          bucketLabel(row.start, unit),
-          ...keys.map((key) => format(row[key] ?? 0)),
+          bucketLabel(row.start ?? undefined, unit),
+          ...keys.map((key) => {
+            const value = row[key]
+            return value === null ? "—" : format(value ?? 0)
+          }),
         ])}
       />
     </>
@@ -282,7 +311,6 @@ export function TokensPanel({ context }: { context: UsageContext }) {
   return (
     <Panel
       title="Model tokens"
-      className="col-span-2 @max-[900px]/shell:col-span-1"
       action={
         Object.keys(options).length > 1 && (
           <SplitSwitch

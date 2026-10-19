@@ -3,16 +3,19 @@ what each status allows."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from forge_task_adk_workflows.run_store import (
     ABANDONED,
+    CHILD_RUN,
     FAILED,
     PAUSED,
     QUEUED,
@@ -25,8 +28,11 @@ from forge_task_adk_workflows.run_store import (
     NoSuchRun,
     NotAllowed,
     NotOpen,
+    Provenance,
     RunStore,
+    RunTaken,
     metadata,
+    new_session_id,
     open_gates,
     overdue_gates,
     runs,
@@ -56,6 +62,17 @@ def clock() -> Clock:
 @pytest.fixture
 async def store(clock: Clock) -> AsyncIterator[RunStore]:
     engine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool)
+    async with engine.begin() as conn:
+        await conn.run_sync(metadata.create_all)
+    yield RunStore(engine, clock=clock)
+    await engine.dispose()
+
+
+@pytest.fixture
+async def shared(clock: Clock, tmp_path: Path) -> AsyncIterator[RunStore]:
+    """A store whose callers each have a connection of their own, as two
+    processes would: their writes race in the database."""
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'runs.db'}", poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.run_sync(metadata.create_all)
     yield RunStore(engine, clock=clock)
@@ -155,6 +172,53 @@ async def test_a_worker_whose_lease_ran_out_cant_write_though_nobody_took_the_ru
     assert (left["status"], left["lease_owner"], left["state"]) == (RUNNING, "w1", None)
     clock.advance(1)
     assert [found["id"] for found in await store.interrupted()] == [run["id"]]
+
+
+async def test_a_workers_notes_land_only_while_it_has_the_run(store: RunStore, clock: Clock) -> None:
+    run = await started(store)
+    await store.claim(run["id"], owner="w1", lease_seconds=60)
+    await store.note(run["id"], "Step 1 finished", owner="w1")
+    with pytest.raises(LostLease):
+        await store.note(run["id"], "Not w2's to say", owner="w2")
+
+    clock.advance(60)  # its lease ran out, though nobody took the run yet
+    with pytest.raises(LostLease):
+        await store.note(run["id"], "Step 2 finished", owner="w1")
+    clock.advance(1)
+    await store.requeue(run["id"], owner=None, error={"message": "gone", "category": "interrupted"}, lease_epoch=1)
+    await store.claim(run["id"], owner="w2", lease_seconds=60)
+    with pytest.raises(LostLease):
+        await store.note(run["id"], "Step 2 finished", owner="w1")  # on its own clock, it may hold it still
+    await store.note(run["id"], "Carries on", owner="w2")
+    await store.note(run["id"], "Said by nobody's worker")  # the admin API's: not fenced
+
+    noted = [event["message"] for event in await store.events(run["id"]) if event["kind"] == "note"]
+    assert noted == ["Step 1 finished", "Carries on", "Said by nobody's worker"]
+
+
+async def test_a_worker_holds_its_run_for_a_write_elsewhere_while_it_has_it(store: RunStore, clock: Clock) -> None:
+    run = await started(store)
+    await store.claim(run["id"], owner="w1", lease_seconds=60)
+    written: list[str] = []
+    async with store.holding(run["id"], owner="w1"):
+        written.append("w1")
+    with pytest.raises(LostLease):
+        async with store.holding(run["id"], owner="w2"):
+            written.append("w2")
+    clock.advance(60)
+    with pytest.raises(LostLease):
+        async with store.holding(run["id"], owner="w1"):
+            written.append("w1, its lease run out")
+    assert written == ["w1"]
+
+    # In a write's own transaction (a usage row, on the same database): it lands with the lease, or not at all.
+    clock.advance(1)
+    await store.requeue(run["id"], owner=None, error={"message": "gone", "category": "interrupted"}, lease_epoch=1)
+    await store.claim(run["id"], owner="w2", lease_seconds=60)
+    async with store.engine.begin() as conn:
+        await store.hold(conn, run["id"], owner="w2")
+        with pytest.raises(LostLease):
+            await store.hold(conn, run["id"], owner="w1")
 
 
 async def test_a_paused_run_carries_on_once_decided(store: RunStore) -> None:
@@ -332,7 +396,13 @@ async def test_retry_resubmit_and_abandon(store: RunStore) -> None:
     assert again["id"] != run["id"] and again["resubmit_of"] == run["id"]
     # In a session of its own.
     assert again["session_id"] != "session-1"
-    assert again["payload"] == {**run["payload"], "session_id": again["session_id"]}
+    # Its trigger says it's Bob's resubmission (the run had none to keep).
+    assert again["payload"] == {
+        **run["payload"],
+        "session_id": again["session_id"],
+        "trigger": {"type": "resubmit", "by": BOB.id, "run_id": run["id"]},
+        "agent_access": None,
+    }
     assert again["requested_by_name"] == "Bob"
     abandoned = await store.abandon(again["id"], actor=BOB)
     assert abandoned["status"] == ABANDONED and abandoned["finished_at"] is not None
@@ -376,6 +446,35 @@ async def test_a_resubmitted_run_takes_its_files_from_where_they_were_saved(stor
 
     assert again["payload"]["files_session_id"] == third["payload"]["files_session_id"] == "session-1"
     assert len({run["session_id"], again["session_id"], third["session_id"]}) == 3
+
+
+async def test_a_resubmission_never_carries_forward_the_access_its_run_held(store: RunStore) -> None:
+    held = {"held": [7], "names": {"7": "refunds:approve"}, "everything": False, "known": True}
+    run = await store.create(
+        organization_id="org-1",
+        agent_id="ag-1",
+        agent_name="Support desk",
+        revision=3,
+        session_id="session-1",
+        payload={"session_id": "session-1", "input": {}, "run_as": ALICE.id, "agent_access": held},
+        requested_by=ALICE,
+    )
+    await store.claim(run["id"], owner="w1", lease_seconds=60)
+    await store.finish(run["id"], owner="w1", state=None, succeeded=True)
+
+    # Nothing said of what whoever it's for holds now: they hold nothing.
+    assert (await store.resubmit(run["id"], actor=BOB))["payload"]["agent_access"] is None
+    # What they hold now, as the admin API works it out; it acts as the run did.
+    now = {**held, "held": []}
+    again, created = await store.resubmit_once(
+        run["id"], again_id="d" * 32, actor=BOB, organization_id="org-1", agent_access=now
+    )
+    assert created and again["payload"]["agent_access"] == now and again["payload"]["run_as"] == ALICE.id
+    # Asked again for that ID, it's that resubmission, as it was made.
+    same, created = await store.resubmit_once(
+        run["id"], again_id="d" * 32, actor=BOB, organization_id="org-1", agent_access=held
+    )
+    assert not created and same["id"] == again["id"] and same["payload"]["agent_access"] == now
 
 
 async def test_a_running_run_abandoned_is_stopped_by_its_worker(store: RunStore) -> None:
@@ -544,6 +643,206 @@ async def test_what_a_run_started_is_abandoned_as_its_worker_abandons_it(store: 
     assert (await store.get(left["id"]))["status"] == ABANDONED
 
 
+def waits_for(child: dict, *, deadline: datetime | None = None) -> dict:
+    """The gate a run waits at for the run its workflow's call started."""
+    reason = f"Waits for Refunds (run {child['id'][:8]}) to end"
+    details = {"child_run_id": child["id"], "step_name": "Helper"}
+    return gate(child["id"], kind=CHILD_RUN, reason=reason, details=details, deadline=deadline)
+
+
+async def waiting_parent(store: RunStore, child_id: str = "c" * 32, **options) -> tuple[dict, dict]:
+    """A run, paused by w1 at the gate of a run it started (queued)."""
+    parent = await started(store)
+    await store.claim(parent["id"], owner="w1", lease_seconds=60)
+    child, _ = await child_of(store, parent, child_id)
+    await opened(store, parent["id"], gates=[waits_for(child, **options)])
+    return parent, child
+
+
+async def test_a_run_waiting_for_a_run_it_started_gives_its_worker_back(store: RunStore) -> None:
+    parent, child = await waiting_parent(store)
+
+    paused = await store.get(parent["id"])
+    assert (paused["status"], paused["lease_owner"], paused["lease_until"]) == (PAUSED, None, None)
+    [waiting] = open_gates(paused)
+    assert (waiting["kind"], waiting["details"]["child_run_id"]) == (CHILD_RUN, child["id"])
+    [*_, said] = await store.events(parent["id"])
+    assert (said["kind"], said["message"]) == ("waiting", f"Waits for Refunds (run {child['id'][:8]}) to end")
+    # Nobody decides it: the run it waits for ending does.
+    with pytest.raises(NotAllowed, match="not for a decision"):
+        await store.decide(parent["id"], request_id=waiting["id"], approved=True, comment="", actor=BOB)
+    assert (await store.get(parent["id"]))["status"] == PAUSED
+    assert await store.claim(parent["id"], owner="w2", lease_seconds=60) is None
+
+
+@pytest.mark.parametrize("succeeded", [True, False])
+async def test_the_end_of_a_run_another_waits_for_queues_that_run(store: RunStore, succeeded: bool) -> None:
+    parent, child = await waiting_parent(store)
+    [waiting] = open_gates(await store.get(parent["id"]))
+    await store.claim(child["id"], owner="w2", lease_seconds=60)
+    error = None if succeeded else {"message": "Declined", "category": "failed"}
+
+    await store.finish(child["id"], owner="w2", state=None, succeeded=succeeded, result={"to": "A1"}, error=error)
+
+    ended = SUCCEEDED if succeeded else FAILED
+    woken = await store.get(parent["id"])
+    assert (woken["status"], open_gates(woken), woken["pause"]) == (QUEUED, [], None)
+    decision = woken["decisions"][waiting["key"]]
+    assert (decision["approved"], decision["run_id"], decision["status"]) == (True, child["id"], ended)
+    assert decision["request_id"] == waiting["id"]
+    [*_, said] = await store.events(parent["id"])
+    assert (said["kind"], said["message"]) == (
+        "child_ended",
+        f"Run {child['id'][:8]} it waits for {ended}: it carries on",
+    )
+    assert said["attributes"] == {"run_id": child["id"]}
+    assert await store.claim(parent["id"], owner="w1", lease_seconds=60) is not None
+
+
+async def test_a_run_another_waits_for_abandoned_queues_that_run(store: RunStore, clock: Clock) -> None:
+    # At once, queued.
+    parent, child = await waiting_parent(store, "a" * 32)
+    await store.abandon(child["id"], actor=BOB)
+    woken = await store.get(parent["id"])
+    assert woken["status"] == QUEUED
+    assert woken["decisions"][child["id"]]["status"] == ABANDONED
+    [*_, said] = await store.events(parent["id"])
+    assert said["message"] == f"Run {child['id'][:8]} it waits for was abandoned: it carries on"
+
+    # Running: as its worker stops it.
+    parent, child = await waiting_parent(store, "b" * 32)
+    await store.claim(child["id"], owner="w2", lease_seconds=60)
+    await store.abandon(child["id"], actor=BOB)
+    assert (await store.get(parent["id"]))["status"] == PAUSED  # it hasn't stopped yet
+    await store.abandon_running(child["id"], owner="w2", state=None)
+    assert (await store.get(parent["id"]))["status"] == QUEUED
+
+    # Its worker gone before it stopped it: as the maintenance abandons it.
+    parent, child = await waiting_parent(store, "d" * 32)
+    await store.claim(child["id"], owner="w2", lease_seconds=60)
+    await store.abandon(child["id"], actor=BOB)
+    clock.advance(61)
+    assert await store.abandon_stopping(child["id"])
+    assert (await store.get(parent["id"]))["status"] == QUEUED
+
+
+async def test_a_run_another_waits_for_failing_as_its_worker_went_queues_that_run(
+    store: RunStore, clock: Clock
+) -> None:
+    parent, child = await waiting_parent(store)
+    await store.claim(child["id"], owner="w2", lease_seconds=60)
+    clock.advance(61)
+
+    assert await store.fail_interrupted(
+        child["id"], lease_epoch=1, error={"message": "Its worker went", "category": "interrupted"}
+    )
+
+    woken = await store.get(parent["id"])
+    assert (woken["status"], woken["decisions"][child["id"]]["status"]) == (QUEUED, FAILED)
+
+
+async def test_a_run_pausing_for_a_run_that_already_ended_carries_on_at_once(store: RunStore) -> None:
+    parent = await started(store)
+    await store.claim(parent["id"], owner="w1", lease_seconds=60)
+    child, _ = await child_of(store, parent, "c" * 32)
+    await store.claim(child["id"], owner="w2", lease_seconds=60)
+    # It ends while the run that started it still runs: nothing waits for it yet.
+    await store.finish(child["id"], owner="w2", state=None, succeeded=True)
+    assert (await store.get(parent["id"]))["status"] == RUNNING
+
+    assert await store.pause(parent["id"], owner="w1", state={"at": 1}, gates=[waits_for(child)]) is None
+
+    run = await store.get(parent["id"])
+    assert (run["status"], run["lease_owner"], open_gates(run), run["state"]) == (QUEUED, None, [], {"at": 1})
+    assert run["decisions"][child["id"]]["status"] == SUCCEEDED
+    [*_, said] = await store.events(parent["id"])
+    assert said["message"] == f"Run {child['id'][:8]} it waits for succeeded: it carries on"
+
+    # One that's gone answers at once too: as the run finds it, gone.
+    gone = await started(store)
+    await store.claim(gone["id"], owner="w1", lease_seconds=60)
+    assert await store.pause(gone["id"], owner="w1", state={}, gates=[waits_for({"id": "e" * 32})]) is None
+    assert (await store.get(gone["id"]))["decisions"]["e" * 32]["status"] is None
+
+
+async def test_a_run_whose_wait_for_another_is_up_carries_on(store: RunStore, clock: Clock) -> None:
+    parent, child = await waiting_parent(store, deadline=START + timedelta(seconds=30))
+    clock.advance(31)
+    [overdue] = await store.overdue()
+    [late] = overdue_gates(overdue, clock())
+    assert late["details"]["child_run_id"] == child["id"]
+
+    timed_out = await store.time_out(parent["id"], pause_id=late["id"], comment="Nobody decided by its deadline")
+
+    assert timed_out is not None and timed_out["status"] == QUEUED
+    assert timed_out["decisions"][child["id"]]["approved"] is False
+    [*_, said] = await store.events(parent["id"])
+    assert (said["kind"], said["message"]) == (
+        "timed_out",
+        f"Stopped waiting for run {child['id'][:8]}: it didn't end in time",
+    )
+    # The run it waited for ending later changes nothing there.
+    await store.claim(child["id"], owner="w2", lease_seconds=60)
+    await store.finish(child["id"], owner="w2", state=None, succeeded=True)
+    after = await store.get(parent["id"])
+    assert (after["status"], after["decisions"]) == (QUEUED, timed_out["decisions"])
+
+
+async def test_abandoning_a_run_waiting_for_another_abandons_that_one(store: RunStore) -> None:
+    parent, child = await waiting_parent(store)
+
+    await store.abandon(parent["id"], actor=BOB)
+
+    assert (await store.get(parent["id"]))["status"] == ABANDONED
+    assert (await store.get(child["id"]))["status"] == ABANDONED
+    assert [e["kind"] for e in await store.events(parent["id"])].count("child_ended") == 0
+
+
+async def test_a_run_ends_whatever_became_of_the_run_that_waited_for_it(store: RunStore) -> None:
+    # The run waiting for it failed meanwhile (another of its ways failed it):
+    # it goes on, and its end changes nothing there.
+    parent = await started(store)
+    await store.claim(parent["id"], owner="w1", lease_seconds=60)
+    child, _ = await child_of(store, parent, "c" * 32)
+    [_, approval] = await opened(store, parent["id"], gates=[waits_for(child), gate("review")])
+    await store.decide(parent["id"], request_id=approval["id"], approved=True, comment="", actor=BOB)
+    await store.claim(parent["id"], owner="w1", lease_seconds=60)
+    await store.finish(parent["id"], owner="w1", state=None, succeeded=False, error={"message": "A way failed"})
+    assert (await store.get(child["id"]))["status"] == QUEUED  # it goes on
+
+    await store.claim(child["id"], owner="w2", lease_seconds=60)
+    await store.finish(child["id"], owner="w2", state=None, succeeded=True)
+
+    failed = await store.get(parent["id"])
+    assert (failed["status"], list(failed["decisions"])) == (FAILED, ["review"])
+
+    # The run waiting for it is gone (its organization forgotten, say): it ends all the same.
+    other = await started(store)
+    await store.claim(other["id"], owner="w1", lease_seconds=60)
+    orphan, _ = await child_of(store, other, "d" * 32)
+    async with store.engine.begin() as conn:
+        await conn.execute(sa.delete(runs).where(runs.c.id == other["id"]))
+    await store.claim(orphan["id"], owner="w2", lease_seconds=60)
+    await store.finish(orphan["id"], owner="w2", state=None, succeeded=True)
+    assert (await store.get(orphan["id"]))["status"] == SUCCEEDED
+
+
+async def test_runs_waiting_for_runs_that_wait_for_runs_carry_on_in_turn(store: RunStore) -> None:
+    parent, child = await waiting_parent(store)
+    await store.claim(child["id"], owner="w2", lease_seconds=60)
+    grandchild, _ = await child_of(store, child, "d" * 32, owner="w2")
+    await store.pause(child["id"], owner="w2", state={}, gates=[waits_for(grandchild)])
+    await store.claim(grandchild["id"], owner="w3", lease_seconds=60)
+
+    await store.finish(grandchild["id"], owner="w3", state=None, succeeded=True)
+
+    assert (await store.get(child["id"]))["status"] == QUEUED
+    assert (await store.get(parent["id"]))["status"] == PAUSED  # its own still goes
+    await store.claim(child["id"], owner="w2", lease_seconds=60)
+    await store.finish(child["id"], owner="w2", state=None, succeeded=True)
+    assert (await store.get(parent["id"]))["status"] == QUEUED
+
+
 async def test_a_run_queued_again_after_a_hiccup_isnt_taken_before_its_backoff(store: RunStore, clock: Clock) -> None:
     run = await started(store)
     await store.claim(run["id"], owner="w1", lease_seconds=60)
@@ -563,7 +862,9 @@ async def test_a_run_queued_again_after_a_hiccup_isnt_taken_before_its_backoff(s
     assert taken is not None and taken["next_attempt_at"] is None
     # Interrupted, it's queued again at once.
     clock.advance(61)
-    again = await store.requeue(run["id"], owner=None, error={"message": "gone", "category": "interrupted"})
+    again = await store.requeue(
+        run["id"], owner=None, error={"message": "gone", "category": "interrupted"}, lease_epoch=2
+    )
     assert again is not None and again["next_attempt_at"] is None
 
 
@@ -572,7 +873,7 @@ async def test_each_taking_of_a_run_counts(store: RunStore, clock: Clock) -> Non
     assert run["lease_epoch"] == 0
     assert (await store.claim(run["id"], owner="w1", lease_seconds=60) or {})["lease_epoch"] == 1
     clock.advance(61)
-    await store.requeue(run["id"], owner=None, error={"message": "gone", "category": "interrupted"})
+    await store.requeue(run["id"], owner=None, error={"message": "gone", "category": "interrupted"}, lease_epoch=1)
     assert (await store.claim(run["id"], owner="w2", lease_seconds=60) or {})["lease_epoch"] == 2
     [*_, taken] = await store.events(run["id"])
     assert taken["attributes"] == {"worker": "w2", "epoch": 2}
@@ -593,15 +894,76 @@ async def test_an_interrupted_run_is_found_and_queued_again(store: RunStore, clo
     assert await store.interrupted() == []
     clock.advance(61)
     assert [r["id"] for r in await store.interrupted()] == [run["id"]]
-    queued = await store.requeue(run["id"], owner=None, error={"message": "Its worker went", "category": "interrupted"})
-    assert queued is not None and queued["attempt"] == 2
+    queued = await store.requeue(
+        run["id"], owner=None, error={"message": "Its worker went", "category": "interrupted"}, lease_epoch=1
+    )
+    # An interruption, not an attempt: it carries on as the same one.
+    assert queued is not None and (queued["attempt"], queued["interruptions"]) == (1, 1)
     assert (await store.events(run["id"]))[-1]["kind"] == "recovered"
     await store.claim(run["id"], owner="w2", lease_seconds=60)
     clock.advance(61)
     assert await store.fail_interrupted(
-        run["id"], error={"message": "Interrupted too often", "category": "interrupted"}
+        run["id"], lease_epoch=2, error={"message": "Interrupted too often", "category": "interrupted"}
     )
     assert (await store.get(run["id"]))["status"] == FAILED
+
+
+async def test_a_recovery_of_one_taking_of_a_run_leaves_a_later_one_alone(store: RunStore, clock: Clock) -> None:
+    run = await started(store)
+    await store.claim(run["id"], owner="w1", lease_seconds=60)
+    clock.advance(61)
+    [found] = await store.interrupted()  # as one maintenance found it: its first taking
+    gone = {"message": "gone", "category": "interrupted"}
+    # Another maintenance recovers it meanwhile; a worker takes it again, and goes too.
+    assert await store.requeue(run["id"], owner=None, error=gone, lease_epoch=found["lease_epoch"])
+    assert (await store.claim(run["id"], owner="w2", lease_seconds=60) or {})["lease_epoch"] == 2
+    clock.advance(61)
+
+    # The first maintenance, from what it found, neither fails the second taking nor queues it.
+    kept = {"message": "w1's failure", "category": "failed"}
+    assert not await store.fail_interrupted(run["id"], lease_epoch=found["lease_epoch"], error=kept)
+    assert await store.requeue(run["id"], owner=None, error=gone, lease_epoch=found["lease_epoch"]) is None
+    taken = await store.get(run["id"]) or {}
+    assert (taken["status"], taken["lease_owner"], taken["interruptions"]) == (RUNNING, "w2", 1)
+    assert taken["error"]["message"] == "gone"
+    # Its own recovery does; one that doesn't say which taking it found, nothing.
+    with pytest.raises(ValueError, match="lease_epoch"):
+        await store.requeue(run["id"], owner=None, error=gone)
+    queued = await store.requeue(run["id"], owner=None, error=gone, lease_epoch=2)
+    assert queued is not None and (queued["status"], queued["interruptions"]) == (QUEUED, 2)
+
+
+async def test_a_runs_interruptions_in_a_row_end_as_it_waits_or_is_retried(store: RunStore, clock: Clock) -> None:
+    run = await started(store)
+    interrupted = {"message": "Its worker stopped while it ran", "category": "interrupted"}
+    for owner in ("w1", "w2"):  # let go by a worker that stops, twice
+        await store.claim(run["id"], owner=owner, lease_seconds=60)
+        await store.requeue(run["id"], owner=owner, error=interrupted)
+    await store.claim(run["id"], owner="w3", lease_seconds=60)
+    hiccup = {"message": "Model overloaded", "category": "transient"}
+    queued = await store.requeue(run["id"], owner="w3", error=hiccup)
+    assert queued is not None and (queued["attempt"], queued["interruptions"]) == (2, 2)
+
+    await store.claim(run["id"], owner="w4", lease_seconds=60)
+    await store.wait(run["id"], owner="w4", state={}, until=START + timedelta(seconds=30), reason="Delay")
+    assert (await store.get(run["id"]) or {})["interruptions"] == 0
+
+    clock.advance(31)
+    await store.claim(run["id"], owner="w5", lease_seconds=60)
+    await store.requeue(run["id"], owner="w5", error=interrupted)
+    await store.claim(run["id"], owner="w6", lease_seconds=60)
+    [asked] = await store.pause(run["id"], owner="w6", state={}, gates=[gate("ship")]) or []
+    assert (await store.get(run["id"]) or {})["interruptions"] == 0
+
+    await store.decide(run["id"], request_id=asked["id"], approved=True, comment="", actor=BOB)
+    await store.claim(run["id"], owner="w7", lease_seconds=60)
+    await store.requeue(run["id"], owner="w7", error=interrupted)
+    await store.claim(run["id"], owner="w8", lease_seconds=60)
+    clock.advance(61)
+    await store.fail_interrupted(run["id"], lease_epoch=8, error=interrupted)
+    assert (await store.get(run["id"]) or {})["interruptions"] == 1
+    retried = await store.retry(run["id"], actor=BOB)
+    assert (retried["attempt"], retried["interruptions"]) == (3, 0)
 
 
 async def test_stalled_runs_are_found(store: RunStore, clock: Clock) -> None:
@@ -661,3 +1023,285 @@ async def test_each_workflows_latest_run(store: RunStore, clock: Clock) -> None:
     latest = {row["agent_id"]: row for row in await store.latest_by_agent("org-1")}
     assert latest["ag-1"]["last_at"] == START + timedelta(seconds=120)
     assert latest["ag-2"]["agent_name"] == "Support desk"
+
+
+# ------------------------------------------------------------------ provenance
+
+CONSOLE_START = Provenance(
+    "builder_test",
+    channel="console",
+    on_behalf_of=ALICE.id,
+    on_behalf_of_name=ALICE.name,
+    on_behalf_of_verified=True,
+    auth_method="jwt",
+    client_ip="203.0.113.7",
+    user_agent="Mozilla/5.0",
+    request_id="req-1",
+)
+
+
+async def test_a_run_keeps_how_it_was_started_and_is_its_own_root(store: RunStore) -> None:
+    run = await store.create(
+        organization_id="org-1",
+        agent_id="ag-1",
+        agent_name="Support desk",
+        revision=3,
+        session_id="session-1",
+        payload={"trigger": {"type": "manual", "by": ALICE.id}},
+        requested_by=ALICE,
+        provenance=CONSOLE_START,
+    )
+    assert Provenance.of(run) == CONSOLE_START
+    assert run["root_run_id"] == run["id"]
+    [created] = await store.events(run["id"])
+    assert created["attributes"] == {
+        "trigger_type": "builder_test",
+        "channel": "console",
+        "on_behalf_of": ALICE.id,
+        "on_behalf_of_verified": True,
+    }
+    # One said nothing of it: it's unknown, but it's still its own root.
+    unsaid = await started(store)
+    assert Provenance.of(unsaid) is None and unsaid["root_run_id"] == unsaid["id"]
+
+
+async def test_what_a_run_keeps_of_its_start_is_cut_to_its_columns(store: RunStore) -> None:
+    run = await store.create(
+        organization_id="org-1",
+        agent_id="ag-1",
+        agent_name="Support desk",
+        revision=3,
+        session_id="session-1",
+        payload={},
+        requested_by=ALICE,
+        provenance=Provenance("chat_agent", on_behalf_of="v" * 300, on_behalf_of_name="", user_agent="u" * 900),
+    )
+    assert (len(run["on_behalf_of"]), len(run["user_agent"])) == (255, 500)
+    assert run["on_behalf_of_name"] is None
+
+
+async def test_a_run_another_starts_is_for_whom_its_starter_is_under_its_root(store: RunStore) -> None:
+    parent = await store.create(
+        organization_id="org-1",
+        agent_id="ag-1",
+        agent_name="Support desk",
+        revision=3,
+        session_id="session-1",
+        payload={},
+        requested_by=Actor("apikey:k-1", "API key Billing"),
+        version="4",
+        provenance=Provenance(
+            "chat_agent",
+            channel="api",
+            on_behalf_of="end-user-9",
+            on_behalf_of_verified=False,
+            via_agent_id="ca_desk",
+            via_agent_version="2",
+            api_key_id="k-1",
+            auth_method="api_key",
+            client_ip="198.51.100.1",
+        ),
+    )
+    await store.claim(parent["id"], owner="w1", lease_seconds=60)
+    child, _ = await child_of(store, parent, "c" * 32)
+    await store.claim(child["id"], owner="w1", lease_seconds=60)
+    grandchild, _ = await child_of(store, child, "g" * 32)
+
+    assert Provenance.of(child) == Provenance(
+        "workflow",
+        channel="worker",
+        on_behalf_of="end-user-9",
+        on_behalf_of_verified=False,
+        via_agent_id="ag-1",
+        via_agent_version="4",
+        api_key_id="k-1",
+        auth_method="api_key",
+    )
+    # Its request was its starter's, not its own.
+    assert child["client_ip"] is None
+    assert (child["root_run_id"], grandchild["root_run_id"]) == (parent["id"], parent["id"])
+    assert grandchild["via_agent_id"] == "ag-child" and grandchild["on_behalf_of"] == "end-user-9"
+    under, total = await store.page("org-1", root_run_id=parent["id"])
+    assert total == 3 and {r["id"] for r in under} == {parent["id"], child["id"], grandchild["id"]}
+
+
+async def test_a_resubmission_is_its_resubmitters_and_keeps_the_first_trigger(store: RunStore) -> None:
+    run = await store.create(
+        organization_id="org-1",
+        agent_id="ag-1",
+        agent_name="Support desk",
+        revision=3,
+        session_id="session-1",
+        payload={
+            "trigger": {"type": "chat_agent", "agent_id": "ca_desk", "user": "u-1"},
+            "run_as": "chat-agent:ca_desk",
+        },
+        requested_by=Actor("chat-agent:ca_desk", "Chat agent Desk"),
+        provenance=Provenance("chat_agent", on_behalf_of="u-1", via_agent_id="ca_desk"),
+    )
+    await store.claim(run["id"], owner="w1", lease_seconds=60)
+    await store.finish(run["id"], owner="w1", state=None, succeeded=True)
+    # Whatever the route says it is, it's a resubmission.
+    again = await store.resubmit(
+        run["id"],
+        actor=BOB,
+        provenance=Provenance("manual", channel="console", on_behalf_of=BOB.id, on_behalf_of_name="Bob"),
+    )
+    assert Provenance.of(again) == Provenance(
+        "resubmit", channel="console", on_behalf_of=BOB.id, on_behalf_of_name="Bob"
+    )
+    assert again["root_run_id"] == again["id"]
+    assert again["payload"]["trigger"] == {"type": "resubmit", "by": BOB.id, "run_id": run["id"]}
+    assert again["payload"]["original_trigger"] == run["payload"]["trigger"]
+    # It acts as the run did, whose files it reads.
+    assert again["payload"]["run_as"] == "chat-agent:ca_desk"
+
+    # Again: the first trigger stays the original; said nothing of, it's the resubmitter's.
+    await store.claim(again["id"], owner="w1", lease_seconds=60)
+    await store.finish(again["id"], owner="w1", state=None, succeeded=True)
+    third = await store.resubmit(again["id"], actor=ALICE)
+    assert third["payload"]["original_trigger"] == run["payload"]["trigger"]
+    assert (third["trigger_type"], third["on_behalf_of"], third["on_behalf_of_name"]) == (
+        "resubmit",
+        ALICE.id,
+        "Alice",
+    )
+
+
+async def test_runs_are_listed_by_how_they_were_started(store: RunStore, clock: Clock) -> None:
+    async def run_of(provenance: Provenance) -> str:
+        clock.advance(60)
+        found = await store.create(
+            organization_id="org-1",
+            agent_id="ag-1",
+            agent_name="Support desk",
+            revision=3,
+            session_id=new_session_id(),
+            payload={},
+            requested_by=ALICE,
+            provenance=provenance,
+        )
+        return str(found["id"])
+
+    manual = await run_of(Provenance("manual", on_behalf_of=ALICE.id))
+    keyed = await run_of(Provenance("api_key", on_behalf_of="apikey:k-1", api_key_id="k-1"))
+    chat = await run_of(Provenance("chat_agent", on_behalf_of=BOB.id, via_agent_id="ca_desk"))
+    intake = await run_of(Provenance("intake", on_behalf_of=BOB.id, via_agent_id="ca_desk"))
+
+    async def ids(**filters: object) -> list[str]:
+        found, total = await store.page("org-1", **filters)  # type: ignore[arg-type]
+        assert total == len(found)
+        return [run["id"] for run in found]
+
+    assert await ids(trigger_types=["chat_agent", "intake"]) == [intake, chat]
+    assert await ids(on_behalf_of=BOB.id) == [intake, chat]
+    assert await ids(via_agent_id="ca_desk", trigger_types=["intake"]) == [intake]
+    assert await ids(api_key_id="k-1") == [keyed]
+    # From the second run's minute to the fourth's, the fourth not included.
+    assert await ids(created_from=START + timedelta(minutes=2), created_to=START + timedelta(minutes=4)) == [
+        chat,
+        keyed,
+    ]
+    assert await ids(trigger_types=["a2a"]) == []
+    assert manual in await ids()
+    assert await store.page("org-2", trigger_types=["manual"]) == ([], 0)
+
+
+async def test_a_refused_start_is_kept_for_the_organizations_audit(store: RunStore, clock: Clock) -> None:
+    first = await store.refuse(
+        organization_id="org-1",
+        agent_id="ag-1",
+        version="draft",
+        status_code=403,
+        reason="Requires agents:run",
+        requested_by=BOB,
+        provenance=Provenance("manual", channel="console", on_behalf_of=BOB.id, auth_method="jwt"),
+    )
+    clock.advance(5)
+    second = await store.refuse(
+        organization_id="org-1",
+        agent_id="ag-2",
+        status_code=422,
+        reason="x" * 2000,
+        requested_by=None,
+        provenance=Provenance("runtime_rest", channel="api", on_behalf_of="anonymous", auth_method="anonymous"),
+    )
+    found, total = await store.refused("org-1")
+    assert total == 2 and [r["id"] for r in found] == [second, first]
+    newest, oldest = found
+    assert (oldest["status_code"], oldest["reason"], oldest["requested_by_name"]) == (403, "Requires agents:run", "Bob")
+    assert oldest["version"] == "draft" and oldest["at"] == START
+    assert Provenance.of(oldest) == Provenance("manual", channel="console", on_behalf_of=BOB.id, auth_method="jwt")
+    assert len(newest["reason"]) == 1000 and newest["requested_by"] is None
+    assert [r["id"] for r in (await store.refused("org-1", trigger_types=["manual"]))[0]] == [first]
+    assert [r["id"] for r in (await store.refused("org-1", agent_id="ag-2"))[0]] == [second]
+    assert (await store.refused("org-1", created_from=START + timedelta(seconds=1)))[1] == 1
+    assert await store.refused("org-2") == ([], 0)
+
+    # They go with the organization.
+    await store.delete_organization("org-1")
+    assert await store.refused("org-1") == ([], 0)
+
+
+async def once(store: RunStore, run_id: str, *, organization: str = "org-1", agent: str = "ag-1", by: Actor = ALICE):
+    return await store.create_once(
+        run_id=run_id,
+        organization_id=organization,
+        agent_id=agent,
+        agent_name="Support desk",
+        revision=3,
+        session_id=new_session_id(),
+        payload={"document": {"name": "Support desk"}, "input": {"message": "hi"}},
+        requested_by=by,
+    )
+
+
+async def test_a_start_retried_under_its_id_is_the_run_it_made(store: RunStore) -> None:
+    run, created = await once(store, "a" * 32)
+    assert created and run["id"] == "a" * 32 and run["status"] == QUEUED
+    again, created = await once(store, "a" * 32)
+    assert not created and again["id"] == run["id"] and again["session_id"] == run["session_id"]
+    items, total = await store.page("org-1")
+    assert total == 1
+
+
+async def test_starts_racing_for_one_id_make_one_run(shared: RunStore) -> None:
+    made = await asyncio.gather(*(once(shared, "b" * 32) for _ in range(5)))
+    assert sum(created for _, created in made) == 1
+    assert {run["id"] for run, _ in made} == {"b" * 32}
+    assert (await shared.page("org-1"))[1] == 1
+
+
+async def test_an_id_another_start_made_isnt_handed_on(store: RunStore) -> None:
+    await once(store, "c" * 32)
+    # Someone else, another workflow, another organization: never that run.
+    with pytest.raises(RunTaken):
+        await once(store, "c" * 32, by=BOB)
+    with pytest.raises(RunTaken):
+        await once(store, "c" * 32, agent="ag-2")
+    with pytest.raises(RunTaken):
+        await once(store, "c" * 32, organization="org-2")
+
+
+async def test_a_resubmission_retried_under_its_id_is_the_one_it_made(shared: RunStore) -> None:
+    store = shared
+    run = await started(store)
+    await store.claim(run["id"], owner="w1", lease_seconds=60)
+    await store.finish(run["id"], owner="w1", state=None, succeeded=True)
+    again, created = await store.resubmit_once(run["id"], again_id="d" * 32, actor=BOB, organization_id="org-1")
+    assert created and again["id"] == "d" * 32 and again["resubmit_of"] == run["id"]
+    retried, created = await store.resubmit_once(run["id"], again_id="d" * 32, actor=BOB, organization_id="org-1")
+    assert not created and retried["id"] == again["id"]
+    # Racing asks make one.
+    made = await asyncio.gather(
+        *(store.resubmit_once(run["id"], again_id="e" * 32, actor=BOB, organization_id="org-1") for _ in range(4))
+    )
+    assert sum(created for _, created in made) == 1
+    # The ID of Bob's resubmission isn't Alice's, nor a resubmission of another run.
+    with pytest.raises(RunTaken):
+        await store.resubmit_once(run["id"], again_id="d" * 32, actor=ALICE, organization_id="org-1")
+    other = await started(store)
+    await store.claim(other["id"], owner="w1", lease_seconds=60)
+    await store.finish(other["id"], owner="w1", state=None, succeeded=True)
+    with pytest.raises(RunTaken):
+        await store.resubmit_once(other["id"], again_id="d" * 32, actor=BOB, organization_id="org-1")

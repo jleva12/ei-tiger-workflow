@@ -565,3 +565,21 @@ def test_a_change_waits_for_the_person_to_confirm_it(signing: Settings) -> None:
     assert asked == ["adk_request_confirmation"]
     # Not even the role is read until the person says so.
     assert api.calls == []
+
+
+def test_each_change_asks_the_person_in_words(signing: Settings) -> None:
+    toolset, api = tools(signing)
+
+    def ask(tool_name: str, /, **args: Any) -> str:
+        found = asyncio.run(toolset.confirmation_hint(tool_name, args, context("ada")))
+        return (found or "").partition("\n")[0]
+
+    assert ask("create_organization", name="Acme") == "Create the organization “Acme”?"
+    # A change names what it changes, read as the person.
+    assert ask("update_role_definition", role_key="org:admin") == (
+        "Change the role “Admin”?"
+    )
+    assert ask("create_user", first_name="Ada", last_name="Lovelace") == (
+        "Add Ada Lovelace as a Forge user?"
+    )
+    assert {request.method for request in api.calls} == {"GET"}

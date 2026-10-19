@@ -1,0 +1,122 @@
+/*
+ * react-grid-layout in Forge's terms, for customizing a dashboard. Its own
+ * stylesheet isn't loaded (a red drop target, long transitions), so what it
+ * draws while widgets are dragged and resized is painted here from the
+ * theme's tokens: the drop target reads like the canvas's rubber band, the
+ * widget in hand lifts on the float shadow. index.css turns transitions off
+ * for reduced motion.
+ */
+
+/* Widgets glide into their new places as others move. */
+.forge-dashboard--editing > .react-grid-item {
+  transition:
+    left 150ms ease,
+    top 150ms ease,
+    width 150ms ease,
+    height 150ms ease;
+}
+
+/* The widget in hand follows the pointer, above the rest. */
+.forge-dashboard > .react-grid-item.react-draggable-dragging,
+.forge-dashboard > .react-grid-item.resizing {
+  z-index: 3;
+  transition: none;
+}
+.forge-dashboard > .react-draggable-dragging .forge-dashboard-card,
+.forge-dashboard > .resizing .forge-dashboard-card {
+  box-shadow: var(--shadow-float);
+}
+
+/* Where it lands, inset as the cards are. */
+.forge-dashboard > .react-grid-placeholder {
+  z-index: 2;
+  transition:
+    left 100ms ease,
+    top 100ms ease,
+    width 100ms ease,
+    height 100ms ease;
+}
+.forge-dashboard > .react-grid-placeholder.placeholder-resizing {
+  transition: none;
+}
+.forge-dashboard > .react-grid-placeholder::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border: 1px dashed color-mix(in oklch, var(--foreground) 35%, transparent);
+  border-radius: var(--radius-card);
+  background: color-mix(in oklch, var(--foreground) 4%, transparent);
+}
+
+/* Sizing: from the right edge, the bottom edge or the corner. */
+.forge-dashboard .react-resizable-handle {
+  position: absolute;
+  z-index: 1;
+}
+.forge-dashboard .react-resizable-handle-e {
+  top: 16px;
+  right: 0;
+  bottom: 16px;
+  width: 8px;
+  cursor: ew-resize;
+}
+.forge-dashboard .react-resizable-handle-s {
+  right: 16px;
+  bottom: 0;
+  left: 16px;
+  height: 8px;
+  cursor: ns-resize;
+}
+.forge-dashboard .react-resizable-handle-se {
+  right: 0;
+  bottom: 0;
+  width: 20px;
+  height: 20px;
+  cursor: nwse-resize;
+}
+
+/* An edge shows a line where it's held. */
+.forge-dashboard .react-resizable-handle-e::after,
+.forge-dashboard .react-resizable-handle-s::after {
+  content: "";
+  position: absolute;
+  border-radius: 1px;
+  background: var(--muted-foreground);
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.forge-dashboard .react-resizable-handle-e::after {
+  top: 0;
+  right: 3px;
+  bottom: 0;
+  width: 2px;
+}
+.forge-dashboard .react-resizable-handle-s::after {
+  right: 0;
+  bottom: 3px;
+  left: 0;
+  height: 2px;
+}
+.forge-dashboard .react-resizable-handle-e:hover::after,
+.forge-dashboard .react-resizable-handle-s:hover::after,
+.forge-dashboard > .resizing > .react-resizable-handle::after {
+  opacity: 0.5;
+}
+
+/* The corner carries the only mark: a quiet bracket, darker on hover. */
+.forge-dashboard .react-resizable-handle-se::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--muted-foreground);
+  border-bottom: 1.5px solid var(--muted-foreground);
+  border-bottom-right-radius: 3px;
+  opacity: 0.55;
+  transition: opacity 150ms;
+}
+.forge-dashboard > .react-grid-item:hover > .react-resizable-handle-se::after {
+  opacity: 1;
+}

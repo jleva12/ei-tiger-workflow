@@ -48,7 +48,7 @@ worker image has Tesseract; the deployment installs LibreOffice):
   (`HYBRID_DOCUMENTS__OFFICE__COMMAND`) to .pptx/.docx/.xlsx and read by the
   registry's parser for that; without LibreOffice they fail saying so.
 
-Consistency: per-document fencing token (`run_seq`), tombstoned deletes, stale-chunk cleanup, and whole versions in search: a run's new chunks are unpublished (`live: false`) until it completes, then `ChunkStore.publish_run` shows them and removes the old version's at once, so a document answers as its last completed ingestion left it. Adding a format = one `Parser` class (entry point group `forge_task_documents.parsers`). Swapping the DB = implement `DocumentStore`, `ChunkStore`, `SearchBackend` and call `register_document_storage(...)`.
+Consistency: a per-document fencing token (`run_seq`) guards source loading and ingestion. Deletes retain tombstones, including for IDs not registered yet; only an explicit registration recreates them. Chunks use immutable storage generations while retaining their public IDs. `DocumentStore.complete_run` atomically marks READY and selects `published_run_seq`; reads select only that generation, and `ChunkStore.publish_run` performs optional cleanup. Failed staging and cleanup cannot alter visible published contents. Adding a format = one `Parser` class (entry point group `forge_task_documents.parsers`). Swapping the DB = implement `DocumentStore`, `ChunkStore`, `SearchBackend` and call `register_document_storage(...)`.
 
 Jobs: `documents.ingest {tenant_id, doc_id, uri}`, `documents.delete {tenant_id, doc_id}`.
 
@@ -61,7 +61,7 @@ agents both use: the worker builds it with `build_knowledge_search(ctx)`, and
 a service outside the worker opens the same store with
 `storage.open_storage(...)` (it follows `FORGE_VECTOR_STORE`).
 
-**Agent search.** In Forge, agents search the documents through the code graph MCP server ([apps/forge-codegraph-mcp](../../../../apps/forge-codegraph-mcp/README.md#document-search)), which ports `HybridSearchService`'s search to Go over this MongoDB, as the same read-only user as commit search, for the teams (tenants) the admin API says each caller may read, all at once. A change to the search here (`storage/mongo/pipelines.py`, `forge_embeddings/identifiers.py`, the chunk fields or the `chunks_text` / `chunks_vector` indexes) belongs there too.
+**Agent search.** Chat agents and ADK workflows use this Python package's shared `KnowledgeBaseSearch` service. Direct database consumers must follow the same publication-pointer and tenant filters; filtering chunks only by `live` is insufficient for the generation format.
 
 **Evaluation.** [`eval/`](eval/README.md) holds a labelled suite: ten documents, one
 per format, and 80 questions labelled with their answers and evidence. It runs
@@ -73,6 +73,69 @@ after changing the chunking, parsers, embeddings or search.
 ## MongoDB schema
 
 `forge-async-worker ensure-schema` creates them: `documents` (one per file) and `chunks` (both search legs), with search indexes `chunks_text` and `chunks_vector`. Field docs are in `storage/mongo/schema.py`.
+
+### Upgrading document generations
+
+Coordinate the upgrade of document readers and ingestion workers. Do not run
+old writers alongside generation-aware readers: old workers do not advance the
+publication pointer. Old readers that only check `live` cannot read the new
+format, whose chunks retain `live: false` and are selected by the document's
+pointer. Update any external or direct database consumers before enabling new
+ingestion. The Go ingestion project remains outside this remediation's scope.
+
+For MongoDB Atlas, add `run_seq` and `live` as `filter` fields in the existing
+vector index **before deploying the new search code**, and wait until it is
+queryable. These filters select the active generation before candidate limits.
+The ordinary `forge-async-worker ensure-schema` command deliberately only logs
+index drift; it does not rebuild existing indexes. Run this one-off migration
+from the configured async-worker directory using the new package:
+
+```sh
+uv run python - <<'PY'
+import asyncio
+from forge_async_worker.config import WorkerSettings
+from forge_async_worker.runtime import build_runtime
+from forge_task_documents.storage.mongo import MongoStorage
+
+async def main():
+    runtime = build_runtime(WorkerSettings(enabled_tasks=["documents"]))
+    try:
+        task = runtime.documents
+        if not isinstance(task.storage, MongoStorage):
+            raise RuntimeError("This index migration requires FORGE_VECTOR_STORE=mongo")
+        await task.storage.ensure_schema(
+            embedding_dimensions=task.embedder.dimensions,
+            update_existing=True,
+            wait=True,
+        )
+    finally:
+        await runtime.close()
+
+asyncio.run(main())
+PY
+```
+
+Existing Mongo documents without `published_run_seq` remain readable through
+the legacy `live != false` rule while being re-ingested. Their next successful
+run writes a positive pointer and permits cleanup of old rows; public chunk
+IDs remain unchanged. A pointer of `0` explicitly means no published generation,
+so deleting and registering an ID cannot revive retained legacy chunks. Do not
+bulk-fill legacy pointers with the latest `run_seq`: that run may have failed or
+never published. Re-ingest from the source to establish a verified generation.
+No automatic rollback to old workers/readers is supported once new generations
+have been written; use a coordinated forward upgrade or restore a consistent
+pre-upgrade backup.
+
+Each Mongo search reads document-generation metadata for the requested tenants
+and document filters, then shares that snapshot between its search legs.
+Production-scale query latency and generated filter size have not been
+benchmarked; validate these with representative tenant document counts before
+rollout.
+
+Spanner needs no DDL migration: its existing JSON payload stores the publication
+pointer and its existing vector rows store generation-qualified IDs. Legacy
+documents remain readable until re-ingestion; the same coordinated reader and
+writer rollout applies.
 
 ## Configuration
 

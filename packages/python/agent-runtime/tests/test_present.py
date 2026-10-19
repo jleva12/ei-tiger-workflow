@@ -15,6 +15,8 @@ from forge_agent_runtime.present import (
     CHOICES_INSTRUCTION,
     INSTRUCTION,
     PRESENT,
+    REFUSED_NOTE,
+    SHOWN_NOTE,
     PresentTool,
     components_of,
     default_components,
@@ -173,6 +175,53 @@ def test_a_composition_fits_and_one_that_doesnt_is_told_where() -> None:
     assert problems_of({"_type": "Map", "places": []}, DEFAULTS)[0].startswith("_type: 'Map' is not one of")
 
 
+def test_a_button_that_would_do_nothing_is_refused() -> None:
+    picked = ("Card", "Text", "Form", "Input")
+    reply = {"type": "reply", "text": "Contact details:"}
+    # The button on the card, the action on the form inside: the chat makes the card that form.
+    on_the_card = {
+        "_type": "Card",
+        "title": "Start a new claim",
+        "confirm": {"label": "Continue"},
+        "children": [
+            {"_type": "Text", "value": "Your details, so we can reach you."},
+            {
+                "_type": "Form",
+                "_action": reply,
+                "children": [{"_type": "Input", "label": "Email", "name": "email"}],
+            },
+        ],
+    }
+    assert problems_of(on_the_card, picked) == []
+    as_form = {
+        **on_the_card,
+        "asForm": True,
+        "_action": reply,
+        "children": [{"_type": "Input", "name": "email"}],
+    }
+    assert problems_of(as_form, picked) == []
+
+    nothing = {
+        "_type": "Card",
+        "title": "Start",
+        "confirm": {"label": "Continue"},
+        "cancel": {"label": "Not now"},
+        "children": [{"_type": "Text", "value": "Ready?"}],
+    }
+    assert problems_of({"_type": "Card", "children": [nothing]}, picked) == [
+        'children[0]: The Card "Start"\'s confirm button does nothing when clicked: give the confirm an '
+        "_action, or make the Card asForm with an _action so it sends the fields in it.",
+        'children[0]: The Card "Start"\'s cancel button does nothing when clicked: give the cancel an '
+        "_action, or leave it out.",
+    ]
+    acting = {
+        **nothing,
+        "confirm": {"label": "Continue", "_action": reply},
+        "cancel": {"label": "No", "_action": reply},
+    }
+    assert problems_of(acting, picked) == []
+
+
 def test_what_the_agent_is_told_follows_its_components() -> None:
     told = instruction_for(DEFAULTS)
     assert told.startswith(INSTRUCTION) and CHOICES_INSTRUCTION in told and ACTION_INSTRUCTION not in told
@@ -202,8 +251,9 @@ async def test_an_agent_offers_what_its_rich_answers_nodes_pick(example, models,
     [tool] = presents(await root_of(with_rich_answers(example, ["Fact"], ["Map", "Fact"])))
     assert tool.components == ("Fact", "Map")
 
-    # The document's schema knows the components: an unknown one is refused as it's read.
-    with pytest.raises(DocumentError, match="'Gauge' is not one of"):
+    # The document's schema knows the components: an unknown one, neither a
+    # base name nor a team key (org.…), is refused as it's read.
+    with pytest.raises(DocumentError, match="'Gauge' is not valid under any of the given schemas"):
         await root_of(with_rich_answers(example, ["Gauge"]))
     with pytest.raises(BuildError, match="'Rich 0': it picks no components"):
         await root_of(with_rich_answers(example, []))
@@ -239,10 +289,12 @@ async def test_present_answers_at_once_and_the_agent_is_told_to_write_too(
             if part.function_response is not None:
                 responses.append(dict(part.function_response.response or {}))
 
-    assert responses[0] == {"shown": True}
+    # Each answer tells the model it's its own, not to quote.
+    assert responses[0] == {"shown": True, "note": SHOWN_NOTE}
     # One that doesn't fit isn't shown, and the model is told why, to send it again.
     assert responses[1]["shown"] is False
     assert responses[1]["problems"][0].startswith("_type: 'Gauge' is not one of")
+    assert responses[1]["note"] == REFUSED_NOTE
 
     first = llm.requests[0]
     declared = [

@@ -9,6 +9,11 @@ refreshed as it runs out, and the renewed grant kept, under a lock on its
 row, so two processes never spend one refresh token. Its tools' results are
 checked against their output schemas on the bounded engine
 (``forge_common.mcp``): the client's own check can freeze the process.
+
+The toolset connects with ADK's own client settings: the runtime that builds
+an agent with it holds its connections to the deployment's network policy
+(``forge_agent_runtime.mcp_guard.guarded_mcp_toolset``), as it does a server
+an agent names by URL.
 """
 
 from contextlib import AbstractAsyncContextManager
@@ -23,6 +28,10 @@ from forge_mcp_servers.service import McpServers, ServerRow
 
 class McpServerGone(LookupError):
     """The organization has no such MCP server."""
+
+
+class McpServerChanged(RuntimeError):
+    """The toolset must be rebuilt before using changed connection settings."""
 
 
 class ServerStore(Protocol):
@@ -66,8 +75,15 @@ async def mcp_toolset(
 
     async def headers(_context: ReadonlyContext) -> dict[str, str]:
         async with store.open(server_id) as current:
-            if current is None:
-                raise McpServerGone(f"The MCP server {server_id!r} was deleted")
+            if current is None or current.organization_id != organization_id:
+                raise McpServerGone(f"The organization has no MCP server {server_id!r}")
+            # A cached toolset still connects to the URL it was built with.
+            # Never give that endpoint credentials saved for its replacement.
+            # Check under the same row lock used to read/refresh credentials.
+            if (current.url, current.timeout_seconds) != (url, timeout):
+                raise McpServerChanged(
+                    f"The MCP server {server_id!r} changed; rebuild its toolset"
+                )
             return await servers.headers(current)
 
     bound_tool_results()

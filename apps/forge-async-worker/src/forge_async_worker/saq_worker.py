@@ -30,12 +30,13 @@ from dataclasses import dataclass
 from typing import Any
 
 import sqlalchemy as sa
-from saq import CronJob, Queue, Worker
+from saq import CronJob, Job, Worker
+from saq.queue.redis import RedisQueue
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from forge_async_worker.config import WorkerSettings
 from forge_async_worker.jobs import ATTEMPT_SECONDS, AdkRunJobs
-from forge_async_worker.queue import DOCUMENTS, JOB_OPTIONS, MAINTAIN, QUEUE, UPKEEP, RunQueue
+from forge_async_worker.queue import DOCUMENTS, JOB_OPTIONS, MAINTAIN, QUEUE, RUN_ADK, UPKEEP, RunQueue
 from forge_async_worker.runtime import Runtime, build_runtime, default_registry
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
 from forge_task_adk_workflows.run_store import RunStore, runs
@@ -49,6 +50,13 @@ CONTEXT_KEY = "forge"  # SAQ's context keeps its own worker under "worker"
 MAINTENANCE_CRON = "* * * * *"
 #: Upkeep jobs at once: the maintenance, and a pause's expiry beside it.
 UPKEEP_CONCURRENCY = 2
+#: After a dequeue fails (Redis is away), the queue's next waits as long as
+#: it has been failing so far: DEQUEUE_PAUSE seconds at least, DEQUEUE_PAUSE_MAX at most.
+DEQUEUE_PAUSE = 0.5
+DEQUEUE_PAUSE_MAX = 2.0
+#: Seconds a dequeue waits on Redis for a job at a time: a worker that stops
+#: taking jobs has none of its dequeues out for longer.
+TAKE_SECONDS = 1
 NO_STORE = (
     "The worker keeps ADK workflow runs in the admin MySQL: set HYBRID_ADK_WORKFLOWS__SESSION_DATABASE_URL "
     "(mysql+aiomysql://...)"
@@ -172,17 +180,18 @@ async def run_job(ctx: dict[str, Any], *, spec: dict[str, Any]) -> dict[str, Any
 
 async def _own_policy(ctx: dict[str, Any]) -> None:
     """
-    Determine and apply the specified policy configuration differences for a job within
-    the provided context. The function retrieves the intended options for the job's
-    function and compares them with the current job's attributes. If there are any
-    discrepancies, the job will be updated to match the desired policy.
+    The job runs under the worker's settings for its function (JOB_OPTIONS),
+    whoever queued it with whatever settings; a ``run_adk``, with the
+    worker's timeout for it (``AdkRunJobs.job_seconds``: as long as its
+    attempt may take, and a while). Written to the job only where they differ.
 
-    :param ctx: The context dictionary containing a "job" key which holds the job object.
-    :type ctx: dict[str, Any]
-    :return: None
+    :param ctx: SAQ's context, with the job (and the worker's state).
     """
     job = ctx["job"]
-    wanted = JOB_OPTIONS.get(job.function, {})
+    wanted = dict(JOB_OPTIONS.get(job.function, {}))
+    state: WorkerState | None = ctx.get(CONTEXT_KEY)
+    if job.function == RUN_ADK and state is not None and state.jobs is not None:
+        wanted["timeout"] = state.jobs.job_seconds
     differs = {name: value for name, value in wanted.items() if getattr(job, name) != value}
     if differs:
         await job.update(**differs)
@@ -205,10 +214,106 @@ class _NoFollowUps:
 # ----------------------------------------------------------------------------- queues and workers
 
 
+class PatientQueue(RedisQueue):
+    """
+    SAQ's Redis queue, but a dequeue that fails (Redis is away) waits before
+    it says so, and a worker can stop taking jobs from it while it finishes
+    those it has.
+
+    SAQ's worker starts its next dequeue as soon as one fails, and Redis's
+    client gives up on a refused connection at once, so each of a worker's
+    jobs at once retried Redis with no pause: a CPU core's worth for as long
+    as Redis was away (the integration suite's IT-8). The pause grows with
+    the outage (DEQUEUE_PAUSE to DEQUEUE_PAUSE_MAX); once Redis answers a
+    ping, before the dequeue that waits for a job, dequeues go on at once.
+
+    SAQ's worker goes on dequeuing until it stops, and its stop cancels the
+    jobs it runs: a worker waiting for its jobs to end before it stopped
+    took new ones meanwhile, only to cut them off (IT-7). Once ``stop_taking``
+    is called, no dequeue takes a job: each waits on Redis TAKE_SECONDS at a
+    time, so one out then comes back within that, putting back at the head of
+    the queue a job it took; then it waits, ``parked``, taking nothing,
+    until the worker stops.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        #: When its dequeues began failing, on the event loop's clock; None while they don't.
+        self.failing_since: float | None = None
+        #: Whether its worker takes no more jobs from it (``stop_taking``).
+        self.closed = False
+        #: The dequeues waiting for the worker to stop, taking nothing.
+        self.parked: set[asyncio.Task[Any]] = set()
+
+    def stop_taking(self) -> None:
+        """No dequeue takes a job from now on."""
+        self.closed = True
+
+    async def dequeue(self, timeout: float = 0.0, poll_interval: float = 0.0) -> Job | None:
+        """A job, once one is queued (within ``timeout`` seconds, unless 0);
+        none once the worker stops taking them: it waits until the worker
+        stops."""
+        while not self.closed:
+            job = await self._take(timeout or TAKE_SECONDS, poll_interval)
+            if job is not None and self.closed:
+                await self._put_back(job)
+            elif job is not None or timeout:
+                return job
+        await self._park()
+        return None
+
+    async def _take(self, timeout: float, poll_interval: float) -> Job | None:
+        try:
+            if self.failing_since is not None:
+                await self.redis.ping()  # type: ignore[misc]  # redis-py types its async client as its sync one
+                self._answered()
+            return await super().dequeue(timeout, poll_interval)
+        except Exception as error:
+            await asyncio.sleep(self._failed(error))
+            raise
+
+    async def _put_back(self, job: Job) -> None:
+        """A job taken as the worker stopped taking them goes back to the head
+        of the queue, as it was. Best effort: one left among the active jobs,
+        never started, SAQ's sweep queues again."""
+        try:
+            async with self.redis.pipeline(transaction=True) as pipe:
+                pipe.lrem(self._active, 1, job.id)
+                pipe.lpush(self._queued, job.id)
+                await pipe.execute()
+        except Exception:
+            log.warning("queue %s: job %s can't go back to its queue; SAQ's sweep will", self.name, job.key)
+            return
+        log.info("queue %s: job %s goes back to its queue, as this worker stops", self.name, job.key)
+
+    async def _park(self) -> None:
+        """Waits, taking nothing, until the worker's stop cancels it."""
+        task = asyncio.current_task()
+        assert task is not None
+        self.parked.add(task)
+        try:
+            await asyncio.get_running_loop().create_future()
+        finally:
+            self.parked.discard(task)
+
+    def _failed(self, error: Exception) -> float:
+        """:return: Seconds to wait before the failed dequeue says so."""
+        now = asyncio.get_running_loop().time()
+        if self.failing_since is None:
+            self.failing_since = now
+            log.warning("queue %s can't be read (%s): trying again until it can", self.name, error)
+        return min(max(now - self.failing_since, DEQUEUE_PAUSE), DEQUEUE_PAUSE_MAX)
+
+    def _answered(self) -> None:
+        if self.failing_since is not None:  # not already said by another of the worker's dequeues
+            log.info("queue %s can be read again", self.name)
+            self.failing_since = None
+
+
 def job_queue(settings: WorkerSettings, name: str = QUEUE) -> RunQueue:
     """The ``adk_workflows`` queue, with its upkeep's (or the queue ``name``), on HYBRID_REDIS_URL."""
-    upkeep = Queue.from_url(settings.redis_url, name=UPKEEP) if name == QUEUE else None
-    return RunQueue(Queue.from_url(settings.redis_url, name=name), upkeep=upkeep)
+    upkeep = PatientQueue.from_url(settings.redis_url, name=UPKEEP) if name == QUEUE else None
+    return RunQueue(PatientQueue.from_url(settings.redis_url, name=name), upkeep=upkeep)
 
 
 def serving(settings: WorkerSettings, requested: Sequence[str] | None = None) -> list[str]:
@@ -272,7 +377,7 @@ def build_workers(
             )
         else:
             worker = Worker(
-                Queue.from_url(state.settings.redis_url, name=name),
+                PatientQueue.from_url(state.settings.redis_url, name=name),
                 functions=[run_job],
                 concurrency=concurrency,
                 id=worker_id(name),
@@ -294,14 +399,36 @@ class _IdleCancellation(logging.Filter):
         return "did not finish within the shutdown grace period" not in record.getMessage()
 
 
+def _stop_taking(worker: Worker) -> None:
+    """The worker takes no more jobs (its queue a PatientQueue; another's goes on)."""
+    stop_taking = getattr(worker.queue, "stop_taking", None)
+    if stop_taking is not None:
+        stop_taking()
+
+
+def _idle(worker: Worker) -> bool:
+    """Whether the worker runs no job and takes none: each of its dequeues is
+    parked (its queue a PatientQueue; another's: it runs no job)."""
+    parked = getattr(worker.queue, "parked", None)
+    if parked is None:
+        return not worker.job_task_contexts
+    # SAQ names each of its dequeue-and-run tasks "process", as its own burst mode finds them.
+    return all(task in parked or task.done() for task in worker.tasks if task.get_name() == "process")
+
+
 async def _drain(workers: Sequence[Worker], grace_period: float) -> None:
-    """Waits up to grace_period for the jobs the workers are running."""
-    deadline = asyncio.get_running_loop().time() + grace_period
-    while any(worker.job_task_contexts for worker in workers):
-        if asyncio.get_running_loop().time() >= deadline:
-            log.warning("runs still running after %ss go back to their queue", grace_period)
+    """Waits for the workers, taking no more jobs, to end those they run: up
+    to grace_period, and at least as long as a dequeue still out may take to
+    come back (TAKE_SECONDS, or a failed one's pause), so none is cut off with
+    a job it took."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(grace_period, TAKE_SECONDS + DEQUEUE_PAUSE_MAX)
+    while not all(_idle(worker) for worker in workers):
+        if loop.time() >= deadline:
+            if any(worker.job_task_contexts for worker in workers):
+                log.warning("runs still running after %ss go back to their queue", grace_period)
             return
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.05)
 
 
 async def run_workers(
@@ -310,10 +437,12 @@ async def run_workers(
     """Runs the workers until SIGINT, SIGTERM or ``stop``. SAQ workers install
     their own signal handlers; the process owns them instead.
 
-    Stopping waits for running jobs, up to grace_period, then stops SAQ at
-    once: its own grace period also waits out idle dequeues and upkeep sleeps,
-    so every stop would take all of it. A run still running is queued again
-    (jobs.py), and SAQ re-queues its job."""
+    Stopping takes no more jobs, then waits for running ones, up to
+    grace_period, then stops SAQ at once: its own grace period also waits
+    out idle dequeues and upkeep sleeps, so every stop would take all of it.
+    A run still running then is let go: queued again with a job of its own
+    (jobs.py); SAQ re-queues the job it ran too. Whichever a worker takes
+    first, once the run is queued, takes the run; the other finds it taken."""
     loop = asyncio.get_running_loop()
     stop = stop or asyncio.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -326,7 +455,9 @@ async def run_workers(
     try:
         await asyncio.wait([stopping, *running], return_when=asyncio.FIRST_COMPLETED)
         if stop.is_set():
-            log.info("stopping: waiting up to %ss for running jobs", grace_period)
+            for worker in workers:
+                _stop_taking(worker)  # first: what it took meanwhile, it would cut off
+            log.info("stopping: taking no more jobs, waiting up to %ss for running ones", grace_period)
             await _drain(workers, grace_period)
     finally:
         stopping.cancel()

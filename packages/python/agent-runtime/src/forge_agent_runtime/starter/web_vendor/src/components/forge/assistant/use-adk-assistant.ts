@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   WebSpeechDictationAdapter,
   type AssistantRuntime,
+  type AttachmentAdapter,
   type DictationAdapter,
   type FeedbackAdapter,
   type ThreadMessage,
@@ -14,7 +15,9 @@ import {
   type AdkStreamCallback,
   type UseAdkRuntimeOptions,
 } from "@assistant-ui/react-google-adk"
+import { noteWholeReply } from "@/components/assistant-ui/elements/whole-replies"
 
+import { defaultAttachments } from "./attachments"
 import { followUpsRequest, type FollowUpsOption } from "./follow-ups"
 import {
   defaultModelStateDelta,
@@ -25,6 +28,13 @@ import {
   type ModelSettings,
   type ThinkingLevel,
 } from "./model-settings"
+import { withSessionTitles } from "./session-titles"
+import {
+  createHistoryFeedback,
+  registerHistoryFeedback,
+} from "./history-feedback"
+import { createAdkHistoryLoader } from "./history-snapshot"
+import { CLIENT_TURN_STATE_KEY, withTurnLifecycle } from "./turn-lifecycle"
 
 type Headers = Record<string, string> | (() => Record<string, string>)
 
@@ -55,6 +65,8 @@ export type UseAdkAssistantOptions = Omit<
    * model section's keys win over the same keys here.
    */
   runState?: () => Record<string, unknown> | undefined
+  /** Require Forge's explicit invocation outcome; enable for Forge runtime connections. */
+  requireTurnOutcome?: boolean
   /** A custom transport instead of `api` / `adk` (tests, mocks). */
   stream?: AdkStreamCallback
   /**
@@ -64,6 +76,14 @@ export type UseAdkAssistantOptions = Omit<
    * assistant-ui `DictationAdapter` (e.g. a server speech-to-text) replaces it.
    */
   dictation?: boolean | DictationAdapter
+  /**
+   * What the composer's attach button takes. Default: images and documents
+   * (PDF, Word, PowerPoint) as inline parts of the message, which ADK passes
+   * to the model, and text files (txt, md, csv, html, json) as text
+   * (`./attachments`). `false` turns attaching off; any assistant-ui
+   * `AttachmentAdapter` replaces it.
+   */
+  attachments?: boolean | AttachmentAdapter
   /**
    * Shows thumbs up / down on the agent's replies and receives each rating,
    * e.g. to store it next to the ADK session. Without it the buttons are
@@ -116,7 +136,9 @@ export function useAdkAssistant({
   headers,
   runState,
   stream,
+  requireTurnOutcome = false,
   dictation = true,
+  attachments = true,
   onFeedback,
   models = noModels,
   defaultModel,
@@ -139,7 +161,8 @@ export function useAdkAssistant({
 
   const { url, appName, userId } = adk ?? {}
   const connection = useMemo(() => {
-    if (stream) return { stream }
+    const history = createHistoryFeedback()
+    if (stream) return { stream, history }
     if (url && appName && userId) {
       const session = createAdkSessionAdapter({
         apiUrl: url,
@@ -148,22 +171,48 @@ export function useAdkAssistant({
         headers: getHeaders,
       })
       return {
+        history,
         stream: createAdkStream({
           api: url,
           appName,
           userId,
           headers: getHeaders,
         }),
-        sessionAdapter: session.adapter,
-        load: session.load,
+        // Listed with their titles, which the server keeps (`session-titles`).
+        sessionAdapter: withSessionTitles(session.adapter, {
+          url,
+          appName,
+          userId,
+          headers: getHeaders,
+        }),
+        load: createAdkHistoryLoader({
+          url,
+          appName,
+          userId,
+          headers: getHeaders,
+        }),
         artifacts: session.artifacts,
       }
     }
-    if (api) return { stream: createAdkStream({ api, headers: getHeaders }) }
+    if (api)
+      return { history, stream: createAdkStream({ api, headers: getHeaders }) }
     throw new Error(
       "useAdkAssistant needs `api` (your route), `adk` (an ADK server) or `stream`."
     )
   }, [stream, url, appName, userId, api, getHeaders])
+
+  const history = connection.history
+  const sessionAdapter = useMemo(
+    () =>
+      connection.sessionAdapter
+        ? history.wrapAdapter(connection.sessionAdapter)
+        : undefined,
+    [connection, history]
+  )
+  const load = useMemo(() => {
+    const loader = options.load ?? connection.load
+    return loader ? history.wrapLoad(loader) : undefined
+  }, [options.load, connection, history])
 
   const { settings: modelSettings, shown: modelsShown } = useModelSettings({
     models,
@@ -187,33 +236,40 @@ export function useAdkAssistant({
   })
   const send = useCallback<AdkStreamCallback>(
     async function* (messages, config) {
-      const selection = selectionRef.current
-      try {
-        const state = runStateRef.current?.()
-        const followUps = followUpsRequest(followUpsRef.current)
-        yield* await connection.stream(
-          messages,
-          selection || state || followUps
-            ? {
-                ...config,
-                stateDelta: {
-                  ...config.stateDelta,
-                  ...state,
-                  ...followUps,
-                  ...(selection && toStateDeltaRef.current(selection)),
-                },
-              }
-            : config
-        )
-      } catch (error) {
-        // Stop aborts the run; that isn't a failure to show.
-        if (config.abortSignal.aborted) throw error
-        // The SDK would drop the error and leave the thread silent; as an ADK
-        // error event it shows as a failed reply, like the agent's own errors.
-        yield requestFailed(error)
-      }
+      const streamWithLifecycle = withTurnLifecycle(
+        async function* (messages, config) {
+          if (load) {
+            const session = await config.initialize()
+            history.assertReady(session.externalId ?? session.remoteId)
+          }
+          const selection = selectionRef.current
+          const stateDelta = {
+            ...config.stateDelta,
+            ...runStateRef.current?.(),
+            ...followUpsRequest(followUpsRef.current),
+            ...(selection && toStateDeltaRef.current(selection)),
+          }
+          // This key is response-only, including when a caller copied session state.
+          delete stateDelta[CLIENT_TURN_STATE_KEY]
+          const events = await connection.stream(messages, {
+            ...config,
+            stateDelta,
+          })
+          // A server that streams sends partial events as the model writes;
+          // one that doesn't sends each reply whole once it's done, and the
+          // thread writes those in word by word, as if they streamed.
+          let streamed = false
+          for await (const event of events) {
+            if (event.partial) streamed = true
+            else if (!streamed) noteWholeReplies(event)
+            yield event
+          }
+        },
+        { requireTurnOutcome }
+      )
+      yield* await streamWithLifecycle(messages, config)
     },
-    [connection]
+    [connection, requireTurnOutcome, history, load]
   )
 
   // Created once: the browser adapter starts a fresh recognition per session.
@@ -224,6 +280,10 @@ export function useAdkAssistant({
   )
   const dictationAdapter =
     dictation === true ? browserDictation : dictation || undefined
+  // Created once, like the dictation adapter.
+  const [defaultAttachmentAdapter] = useState(defaultAttachments)
+  const attachmentAdapter =
+    attachments === true ? defaultAttachmentAdapter : attachments || undefined
   // Created once: reads the latest handler and session for each rating.
   const onFeedbackRef = useRef(onFeedback)
   const runtimeRef = useRef<AssistantRuntime | null>(null)
@@ -250,19 +310,27 @@ export function useAdkAssistant({
   const adapters = useMemo(
     () => ({
       dictation: dictationAdapter,
+      attachments: attachmentAdapter,
       ...(hasFeedback && { feedback: feedbackAdapter }),
       ...options.adapters,
     }),
-    [dictationAdapter, hasFeedback, feedbackAdapter, options.adapters]
+    [
+      dictationAdapter,
+      attachmentAdapter,
+      hasFeedback,
+      feedbackAdapter,
+      options.adapters,
+    ]
   )
 
   const runtime = useAdkRuntime({
     ...options,
     adapters,
     stream: send,
-    sessionAdapter: connection.sessionAdapter,
-    load: options.load ?? connection.load,
+    sessionAdapter,
+    load,
   })
+  useEffect(() => registerHistoryFeedback(runtime, history), [runtime, history])
   useEffect(() => {
     onFeedbackRef.current = onFeedback
     runtimeRef.current = runtime
@@ -273,6 +341,14 @@ export function useAdkAssistant({
     runtime,
     artifacts: connection.artifacts,
     modelSettings,
+  }
+}
+
+/** The agent's text in an event that arrived whole, for `MarkdownText`. */
+function noteWholeReplies(event: AdkEvent) {
+  if (event.author === "user") return
+  for (const part of event.content?.parts ?? []) {
+    if (part.text && !part.thought) noteWholeReply(part.text)
   }
 }
 
@@ -288,15 +364,6 @@ export type AssistantFeedback = {
   /** A comment, when the UI collects one. */
   comment?: string
 }
-
-/** A failed request to the agent server (unreachable, refused, not found) as an ADK error event. */
-const requestFailed = (error: unknown): AdkEvent => ({
-  id: crypto.randomUUID(),
-  errorCode: "REQUEST_FAILED",
-  errorMessage: `The assistant couldn't reach the agent: ${
-    error instanceof Error ? error.message : String(error)
-  }`,
-})
 
 const messageText = (message: ThreadMessage) =>
   message.content

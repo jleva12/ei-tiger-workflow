@@ -6,7 +6,7 @@ import {
   AdkDelegation,
   AdkInputRequestUI,
 } from "./adk"
-import { PresentUI } from "./rich-answers"
+import { PresentUI } from "../generative-ui"
 
 /**
  * Renderers for ADK's own calls: the human-in-the-loop ones, and

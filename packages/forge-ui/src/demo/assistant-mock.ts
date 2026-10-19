@@ -590,6 +590,20 @@ export const mockAdkStream: AdkStreamCallback = async (messages, config) => {
   )
 }
 
+/**
+ * The same agent on a server that doesn't stream: each reply arrives whole,
+ * once the model is done (the partial events never reach the page).
+ */
+export const mockWholeAdkStream: AdkStreamCallback = async (
+  messages,
+  config
+) => {
+  const events = await mockAdkStream(messages, config)
+  return (async function* () {
+    for await (const event of events) if (!event.partial) yield event
+  })()
+}
+
 /** Artifact downloads for the demo, as the ADK session adapter would. */
 export const mockArtifacts: AdkArtifactsApi = {
   list: async () => Object.keys(artifactFiles),

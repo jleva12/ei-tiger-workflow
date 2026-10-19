@@ -147,6 +147,72 @@ export function workflowAnswerOf(
   return { error: error || "The workflow couldn't be run." }
 }
 
+/** A workflow an intake agent started when it completed, as it handed it back. */
+export type StartedRun = {
+  /** The workflow's name. */
+  workflow: string
+  /** The call that started it, which the runtime knows the run by; none when it couldn't start. */
+  call_id?: string
+  run_id?: string
+  status?: string
+  result?: unknown
+  /** Why it couldn't start, or failed. */
+  error?: unknown
+}
+
+/**
+ * The workflows an intake agent says it started as it completed (the
+ * `workflows` of its `finish_task` call, or of what it handed back); none
+ * for anything else.
+ */
+export function startedRunsOf(result: unknown): StartedRun[] {
+  let value = result
+  if (typeof result === "string") {
+    try {
+      value = JSON.parse(result)
+    } catch {
+      return []
+    }
+  }
+  const runs = isRecord(value) ? value.workflows : undefined
+  if (!Array.isArray(runs)) return []
+  return runs.filter(
+    (run): run is StartedRun =>
+      isRecord(run) &&
+      typeof run.workflow === "string" &&
+      (run.call_id === undefined || typeof run.call_id === "string")
+  )
+}
+
+/** A run a submitted request started, with the request's intake. */
+export type SubmittedRun = StartedRun & { intake: string }
+
+/**
+ * The workflows the requests an agent submitted started (`submit_requests`'
+ * answer: each submitted request's `workflows`, from its intake's On
+ * complete way); none for anything else.
+ */
+export function submittedRunsOf(result: unknown): SubmittedRun[] {
+  let value = result
+  if (typeof result === "string") {
+    try {
+      value = JSON.parse(result)
+    } catch {
+      return []
+    }
+  }
+  const submitted = isRecord(value) ? value.submitted : undefined
+  if (!Array.isArray(submitted)) return []
+  return submitted.flatMap((request) =>
+    isRecord(request)
+      ? startedRunsOf(request).map((run) => ({
+          ...run,
+          intake: typeof request.intake === "string" ? request.intake : "",
+        }))
+      : []
+  )
+}
+
 const time = (iso: string | null | undefined) =>
   iso && isTimestamp(iso) ? parseTimestamp(iso).getTime() : undefined
 

@@ -14,7 +14,7 @@ from sqlalchemy.dialects import mysql
 from sqlalchemy.schema import CreateTable
 
 from forge_admin.db.migrate import MIGRATIONS
-from forge_admin.models import Skill, SkillCreatorJob
+from forge_admin.models import Skill
 
 REVISION = MIGRATIONS / "versions" / "0025skills_skills.py"
 
@@ -50,11 +50,12 @@ def test_on_mysql_it_makes_the_models_tables() -> None:
     with Operations.context(context):
         revision().upgrade()
     made = statements(output.getvalue())
-    for model in (Skill, SkillCreatorJob):
-        expected = statements(
-            str(CreateTable(model.__table__).compile(dialect=mysql.dialect()))  # type: ignore[arg-type]
-        )
-        assert expected <= made, model.__tablename__
+    expected = statements(
+        str(CreateTable(Skill.__table__).compile(dialect=mysql.dialect()))  # type: ignore[arg-type]
+    )
+    assert expected <= made
+    # The skill creator's jobs, which 0032helper_jobs moves to helper_jobs.
+    assert any(s.startswith("CREATE TABLE skill_creator_jobs") for s in made)
 
 
 def test_on_sqlite_it_goes_up_and_down() -> None:

@@ -1,13 +1,10 @@
 import * as React from "react"
 import { cn } from "cn"
-import { Bar } from "recharts"
+import { Area, Bar, Line } from "recharts"
 
 import { Skeleton } from "@/components/ui/skeleton"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import {
-  OVERVIEW_PERIODS,
-  type OverviewPeriod,
-} from "@/features/overview/lib/overview"
+import { WidgetTitle } from "@/features/overview/components/widget-title"
 
 /*
  * The parts of an organization's overview, as forge-aidlc-parent's delivery
@@ -17,42 +14,7 @@ import {
  * period before, and bar lists.
  */
 
-/* Period ------------------------------------------------------------------ */
-
-/** The 7, 30 or 90 days the overview reads, in the top bar. */
-export function PeriodSwitch({
-  value,
-  onValueChange,
-}: {
-  value: OverviewPeriod
-  onValueChange: (period: OverviewPeriod) => void
-}) {
-  return (
-    <ToggleGroup
-      aria-label="Period"
-      value={[value]}
-      onValueChange={(next) => {
-        if (next[0]) onValueChange(next[0] as OverviewPeriod)
-      }}
-      spacing={0}
-      className="rounded-(--radius-control) bg-muted p-[3px]"
-    >
-      {(Object.keys(OVERVIEW_PERIODS) as OverviewPeriod[]).map((key) => (
-        <ToggleGroupItem
-          key={key}
-          value={key}
-          aria-label={`Last ${OVERVIEW_PERIODS[key].label}`}
-          className="h-[26px] min-w-0 rounded-(--radius-soft)! px-2.5 text-xs font-normal text-muted-foreground hover:bg-transparent hover:text-foreground aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-(--shadow-raised) @max-[600px]/shell:px-2"
-        >
-          <span className="@max-[600px]/shell:hidden">
-            {OVERVIEW_PERIODS[key].label}
-          </span>
-          <span className="hidden @max-[600px]/shell:inline">{key}</span>
-        </ToggleGroupItem>
-      ))}
-    </ToggleGroup>
-  )
-}
+/* Switches ---------------------------------------------------------------- */
 
 /** A small switch beside a panel's title: which way its chart splits. */
 export function SplitSwitch<T extends string>({
@@ -97,9 +59,20 @@ export function Fact({ children }: { children: React.ReactNode }) {
 }
 
 /** The sentence that opens the overview, at headline size. */
-export function ReadOutText({ children }: { children: React.ReactNode }) {
+export function ReadOutText({
+  className,
+  children,
+}: {
+  className?: string
+  children: React.ReactNode
+}) {
   return (
-    <p className="mt-1 mb-7 max-w-[64ch] text-[1.3125rem]/[1.5] font-normal tracking-[-.4px] text-balance text-muted-foreground @max-[600px]/shell:text-[1.0625rem]/[1.5] @max-[600px]/shell:tracking-[-.2px]">
+    <p
+      className={cn(
+        "mt-1 mb-7 max-w-[64ch] text-[1.3125rem]/[1.5] font-normal tracking-[-.4px] text-balance text-muted-foreground @max-[600px]/shell:text-[1.0625rem]/[1.5] @max-[600px]/shell:tracking-[-.2px]",
+        className
+      )}
+    >
       {children}
     </p>
   )
@@ -268,7 +241,10 @@ export function HandoffKey({
 
 /* Chart panels ------------------------------------------------------------ */
 
-/** One of the hairline-divided panels of the overview. */
+/**
+ * One of the overview's panels, as a dashboard widget: the grid draws its
+ * hairlines and padding, and a title the person gave it replaces `title`.
+ */
 export function Panel({
   title,
   answer,
@@ -283,15 +259,11 @@ export function Panel({
   className?: string
   children: React.ReactNode
 }) {
+  const own = React.useContext(WidgetTitle)
   return (
-    <section
-      className={cn(
-        "flex min-w-0 flex-col border-l px-6 pt-5 pb-2 first:border-l-0 first:pl-0 last:pr-0 @max-[900px]/shell:border-t @max-[900px]/shell:border-l-0 @max-[900px]/shell:px-0 @max-[900px]/shell:first:border-t-0",
-        className
-      )}
-    >
+    <section className={cn("flex min-w-0 flex-col", className)}>
       <div className="flex min-h-5 items-center justify-between gap-3">
-        <h3 className="text-xs font-medium">{title}</h3>
+        <h3 className="text-xs font-medium">{own ?? title}</h3>
         {action}
       </div>
       <p className="mt-1 mb-4 min-h-[2lh] text-xs/[1.55] text-muted-foreground">
@@ -299,15 +271,6 @@ export function Panel({
       </p>
       {children}
     </section>
-  )
-}
-
-/** A row of panels under a top hairline: three columns, stacked when narrow. */
-export function PanelRow({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-3 border-t @max-[900px]/shell:grid-cols-1">
-      {children}
-    </div>
   )
 }
 
@@ -419,6 +382,56 @@ export function StackedBars({
       strokeWidth={1}
       radius={index === keys.length - 1 ? [2, 2, 0, 0] : 0}
       maxBarSize={24}
+      isAnimationActive={false}
+    />
+  ))
+}
+
+// Hovered points on lines and areas: a dot ringed in the page colour.
+const activeDot = { r: 4, strokeWidth: 2, stroke: "var(--background)" }
+
+/**
+ * Stacked areas of some series: 2px monotone edges over an 8% wash, so the
+ * make-up reads as it flows. Call it as a function, as StackedBars.
+ */
+export function StackedAreas({
+  keys,
+  stackId,
+}: {
+  keys: string[]
+  stackId: string
+}) {
+  return keys.map((key) => (
+    <Area
+      key={key}
+      dataKey={key}
+      stackId={stackId}
+      type="monotone"
+      stroke={`var(--color-${key})`}
+      strokeWidth={2}
+      fill={`var(--color-${key})`}
+      fillOpacity={0.08}
+      dot={false}
+      activeDot={activeDot}
+      isAnimationActive={false}
+    />
+  ))
+}
+
+/**
+ * Some series as 2px monotone lines, each on its own rather than stacked,
+ * to compare them. Call it as a function, as StackedBars.
+ */
+export function SeriesLines({ keys }: { keys: string[] }) {
+  return keys.map((key) => (
+    <Line
+      key={key}
+      dataKey={key}
+      type="monotone"
+      stroke={`var(--color-${key})`}
+      strokeWidth={2}
+      dot={false}
+      activeDot={activeDot}
       isAnimationActive={false}
     />
   ))

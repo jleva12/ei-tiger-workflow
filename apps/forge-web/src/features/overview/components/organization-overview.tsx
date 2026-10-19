@@ -3,58 +3,65 @@ import { Link } from "@tanstack/react-router"
 import { cn } from "cn"
 
 import { Footnote, Footnotes } from "@/components/forge/activity"
-import { PageEmpty } from "@/components/forge/empty-state"
+import { PageEmpty, PanelEmpty } from "@/components/forge/empty-state"
 import { ErrorCallout } from "@/components/forge/feedback"
 import { Icon } from "@/components/forge/icon"
 import { Button } from "@/components/ui/button"
+import { slotsBy } from "@/features/overview/components/chart-kit"
+import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
+import { DashboardGrid } from "@/features/overview/components/dashboard-grid"
 import {
-  ActivityPanel,
-  AttentionPanel,
-  OutcomesPanel,
-  PeoplePanel,
-  StepsPanel,
-} from "@/features/overview/components/activity-panels"
+  CustomizeButton,
+  LayoutToolbar,
+} from "@/features/overview/components/layout-toolbar"
 import {
-  slotsBy,
-  type SeriesSlot,
-} from "@/features/overview/components/chart-kit"
-import { Ledger } from "@/features/overview/components/ledger"
+  type KindFilter,
+  type LedgerFocus,
+} from "@/features/overview/components/overview-summary"
+import { SCOPE_ROW } from "@/features/overview/lib/ledger"
+import { ChartTypeSwitch } from "@/features/overview/components/chart-type-switch"
 import {
-  detailOf,
-  ledgerRow,
-  SCOPE_ROW,
-  type LedgerRow,
-} from "@/features/overview/lib/ledger"
+  CHART_SETTINGS,
+  OVERVIEW_WIDGETS,
+  type OverviewCatalogType,
+} from "@/features/overview/components/overview-widgets"
+import { OverviewSkeleton } from "@/features/overview/components/panels"
 import {
-  Fact,
-  OverviewSkeleton,
-  PanelRow,
-  ReadOutText,
-  SplitSwitch,
-} from "@/features/overview/components/panels"
+  OVERVIEW_LAYOUT,
+  resolveLayout,
+  useSavedLayout,
+  type DashboardLayout,
+  type DashboardWidget,
+  withSetting,
+} from "@/features/overview/lib/dashboard"
+import { SharedWidgetsDialog } from "@/features/overview/components/shared-widgets-dialog"
+import { WidgetBuilder } from "@/features/overview/components/widget-builder"
 import {
-  ModelsPanel,
-  SpendPanel,
-  TokensPanel,
-} from "@/features/overview/components/usage-panels"
+  chartTypeOf,
+  DEFAULT_CHART_TYPE,
+  type ChartType,
+} from "@/features/overview/lib/chart-type"
 import {
-  ageInWords,
-  compact,
-  DAY,
-  plural,
-  sharedTicks,
-  usd,
-} from "@/features/overview/lib/format"
+  CUSTOM_SETTINGS,
+  linesOnly,
+  specOf,
+} from "@/features/overview/lib/custom-widget"
 import {
-  bySubject,
-  emptyTotals,
-  OVERVIEW_PERIODS,
+  LayoutEditorProvider,
+  useLayoutEditor,
+} from "@/features/overview/lib/layout-editor"
+import {
+  spanOf,
+  type OverviewView,
+} from "@/features/overview/lib/overview-view"
+import { sharedTicks } from "@/features/overview/lib/format"
+import {
+  periodWords,
   SUBJECT_KINDS,
   summarize,
   useOrganizationOverview,
   weeksBySubject,
   type OrganizationOverview as Overview,
-  type OverviewPeriod,
   type OverviewScope,
   type SubjectKind,
 } from "@/features/overview/lib/overview"
@@ -65,28 +72,36 @@ import { parseTimestamp } from "@/lib/timestamps"
  * An organization's overview, for the people who run it: a sentence on the
  * period, its workflows and agents compared in a ledger, then its tokens
  * (the headline), models and spend, what ran and how it ended, who ran it,
- * what in it used the tokens, and what needs a person now. Selecting a row,
- * or a type, focuses everything below on it.
+ * what in it used the tokens, and what needs a person now. Selecting a row
+ * in the ledger, or a type, focuses every other widget on it. Each of them
+ * is a widget, laid out as the person saved them, or by default; Customize
+ * lets them move, size, rename, add and remove every one.
  */
-
-type KindFilter = "all" | SubjectKind
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" })
 
 export function OrganizationOverview({
   organizationId,
   organizationName,
-  period,
+  view,
+  onView,
   onOpenRun,
 }: {
   organizationId: string
   organizationName: string
-  period: OverviewPeriod
+  /** Its period and focus, as the page's address keeps them. */
+  view: OverviewView
+  onView: (change: Partial<OverviewView>) => void
   /** Open a workflow run's page; without it, waiting runs are listed only. */
   onOpenRun?: (runId: string) => void
 }) {
-  const query = useOrganizationOverview(organizationId, period)
+  const query = useOrganizationOverview(organizationId, spanOf(view))
   const overview = query.data
+  const saved = useSavedLayout("organization-overview")
+  const layout = React.useMemo(
+    () => resolveLayout(saved.data?.layout, OVERVIEW_WIDGETS, OVERVIEW_LAYOUT),
+    [saved.data]
+  )
 
   if (query.error && !overview) {
     return (
@@ -106,7 +121,8 @@ export function OrganizationOverview({
       </ErrorCallout>
     )
   }
-  if (!overview) return <OverviewSkeleton />
+  // Waits for the layout too, so a saved one doesn't replace the default in view.
+  if (!overview || saved.isPending) return <OverviewSkeleton />
   if (overview.subjects.length === 0) {
     return (
       <PageEmpty
@@ -117,30 +133,53 @@ export function OrganizationOverview({
     )
   }
   return (
-    <Report
-      key={overview.period}
-      organizationId={organizationId}
-      overview={overview}
-      // A new period loads behind the last one; fade it while it does.
-      stale={query.isPlaceholderData}
-      onOpenRun={onOpenRun}
-    />
+    // Above the report, so a draft layout outlasts a new period.
+    <LayoutEditorProvider>
+      <Report
+        key={`${overview.period}:${overview.first_day}:${overview.last_day}`}
+        organizationId={organizationId}
+        organizationName={organizationName}
+        overview={overview}
+        view={view}
+        onView={onView}
+        layout={layout}
+        // A new period loads behind the last one; fade it while it does.
+        stale={query.isPlaceholderData}
+        onOpenRun={onOpenRun}
+      />
+    </LayoutEditorProvider>
   )
 }
 
 function Report({
   organizationId,
+  organizationName,
   overview,
+  view,
+  onView,
+  layout,
   stale,
   onOpenRun,
 }: {
   organizationId: string
+  organizationName: string
   overview: Overview
+  view: OverviewView
+  onView: (change: Partial<OverviewView>) => void
+  layout: DashboardLayout
   stale: boolean
   onOpenRun?: (runId: string) => void
 }) {
-  const [kind, setKind] = React.useState<KindFilter>("all")
-  const [focus, setFocus] = React.useState<string | null>(null)
+  // The focus is the page's: the ledger, and the header's picker, change it.
+  const kind: KindFilter = view.only ?? "all"
+  const focus = view.focus ?? null
+  const draft = useLayoutEditor((state) => state.draft)
+  const change = useLayoutEditor((state) => state.change)
+  const widgets = draft ?? layout.widgets
+  const organization = React.useMemo(
+    () => ({ id: organizationId, name: organizationName }),
+    [organizationId, organizationName]
+  )
   const now = parseTimestamp(overview.as_of).getTime()
   const subjects = React.useMemo(
     () => new Map(overview.subjects.map((subject) => [subject.key, subject])),
@@ -188,13 +227,24 @@ function Report({
     (k) => overview.subjects.some((subject) => subject.kind === k)
   )
 
-  const select = (id: string) => {
-    setFocus(id === SCOPE_ROW || id === focus ? null : id)
+  const select = (id: string) =>
+    onView({ focus: id === SCOPE_ROW || id === focus ? undefined : id })
+  const chooseKind = (next: KindFilter) =>
+    onView({
+      only: next === "all" ? undefined : next,
+      ...(focused &&
+        next !== "all" &&
+        focused.kind !== next && { focus: undefined }),
+    })
+  const ledger: LedgerFocus = {
+    kind,
+    kinds,
+    focus,
+    weeks,
+    onKind: chooseKind,
+    onSelect: select,
   }
-  const chooseKind = (next: KindFilter) => {
-    setKind(next)
-    if (focused && next !== "all" && focused.kind !== next) setFocus(null)
-  }
+  const scopeKey = `${scope.level}:${focus ?? kind}`
 
   return (
     // Phones keep the last footnote clear of the assistant launcher.
@@ -205,38 +255,7 @@ function Report({
         stale && "opacity-60"
       )}
     >
-      <ReadOut overview={overview} now={now} />
-
-      {overview.truncated && (
-        <ErrorCallout
-          className="mb-5"
-          icon="warning"
-          title="Only the latest runs are counted"
-        >
-          This organization started more workflow runs in the period than the
-          overview reads at once; the oldest are left out of the figures.
-        </ErrorCallout>
-      )}
-
-      <OverviewLedger
-        overview={overview}
-        kind={kind}
-        kinds={kinds}
-        focus={focus}
-        slots={slots}
-        weeks={weeks}
-        now={now}
-        onKind={chooseKind}
-        onSelect={select}
-      />
-
-      <section
-        id="overview-scope"
-        aria-labelledby="overview-scope-title"
-        // A new scope fades in, so the change reads as one.
-        key={`${scope.level}:${focus ?? kind}`}
-        className="mt-10 animate-in duration-150 fade-in-0 @max-[600px]/shell:mt-8"
-      >
+      <section id="overview-scope" aria-labelledby="overview-scope-title">
         <header className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1">
           <Icon icon="dashboard" size={16} className="text-muted-foreground" />
           <h2 id="overview-scope-title" className="text-sm font-medium">
@@ -247,43 +266,128 @@ function Report({
                 : `All ${SUBJECT_KINDS[kind].plural.toLowerCase()}`}
           </h2>
           <span className="text-xs text-muted-foreground">
-            Last {OVERVIEW_PERIODS[overview.period].label}
+            {periodWords(overview).label}
           </span>
-          {focused && (
-            <span className="ml-auto flex items-center gap-1">
-              <OpenSubject organizationId={organizationId} subject={focused} />
-              <Button
-                variant="ghost"
-                size="xs"
-                className="text-muted-foreground"
-                onClick={() => setFocus(null)}
-              >
-                <Icon icon="close" data-icon="inline-start" />
-                Back to all
-              </Button>
-            </span>
-          )}
+          <span className="ml-auto flex items-center gap-1">
+            {draft ? (
+              <LayoutToolbar
+                widgets={layout.widgets}
+                organization={organization}
+              />
+            ) : (
+              <>
+                {focused && (
+                  <>
+                    <OpenSubject
+                      organizationId={organizationId}
+                      subject={focused}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="text-muted-foreground"
+                      onClick={() => onView({ focus: undefined })}
+                    >
+                      <Icon icon="close" data-icon="inline-start" />
+                      Back to all
+                    </Button>
+                  </>
+                )}
+                <CustomizeButton widgets={layout.widgets} />
+              </>
+            )}
+          </span>
         </header>
+        {draft && (
+          <p className="-mt-2 mb-4 text-xs text-muted-foreground">
+            Drag a widget by its bar, size it from its edges or corner, and
+            rename or remove it there. Done saves this layout for you, in every
+            organization.
+          </p>
+        )}
 
-        <PanelRow>
-          <TokensPanel context={context} />
-          <ModelsPanel context={context} />
-        </PanelRow>
-        <PanelRow>
-          <ActivityPanel context={context} />
-          <OutcomesPanel context={context} />
-          <SpendPanel context={context} />
-        </PanelRow>
-        <PanelRow>
-          <PeoplePanel overview={overview} context={context} />
-          <StepsPanel overview={overview} context={context} />
-          <AttentionPanel
-            overview={overview}
-            context={context}
-            now={now}
-            onOpenRun={onOpenRun}
+        {overview.truncated && (
+          <ErrorCallout
+            className="mb-5"
+            icon="warning"
+            title="Only the latest runs are counted"
+          >
+            This organization started more workflow runs in the period than the
+            overview reads at once; the oldest are left out of the figures.
+          </ErrorCallout>
+        )}
+
+        {widgets.length === 0 ? (
+          <PanelEmpty icon="dashboard" className="border-t">
+            {draft
+              ? "No widgets. Add one to show it here."
+              : "No widgets on your overview. Customize it to add some."}
+          </PanelEmpty>
+        ) : (
+          <DashboardGrid
+            widgets={widgets}
+            bare={(widget) =>
+              Boolean(OVERVIEW_WIDGETS[widget.type as OverviewCatalogType].bare)
+            }
+            render={(widget) => {
+              const kind = OVERVIEW_WIDGETS[widget.type as OverviewCatalogType]
+              const drawn = kind.render({
+                overview,
+                context,
+                now,
+                onOpenRun,
+                settings: widget.settings ?? {},
+                ledger,
+              })
+              // What follows the focus fades in when it changes, so the
+              // change reads as one; the read-out and the ledger stay put.
+              return kind.bare ? (
+                drawn
+              ) : (
+                <div
+                  key={scopeKey}
+                  className="flex min-w-0 animate-in flex-col duration-150 fade-in-0"
+                >
+                  {drawn}
+                </div>
+              )
+            }}
+            editor={
+              draft
+                ? {
+                    catalog: OVERVIEW_WIDGETS,
+                    onChange: change,
+                    controls: (widget) => (
+                      <WidgetControls
+                        widget={widget}
+                        onChart={(type) =>
+                          change(
+                            withSetting(
+                              draft,
+                              widget.id,
+                              "chart",
+                              type,
+                              DEFAULT_CHART_TYPE
+                            )
+                          )
+                        }
+                      />
+                    ),
+                  }
+                : undefined
+            }
           />
-        </PanelRow>
+        )}
+        {draft && (
+          <>
+            <WidgetBuilder
+              overview={overview}
+              context={context}
+              organization={organization}
+            />
+            <SharedWidgetsDialog organization={organization} />
+          </>
+        )}
       </section>
 
       <Footnotes className="mt-10 max-w-[680px]">
@@ -302,10 +406,10 @@ function Report({
         </Footnote>
         <Footnote icon="clock">
           Days are yours ({overview.time_zone}). Changes compare with the{" "}
-          {OVERVIEW_PERIODS[overview.period].label} before. The small bars count
-          each week's tokens over the last 12 weeks; the last is this week so
-          far. Colours rank workflows and agents by tokens over those weeks, so
-          each keeps its colour whatever the period.
+          {periodWords(overview).length} before. The small bars count each
+          week's tokens over the last 12 weeks; the last is this week so far.
+          Colours rank workflows and agents by tokens over those weeks, so each
+          keeps its colour whatever the period.
         </Footnote>
         <Footnote icon="info">
           {overview.recording_since
@@ -317,236 +421,40 @@ function Report({
   )
 }
 
-/* Read-out ---------------------------------------------------------------- */
-
 /**
- * The period in two sentences: what ran and what it used and cost; then
- * what waits on people.
+ * A widget's own settings in its bar while customizing: a chart panel's
+ * type; for a widget a person defined, its chart's type (when it's drawn
+ * over time and isn't fixed to lines) and the builder to change it.
  */
-function ReadOut({ overview, now }: { overview: Overview; now: number }) {
-  const all = summarize(overview, { level: "organization" })
-  const workflows = summarize(overview, { level: "kind", kind: "workflow" })
-  const agents = summarize(overview, { level: "kind", kind: "agent" })
-  const { current } = all
-  const active = (kind: SubjectKind) =>
-    new Set(
-      overview.activity
-        .filter(
-          (fact) =>
-            fact.bucket >= 0 &&
-            fact.started > 0 &&
-            fact.subject.startsWith(`${kind}:`)
-        )
-        .map((fact) => fact.subject)
-    ).size
-  const oldest = overview.waiting[0]
-  const parts: React.ReactNode[] = []
-  if (workflows.current.started > 0) {
-    parts.push(
-      <React.Fragment key="workflows">
-        <Fact>{plural(active("workflow"), "workflow")}</Fact> ran{" "}
-        <Fact>{plural(workflows.current.started, "time")}</Fact>
-      </React.Fragment>
-    )
-  }
-  if (agents.current.started > 0) {
-    parts.push(
-      <React.Fragment key="agents">
-        <Fact>{plural(active("agent"), "agent")}</Fact> answered{" "}
-        <Fact>{plural(agents.current.started, "invocation")}</Fact>
-      </React.Fragment>
-    )
-  }
-  return (
-    <ReadOutText>
-      In the last {OVERVIEW_PERIODS[overview.period].label}{" "}
-      {parts.length === 0 ? (
-        <>
-          <Fact>nothing ran</Fact>
-        </>
-      ) : (
-        parts.reduce<React.ReactNode[]>(
-          (joined, part, index) =>
-            index === 0 ? [part] : [...joined, " and ", part],
-          []
-        )
-      )}
-      {current.tokens > 0 && (
-        <>
-          , using <Fact>{compact(current.tokens)} tokens</Fact> over{" "}
-          <Fact>{plural(current.calls, "model call")}</Fact>
-          {current.cost > 0 && (
-            <>
-              {" "}
-              for <Fact>{usd(current.cost)}</Fact>
-            </>
-          )}
-        </>
-      )}
-      .{" "}
-      {oldest ? (
-        <>
-          <Fact>{plural(overview.waiting.length, "run")}</Fact>{" "}
-          {overview.waiting.length === 1 ? "waits" : "wait"} on people
-          {overview.waiting.length > 1 ? ", the oldest for " : " for "}
-          <Fact>
-            {ageInWords(
-              Math.max(
-                0,
-                now - parseTimestamp(oldest.since ?? overview.as_of).getTime()
-              )
-            )}
-          </Fact>
-          .
-        </>
-      ) : (
-        <>
-          <Fact>Nothing</Fact> waits on people.
-        </>
-      )}
-    </ReadOutText>
-  )
-}
-
-/* Ledger ------------------------------------------------------------------ */
-
-const KIND_FILTERS: Record<KindFilter, string> = {
-  all: "All",
-  workflow: "Workflows",
-  agent: "Agents",
-  assistant: "Assistant",
-}
-
-function OverviewLedger({
-  overview,
-  kind,
-  kinds,
-  focus,
-  slots,
-  weeks,
-  now,
-  onKind,
-  onSelect,
+function WidgetControls({
+  widget,
+  onChart,
 }: {
-  overview: Overview
-  kind: KindFilter
-  kinds: SubjectKind[]
-  focus: string | null
-  slots: Map<string, SeriesSlot>
-  weeks: Map<string, number[]>
-  now: number
-  onKind: (kind: KindFilter) => void
-  onSelect: (id: string) => void
+  widget: DashboardWidget
+  onChart: (type: ChartType) => void
 }) {
-  const rows = React.useMemo((): LedgerRow[] => {
-    const totals = bySubject(overview)
-    const waiting = new Map<string, { count: number; overdue: number }>()
-    for (const run of overview.waiting) {
-      const found = waiting.get(run.subject) ?? { count: 0, overdue: 0 }
-      found.count += 1
-      if (run.since && now - parseTimestamp(run.since).getTime() >= DAY)
-        found.overdue += 1
-      waiting.set(run.subject, found)
-    }
-    const listed = overview.subjects.filter(
-      (subject) => kind === "all" || subject.kind === kind
-    )
-    const length = overview.weeks.length
-    const none = Array<number>(length).fill(0)
-    // Rows share one scale, so their bars compare; the whole has its own.
-    const peak = Math.max(
-      1,
-      ...listed.flatMap((subject) => weeks.get(subject.key) ?? [])
-    )
-    const scopeWeeks = none.map((_, index) =>
-      listed.reduce(
-        (sum, subject) => sum + (weeks.get(subject.key)?.[index] ?? 0),
-        0
-      )
-    )
-    const scope = summarize(
-      overview,
-      kind === "all" ? { level: "organization" } : { level: "kind", kind }
-    )
-    const scopeWaiting = listed.reduce(
-      (sum, subject) => {
-        const found = waiting.get(subject.key)
-        return found
-          ? {
-              count: sum.count + found.count,
-              overdue: sum.overdue + found.overdue,
-            }
-          : sum
-      },
-      { count: 0, overdue: 0 }
-    )
-    const rows = listed.map((subject) => {
-      const found = totals.get(subject.key)
-      const held = waiting.get(subject.key) ?? { count: 0, overdue: 0 }
-      return ledgerRow(
-        found?.current ?? emptyTotals(),
-        found?.previous ?? emptyTotals(),
-        {
-          id: subject.key,
-          name: subject.name,
-          detail: detailOf(subject.kind, subject.current, subject.last_at, now),
-          kind: subject.kind,
-          total: false,
-          selected: focus === subject.key,
-          slot: slots.get(subject.key),
-          weeks: weeks.get(subject.key) ?? none,
-          peak,
-          waiting: held.count,
-          overdue: held.overdue,
-        }
-      )
-    })
-    // Busiest first: by tokens, then by runs.
-    rows.sort(
-      (a, b) =>
-        b.tokens - a.tokens || b.runs - a.runs || a.name.localeCompare(b.name)
-    )
-    return [
-      ledgerRow(scope.current, scope.previous, {
-        id: SCOPE_ROW,
-        name:
-          kind === "all"
-            ? "All workflows and agents"
-            : `All ${SUBJECT_KINDS[kind].plural.toLowerCase()}`,
-        detail: `${plural(listed.length, kind === "all" ? "workflow or agent" : SUBJECT_KINDS[kind].label.toLowerCase(), kind === "all" ? "workflows and agents" : SUBJECT_KINDS[kind].plural.toLowerCase())}`,
-        kind: kind === "all" ? null : kind,
-        total: true,
-        selected: focus === null,
-        slot: undefined,
-        weeks: scopeWeeks,
-        peak: Math.max(1, ...scopeWeeks),
-        waiting: scopeWaiting.count,
-        overdue: scopeWaiting.overdue,
-      }),
-      ...rows,
-    ]
-  }, [overview, kind, focus, slots, weeks, now])
-
-  const options = Object.fromEntries(
-    (["all", ...kinds] as KindFilter[]).map((key) => [key, KIND_FILTERS[key]])
-  ) as Record<KindFilter, string>
-
+  const build = useLayoutEditor((state) => state.build)
+  const settings = widget.settings ?? {}
+  const kind = OVERVIEW_WIDGETS[widget.type as OverviewCatalogType]
+  if (kind.settings === CHART_SETTINGS) {
+    return <ChartTypeSwitch value={chartTypeOf(settings)} onChange={onChart} />
+  }
+  if (kind.settings !== CUSTOM_SETTINGS) return null
+  const spec = specOf(settings)
   return (
-    <Ledger
-      rows={rows}
-      period={overview.period}
-      onSelect={onSelect}
-      toolbar={
-        kinds.length > 1 && (
-          <SplitSwitch
-            label="Show"
-            options={options}
-            value={kind}
-            onValueChange={onKind}
-          />
-        )
-      }
-    />
+    <>
+      {spec.show === "time" && !linesOnly(spec) && (
+        <ChartTypeSwitch value={spec.chart} onChange={onChart} />
+      )}
+      <TooltipIconButton
+        tooltip="Change widget"
+        side="top"
+        onClick={() => build(widget.id)}
+        className="size-6 text-muted-foreground hover:text-foreground"
+      >
+        <Icon icon="settings" size={14} />
+      </TooltipIconButton>
+    </>
   )
 }
 

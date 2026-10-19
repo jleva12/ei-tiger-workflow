@@ -1,4 +1,6 @@
 import copy
+import inspect
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -9,7 +11,14 @@ from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 from forge_agent_runtime.build import BuildError, build_app
 from forge_agent_runtime.document import parse_document
 from forge_agent_runtime.services import RuntimeServices
-from forge_agent_runtime.tools import GuardedTools, HttpTool, KnowledgeBaseTool, WorkflowTool
+from forge_agent_runtime.tools import (
+    CalledAgent,
+    GuardedTools,
+    HttpTool,
+    KnowledgeBaseTool,
+    LentToolset,
+    WorkflowTool,
+)
 from tests.conftest import EXAMPLE_HOSTS, without
 
 
@@ -64,7 +73,9 @@ async def test_an_agent_that_can_ask_the_person_gets_the_tool_and_its_instructio
     class State:
         state: dict[str, Any] = {}
 
-    told = root.instruction(cast(ReadonlyContext, State()))
+    instruction = root.instruction(cast(ReadonlyContext, State()))
+    assert inspect.isawaitable(instruction)
+    told = await instruction
     assert isinstance(told, str) and told.endswith(ASK_PERSON_INSTRUCTION)
 
     # Where nobody is there to answer (a workflow's run), it doesn't get it.
@@ -79,7 +90,14 @@ async def test_a_sub_agent_on_the_tools_way_is_called_like_a_tool(example, model
     doc["edges"].append({"id": "t", "source": "agent", "source_output": "tools", "target": "billing"})
     root = (await build(doc, models, web)).root_agent
     assert root.sub_agents == []
-    assert isinstance(root.tools[-1], AgentTool) and root.tools[-1].agent.name == "billing_specialist"
+    called = root.tools[-1]
+    assert isinstance(called, CalledAgent) and isinstance(called.tool, AgentTool)
+    assert called.tool.agent.name == "billing_specialist"
+    # It owns the Billing API: each call's runner is only lent it.
+    [billing_api] = called.owned
+    assert isinstance(billing_api, GuardedTools)
+    [lent] = cast(LlmAgent, called.tool.agent).tools
+    assert isinstance(lent, LentToolset) and lent.toolset is billing_api
 
 
 async def test_secrets_are_filled_in_from_the_environment(example, models, web):
@@ -118,7 +136,8 @@ async def test_saved_agents_come_from_the_dependencies_or_the_resolver(example, 
 
     bundled = {**doc, "dependencies": {"ca_refunds@2": refunds}}
     root = (await build(bundled, models, web)).root_agent
-    assert [a.name for a in root.sub_agents] == ["billing_specialist", "refunds_desk"]
+    # It's called after the node it's placed at, not its own entry ("Refunds desk").
+    assert [a.name for a in root.sub_agents] == ["billing_specialist", "refunds"]
 
     async def resolve(agent_id: str):
         if agent_id != "ca_refunds":
@@ -126,7 +145,7 @@ async def test_saved_agents_come_from_the_dependencies_or_the_resolver(example, 
         return parse_document(refunds)
 
     root = (await build(doc, models, web, resolve_agent=resolve)).root_agent
-    assert root.sub_agents[-1].name == "refunds_desk"
+    assert root.sub_agents[-1].name == "refunds"
 
     loop = copy.deepcopy(refunds)
     loop["nodes"].append(saved_node("ca_1k2cuqsuev"))
@@ -177,7 +196,7 @@ async def test_workflows_and_organization_mcp_servers_need_the_hosted_runtime(ex
                 {"type": "object", "properties": {"ticket": {"type": "string"}}},
             )
 
-        async def run(self, workflow_id, workflow_input, *, organization_id, context):
+        async def run(self, workflow_id, workflow_input, *, organization_id, context, wait=None):
             return {"status": "succeeded", "output": workflow_input}
 
     root = (await build(doc, models, web, workflows=Workflows())).root_agent
@@ -191,6 +210,85 @@ async def test_workflows_and_organization_mcp_servers_need_the_hosted_runtime(ex
     help_center["config"]["server"] = "mcp_1"
     with pytest.raises(BuildError, match="organization's MCP servers"):
         await build(doc, models, web, workflows=Workflows())
+
+
+@pytest.mark.parametrize(
+    ("wanted", "waits", "limit"),
+    [
+        (600, 600.0, 630.0),  # As its node says, the call allowed the margin more.
+        (5000, 900.0, 930.0),  # At most the deployment's cap.
+        (None, 120.0, 150.0),  # The deployment's default when it doesn't say.
+        (10, 10.0, 120.0),  # Never less than any tool call may take.
+    ],
+)
+async def test_a_workflow_tool_waits_as_its_node_says(example, models, web, wanted, waits, limit):
+    doc = copy.deepcopy(example)
+    config: dict[str, Any] = {"workflow": "ag_triage"}
+    if wanted is not None:
+        config["wait_seconds"] = wanted
+    doc["nodes"].append(
+        {"id": "wf", "kind": "adk_workflow", "name": "Triage", "config": config, "outputs": []}
+    )
+    doc["edges"].append({"id": "w", "source": "agent", "source_output": "tools", "target": "wf"})
+    waited: list[float | None] = []
+
+    class Workflows:
+        async def describe(self, workflow_id, *, organization_id):
+            return "Triage", "Sorts a ticket.", {}
+
+        async def run(self, workflow_id, workflow_input, *, organization_id, context, wait=None):
+            waited.append(wait)
+            return {"run_id": "r1", "status": "running"}
+
+    root = (
+        await build(doc, models, web, workflows=Workflows(), tool_timeout=120.0, workflow_wait_max=900.0)
+    ).root_agent
+    guarded: Any = root.tools[-1]
+    tool = guarded.items[0]
+    assert (tool.wait, guarded.timeout_for(tool)) == (waits, limit)
+    assert await tool.run_async(args={}, tool_context=None) == {"run_id": "r1", "status": "running"}
+    assert waited == [waits]
+
+
+async def test_a_workflow_tool_is_long_running_where_its_runner_waits_for_the_run_apart(example, models, web):
+    doc = copy.deepcopy(example)
+    doc["nodes"].append(
+        {
+            "id": "wf",
+            "kind": "adk_workflow",
+            "name": "Triage",
+            "config": {"workflow": "ag_triage"},
+            "outputs": [],
+        }
+    )
+    doc["edges"].append({"id": "w", "source": "agent", "source_output": "tools", "target": "wf"})
+
+    class Workflows:
+        """A workflow run's worker: calls in its own invocation wait for their runs apart."""
+
+        async def describe(self, workflow_id, *, organization_id):
+            return "Triage", "Sorts a ticket.", {}
+
+        async def run(self, workflow_id, workflow_input, *, organization_id, context, wait=None):
+            return None if self.waits_apart(context) else {"run_id": "r1", "status": "running"}
+
+        def waits_apart(self, context):
+            return context.invocation_id == "e-run"
+
+    root = (await build(doc, models, web, workflows=Workflows())).root_agent
+    toolset: Any = root.tools[-1]
+
+    [apart] = await toolset.get_tools(SimpleNamespace(invocation_id="e-run"))
+    [in_place] = await toolset.get_tools(SimpleNamespace(invocation_id="e-sub-agent"))
+    [listed] = await toolset.get_tools(None)
+
+    assert isinstance(apart, WorkflowTool) and apart.is_long_running
+    assert not in_place.is_long_running and not listed.is_long_running
+    assert not toolset.tool.is_long_running  # each request's copy, never the tool itself
+    # A long-running call returns nothing: its runner answers it later.
+    assert await apart.run_async(args={}, tool_context=SimpleNamespace(invocation_id="e-run")) is None
+    called = await in_place.run_async(args={}, tool_context=SimpleNamespace(invocation_id="e-sub-agent"))
+    assert called == {"status": "success", "payload": {"run_id": "r1", "status": "running"}}
 
 
 class KnowledgeBases:
@@ -371,7 +469,7 @@ async def test_one_tool_builds_on_its_own_for_an_agent_built_elsewhere(example, 
         models=models,
         dependencies={"ca_refunds@2": refunds},
     )
-    assert isinstance(agent[0], AgentTool)
+    assert isinstance(agent[0], CalledAgent) and isinstance(agent[0].tool, AgentTool)
 
     with pytest.raises(BuildError, match="can't be a tool"):
         await build_tools("Helper", "sub_agent", {}, models=models)

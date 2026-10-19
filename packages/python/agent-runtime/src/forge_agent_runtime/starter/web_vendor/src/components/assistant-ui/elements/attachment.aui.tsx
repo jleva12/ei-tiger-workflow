@@ -17,6 +17,7 @@ import {
   AttachmentPrimitive,
   ComposerPrimitive,
   MessagePrimitive,
+  useAuiEvent,
   useAuiState,
   useAui,
 } from "@assistant-ui/react"
@@ -34,6 +35,7 @@ import {
 } from "@/components/ui/dialog"
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
+import { toast } from "@/components/ui/toast"
 import { useAttachmentSrc } from "@/hooks/use-attachment-src"
 import { cn } from "cn"
 
@@ -249,6 +251,14 @@ export const ComposerAttachments: FC = () => {
 }
 
 export const ComposerAddAttachment: FC = () => {
+  // A file the chat can't take (its type, its size) says why, not nothing.
+  useAuiEvent("composer.attachmentAddError", ({ message }) =>
+    toast.add({
+      title: "Couldn't attach the file",
+      description: message,
+      type: "error",
+    })
+  )
   return (
     <ComposerPrimitive.AddAttachment
       render={

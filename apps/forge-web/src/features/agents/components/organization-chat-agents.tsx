@@ -57,7 +57,7 @@ import {
   type ChatAgentDocument,
 } from "@/features/agents/lib/document"
 import { exampleChatAgent } from "@/features/agents/lib/example"
-import { isAgentLike, CHAT_AGENTS_ICON } from "@/features/agents/lib/model"
+import { isAgent, CHAT_AGENTS_ICON } from "@/features/agents/lib/model"
 import {
   validateChatAgent,
   type ChatAgentValidationContext,
@@ -95,15 +95,13 @@ const toRow = (
   const issues = validateChatAgent(toGraph(doc), { ...context, selfId: doc.id })
   const errors = issues.filter((i) => i.level === "error").length
   const agents = doc.nodes.filter(
-    (n) => n.kind === "sub_agent" || n.kind === "saved_agent"
+    (n) => isAgent(n.kind) && n.kind !== "agent"
   ).length
   return {
     id: doc.id,
     name: doc.name,
     description: doc.description,
-    tools: doc.nodes.filter(
-      (n) => !isAgentLike(n.kind) && n.kind !== "saved_agent"
-    ).length,
+    tools: doc.nodes.filter((n) => !isAgent(n.kind)).length,
     agents,
     errors,
     warnings: issues.length - errors,

@@ -261,6 +261,7 @@ def test_a_bash_step_needs_a_start_that_allows_a_file_system() -> None:
         ([("1ST", "x")], "its environment variable '1ST' isn't a name bash reads"),
         ([("", "x")], "its environment variable '' isn't a name bash reads"),
         ([("WORKSPACE", "x")], "WORKSPACE is the run's folder"),
+        ([("FORGE_IDEMPOTENCY_KEY", "x")], "FORGE_IDEMPOTENCY_KEY is its step's key"),
         ([("REPO", "a"), ("REPO", "b")], "two of its environment variables are called REPO"),
     ],
 )

@@ -19,6 +19,7 @@ from pymongo.operations import SearchIndexModel
 
 from forge_embeddings.fusion import rrf_fuse
 from forge_embeddings.vectors import decode_vector, is_subset
+from forge_task_documents.errors import StaleRunError
 from forge_task_documents.models import (
     Chunk,
     DocumentRecord,
@@ -29,7 +30,7 @@ from forge_task_documents.models import (
     utcnow,
 )
 from forge_task_documents.storage.mongo import pipelines
-from forge_task_documents.storage.mongo.pipelines import LIVE, PUBLISHED, UNPUBLISHED
+from forge_task_documents.storage.mongo.pipelines import PUBLISHED, UNPUBLISHED
 from forge_task_documents.storage.mongo.schema import (
     CHUNK_INDEXES,
     DOCUMENT_INDEXES,
@@ -97,32 +98,67 @@ class MongoDocumentStore:
         now = utcnow()
         await self._c.update_one(
             self._key(record.tenant_id, record.doc_id),
-            {
-                "$set": {
-                    **self._identity(record),
-                    "status": IngestStatus.PENDING.value,
-                    "error": None,
-                    "updated_at": now,
-                },
-                "$setOnInsert": {"created_at": record.created_at or now, "chunk_count": 0, "run_seq": 0},
-            },
+            [
+                {
+                    "$set": {
+                        **{key: {"$literal": value} for key, value in self._identity(record).items()},
+                        "status": IngestStatus.PENDING.value,
+                        "error": None,
+                        "updated_at": now,
+                        "created_at": {"$ifNull": ["$created_at", record.created_at or now]},
+                        "run_seq": {
+                            "$add": [
+                                {
+                                    "$ifNull": [
+                                        "$run_seq",
+                                        {"$cond": [{"$eq": [{"$ifNull": ["$status", None]}, None]}, -1, 0]},
+                                    ]
+                                },
+                                1,
+                            ]
+                        },
+                        "chunk_count": {
+                            "$cond": [
+                                {"$eq": [{"$ifNull": ["$status", _DELETED]}, _DELETED]},
+                                0,
+                                {"$ifNull": ["$chunk_count", 0]},
+                            ]
+                        },
+                        "published_run_seq": {
+                            "$cond": [
+                                {"$eq": [{"$ifNull": ["$status", _DELETED]}, _DELETED]},
+                                0,
+                                {"$ifNull": ["$published_run_seq", None]},
+                            ]
+                        },
+                    }
+                }
+            ],
             upsert=True,
         )
 
     @_wrap_errors
-    async def begin_run(self, record: DocumentRecord) -> int:
-        now = utcnow()
+    async def begin_run(self, record: DocumentRecord, *, expected_run_seq: int | None = None) -> int:
+        key = self._key(record.tenant_id, record.doc_id)
+        # Initialize without changing an existing row, especially a tombstone.
+        await self._c.update_one(key, {"$setOnInsert": record_to_doc(record)}, upsert=True)
+        query: dict[str, Any] = {**key, "status": {"$ne": _DELETED}}
+        if expected_run_seq is not None:
+            if expected_run_seq == 0:
+                query["$or"] = [{"run_seq": 0}, {"run_seq": {"$exists": False}}]
+            else:
+                query["run_seq"] = expected_run_seq
         doc = await self._c.find_one_and_update(
-            self._key(record.tenant_id, record.doc_id),
+            query,
             {
-                "$set": {**self._identity(record), "status": _PROCESSING, "error": None, "updated_at": now},
+                "$set": {**self._identity(record), "status": _PROCESSING, "error": None, "updated_at": utcnow()},
                 "$inc": {"run_seq": 1},
-                "$setOnInsert": {"created_at": record.created_at or now, "chunk_count": 0},
             },
-            upsert=True,
             return_document=ReturnDocument.AFTER,
             projection={"run_seq": 1},
         )
+        if doc is None:
+            raise StaleRunError("document was deleted or changed before ingestion began")
         return int(doc["run_seq"])
 
     @_wrap_errors
@@ -135,17 +171,31 @@ class MongoDocumentStore:
     @_wrap_errors
     async def complete_run(self, tenant_id: str, doc_id: str, run_seq: int, *, fields: dict[str, Any]) -> bool:
         now = utcnow()
-        update = {**fields, "status": IngestStatus.READY.value, "error": None, "updated_at": now, "ingested_at": now}
+        update = {
+            **fields,
+            "published_run_seq": run_seq,
+            "status": IngestStatus.READY.value,
+            "error": None,
+            "updated_at": now,
+            "ingested_at": now,
+        }
         res = await self._c.update_one(
             {**self._key(tenant_id, doc_id), "run_seq": run_seq, "status": _PROCESSING}, {"$set": update}
         )
         return bool(res.matched_count)
 
     @_wrap_errors
-    async def fail_run(self, tenant_id: str, doc_id: str, run_seq: int | None, *, error: str) -> bool:
+    async def fail_run(
+        self, tenant_id: str, doc_id: str, run_seq: int | None, *, error: str, expected_run_seq: int | None = None
+    ) -> bool:
         query: dict[str, Any] = self._key(tenant_id, doc_id)
         if run_seq is None:
             query["status"] = IngestStatus.PENDING.value
+            if expected_run_seq is not None:
+                if expected_run_seq == 0:
+                    query["$or"] = [{"run_seq": 0}, {"run_seq": {"$exists": False}}]
+                else:
+                    query["run_seq"] = expected_run_seq
         else:
             query.update(run_seq=run_seq, status=_PROCESSING)
         res = await self._c.update_one(
@@ -165,18 +215,60 @@ class MongoDocumentStore:
 
     @_wrap_errors
     async def delete(self, tenant_id: str, doc_id: str) -> bool:
-        # Tombstone instead of removing, so run_seq keeps increasing if the
-        # same doc_id is re-created and in-flight runs are fenced out.
-        res = await self._c.update_one(
-            {**self._key(tenant_id, doc_id), "status": {"$ne": _DELETED}},
-            {"$set": {"status": _DELETED, "chunk_count": 0, "updated_at": utcnow()}, "$inc": {"run_seq": 1}},
+        # Even an unknown ID gets a tombstone: a queued loader may not have
+        # registered its first record yet.
+        defaults = record_to_doc(
+            DocumentRecord(tenant_id=tenant_id, doc_id=doc_id, filename=doc_id, sha256="", size_bytes=0)
         )
-        return bool(res.matched_count)
+        before = await self._c.find_one_and_update(
+            self._key(tenant_id, doc_id),
+            [
+                {
+                    "$set": {
+                        **{key: {"$ifNull": [f"${key}", {"$literal": value}]} for key, value in defaults.items()},
+                        "status": _DELETED,
+                        "published_run_seq": 0,
+                        "chunk_count": 0,
+                        "updated_at": utcnow(),
+                        "run_seq": {"$add": [{"$ifNull": ["$run_seq", 0]}, 1]},
+                    }
+                }
+            ],
+            upsert=True,
+            return_document=ReturnDocument.BEFORE,
+        )
+        return before is not None and before.get("status") != _DELETED
+
+
+async def _visibility(
+    documents: Any, tenant_ids: Sequence[str], doc_ids: Sequence[str] | None = None
+) -> dict[str, Any]:
+    """A single authoritative snapshot shared by both retrieval legs."""
+    query: dict[str, Any] = {"tenant_id": {"$in": list(tenant_ids)}, "status": {"$ne": _DELETED}}
+    if doc_ids:
+        query["doc_id"] = {"$in": list(doc_ids)}
+    rows = documents.find(query, {"tenant_id": 1, "doc_id": 1, "published_run_seq": 1})
+    clauses = []
+    async for row in rows:
+        selected = row.get("published_run_seq")
+        if selected == 0:
+            continue
+        clauses.append(
+            {
+                "tenant_id": row["tenant_id"],
+                "doc_id": row["doc_id"],
+                **({"run_seq": selected} if selected is not None else PUBLISHED),
+            }
+        )
+    # New generations always carry live:false. Until a legacy document first
+    # commits a generation pointer, only its previously published rows match.
+    return {"$or": clauses} if clauses else {"run_seq": {"$lt": 0}}
 
 
 class MongoChunkStore:
-    def __init__(self, collection: Any, *, binary_vectors: bool = True) -> None:
+    def __init__(self, collection: Any, documents: Any, *, binary_vectors: bool = True) -> None:
         self._c = collection
+        self._documents = documents
         self.binary_vectors = binary_vectors
 
     @_wrap_errors
@@ -199,28 +291,22 @@ class MongoChunkStore:
     async def replace_document_chunks(
         self, tenant_id: str, doc_id: str, run_seq: int, chunks: Sequence[Chunk]
     ) -> ReplaceStats:
+        if any(c.tenant_id != tenant_id or c.doc_id != doc_id for c in chunks):
+            raise ValueError("chunks must belong to the requested tenant and document")
         skipped = 0
         for i in range(0, len(chunks), _WRITE_BATCH):
             ops = []
             for c in chunks[i : i + _WRITE_BATCH]:
                 doc = chunk_to_doc(c, run_seq, binary_vectors=self.binary_vectors)
                 _id = doc.pop("_id")
-                # only overwrite chunks written by this or an older run; if a
-                # newer run owns the id, the upsert hits a duplicate key (11000).
-                # A new chunk is unpublished until the run is; one already
-                # there keeps whether it's published.
-                ops.append(
-                    UpdateOne(
-                        {"_id": _id, "run_seq": {"$not": {"$gt": run_seq}}},
-                        {"$set": doc, "$setOnInsert": UNPUBLISHED},
-                        upsert=True,
-                    )
-                )
+                # Each generation has its own physical ID. A retry cannot
+                # change a chunk already selected by a published pointer.
+                ops.append(UpdateOne({"_id": _id}, {"$setOnInsert": {**doc, **UNPUBLISHED}}, upsert=True))
             try:
                 await self._c.bulk_write(ops, ordered=False)
             except BulkWriteError as exc:
                 errors = exc.details.get("writeErrors", [])
-                if any(e.get("code") != 11000 for e in errors):
+                if exc.details.get("writeConcernErrors") or not errors or any(e.get("code") != 11000 for e in errors):
                     raise
                 skipped += len(errors)
         return ReplaceStats(upserted=len(chunks) - skipped, deleted=0)
@@ -228,35 +314,78 @@ class MongoChunkStore:
     @_wrap_errors
     async def publish_run(self, tenant_id: str, doc_id: str, run_seq: int) -> int:
         key = {"tenant_id": tenant_id, "doc_id": doc_id}
-        await self._c.update_many({**key, "run_seq": run_seq, **UNPUBLISHED}, {"$unset": {LIVE: ""}})
-        res = await self._c.delete_many({**key, "run_seq": {"$lt": run_seq}})
-        return int(res.deleted_count)
+        try:
+            record = await self._documents.find_one(key)
+            selected = record.get("published_run_seq") if record else None
+            if selected is None or selected <= 0 or record["status"] == _DELETED:
+                return 0
+            result = await self._c.delete_many(
+                {**key, "$or": [{"run_seq": {"$lt": selected}}, {"run_seq": {"$exists": False}}]}
+            )
+            return int(result.deleted_count)
+        except Exception:
+            # Publication already committed atomically with READY. Old rows
+            # remain invisible even if this optional garbage collection fails.
+            log.warning("document generation cleanup failed", exc_info=True)
+            return 0
 
     @_wrap_errors
     async def delete_run_chunks(self, tenant_id: str, doc_id: str, run_seq: int) -> int:
-        res = await self._c.delete_many({"tenant_id": tenant_id, "doc_id": doc_id, "run_seq": run_seq, **UNPUBLISHED})
+        key = {"tenant_id": tenant_id, "doc_id": doc_id}
+        record = await self._documents.find_one(key)
+        if (
+            record
+            and record["status"] != _DELETED
+            and (
+                record.get("published_run_seq") == run_seq
+                or (record["run_seq"] == run_seq and record["status"] in (_PROCESSING, IngestStatus.READY.value))
+            )
+        ):
+            return 0
+        res = await self._c.delete_many({**key, "run_seq": run_seq, **UNPUBLISHED})
         return int(res.deleted_count)
 
     @_wrap_errors
     async def delete_document_chunks(self, tenant_id: str, doc_id: str) -> int:
-        res = await self._c.delete_many({"tenant_id": tenant_id, "doc_id": doc_id})
+        key = {"tenant_id": tenant_id, "doc_id": doc_id}
+        record = await self._documents.find_one(key)
+        if record is None or record["status"] != _DELETED:
+            return 0
+        res = await self._c.delete_many({**key, "run_seq": {"$not": {"$gt": record["run_seq"]}}})
         return int(res.deleted_count)
 
     @_wrap_errors
     async def get_chunks(self, tenant_id: str, chunk_ids: Sequence[str]) -> list[Chunk]:
         ids = list(chunk_ids)
         found: dict[str, Chunk] = {}
+        visible = await _visibility(self._documents, [tenant_id])
         for i in range(0, len(ids), _IN_BATCH):
-            cursor = self._c.find({"tenant_id": tenant_id, "_id": {"$in": ids[i : i + _IN_BATCH]}}, {"embedding": 0})
+            batch = ids[i : i + _IN_BATCH]
+            cursor = self._c.find(
+                {
+                    "$and": [
+                        visible,
+                        {"tenant_id": tenant_id},
+                        {"$or": [{"chunk_id": {"$in": batch}}, {"_id": {"$in": batch}}]},
+                    ]
+                },
+                {"embedding": 0},
+            )
             async for doc in cursor:
                 chunk = doc_to_chunk(doc)
                 found[chunk.id] = chunk
         return [found[i] for i in ids if i in found]
 
     @_wrap_errors
-    async def get_section(self, tenant_id: str, doc_id: str, section_key: str) -> list[Chunk]:
+    async def get_section(
+        self, tenant_id: str, doc_id: str, section_key: str, *, generation: int | None = None
+    ) -> list[Chunk]:
+        visible = await _visibility(self._documents, [tenant_id], [doc_id])
+        if generation is not None:
+            visible = {"$and": [visible, {"run_seq": generation}]}
         cursor = self._c.find(
-            {"tenant_id": tenant_id, "doc_id": doc_id, "section_key": section_key, **PUBLISHED}, {"embedding": 0}
+            {"$and": [visible, {"tenant_id": tenant_id, "doc_id": doc_id, "section_key": section_key}]},
+            {"embedding": 0},
         ).sort("ordinal", 1)
         return [doc_to_chunk(d) async for d in cursor]
 
@@ -270,11 +399,13 @@ class AtlasSearchBackend:
         self,
         collection: Any,
         *,
+        documents: Any,
         text_index: str = "chunks_text",
         vector_index: str = "chunks_vector",
         fusion_mode: FusionMode = "server",
     ) -> None:
         self._c = collection
+        self._documents = documents
         self.text_index = text_index
         self.vector_index = vector_index
         self.fusion_mode = fusion_mode
@@ -296,31 +427,35 @@ class AtlasSearchBackend:
                     hit_ranks[d.get("inputPipelineName", "?")] = rank
         return SearchHit(
             chunk=doc_to_chunk(doc),
+            generation=doc.get("run_seq"),
             score=float(score if score is not None else (raw_score or 0.0)),
             ranks=hit_ranks,
             details=details,
         )
 
-    async def text_search(self, request: HybridSearchRequest) -> list[SearchHit]:
+    @_wrap_errors
+    async def _snapshot(self, request: HybridSearchRequest) -> dict[str, Any]:
+        return await _visibility(self._documents, request.tenant_ids, request.filters.doc_ids)
+
+    async def _leg(self, request: HybridSearchRequest, leg: str, visibility: dict[str, Any]) -> list[SearchHit]:
         docs = await self._run(
             pipelines.single_leg_pipeline(
-                request, leg="text", text_index=self.text_index, vector_index=self.vector_index
+                request, leg=leg, text_index=self.text_index, vector_index=self.vector_index, visibility=visibility
             )
         )
         return [self._to_hit(d) for d in docs]
+
+    async def text_search(self, request: HybridSearchRequest) -> list[SearchHit]:
+        return await self._leg(request, "text", await self._snapshot(request))
 
     async def vector_search(self, request: HybridSearchRequest) -> list[SearchHit]:
-        docs = await self._run(
-            pipelines.single_leg_pipeline(
-                request, leg="vector", text_index=self.text_index, vector_index=self.vector_index
-            )
-        )
-        return [self._to_hit(d) for d in docs]
+        return await self._leg(request, "vector", await self._snapshot(request))
 
     async def hybrid_search(self, request: HybridSearchRequest) -> list[SearchHit]:
+        visibility = await self._snapshot(request)
         if self.fusion_mode == "server":
             pipeline = pipelines.rank_fusion_pipeline(
-                request, text_index=self.text_index, vector_index=self.vector_index
+                request, text_index=self.text_index, vector_index=self.vector_index, visibility=visibility
             )
             try:
                 cursor = await self._c.aggregate(pipeline)
@@ -333,14 +468,17 @@ class AtlasSearchBackend:
                 self.fusion_mode = "client"
             except PyMongoError as exc:
                 raise _storage_error(exc) from exc
-
-        text_hits, vector_hits = await asyncio.gather(self.text_search(request), self.vector_search(request))
-        by_id = {h.chunk.id: h.chunk for h in [*text_hits, *vector_hits]}
+        # Both legs use exactly the same pointer snapshot. Concurrent
+        # publication cannot combine old text hits with new vector hits.
+        text_hits, vector_hits = await asyncio.gather(
+            self._leg(request, "text", visibility), self._leg(request, "vector", visibility)
+        )
+        by_id = {h.chunk.id: h for h in [*text_hits, *vector_hits]}
         fused = rrf_fuse(
             {"vector": [h.chunk.id for h in vector_hits], "text": [h.chunk.id for h in text_hits]},
             {"vector": request.vector_weight, "text": request.text_weight},
         )
-        return [SearchHit(chunk=by_id[i], score=s, ranks=r) for i, s, r in fused[: request.limit]]
+        return [by_id[i].model_copy(update={"score": s, "ranks": r}) for i, s, r in fused[: request.limit]]
 
 
 class MongoStorage:
@@ -375,9 +513,9 @@ class MongoStorage:
         docs_coll = self._db[documents_collection]
         chunks_coll = self._db[chunks_collection]
         self.documents = MongoDocumentStore(docs_coll)
-        self.chunks = MongoChunkStore(chunks_coll, binary_vectors=binary_vectors)
+        self.chunks = MongoChunkStore(chunks_coll, docs_coll, binary_vectors=binary_vectors)
         self.search = AtlasSearchBackend(
-            chunks_coll, text_index=text_index, vector_index=vector_index, fusion_mode=fusion_mode
+            chunks_coll, documents=docs_coll, text_index=text_index, vector_index=vector_index, fusion_mode=fusion_mode
         )
 
     @classmethod

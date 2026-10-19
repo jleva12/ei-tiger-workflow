@@ -19,21 +19,19 @@ import { ViewTabsList, ViewTabsTrigger } from "@/components/forge/toolbar"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent } from "@/components/ui/tabs"
 import { OrganizationOverview } from "@/features/overview/components/organization-overview"
-import { PeriodSwitch } from "@/features/overview/components/panels"
+import { OverviewControls } from "@/features/overview/components/overview-controls"
 import {
-  DEFAULT_PERIOD,
-  isOverviewPeriod,
-  type OverviewPeriod,
-} from "@/features/overview/lib/overview"
+  overviewViewOf,
+  withView,
+  type OverviewView,
+} from "@/features/overview/lib/overview-view"
 import { useMyOrganizations } from "@/lib/access"
 import { organizations, useScopeAccess } from "@/lib/hierarchy"
 import { usePageContext } from "@/features/assistant/lib/page-context"
 
-type OrganizationSearch = {
-  /** Members; the overview when absent. */
+type OrganizationSearch = OverviewView & {
+  /** Members; the overview when absent. Otherwise, what the overview shows. */
   tab?: "members"
-  /** The overview's period; 7 days when absent. */
-  period?: OverviewPeriod
 }
 
 /**
@@ -47,10 +45,7 @@ type OrganizationSearch = {
 export const Route = createFileRoute("/admin/organizations/$organizationId/")({
   validateSearch: (search: Record<string, unknown>): OrganizationSearch => ({
     tab: search.tab === "members" ? "members" : undefined,
-    period:
-      isOverviewPeriod(search.period) && search.period !== DEFAULT_PERIOD
-        ? search.period
-        : undefined,
+    ...overviewViewOf(search),
   }),
   // Site administration: the /admin layout lets only site administrators in.
   component: OrganizationPage,
@@ -61,8 +56,11 @@ const SILENT = { meta: { silent: true } }
 
 function OrganizationPage() {
   const { organizationId } = Route.useParams()
-  const { tab = "overview", period = DEFAULT_PERIOD } = Route.useSearch()
+  const { tab = "overview", ...overviewView } = Route.useSearch()
   const setSearch = Route.useNavigate()
+  // What the overview shows, as its address keeps it; changed in place.
+  const changeOverview = (change: Partial<OverviewView>) =>
+    void setSearch({ search: (last) => withView(last, change), replace: true })
   const navigate = useNavigate()
   const removeOrganization = organizations.useDelete(SILENT)
   // Once it's deleted, don't fetch it again (404) before leaving the page.
@@ -103,16 +101,10 @@ function OrganizationPage() {
     <>
       <ShellHeaderActions>
         {tab === "overview" && (
-          <PeriodSwitch
-            value={period}
-            onValueChange={(next) =>
-              void setSearch({
-                search: {
-                  period: next === DEFAULT_PERIOD ? undefined : next,
-                },
-                replace: true,
-              })
-            }
+          <OverviewControls
+            organizationId={organizationId}
+            view={overviewView}
+            onView={changeOverview}
           />
         )}
         <NodeActions
@@ -174,7 +166,8 @@ function OrganizationPage() {
             <OrganizationOverview
               organizationId={organizationId}
               organizationName={org.name}
-              period={period}
+              view={overviewView}
+              onView={changeOverview}
               // A run's page is in the workspace, which only members open.
               onOpenRun={
                 member

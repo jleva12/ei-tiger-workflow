@@ -1,0 +1,49 @@
+/*
+ * A template's {{ }} in the rich text editor: one chip, in the expression
+ * field's look (expression-field.css's .cm-template).
+ */
+.rich-text .ProseMirror .template-reference {
+  border-radius: var(--radius-chip);
+  background: var(--muted);
+  padding: 0.0625rem 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  color: var(--foreground);
+  white-space: nowrap;
+  box-decoration-break: clone;
+}
+
+.rich-text[data-editable] .ProseMirror .template-reference {
+  cursor: pointer;
+}
+
+.rich-text .ProseMirror .template-reference.ProseMirror-selectednode {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* The preview under the label: the same document, a size down. */
+.template-preview .rich-text .ProseMirror {
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.template-preview .rich-text .ProseMirror > * + * {
+  margin-top: 0.45em;
+}
+
+.template-preview .rich-text .ProseMirror h1 {
+  font-size: 1rem;
+}
+
+.template-preview .rich-text .ProseMirror h2 {
+  font-size: 0.9375rem;
+}
+
+.template-preview .rich-text .ProseMirror :is(h3, h4, h5, h6) {
+  font-size: 0.875rem;
+}
+
+.template-preview .rich-text .ProseMirror :is(h1, h2, h3, h4, h5, h6) + * {
+  margin-top: 0.3em;
+}

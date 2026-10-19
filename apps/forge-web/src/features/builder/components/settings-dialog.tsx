@@ -453,6 +453,8 @@ export function SettingsHint({ children }: { children: React.ReactNode }) {
 
 /** A card's width beside others: it shrinks to its least as more open. */
 const COMPANION_SIZES = {
+  // A document to write in (an agent's instruction): room for a toolbar and a measure.
+  wide: "w-[64rem] min-w-[32rem]",
   default: "w-[47.5rem] min-w-[28rem]",
   sheet: "w-[35rem] min-w-[26rem]",
   narrow: "w-[30rem] min-w-[22rem]",
@@ -485,7 +487,7 @@ export function SettingsCompanion({
   /** Its spine's icon, when it's folded. */
   icon?: IconProp
   footer?: React.ReactNode
-  /** `default` 47.5rem, `sheet` 35rem, `narrow` 30rem; each shrinks beside others. */
+  /** `wide` 64rem, `default` 47.5rem, `sheet` 35rem, `narrow` 30rem; each shrinks beside others. */
   size?: keyof typeof COMPANION_SIZES
   render?: CardElement
   /** The close button's name for screen readers. */

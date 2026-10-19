@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -10,10 +11,11 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import InMemoryRunner
-from google.genai import types
+from google.genai import errors, types
 from pydantic import Field
 
 from forge_common.adk.models import ModelCall, ProviderModels, gemini_thinking_config
+from forge_common.adk.usage import MODEL_KEY
 from forge_common.model_provider import (
     ModelProviderConfig,
     ModelProviderConfigError,
@@ -82,6 +84,443 @@ class Recorder:
     def __call__(self, call: ModelCall) -> BaseLlm:
         self.calls.append(call)
         return self.llm
+
+
+class ResponseLlm(BaseLlm):
+    """Exact provider frames, including empty and prematurely ended streams."""
+
+    model: str = "scripted"
+    responses: list[LlmResponse] = Field(default_factory=list)
+    failure: Any = None
+
+    async def generate_content_async(
+        self, llm_request: LlmRequest, stream: bool = False
+    ) -> AsyncGenerator[LlmResponse]:
+        for response in self.responses:
+            yield response
+        if self.failure is not None:
+            raise self.failure
+
+
+async def provider_responses(*responses: LlmResponse) -> list[LlmResponse]:
+    models = ProviderModels(config(), build=lambda _: ResponseLlm(responses=list(responses)))
+    return [response async for response in models.generate_content_async(LlmRequest(), stream=True)]
+
+
+@pytest.mark.parametrize("reason", [types.FinishReason.MAX_TOKENS, types.FinishReason.SAFETY])
+async def test_gemini_abnormal_completion_keeps_text_and_reports_failure(
+    reason: types.FinishReason,
+) -> None:
+    # ADK leaves error_code empty when a Gemini candidate contains text,
+    # even when the provider explicitly reports an incomplete/refused reply.
+    raw = LlmResponse.create(
+        types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(
+                    content=types.Content(role="model", parts=[types.Part(text="Answer so far")]),
+                    finish_reason=reason,
+                )
+            ]
+        )
+    )
+    assert raw.error_code is None
+    [response] = await provider_responses(raw)
+    assert response.error_code == reason.value
+    assert response.error_message
+    assert response.content and response.content.parts
+    assert response.content.parts[0].text == "Answer so far"
+    assert response.custom_metadata == {MODEL_KEY: "google/gemini-3.5-flash"}
+
+
+@pytest.mark.parametrize(
+    "responses",
+    [
+        [],
+        [LlmResponse()],
+        [
+            LlmResponse(
+                content=types.Content(role="model", parts=[types.Part(text=" ")]),
+                finish_reason=types.FinishReason.STOP,
+            )
+        ],
+    ],
+)
+async def test_empty_provider_exhaustion_is_an_explicit_failure(
+    responses: list[LlmResponse],
+) -> None:
+    completed = await provider_responses(*responses)
+    assert completed[-1].error_code == "EMPTY_MODEL_RESPONSE"
+    assert completed[-1].error_message == "The model returned no answer. Try again."
+
+
+async def test_partial_only_exhaustion_keeps_text_without_promoting_tool_arguments() -> None:
+    chunks = [
+        LlmResponse(
+            partial=True,
+            content=types.Content(
+                role="model",
+                parts=[
+                    types.Part(text="Working", thought=True),
+                    types.Part(text="Answer "),
+                ],
+            ),
+        ),
+        LlmResponse(
+            partial=True,
+            content=types.Content(
+                role="model",
+                parts=[
+                    types.Part(text="so far"),
+                    types.Part(
+                        function_call=types.FunctionCall(name="save", args={"value": "unfinished"})
+                    ),
+                ],
+            ),
+        ),
+    ]
+    completed = await provider_responses(*chunks)
+    assert completed[:2] == chunks
+    final = completed[-1]
+    assert final.error_code == "INCOMPLETE_MODEL_RESPONSE"
+    assert final.partial is False
+    assert final.content and final.content.parts
+    assert [(part.text, part.thought) for part in final.content.parts] == [
+        ("Working", True),
+        ("Answer ", None),
+        ("so far", None),
+    ]
+    assert not final.get_function_calls()
+
+
+async def test_a_provider_exception_saves_partial_text_and_error_without_executing_tools() -> None:
+    calls: list[str] = []
+
+    def save(value: str) -> dict[str, str]:
+        """Save a value."""
+        calls.append(value)
+        return {"saved": value}
+
+    provider = ResponseLlm(
+        responses=[
+            LlmResponse(
+                partial=True,
+                content=types.Content(
+                    role="model",
+                    parts=[types.Part(text="Working", thought=True), types.Part(text="Answer ")],
+                ),
+            ),
+            LlmResponse(
+                partial=True,
+                content=types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(text="so far"),
+                        types.Part(
+                            function_call=types.FunctionCall(
+                                name="save", args={"value": "unfinished"}
+                            )
+                        ),
+                    ],
+                ),
+            ),
+        ],
+        failure=RuntimeError("Internal provider connection details: secret"),
+    )
+    models = ProviderModels(config(), build=lambda _: provider)
+    runner = InMemoryRunner(
+        agent=LlmAgent(name="helper", model=models, tools=[save]), app_name="test"
+    )
+    session = await runner.session_service.create_session(app_name="test", user_id="u")
+    events = [
+        event
+        async for event in runner.run_async(
+            user_id="u",
+            session_id=session.id,
+            new_message=types.Content(role="user", parts=[types.Part(text="Save it")]),
+        )
+    ]
+    stored = await runner.session_service.get_session(
+        app_name="test", user_id="u", session_id=session.id
+    )
+    assert stored is not None
+    [saved] = [event for event in stored.events if event.author == "helper"]
+    assert saved.error_code == "INTERNAL_ERROR"
+    assert saved.error_message == "The model response could not be completed. Try again."
+    assert saved.partial is False
+    assert saved.content and saved.content.parts
+    assert [(part.text, part.thought) for part in saved.content.parts] == [
+        ("Working", True),
+        ("Answer ", None),
+        ("so far", None),
+    ]
+    assert calls == []
+    assert not saved.get_function_calls()
+    assert [event.error_code for event in events if event.error_code] == ["INTERNAL_ERROR"]
+    await runner.close()
+
+
+@pytest.mark.parametrize("partial", [False, True])
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_native_terminal_frames_keep_partial_text_in_saved_history(
+    partial: bool, interrupted: bool
+) -> None:
+    final = LlmResponse(
+        partial=partial,
+        interrupted=interrupted,
+        error_code=None if interrupted else "PROVIDER_UNAVAILABLE",
+        error_message=None if interrupted else "Please retry later.",
+        content=(
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part(text="so far"),
+                    types.Part(function_call=types.FunctionCall(name="save", args={})),
+                ],
+            )
+            if partial
+            else None
+        ),
+    )
+    models = ProviderModels(
+        config(),
+        build=lambda _: ResponseLlm(
+            responses=[
+                LlmResponse(
+                    partial=True,
+                    content=types.Content(role="model", parts=[types.Part(text="Answer ")]),
+                ),
+                final,
+            ],
+        ),
+    )
+    runner = InMemoryRunner(agent=LlmAgent(name="helper", model=models), app_name="test")
+    session = await runner.session_service.create_session(app_name="test", user_id="u")
+    events = [
+        event
+        async for event in runner.run_async(
+            user_id="u",
+            session_id=session.id,
+            new_message=types.Content(role="user", parts=[types.Part(text="Hello")]),
+        )
+    ]
+    stored = await runner.session_service.get_session(
+        app_name="test", user_id="u", session_id=session.id
+    )
+    assert stored is not None
+    [saved] = [event for event in stored.events if event.author == "helper"]
+    assert saved.partial is False
+    assert saved.interrupted is interrupted
+    assert saved.error_code == (None if interrupted else "PROVIDER_UNAVAILABLE")
+    assert saved.content
+    assert "".join(part.text or "" for part in saved.content.parts or ()) == (
+        "Answer so far" if partial else "Answer "
+    )
+    assert not saved.get_function_calls()
+    assert len(events) == 2
+    await runner.close()
+
+
+async def test_a_failed_completed_answer_is_not_duplicated_by_its_prior_partials() -> None:
+    completed = await provider_responses(
+        LlmResponse(
+            partial=True,
+            content=types.Content(role="model", parts=[types.Part(text="Answer ")]),
+        ),
+        LlmResponse(
+            content=types.Content(role="model", parts=[types.Part(text="Answer so far")]),
+            finish_reason=types.FinishReason.MAX_TOKENS,
+        ),
+    )
+    assert completed[-1].content and completed[-1].content.parts
+    assert [part.text for part in completed[-1].content.parts] == ["Answer so far"]
+
+
+@pytest.mark.parametrize(
+    ("error", "code", "message"),
+    [
+        (
+            errors.APIError(429, {"error": {"status": "RESOURCE_EXHAUSTED", "message": "secret"}}),
+            "RESOURCE_EXHAUSTED",
+            "The model's provider is rate limiting requests. Wait a moment and try again.",
+        ),
+        (
+            errors.APIError(503, {"error": {"status": "UNAVAILABLE", "message": "secret"}}),
+            "UNAVAILABLE",
+            "The model's provider is unavailable. Wait a moment and try again.",
+        ),
+        (
+            httpx.ReadTimeout("secret"),
+            "MODEL_TIMEOUT",
+            "The model timed out before completing its response. Try again.",
+        ),
+    ],
+)
+async def test_provider_exception_after_partial_text_uses_a_safe_actionable_error(
+    error: Exception, code: str, message: str
+) -> None:
+    models = ProviderModels(
+        config(),
+        build=lambda _: ResponseLlm(
+            responses=[
+                LlmResponse(
+                    partial=True,
+                    content=types.Content(role="model", parts=[types.Part(text="Answer so far")]),
+                )
+            ],
+            failure=error,
+        ),
+    )
+    replies = [reply async for reply in models.generate_content_async(LlmRequest(), stream=True)]
+    assert len(replies) == 2
+    assert replies[-1].error_code == code
+    assert replies[-1].error_message == message
+    assert replies[-1].content and replies[-1].content.parts
+    assert replies[-1].content.parts[0].text == "Answer so far"
+
+
+@pytest.mark.parametrize("partial", [None, False, True])
+async def test_model_errors_before_output_or_after_completion_and_cancellation_propagate(
+    partial: bool | None,
+) -> None:
+    # A completed response is already saved. Cancellation must never be
+    # converted into a failure or attempt to yield from generator teardown.
+    error = asyncio.CancelledError() if partial else RuntimeError("Model failed")
+    response = LlmResponse(
+        partial=partial,
+        content=types.Content(role="model", parts=[types.Part(text="Answer")]),
+    )
+    models = ProviderModels(
+        config(),
+        build=lambda _: ResponseLlm(responses=[] if partial is None else [response], failure=error),
+    )
+    replies: list[LlmResponse] = []
+    with pytest.raises(type(error)) as raised:
+        async for reply in models.generate_content_async(LlmRequest(), stream=True):
+            replies.append(reply)
+    assert raised.value is error
+    assert replies == ([] if partial is None else [response])
+
+
+async def test_transient_partial_frames_wait_for_the_completed_reply() -> None:
+    partial = LlmResponse(
+        partial=True,
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(text="Answer"),
+            ],
+        ),
+    )
+    final = LlmResponse(
+        content=types.Content(role="model", parts=[types.Part(text="Answer.")]),
+        finish_reason=types.FinishReason.STOP,
+    )
+    completed = await provider_responses(partial, final)
+    assert completed == [partial, final]
+    assert all(response.error_code is None for response in completed)
+
+
+@pytest.mark.parametrize("tool", ["look_up", "ask_person", "adk_request_confirmation"])
+async def test_complete_tool_calls_and_person_pauses_are_not_empty_failures(tool: str) -> None:
+    response = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(function_call=types.FunctionCall(name=tool, args={})),
+            ],
+        )
+    )
+    assert await provider_responses(response) == [response]
+    assert response.error_code is None
+
+
+async def test_native_error_details_are_kept_without_a_second_empty_failure() -> None:
+    response = LlmResponse(error_code="QUOTA", error_message="Please retry later.")
+    assert await provider_responses(response) == [response]
+    assert response.error_message == "Please retry later."
+
+
+async def test_a_message_only_provider_error_gets_a_code_without_losing_its_reason() -> None:
+    response = LlmResponse(error_message="The provider refused the response.")
+    assert await provider_responses(response) == [response]
+    assert response.error_code == "MODEL_ERROR"
+    assert response.error_message == "The provider refused the response."
+
+
+async def test_empty_completion_keeps_usage_on_one_failed_model_response() -> None:
+    usage = types.GenerateContentResponseUsageMetadata(
+        prompt_token_count=20, candidates_token_count=0
+    )
+    [response] = await provider_responses(LlmResponse(usage_metadata=usage))
+    assert response.error_code == "EMPTY_MODEL_RESPONSE"
+    assert response.usage_metadata == usage
+
+
+@pytest.mark.parametrize("partial", [False, True])
+async def test_an_explicit_model_interruption_remains_a_cancellation(partial: bool) -> None:
+    response = LlmResponse(interrupted=True, partial=partial)
+    assert await provider_responses(response) == [response]
+    assert response.error_code is None
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        {"finish_reason": types.FinishReason.MAX_TOKENS},
+        {"interrupted": True},
+        {"error_message": "The provider refused the response."},
+    ],
+)
+async def test_a_failed_or_interrupted_function_call_cannot_execute_a_tool(
+    failure: dict[str, Any],
+) -> None:
+    calls: list[str] = []
+
+    def save(value: str) -> dict[str, str]:
+        """Save a value."""
+        calls.append(value)
+        return {"saved": value}
+
+    failed = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[
+                types.Part(text="Starting the operation"),
+                types.Part(
+                    function_call=types.FunctionCall(name="save", args={"value": "incomplete"})
+                ),
+            ],
+        ),
+        **failure,
+    )
+    models = ProviderModels(config(), build=lambda _: ResponseLlm(responses=[failed]))
+    runner = InMemoryRunner(
+        agent=LlmAgent(name="helper", model=models, tools=[save]), app_name="test"
+    )
+    session = await runner.session_service.create_session(app_name="test", user_id="u")
+    events = [
+        event
+        async for event in runner.run_async(
+            user_id="u",
+            session_id=session.id,
+            new_message=types.Content(role="user", parts=[types.Part(text="Save it")]),
+        )
+    ]
+    assert calls == []
+    if failure.get("interrupted"):
+        assert any(event.interrupted for event in events)
+        assert all(event.error_code is None for event in events)
+    else:
+        expected_code = "MAX_TOKENS" if "finish_reason" in failure else "MODEL_ERROR"
+        assert any(event.error_code == expected_code for event in events)
+    assert not any(event.get_function_calls() for event in events)
+    assert any(
+        part.text == "Starting the operation"
+        for event in events
+        if event.content
+        for part in event.content.parts or ()
+    )
+    await runner.close()
 
 
 async def run(models: ProviderModels, request: LlmRequest) -> list[LlmResponse]:

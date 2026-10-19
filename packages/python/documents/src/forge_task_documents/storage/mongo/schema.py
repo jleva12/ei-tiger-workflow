@@ -11,15 +11,17 @@ documents collection (one per source file)
   status: "pending"|"processing"|"ready"|"failed", error,
   chunk_count, parser_name, parser_version, chunker_version, embedding_model,
   run_seq: int,                             # fencing token, only ever increases
+  published_run_seq: int,                   # 0: unpublished; positive: visible generation
   status: ... | "deleted",                  # deletes are tombstones (keep run_seq)
   metadata: {...},                          # your app's fields (tags, acl, ...)
   created_at, updated_at, ingested_at
 }
 
-chunks collection (one per chunk; both BM25 and vector search run here)
+chunks collection (one per chunk generation; both search legs run here)
 ----------------------------------------------------------------------
 {
-  _id: str,                                 # deterministic chunk id
+  _id: str,                                 # generation-qualified storage id
+  chunk_id: str,                            # unchanged public chunk id
   tenant_id, doc_id, source_type,
   kind: "prose"|"code"|"table"|"table_summary"|"graph"|"graph_summary",
   ordinal: int,                             # order within the document
@@ -34,13 +36,14 @@ chunks collection (one per chunk; both BM25 and vector search run here)
   chunker_version, embedding_model,
   embedding: BinData(vector float32) | [double],
   run_seq,                                  # fencing token of the run that wrote it
-  live: false,                              # only while its run is unpublished
+  live: false,                              # modern rows use the document pointer instead
   updated_at
 }
 """
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from typing import Any
 
@@ -69,7 +72,7 @@ CHUNK_INDEXES: list[IndexModel] = [
 ]
 
 # Fields that exist on every chunk and can be filtered in both search legs.
-FILTER_FIELDS = ("tenant_id", "doc_id", "source_type", "kind", "metadata.tags")
+FILTER_FIELDS = ("tenant_id", "doc_id", "source_type", "kind", "metadata.tags", "run_seq", "live")
 
 
 def search_index_definition(*, language_analyzer: str = "lucene.english") -> dict[str, Any]:
@@ -130,7 +133,8 @@ def vector_index_definition(
 
 def chunk_to_doc(chunk: Chunk, run_seq: int, *, binary_vectors: bool) -> dict[str, Any]:
     doc = chunk.model_dump(mode="python", exclude={"id", "embedding", "location"})
-    doc["_id"] = chunk.id
+    doc["chunk_id"] = chunk.id
+    doc["_id"] = hashlib.sha256(f"{chunk.id}\0{run_seq}".encode()).hexdigest()
     doc["kind"] = chunk.kind.value
     doc["section_text"] = chunk.section_text
     doc["location"] = chunk.location.model_dump(mode="python", exclude_none=True, exclude_defaults=True)
@@ -143,7 +147,8 @@ def chunk_to_doc(chunk: Chunk, run_seq: int, *, binary_vectors: bool) -> dict[st
 
 def doc_to_chunk(doc: Mapping[str, Any]) -> Chunk:
     data = dict(doc)
-    data["id"] = data.pop("_id")
+    data["id"] = data.pop("chunk_id", data["_id"])
+    data.pop("_id")
     data["embedding"] = decode_vector(data.get("embedding"))
     loc = data.get("location") or {}
     if "shape_ids" in loc:
@@ -162,4 +167,5 @@ def record_to_doc(record: DocumentRecord) -> dict[str, Any]:
 
 def doc_to_record(doc: Mapping[str, Any]) -> DocumentRecord:
     data = {k: v for k, v in doc.items() if k != "_id"}
+    data.setdefault("published_run_seq", None)  # pre-generation documents retain their legacy visibility
     return DocumentRecord.model_validate(data)

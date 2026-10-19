@@ -13,22 +13,20 @@ A skill gets into the vault four ways, all ending in the same skill
 - imported from GitHub: a repository's folder at a branch, tag or commit is
   read (``POST …/skills/github``), then added the same way; a skill from
   GitHub can be pulled again later (``POST …/skills/{id}/pull``);
-- written by the skill creator, an agent that knows Forge and looks at what
-  the organization has, in the background (``POST …/skill-creator/jobs``):
-  the skill it writes is added when it's done.
+- written by the skill creator, a helper agent that knows Forge and looks
+  at what the organization has, in the background
+  (``POST …/helpers/skill_creator``, ``forge_admin.skills.creator``): the
+  skill it writes is added when it's done.
 
 Reading needs ``organizations:read`` in the organization; everything else
-``skills:manage`` (its admins and members have it by default). The creator
-runs on the assistant's models, so it's there when the assistant is.
+``skills:manage`` (its admins and members have it by default).
 """
 
-import asyncio
 import io
 import json
 import logging
 import posixpath
 import zipfile
-from datetime import timedelta
 from typing import Annotated, Any
 
 import httpx2 as httpx
@@ -51,17 +49,13 @@ from forge_agent_runtime.skills import (
     find_skills,
     unzip,
 )
-from forge_common.adk.usage import Attribution, price_from
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
-from sqlalchemy import delete, select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
 from forge_admin.api.routes.common import NodeId, Session, commit_or_conflict
-from forge_admin.api.routes.instruction_writer import assistant_model
 from forge_admin.api_credentials import OrganizationCredentials
-from forge_admin.assistant.runtime import AgentRuntime
 from forge_admin.auth.access import (
     UUID_PATTERN,
     CurrentUser,
@@ -70,18 +64,10 @@ from forge_admin.auth.access import (
     Scope,
     authorize,
 )
-from forge_admin.db.audit import UtcDateTime, utc_now
-from forge_admin.knowledge.tools import OrganizationKnowledgeBases
-from forge_admin.models import ApiCredential, Skill, SkillCreatorJob
-from forge_admin.overview.recording import ASSISTANT
-from forge_admin.skills.creator import (
-    CREATOR_SECONDS,
-    Workspace,
-    create,
-    describe_failure,
-    free_name,
-)
+from forge_admin.db.audit import UtcDateTime
+from forge_admin.models import ApiCredential, Skill
 from forge_admin.skills.github import GitHubError, GitHubSkills, parse_location
+from forge_admin.skills.vault import fill
 
 logger = logging.getLogger(__name__)
 
@@ -91,13 +77,8 @@ MANAGE = "skills:manage"
 READ = "organizations:read"
 NOT_FOUND = "The organization has no such skill"
 NAME_TAKEN = "The organization already has a skill by that name"
-#: How long after it should have finished a running job is taken to have stopped.
-STALE_AFTER = timedelta(seconds=CREATOR_SECONDS + 120)
-#: How long finished jobs stay listed.
-JOBS_KEPT = timedelta(days=7)
 
 SkillId = Annotated[str, Path(pattern=rf"^{UUID_PATTERN}$")]
-JobId = Annotated[str, Path(pattern=rf"^{UUID_PATTERN}$")]
 
 
 class SkillSummary(BaseModel):
@@ -181,32 +162,6 @@ class ImportRequest(BaseModel):
     skills: list[ImportItem] = Field(min_length=1, max_length=100)
 
 
-class CreatorRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    #: What the skill should do: the person's description.
-    brief: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8_000)
-    ]
-    #: One of the organization's skills to rework; None for a new one.
-    revises: str | None = Field(default=None, max_length=36)
-
-
-class JobRead(BaseModel):
-    id: str
-    organization_id: str
-    brief: str
-    revises: str | None
-    status: str
-    skill_id: str | None
-    notes: list[str]
-    error: str | None
-    model: str | None
-    created_at: UtcDateTime
-    created_by: str
-    updated_at: UtcDateTime
-
-
 def _summary(row: Skill) -> SkillSummary:
     return SkillSummary.model_validate(
         {name: getattr(row, name) for name in SkillSummary.model_fields}
@@ -220,21 +175,6 @@ def _read(row: Skill) -> SkillRead:
             "skill": row.bundle,
         }
     )
-
-
-def _job(row: SkillCreatorJob) -> JobRead:
-    return JobRead.model_validate(
-        {name: getattr(row, name) for name in JobRead.model_fields}
-    )
-
-
-def _fill(row: Skill, skill: SkillBundle) -> None:
-    """Make the row this skill."""
-    row.name = skill.name
-    row.description = skill.description
-    row.bundle = skill.model_dump(mode="json")
-    row.file_count = len(skill.files)
-    row.size_bytes = skill.size
 
 
 def _source(raw: dict[str, Any]) -> dict[str, Any]:
@@ -342,7 +282,7 @@ async def create_skill(
     """
     await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
     row = Skill(organization_id=organization_id, source={"kind": "written"})
-    _fill(row, body)
+    fill(row, body)
     session.add(row)
     await commit_or_conflict(session, NAME_TAKEN)
     return _read(row)
@@ -385,7 +325,7 @@ async def update_skill(
     """
     await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
     row = await _skill(session, organization_id, skill_id)
-    _fill(row, body)
+    fill(row, body)
     await commit_or_conflict(session, NAME_TAKEN)
     return _read(row)
 
@@ -648,7 +588,7 @@ async def import_skills(
         else:
             row = Skill(organization_id=organization_id)
             session.add(row)
-        _fill(row, item.skill)
+        fill(row, item.skill)
         row.source = _source(item.source)
         rows.append(row)
     await commit_or_conflict(session, NAME_TAKEN)
@@ -699,265 +639,7 @@ async def pull_skill(
             f"{body.path or 'The repository'} at {imported.ref} holds no skill now"
             + (f": {problem.message}" if problem else ""),
         )
-    _fill(row, found)
+    fill(row, found)
     row.source = imported.source(body.path, body.credential or None)
     await commit_or_conflict(session, NAME_TAKEN)
     return _read(row)
-
-
-# --------------------------------------------------------------------------
-# The skill creator
-# --------------------------------------------------------------------------
-
-
-async def _save_created(
-    sessions: async_sessionmaker[AsyncSession],
-    *,
-    organization_id: str,
-    job_id: str,
-    revises: str | None,
-    created: Any,
-) -> None:
-    """Add (or rework) the skill the creator wrote, and say the job's done."""
-    async with sessions() as session:
-        row = (
-            await session.scalar(
-                select(Skill)
-                .options(undefer(Skill.bundle))
-                .where(Skill.id == revises, Skill.organization_id == organization_id)
-            )
-            if revises
-            else None
-        )
-        skill: SkillBundle = created.skill
-        name = await free_name(
-            session, organization_id, skill.name, keep=row.id if row else None
-        )
-        if row is None:
-            row = Skill(organization_id=organization_id)
-            session.add(row)
-        _fill(row, skill.model_copy(update={"name": name}))
-        row.source = {"kind": "creator", "job": job_id}
-        await session.flush()
-        job = await session.get(SkillCreatorJob, job_id)
-        if job is not None:
-            job.status = "done"
-            job.skill_id = row.id
-            job.notes = list(created.notes)
-            job.model = created.model[:200] or None
-        await session.commit()
-
-
-async def _fail(
-    sessions: async_sessionmaker[AsyncSession], job_id: str, message: str
-) -> None:
-    async with sessions() as session:
-        job = await session.get(SkillCreatorJob, job_id)
-        if job is not None:
-            job.status = "failed"
-            job.error = message
-            await session.commit()
-
-
-async def run_job(
-    state: Any,
-    *,
-    job_id: str,
-    organization_id: str,
-    user: str,
-    brief: str,
-    revises: str | None,
-    revising: SkillBundle | None,
-    model: Any,
-) -> None:
-    """A creator's job, start to end: the skill saved, or why not on the job."""
-    sessions: async_sessionmaker[AsyncSession] = state.sessionmaker
-    runtime: AgentRuntime = state.agents
-    workspace = Workspace(
-        organization_id=organization_id,
-        sessions=sessions,
-        chat_agents=getattr(state, "chat_agents", None),
-        workflows=getattr(state, "organization_agents", None),
-        knowledge=OrganizationKnowledgeBases(
-            sessions,
-            getattr(state, "knowledge_search", None),
-            getattr(state, "codegraph", None),
-        ),
-    )
-    try:
-        async with asyncio.timeout(CREATOR_SECONDS):
-            created = await create(
-                model,
-                workspace,
-                brief=brief,
-                user_id=user,
-                revising=revising,
-                # It's the assistant's work, done for this organization.
-                attribution=Attribution(
-                    organization_id, "assistant", ASSISTANT, "Assistant", user_id=user
-                ),
-                usage=runtime.usage.record if runtime.usage is not None else None,
-                price=price_from(model),
-            )
-        await _save_created(
-            sessions,
-            organization_id=organization_id,
-            job_id=job_id,
-            revises=revises,
-            created=created,
-        )
-        logger.info(
-            "The skill creator wrote %s for %s in organization %s",
-            created.skill.name,
-            user,
-            organization_id,
-        )
-    except Exception as error:
-        if not isinstance(error, (TimeoutError, IntegrityError)) and not type(
-            error
-        ).__module__.startswith(("litellm", "google.genai")):
-            logger.exception(
-                "The skill creator failed in organization %s", organization_id
-            )
-        try:
-            await _fail(sessions, job_id, describe_failure(error))
-        except Exception:
-            logger.exception("Couldn't record the skill creator's failure")
-
-
-def _tasks(state: Any) -> set[asyncio.Task[None]]:
-    """The creator's jobs running in this process, kept so they aren't collected."""
-    tasks: set[asyncio.Task[None]] | None = getattr(state, "skill_creator_tasks", None)
-    if tasks is None:
-        tasks = set()
-        state.skill_creator_tasks = tasks
-    return tasks
-
-
-@router.post(
-    "/organizations/{organization_id}/skill-creator/jobs",
-    status_code=status.HTTP_202_ACCEPTED,
-)
-async def start_creator(
-    organization_id: NodeId,
-    body: CreatorRequest,
-    request: Request,
-    user: CurrentUser,
-    session: Session,
-    enforcer: Enforcer,
-) -> JobRead:
-    """
-    Have the skill creator write a skill from a description, in the
-    background: it looks at what the organization has (its MCP servers'
-    tools, knowledge bases, workflows, agents, credentials and skills) and
-    adds the skill to the vault when it's done, or reworks ``revises``.
-    \f
-    :raises HTTPException: 403 without skills:manage; 404 when the skill to
-        rework isn't the organization's; 503 when the assistant isn't set up.
-    """
-    await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
-    model = assistant_model(request)
-    revising = None
-    if body.revises:
-        row = await _skill(session, organization_id, body.revises)
-        revising = SkillBundle.model_validate(row.bundle)
-    job = SkillCreatorJob(
-        organization_id=organization_id,
-        brief=body.brief,
-        revises=body.revises,
-        status="running",
-        notes=[],
-    )
-    session.add(job)
-    await session.commit()
-    read = _job(job)
-    task = asyncio.create_task(
-        run_job(
-            request.app.state,
-            job_id=job.id,
-            organization_id=organization_id,
-            user=user,
-            brief=body.brief,
-            revises=body.revises,
-            revising=revising,
-            model=model,
-        ),
-        name=f"skill-creator:{job.id}",
-    )
-    tasks = _tasks(request.app.state)
-    tasks.add(task)
-    task.add_done_callback(tasks.discard)
-    return read
-
-
-@router.get("/organizations/{organization_id}/skill-creator/jobs")
-async def list_creator_jobs(
-    organization_id: NodeId,
-    user: CurrentUser,
-    session: Session,
-    enforcer: Enforcer,
-) -> list[JobRead]:
-    """
-    The skill creator's jobs in the organization from the last week, newest
-    first. One that should have finished long ago stopped with the process
-    it ran in, and is said to have failed.
-    \f
-    :raises HTTPException: 403 without organizations:read.
-    """
-    await authorize(session, enforcer, user, READ, Scope(Level.ORG, organization_id))
-    now = utc_now()
-    rows = list(
-        await session.scalars(
-            select(SkillCreatorJob)
-            .where(
-                SkillCreatorJob.organization_id == organization_id,
-                SkillCreatorJob.created_at >= now - JOBS_KEPT,
-            )
-            .order_by(SkillCreatorJob.created_at.desc())
-            .limit(50)
-        )
-    )
-    stale = [
-        row
-        for row in rows
-        if row.status == "running" and row.created_at < now - STALE_AFTER
-    ]
-    for row in stale:
-        row.status = "failed"
-        row.error = "It stopped: Forge restarted while it was writing. Try again."
-    if stale:
-        await session.commit()
-    return [_job(row) for row in rows]
-
-
-@router.delete(
-    "/organizations/{organization_id}/skill-creator/jobs/{job_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-async def dismiss_creator_job(
-    organization_id: NodeId,
-    job_id: JobId,
-    user: CurrentUser,
-    session: Session,
-    enforcer: Enforcer,
-) -> Response:
-    """
-    Dismiss a job from the list. One still running goes on, and its skill
-    is added when it's done.
-    \f
-    :raises HTTPException: 403 without skills:manage; 404 when the
-        organization has no such job.
-    """
-    await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
-    found = await session.execute(
-        delete(SkillCreatorJob).where(
-            SkillCreatorJob.id == job_id,
-            SkillCreatorJob.organization_id == organization_id,
-        )
-    )
-    if not getattr(found, "rowcount", 0):
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, "The organization has no such job"
-        )
-    await session.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)

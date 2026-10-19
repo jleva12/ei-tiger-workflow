@@ -1,4 +1,5 @@
 import {
+  originProblem,
   parseBody,
   takesBody,
   unusedParameters,
@@ -14,9 +15,11 @@ import { checkField } from "@/features/steps/lib/expressions"
 import { stronglyConnected } from "@/features/steps/lib/validate"
 import type { ChatAgentGraph } from "./document"
 import { chatScope, declaredState, stateNameProblem } from "./input"
+import { intakeIssues } from "./intake"
 import {
   isAgentLike,
   HANDS_OFF,
+  ON_COMPLETE,
   TOOLS,
   type ChatAgentSettings,
   type ChatStep,
@@ -26,7 +29,9 @@ import {
  * What stands between a chat agent and ADK building it: errors (ADK would
  * refuse it) and warnings (it builds, but probably not as meant). ADK's
  * rules: an agent has one parent; names are ADK names, once each; a
- * sub-agent given a task hands off to no one.
+ * sub-agent given a task hands off to no one; an intake agent is handed
+ * off to by one agent, or used as a tool (by any, but not by another
+ * intake), and its design must work (./intake).
  */
 
 export type ChatAgentValidationContext = {
@@ -117,6 +122,13 @@ function settingsIssues(
     case "sub_agent":
       out.push(...agentIssues(step.config))
       break
+    case "intake_agent":
+      // Its design is its instruction: what it's told is worked out from it.
+      out.push(
+        ...agentIssues(step.config).filter(([code]) => code !== "instruction"),
+        ...intakeIssues(step.config)
+      )
+      break
     case "saved_agent": {
       const target = step.config.agent
       if (!target)
@@ -162,6 +174,14 @@ function settingsIssues(
           "workflow",
         ])
       }
+      const wait: unknown = step.config.wait_seconds
+      if (wait != null && !(Number.isInteger(wait) && (wait as number) >= 1))
+        out.push([
+          "wait_seconds",
+          "error",
+          "Wait a whole number of seconds, at least 1.",
+          "wait_seconds",
+        ])
       break
     }
     case "http_tool": {
@@ -184,6 +204,13 @@ function settingsIssues(
           "A URL starts with https:// (or http://).",
           "url",
         ])
+      } else {
+        // Where it calls is its author's to say, never the model's.
+        const problem = originProblem(
+          url,
+          c.headers.some((header) => header.name.trim())
+        )
+        if (problem) out.push(["url", "error", problem, "url"])
       }
       if (!c.description.trim()) {
         out.push([
@@ -648,6 +675,59 @@ export function validateChatAgent(
           ? "The chat agent doesn't reach it, so it's never used."
           : "Nothing uses it: connect an agent's Tools or Hands off to way to it."
       )
+    }
+
+    if (data.kind === "intake_agent") {
+      const parents = new Set(
+        into.filter((l) => l.output === HANDS_OFF).map((l) => l.source)
+      )
+      if (parents.size > 1) {
+        add(
+          "error",
+          step.id,
+          "parents",
+          `ADK gives an agent one parent: ${[...parents].map(name).join(" and ")} both hand off to it. Keep one, or use a copy.`
+        )
+      }
+      for (const link of out.filter((l) => l.output === ON_COMPLETE)) {
+        if (byId.get(link.target)?.data.kind !== "adk_workflow")
+          add(
+            "error",
+            step.id,
+            "on-complete",
+            `Only workflows start when it completes: ${name(link.target)} isn't one.`
+          )
+      }
+      const handedTo = into.some((l) => l.output === HANDS_OFF)
+      const called = into.filter((l) => l.output === TOOLS)
+      for (const link of called) {
+        if (byId.get(link.source)?.data.kind === "intake_agent")
+          add(
+            "error",
+            step.id,
+            "called",
+            `${name(link.source)} is an intake agent: it can't file requests to another.`
+          )
+      }
+      if ((handedTo || called.length) && !data.config.description.trim()) {
+        add(
+          "warning",
+          step.id,
+          "description",
+          handedTo
+            ? "Say what it's for: the agent hands off to it by this."
+            : "Say what it's for: the agent files requests to it by this.",
+          "description"
+        )
+      }
+      if (called.length && !handedTo && out.some((l) => l.output === TOOLS)) {
+        add(
+          "warning",
+          step.id,
+          "unused-tools",
+          "Agents only use it as a tool, so they ask its questions with their own tools: what its Tools way leads to isn't used."
+        )
+      }
     }
 
     if (data.kind === "sub_agent") {

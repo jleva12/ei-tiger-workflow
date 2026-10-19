@@ -375,14 +375,26 @@ async def test_a_toolset_that_cant_list_its_tools_gives_none() -> None:
             raise ConnectionError("server down")
 
     assert await Broken().get_tools() == []
+    # Unless its caller would rather know why.
+    with pytest.raises(ConnectionError, match="server down"):
+        await Broken().get_tools_or_raise()
 
 
-def test_a_subclass_cant_bypass_the_guard_by_overriding_get_tools() -> None:
-    with pytest.raises(TypeError, match="get_raw_tools"):
+async def test_listed_or_raising_its_tools_are_the_same() -> None:
+    toolset = Toolset(get_repo, get_branch, tool_filter=["get_branch"])
+    [listed] = await toolset.get_tools()
+    [raised] = await toolset.get_tools_or_raise()
+    assert listed.name == raised.name == "get_branch"
+    assert getattr(raised, "_forge_guarded", False)
 
-        class Unguarded(ForgeBaseToolset):
-            async def get_tools(self, readonly_context=None):  # type: ignore[misc]
-                return []
+
+@pytest.mark.parametrize("listing", ["get_tools", "get_tools_or_raise"])
+def test_a_subclass_cant_bypass_the_guard_by_overriding_how_it_lists_tools(listing: str) -> None:
+    async def get_tools(self: Any, readonly_context: Any = None) -> list[Any]:
+        return []
+
+    with pytest.raises(TypeError, match=f"overrides {listing}.*get_raw_tools"):
+        type("Unguarded", (ForgeBaseToolset,), {listing: get_tools})
 
 
 async def test_guarded_tools_keep_their_type_name_and_declaration_and_honour_the_filter() -> None:

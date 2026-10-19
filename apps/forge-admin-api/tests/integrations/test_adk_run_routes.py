@@ -90,6 +90,8 @@ RUN_FIELDS = {
     "cancel_requested_at",
     "parent_run_id",
     "next_attempt_at",
+    "provenance",
+    "root_run_id",
 }
 DETAIL_FIELDS = RUN_FIELDS | {
     "input",
@@ -97,6 +99,8 @@ DETAIL_FIELDS = RUN_FIELDS | {
     "result",
     "document",
     "trigger",
+    "original_trigger",
+    "origin",
     "events",
     "activity_incomplete",
     "children",
@@ -480,6 +484,7 @@ def test_a_run_starts_queued_with_its_job_as_its_adk_workflow_is_saved(
         "chat_agents": {},
         "knowledge_bases": {},
         "skills": {},
+        "agent_access": None,
         "input": {"n": 1},
         "files": [],
         "session_id": run["session_id"],
@@ -489,6 +494,29 @@ def test_a_run_starts_queued_with_its_job_as_its_adk_workflow_is_saved(
     }
     again = workspace.start(OUTER)
     assert again["session_id"] != run["session_id"]
+
+
+def test_a_start_retried_with_its_idempotency_key_is_the_run_it_made(
+    workspace: Workspace,
+) -> None:
+    def start(key: str, user: str = MEMBER, n: int = 1) -> Any:
+        return workspace.client.post(
+            f"{API}/organizations/{ORG}/agents/{OUTER}/runs",
+            headers={**workspace._as(user), "Idempotency-Key": key},
+            json={"input": {"n": n}},
+        )
+
+    first = start("deploy-17")
+    assert first.status_code == 202, first.json()
+    again = start("deploy-17")
+    # The client retried: the same run, one job.
+    assert again.status_code == 202 and again.json()["id"] == first.json()["id"]
+    assert workspace.queue.queued == [first.json()["id"]]
+    # Another input under the key, or another person's key of that name: not that run.
+    assert start("deploy-17", n=2).status_code == 409
+    assert start("deploy-17", user=ADMIN).status_code == 409
+    assert start("deploy-18").json()["id"] != first.json()["id"]
+    assert len(workspace.queue.queued) == 2
 
 
 def test_a_run_starts_only_with_input_that_fits_and_a_document_that_builds(
@@ -614,7 +642,13 @@ def test_a_runs_page_has_what_it_runs_its_activity_and_what_it_allows(
             "kind": "created",
             "message": "Started",
             "actor": {"id": MEMBER, "name": "Mia Member"},
-            "attributes": None,
+            # How: a person's own call to the API, with their sign-in.
+            "attributes": {
+                "trigger_type": "manual",
+                "channel": "api",
+                "on_behalf_of": MEMBER,
+                "on_behalf_of_verified": True,
+            },
         }
     ]
     assert detail["actions"] == {
@@ -1078,7 +1112,40 @@ def test_a_finished_run_is_resubmitted_as_a_new_run(workspace: Workspace) -> Non
     assert workspace.queue.queued == [again["id"]]
     original = workspace.call(workspace.runs.get, done["id"])
     copy = workspace.call(workspace.runs.get, again["id"])
-    assert copy["payload"] == {**original["payload"], "session_id": again["session_id"]}
+    # The admin's resubmission, the run's own trigger kept as the original.
+    assert copy["payload"] == {
+        **original["payload"],
+        "session_id": again["session_id"],
+        "trigger": {"type": "resubmit", "by": ADMIN, "run_id": done["id"]},
+        "original_trigger": {"type": "manual", "by": MEMBER},
+    }
+    assert again["provenance"]["trigger_type"] == "resubmit"
+    assert again["provenance"]["on_behalf_of"] == {
+        "id": ADMIN,
+        "name": "Ada Admin",
+        "verified": True,
+    }
+    assert again["root_run_id"] == again["id"]
+
+
+def test_a_resubmission_retried_with_its_idempotency_key_is_the_one_it_made(
+    workspace: Workspace,
+) -> None:
+    done = workspace.finished(succeeded=True)
+    workspace.queue.queued.clear()
+
+    def resubmit(key: str) -> Any:
+        return workspace.client.post(
+            f"{API}{RUNS}/{done['id']}/resubmit",
+            headers={**workspace._as(ADMIN), "Idempotency-Key": key},
+        )
+
+    first = resubmit("again-1")
+    assert first.status_code == 202, first.json()
+    retried = resubmit("again-1")
+    assert retried.status_code == 202 and retried.json()["id"] == first.json()["id"]
+    assert workspace.queue.queued == [first.json()["id"]]
+    assert resubmit("again-2").json()["id"] != first.json()["id"]
 
 
 def test_a_run_is_abandoned_unless_it_succeeded_or_was_abandoned(
@@ -1171,6 +1238,66 @@ def test_a_run_shows_the_runs_it_started_and_abandoning_it_abandons_them(
     assert abandoned["status"] == "abandoned"
     [*_, event] = abandoned["events"]
     assert event["message"] == "Abandoned: the run that started it was abandoned"
+
+
+def test_a_run_waiting_for_a_run_it_started_is_carried_on_by_that_run_only(
+    workspace: Workspace,
+) -> None:
+    parent = workspace.claimed()
+    child, _ = workspace.call(
+        workspace.runs.create_child,
+        run_id="c" * 32,
+        parent_run_id=parent["id"],
+        owner="w1",
+        organization_id=ORG,
+        agent_id=SHIP,
+        agent_name="Refunds",
+        revision=0,
+        session_id="child-session",
+        payload={"input": {}, "trigger": {"type": "workflow", "run_id": parent["id"]}},
+        requested_by=Actor(MEMBER, "Mia Member"),
+    )
+    reason = f"Waits for Refunds (run {child['id'][:8]}) to end"
+    details = {"kind": "child_run", "child_run_id": child["id"], "step_name": "Helper"}
+    [waits] = workspace.call(
+        workspace.runs.pause,
+        parent["id"],
+        owner="w1",
+        state={},
+        gates=[
+            {"key": "call-1", "kind": "child_run", "reason": reason, "details": details}
+        ],
+    )
+
+    detail = workspace.get(f"{RUNS}/{parent['id']}").json()
+    assert detail["status"] == "paused"
+    [gate] = detail["gates"]
+    assert (gate["kind"], gate["reason"], gate["details"]["child_run_id"]) == (
+        "child_run",
+        reason,
+        child["id"],
+    )
+    # Nobody decides it, nor answers it: the run it waits for ending does.
+    assert not detail["actions"]["decide"] and not detail["actions"]["answer"]
+    for route, body in (
+        ("decisions", {"request_id": waits["id"], "approved": True}),
+        ("answers", {"request_id": waits["id"], "answer": {}}),
+    ):
+        refused = workspace.post(f"{RUNS}/{parent['id']}/{route}", ADMIN, body)
+        assert refused.status_code == 409
+        assert f"waits for run {child['id'][:8]} to end" in refused.json()["detail"]
+
+    # Abandoned, the run it waits for carries it on: it's queued to.
+    workspace.queue.queued.clear()
+    abandoned = workspace.post(f"{RUNS}/{child['id']}/abandon", ADMIN)
+
+    assert abandoned.status_code == 200, abandoned.json()
+    woken = workspace.get(f"{RUNS}/{parent['id']}").json()
+    assert (woken["status"], woken["gates"]) == ("queued", [])
+    assert woken["events"][-1]["message"] == (
+        f"Run {child['id'][:8]} it waits for was abandoned: it carries on"
+    )
+    assert workspace.queue.queued == [parent["id"]]
 
 
 def test_a_runs_page_says_when_its_activity_misses_notes(
@@ -1368,3 +1495,154 @@ def test_files_a_start_doesnt_take_are_refused(workspace: Workspace) -> None:
     assert none_taken.status_code == 422
     assert none_taken.json()["detail"] == "The workflow's start doesn't take files"
     assert workspace.queue.queued == []
+
+
+# ------------------------------------------------------------------ provenance
+
+
+def started_with(
+    workspace: Workspace, headers: dict[str, str], token: str | None = None
+) -> dict[str, Any]:
+    """A run started on the run route with these headers (as the member)."""
+    started = workspace.client.post(
+        f"{API}/organizations/{ORG}/agents/{SHIP}/runs",
+        headers={
+            "Authorization": f"Bearer {token or workspace.tokens(MEMBER)}",
+            **headers,
+        },
+        json={"input": {"key": "k-1"}},
+    )
+    assert started.status_code == 202, started.json()
+    return dict(started.json())
+
+
+def test_a_run_says_whether_the_builder_the_console_or_the_api_started_it(
+    workspace: Workspace,
+) -> None:
+    tested = started_with(
+        workspace,
+        {
+            "X-Forge-Client": "builder",
+            "User-Agent": "Forge console",
+            "X-Request-ID": "req-builder-1",
+        },
+    )
+    assert tested["provenance"] == {
+        "trigger_type": "builder_test",
+        "channel": "console",
+        "on_behalf_of": {"id": MEMBER, "name": "Mia Member", "verified": True},
+        "via": None,
+        "api_key_id": None,
+        "auth_method": "jwt",
+    }
+    assert tested["root_run_id"] == tested["id"]
+    # Where from, on its page: the request's address, user agent and ID.
+    page = workspace.get(f"{RUNS}/{tested['id']}", VIEWER).json()
+    assert page["origin"] == {
+        "client_ip": "testclient",
+        "user_agent": "Forge console",
+        "request_id": "req-builder-1",
+    }
+    assert page["original_trigger"] is None
+    console = started_with(workspace, {"X-Forge-Client": "console"})
+    assert (
+        console["provenance"]["trigger_type"],
+        console["provenance"]["channel"],
+    ) == ("manual", "console")
+    # A person's own call to the API, with their sign-in.
+    called = started_with(workspace, {})
+    assert (
+        called["provenance"]["trigger_type"],
+        called["provenance"]["channel"],
+    ) == ("manual", "api")
+
+
+def test_the_assistants_test_run_is_the_assistants_for_the_person(
+    workspace: Workspace,
+) -> None:
+    configured = workspace.client.app.state.settings  # type: ignore[attr-defined]
+    # As its tools call: the person's token, saying the assistant acts for them.
+    token = mint_subject_token(
+        configured, MEMBER, lifetime=timedelta(minutes=5), actor="assistant"
+    )
+    run = started_with(workspace, {"X-Forge-Client": "builder"}, token)
+    assert run["provenance"]["trigger_type"] == "assistant"
+    assert run["provenance"]["channel"] == "assistant"
+    assert run["provenance"]["on_behalf_of"] == {
+        "id": MEMBER,
+        "name": "Mia Member",
+        "verified": True,
+    }
+    assert run["requested_by"] == {"id": MEMBER, "name": "Mia Member"}
+
+
+def test_runs_are_listed_by_how_and_for_whom_they_were_started(
+    workspace: Workspace,
+) -> None:
+    tested = started_with(workspace, {"X-Forge-Client": "builder"})
+    workspace.clock.advance(60)
+    console = started_with(workspace, {"X-Forge-Client": "console"})
+    workspace.clock.advance(60)
+    admins = workspace.start(user=ADMIN)
+
+    def ids(**filters: Any) -> list[str]:
+        listed = workspace.get(RUNS, VIEWER, **filters)
+        assert listed.status_code == 200, listed.json()
+        return [run["id"] for run in listed.json()["items"]]
+
+    assert ids(trigger_type="builder_test") == [tested["id"]]
+    assert ids(trigger_type=["builder_test", "manual"]) == [
+        admins["id"],
+        console["id"],
+        tested["id"],
+    ]
+    assert ids(on_behalf_of=ADMIN) == [admins["id"]]
+    assert ids(root_run_id=console["id"]) == [console["id"]]
+    assert ids(
+        created_from=(START + timedelta(seconds=30)).isoformat(),
+        created_to=(START + timedelta(seconds=90)).isoformat(),
+    ) == [console["id"]]
+    assert ids(via_agent_id="ca_desk") == [] and ids(api_key_id="k-1") == []
+    assert workspace.get(RUNS, trigger_type="sideways").status_code == 422
+
+
+def test_refused_starts_are_kept_for_the_organizations_audit(
+    workspace: Workspace,
+) -> None:
+    path = f"/organizations/{ORG}/agents/{SHIP}/runs"
+    assert workspace.post(path, VIEWER, {"input": {"key": "k"}}).status_code == 403
+    workspace.clock.advance(1)
+    assert workspace.post(path, body={"input": {"key": 7}}).status_code == 422
+    workspace.clock.advance(1)
+    unbuilt = workspace.post(f"/organizations/{ORG}/agents/{BROKEN}/runs", body={})
+    assert unbuilt.status_code == 422
+    # A workflow that isn't there isn't a refusal: there was nothing to start.
+    missing = workspace.post(f"/organizations/{ORG}/agents/ag_nosuchthing/runs")
+    assert missing.status_code == 404
+    assert workspace.get(RUNS).json()["total"] == 0
+
+    refusals = f"/organizations/{ORG}/adk-run-refusals"
+    listed = workspace.get(refusals, VIEWER)
+    assert listed.status_code == 200, listed.json()
+    page = listed.json()
+    assert page["total"] == 3
+    broken, misfit, viewed = page["items"]
+    assert (viewed["agent_id"], viewed["status_code"], viewed["reason"]) == (
+        SHIP,
+        403,
+        "Requires agents:run",
+    )
+    assert viewed["requested_by"] == {"id": VIEWER, "name": VIEWER}
+    assert viewed["provenance"]["trigger_type"] == "manual"
+    assert viewed["provenance"]["on_behalf_of"]["id"] == VIEWER
+    assert viewed["origin"]["client_ip"] == "testclient"
+    assert (misfit["status_code"], misfit["version"]) == (422, "draft")
+    assert "key: 7 is not of type 'string'" in misfit["reason"]
+    assert broken["agent_id"] == BROKEN
+    assert "no agent ag_nosuchthing" in broken["reason"]
+    # Filtered as runs are.
+    assert workspace.get(refusals, on_behalf_of=VIEWER).json()["total"] == 1
+    assert workspace.get(refusals, agent_id=BROKEN).json()["total"] == 1
+    assert workspace.get(refusals, trigger_type="a2a").json()["total"] == 0
+    # The organization's readers only.
+    assert workspace.get(refusals, OUTSIDER).status_code == 403

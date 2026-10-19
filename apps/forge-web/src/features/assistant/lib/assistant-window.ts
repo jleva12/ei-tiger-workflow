@@ -78,6 +78,8 @@ type Message =
   | { type: "dock"; tab: string; thread?: string | undefined }
   // Tab → window: show this conversation.
   | { type: "show-thread"; thread: string }
+  // Tab → window: a page asked the assistant something (assistant-asks.ts).
+  | { type: "ask" }
 
 const openChannel = () =>
   typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(CHANNEL)
@@ -171,6 +173,11 @@ export function openAssistantWindow(thread?: string): boolean {
   else if (thread) post({ type: "show-thread", thread })
   target.focus()
   return true
+}
+
+/** Tells an open assistant window a page asked it something. */
+export function tellWindowOfAsk() {
+  post({ type: "ask" })
 }
 
 /**
@@ -353,12 +360,15 @@ function lastActive(tabs: ReadonlyMap<string, TabPage>) {
  * last (null while no tab is open), a stable `read` for `useForgeAgent`,
  * `dock`, which hands the conversation back to that tab's panel, and
  * `setRunning`, which tells the tabs' launchers the agent is replying.
- * `onShowThread` is called when a tab asks for a conversation.
+ * `onShowThread` is called when a tab asks for a conversation, and `onAsk`
+ * when a page asked the assistant something (`assistant-asks.ts`).
  */
 export function useLinkedPage({
   onShowThread,
+  onAsk,
 }: {
   onShowThread: (thread: string) => void
+  onAsk?: () => void
 }) {
   const [tabs, setTabs] = React.useState<ReadonlyMap<string, TabPage>>(
     () => new Map()
@@ -367,8 +377,10 @@ export function useLinkedPage({
   const channelRef = React.useRef<BroadcastChannel | null>(null)
   const runningRef = React.useRef(false)
   const onShowThreadRef = React.useRef(onShowThread)
+  const onAskRef = React.useRef(onAsk)
   React.useEffect(() => {
     onShowThreadRef.current = onShowThread
+    onAskRef.current = onAsk
   })
 
   React.useEffect(() => {
@@ -409,6 +421,9 @@ export function useLinkedPage({
         case "show-thread":
           if (typeof data.thread === "string")
             onShowThreadRef.current(data.thread)
+          break
+        case "ask":
+          onAskRef.current?.()
           break
       }
     }

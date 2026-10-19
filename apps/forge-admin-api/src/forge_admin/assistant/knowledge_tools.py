@@ -19,6 +19,7 @@ refused call answers ``failed`` with the API's reason and how to go on.
 """
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 from fastapi import FastAPI
@@ -26,7 +27,13 @@ from forge_common.adk import ToolFailure
 from google.adk.tools.tool_context import ToolContext
 
 from forge_admin.assistant.person_api import PersonApi
-from forge_admin.assistant.route_tools import RouteToolset, given, pick, uuid_arg
+from forge_admin.assistant.route_tools import (
+    RouteToolset,
+    given,
+    pick,
+    quoted,
+    uuid_arg,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +121,38 @@ class KnowledgeToolset(RouteToolset):
             "now: tell the person and try later."
         ],
     }
+
+    async def confirmation_hint(
+        self, name: str, args: Mapping[str, Any], tool_context: ToolContext
+    ) -> str | None:
+        organization, base = args.get("organization_id"), args.get("knowledge_base_id")
+        if name == "retry_knowledge_document":
+            found = await self._read_quietly(
+                tool_context,
+                lambda: _document(organization, base, args.get("document_id")),
+            )
+            document = quoted((found or {}).get("filename"), "this document")
+            return (
+                f"Read {document} again?\n"
+                "Forge reads, splits and indexes it again; searches find it once "
+                "that's done."
+            )
+        if name == "reindex_knowledge_base":
+            found = await self._read_quietly(
+                tool_context, lambda: _base(organization, base)
+            )
+            named = quoted((found or {}).get("name"), "this knowledge base")
+            if args.get("stale_only", True) is False:
+                return (
+                    f"Index every document in {named} again?\n"
+                    "Forge reads them all again, which can take a while."
+                )
+            return (
+                f"Index the out-of-date documents in {named} again?\n"
+                "Until then, searches find them by their words only, not their "
+                "meaning."
+            )
+        return None
 
     async def list_knowledge_bases(
         self, organization_id: str, tool_context: ToolContext

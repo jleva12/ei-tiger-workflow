@@ -36,14 +36,17 @@ from forge_admin.auth.tokens import mint_subject_token
 from forge_admin.config import Settings
 from forge_admin.db.base import Base
 from forge_admin.db.session import get_session
-from forge_admin.instruction_writer.writer import WriterError, parse
+from forge_admin.helpers.kit import HelperError
+from forge_admin.instruction_writer.editor import parse as parse_edit
+from forge_admin.instruction_writer.kit import parse
 from forge_admin.models import KnowledgeBase, McpServer, Organization
 
 API = "/api/v1"
 ORG = "3f6c0000-0000-4000-8000-000000000001"
 OTHER_ORG = "3f6c0000-0000-4000-8000-000000000002"
 MEMBER, VIEWER = "member-1", "viewer-1"
-WRITE = f"/organizations/{ORG}/instruction-writer"
+WRITE = f"/organizations/{ORG}/helpers/instruction_writer"
+EDIT = f"/organizations/{ORG}/helpers/instruction_editor"
 SERVER, OTHER_SERVER, BASE = "srv-orders", "srv-theirs", "kb-policies"
 
 GRANTS = {
@@ -407,8 +410,10 @@ def test_it_writes_the_instruction_from_the_brief(workspace: Workspace) -> None:
     )
     assert written.status_code == 200, written.json()
     draft = written.json()
-    assert draft["instruction"].startswith("You help Acme's customers")
-    assert "</instruction>" not in draft["instruction"]
+    assert draft["helper"] == "instruction_writer"
+    instruction = draft["result"]["instruction"]
+    assert instruction.startswith("You help Acme's customers")
+    assert "</instruction>" not in instruction
     assert draft["notes"] == ["Attach a refunds tool to let it refund orders."]
     assert draft["model"] == "scripted-model"
 
@@ -436,9 +441,9 @@ def test_it_writes_the_instruction_from_the_brief(workspace: Workspace) -> None:
         "Rich answers node picks (Fact, Input, Form)" in sent
     )
     assert "`load_memory(query)`" in sent
-    # Who it hands off to, as ADK names them.
-    assert '`billing_specialist` (the Agents page\'s "Billing desk")' in sent
-    assert 'transfer_to_agent(agent_name="billing_specialist")' in sent
+    # Who it hands off to, as ADK names them: a saved agent after where it's placed.
+    assert '`billing` (the Agents page\'s "Billing desk")' in sent
+    assert 'transfer_to_agent(agent_name="billing")' in sent
     assert "Handles invoices and refunds." in sent
     assert "the tool `researcher(request)` gives it a task" in sent
     assert "`{{ state.customer_name }}` (string): Who's chatting." in sent
@@ -456,7 +461,8 @@ def test_the_current_instruction_is_reworked(workspace: Workspace) -> None:
     )
     assert written.status_code == 200
     assert written.json() == {
-        "instruction": "Shorter.",
+        "helper": "instruction_writer",
+        "result": {"instruction": "Shorter."},
         "notes": [],
         "model": "scripted-model",
     }
@@ -575,7 +581,7 @@ def test_a_model_that_stops_says_why(workspace: Workspace) -> None:
     stopped = workspace.write({"ask": "Help.", "brief": brief()})
     assert stopped.status_code == 502
     assert stopped.json()["detail"] == (
-        "The model stopped without writing it (MAX_TOKENS); try again."
+        "The model stopped before the writer finished (MAX_TOKENS); try again."
     )
 
 
@@ -593,7 +599,7 @@ def test_parse_reads_tags_fences_and_bare_answers() -> None:
         "<instruction>Z</instruction><notes>\n* one\n- two\n• three\n- four\n- five\n</notes>"
     )
     assert (instruction, notes) == ("Z", ["one", "two", "three", "four"])
-    with pytest.raises(WriterError):
+    with pytest.raises(HelperError):
         parse("<instruction>  </instruction>")
 
 
@@ -621,3 +627,101 @@ def test_a_server_set_up_by_url_goes_by_its_name_not_its_url(
         == 200
     )
     assert 'MCP server "Help center": `read`, `search`.' in workspace.model.sent
+
+
+# ---------------------------------------------------------------- the editor's AI
+
+INSTRUCTION = """You help Acme's customers with their orders.
+
+## Tools
+
+- Use the order tool when they ask about an order."""
+
+
+def test_the_editor_rewrites_the_selected_passage(workspace: Workspace) -> None:
+    workspace.model.turns.append(
+        "<text>\n- Look an order up with `get_order` before answering about it.\n</text>"
+    )
+    edited = workspace.write(
+        {
+            "action": "rewrite",
+            "ask": "Name the tool and say when to use it.",
+            "document": INSTRUCTION,
+            "selection": "- Use the order tool when they ask about an order.",
+            "place": "replace",
+            "brief": brief(),
+        },
+        path=EDIT,
+    )
+    assert edited.status_code == 200, edited.json()
+    assert edited.json() == {
+        "helper": "instruction_editor",
+        "result": {
+            "markdown": "- Look an order up with `get_order` before answering about it."
+        },
+        "notes": [],
+        "model": "scripted-model",
+    }
+    assert "You edit part of the system instruction" in workspace.model.system
+    sent = workspace.model.sent
+    # The same setup the writer reads: the agent's tools by their real names.
+    assert "`get_order`: Reads an order." in sent
+    assert f"<document>\n{INSTRUCTION}\n</document>" in sent
+    assert (
+        "<selection>\n- Use the order tool when they ask about an order.\n</selection>"
+        in sent
+    )
+    assert "It replaces the selected passage" in sent
+    assert "<before>" not in sent
+    assert sent.rstrip().endswith("Name the tool and say when to use it.")
+
+
+def test_the_editor_writes_what_goes_in_at_the_caret(workspace: Workspace) -> None:
+    workspace.model.turns.append("## Rules\n\n- Never promise a refund.")
+    edited = workspace.write(
+        {
+            "action": "insert",
+            "ask": "Add a rules section about refunds.",
+            "document": INSTRUCTION,
+            "before": INSTRUCTION,
+            "after": "",
+            "place": "insert",
+        },
+        path=EDIT,
+    )
+    assert edited.status_code == 200, edited.json()
+    # An answer without its tags is all text.
+    assert edited.json()["result"] == {
+        "markdown": "## Rules\n\n- Never promise a refund."
+    }
+    sent = workspace.model.sent
+    assert "It goes in at the caret" in sent
+    assert f"<before>\n{INSTRUCTION}\n</before>" in sent
+    assert "<selection>" not in sent
+    # Without a brief it works from the instruction alone.
+    assert "# Its setup" not in sent
+
+
+def test_the_editor_needs_agents_manage_and_its_own_fields(
+    workspace: Workspace,
+) -> None:
+    body = {"action": "rewrite", "ask": "Shorter.", "selection": "Long text."}
+    assert workspace.write(body, user=VIEWER, path=EDIT).status_code == 403
+    assert workspace.write(body | {"ask": " "}, path=EDIT).status_code == 422
+    assert workspace.write(body | {"place": "anywhere"}, path=EDIT).status_code == 422
+    assert workspace.write(body | {"current": "x"}, path=EDIT).status_code == 422
+    assert workspace.model.requests == []
+
+
+def test_parse_edit_reads_tags_fences_and_bare_answers() -> None:
+    assert parse_edit("<text>\n```markdown\n**Bold** move.\n```\n</text>") == (
+        "**Bold** move."
+    )
+    assert parse_edit("Plain answer.") == "Plain answer."
+    assert parse_edit("<text>Cut off mid") == "Cut off mid"
+    # {{ }} values come back as written.
+    assert parse_edit("<text>Hi {{ state.user_name }}</text>") == (
+        "Hi {{ state.user_name }}"
+    )
+    with pytest.raises(HelperError):
+        parse_edit("<text>   </text>")

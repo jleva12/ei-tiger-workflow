@@ -387,7 +387,9 @@ const { runtime, artifacts, modelSettings } = useAdkAssistant({
   the agent server for follow-up questions, `forge:suggest_follow_ups` in its
   state; the server's `FollowUpsPlugin` writes them to `forge:follow_ups`, and
   the thread shows them above the composer as chips that send them, hidden
-  while the agent works or waits on the person), every `useAdkRuntime` option
+  while the agent works or waits on the person; a server that doesn't stream
+  needs nothing: its whole replies are written in word by word with
+  `StreamingText`'s look, `whole-replies.ts`), every `useAdkRuntime` option
   (`getCheckpointId` enables edit/regenerate, `adapters.attachments` makes
   the attach button work), and the model section's `models`,
   `defaultModel`, `thinkingLevels` (default off/low/medium/high),
@@ -519,17 +521,50 @@ keeps notes, writes documents and uses tools. Mount it through
 
 ## rich-text-editor (`rich-text-editor/index.ts`)
 
-- `RichTextEditor` — `format?: "html" | "markdown" | "json"` with
-  `value` / `defaultValue` / `onChange(value, editor)`, `preset?: "full" |
-  "standard" | "minimal"`, `features?: Partial<RichTextFeatures>`,
-  `placeholder?`, `readOnly?`, `disabled?`, `autoFocus?`, `maxLength?`,
-  `toolbar?`, `showCount?`, `mentions?: (query, signal) => MentionItem[]`,
-  `onUpload?(file) → url` (else data URLs), `maxFileSize?`, `name?` (native
-  forms), `contentClassName?` (min/max height), `bare?`, `ref`
-  (`RichTextEditorHandle`). Lazy: Tiptap loads when an editor renders.
-- `RichTextView` — read-only `value` in the editor's typography.
+Markdown in and out; Tiptap stays inside. Lazy: Tiptap loads when an editor
+renders, and `index.ts` imports none of it.
+
+- `RichTextEditor` — `value` (controlled) or `defaultValue` (uncontrolled),
+  `onChange(markdown)` (edits and programmatic changes, never no-ops;
+  `onChangeDebounce?` ms), `preset?: "standard" (default) | "full" |
+  "minimal"`, `features?: EditorFeatures` (`bold`, `headings`, `tables`,
+  `images`, `taskList`, `math`, `slashCommands`, `findReplace`, …; a disabled
+  one's Markdown stays literal text), `placeholder?`, `readOnly?`,
+  `disabled?`, `autoFocus?`, `maxLength?`, `minHeight?`, `maxHeight?`,
+  `toolbar?: false | { position, items }`, `contextMenu?: false | { items }`,
+  `bubbleMenu?: false | { items }`, `actions?: EditorAction[]`,
+  `extensions?` (stable array), `ai?: EditorAIConfig`, `mentions?`,
+  `onUpload?(file) → url`, `urlPolicy?`, `components?` (`Toolbar`,
+  `ContextMenu`, `AIPreview`, `StatusBar`), `headless?`, `bare?`, `name?`
+  (native forms), `onFocus`, `onBlur`, `onSelectionChange`, `onError(error)`,
+  `onReady(controller)`, `ref` → `EditorController`.
+- Toolbar / menu items: action ids (`bold`, `heading2`, `codeBlock`,
+  `ai.rewrite`, a custom id), `"separator"`, `"spacer"`, `"heading"` (block
+  type), `"insert"`, `"ai"`, `"more"`, `{ type: "group" | "menu" |
+  "submenu", label, items }`.
+- `EditorAction` — `{ id, label, icon?, group?, shortcut?, slashCommand?,
+  allowReadOnly?, isVisible?, isEnabled?, isActive?, execute(ctx) }`; `ctx`
+  is a frozen snapshot (`selection`, `selectedText`, `documentMarkdown`,
+  `editor` = the controller). The same id as a built-in replaces it.
+- `EditorController` — `getMarkdown`, `setMarkdown`, `clear`,
+  `insertMarkdown`, `appendMarkdown`, `replaceSelection`, `replaceRange({ from,
+  to }, md)` (document positions), `getSelection`, `getSelectedText`,
+  `getSelectedMarkdown`, `setSelection`, `bookmark`, `focus`, `blur`,
+  `undo`, `redo`, `executeAction(id)`, `registerAction`, `runAI(id)`,
+  `cancelAI`, `getTiptapEditor()`.
+- `ai` — `{ enabled, actions?, requireApproval? (default true),
+  allowCustomPrompts?, context?, execute(request, { signal }) }` returning
+  `{ markdown, mode? }` or an async iterable of `delta` / `complete` /
+  `error` events. Answers stream into a panel and only go in on Accept; a
+  target edited meanwhile becomes a conflict, not an overwrite.
+- `RichTextView` — read-only Markdown `value` in the editor's typography.
+- `rich-text-editor/headless` — `useRichTextEditor`, `RichTextEditorProvider`,
+  `RichTextEditorContent`, `EditorToolbar`, `EditorBubbleMenu`,
+  `EditorContextMenu`, `AIResponsePreview`, `EditorStatusBar`,
+  `useEditorActions(ids)` for a custom UI.
 - Use it for any formatted text field (descriptions, comments, documents);
-  a plain `Textarea` for plain text.
+  a plain `Textarea` for plain text. Never call an AI provider from the
+  editor: `ai.execute` posts to the app's own endpoint.
 
 ## shell (`shell/index.ts`) — dynamic app shell
 
@@ -572,10 +607,11 @@ The Forge shell drawn from a store that pages change. Root:
 
 ## Tuned primitives (`@/components/ui/<name>`)
 
-32 files: alert, avatar, badge, breadcrumb, button, checkbox, collapsible,
+36 files: alert, avatar, badge, breadcrumb, button, chart, checkbox, collapsible,
 command, context-menu, dialog, dropdown-menu, empty, field, input-group, input, kbd,
-label, native-select, popover, progress, select, separator, sheet, skeleton,
-spinner, table, tabs, textarea, toast, toggle-group, toggle, tooltip.
+label, native-select, popover, progress, questionnaire, select, separator, sheet,
+skeleton, spinner, streaming-text, switch, table, tabs, textarea, toast,
+toggle-group, toggle, tooltip.
 
 What differs from stock shadcn:
 
@@ -645,3 +681,9 @@ What differs from stock shadcn:
 - **field** — `Field` (`data-invalid`, `data-disabled`), `FieldLabel`,
   `FieldDescription`, `FieldError`, `FieldGroup`, `FieldSet`,
   `FieldLegend`, `FieldContent`, `FieldTitle`, `FieldSeparator`.
+- **streaming-text** — Iconiq's `StreamingText` (on `motion`): plain `text`
+  written in word by word, each word fading in with a blue gradient that
+  settles into the foreground, a pulsing dot at the head (`showCursor`).
+  Props `speed` (ms per word, 120), `delay`, `settleDelay` (300),
+  `onComplete`; changing `text` restarts it. Not for Markdown: the assistant
+  thread already writes in replies that arrived whole with the same look.

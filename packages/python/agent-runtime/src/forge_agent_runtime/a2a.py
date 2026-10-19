@@ -47,6 +47,7 @@ import re
 import uuid
 import warnings
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from contextlib import aclosing
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -58,6 +59,7 @@ from a2a.server.agent_execution import RequestContext
 from a2a.server.context import ServerCallContext
 from a2a.server.events import Event, EventQueue
 from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.request_handlers.request_handler import RequestHandler
 from a2a.server.request_handlers.response_helpers import agent_card_to_dict
 from a2a.server.routes import DefaultServerCallContextBuilder
 from a2a.server.routes.jsonrpc_dispatcher import JsonRpcDispatcher
@@ -85,7 +87,7 @@ from a2a.types import (
     TaskStatusUpdateEvent,
 )
 from a2a.utils.constants import PROTOCOL_VERSION_0_3, PROTOCOL_VERSION_1_0
-from a2a.utils.errors import InvalidParamsError, UnsupportedOperationError
+from a2a.utils.errors import A2AError, InternalError, InvalidParamsError, UnsupportedOperationError
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.params import Depends as DependsParam
 from fastapi.responses import JSONResponse, Response
@@ -94,10 +96,13 @@ from google.adk.a2a.converters.part_converter import convert_a2a_part_to_genai_p
 from google.adk.a2a.converters.request_converter import convert_a2a_request_to_agent_run_request
 from google.protobuf.json_format import MessageToDict
 
+from forge_agent_runtime.access import AccessRefused
 from forge_agent_runtime.build import BuildError
 from forge_agent_runtime.document import HANDED_TO, ChatAgentDocument
 from forge_agent_runtime.executor import AgentExecutor, AgentNotFound, RunRequest, StateRefused
-from forge_agent_runtime.server import AppName, AuthorizeCall, CallAction, error_event
+from forge_agent_runtime.leases import TurnBusy, TurnLease
+from forge_agent_runtime.server import CANT_BUILD, AdmitCall, AppName, AuthorizeCall, CallAction, error_event
+from forge_common.adk.turns import current_turn, persist_turn, turn_scope
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
@@ -108,6 +113,7 @@ CARD_PATH = "/.well-known/agent-card.json"
 #: Where the agent a call is for is in the call context's state: its ID, and the app name it was called by.
 AGENT_KEY = "forge_agent"
 APP_KEY = "forge_app"
+RESOLVED_KEY = "forge_resolved_agent"
 #: Conversations are ADK sessions, whose IDs the chat's run API takes too; a task
 #: table keeps 36 characters of one (a UUID's).
 CONTEXT_ID = re.compile(r"^[A-Za-z0-9._:-]{1,36}$")
@@ -319,6 +325,7 @@ class _Turn:
     #: The states a turn can end in, the stronger first.
     RANK = (
         TaskState.TASK_STATE_FAILED,
+        TaskState.TASK_STATE_CANCELED,
         TaskState.TASK_STATE_AUTH_REQUIRED,
         TaskState.TASK_STATE_INPUT_REQUIRED,
     )
@@ -326,6 +333,31 @@ class _Turn:
     def __init__(self) -> None:
         self.state = TaskState.TASK_STATE_WORKING
         self.message: Message | None = None
+        self.reply_text = ""
+        self.partial_text = ""
+
+    def remember_reply(self, event: Any) -> None:
+        """Keep readable output even when its terminal event reports failure."""
+        text = (
+            "".join(part.text for part in (event.content.parts or ()) if part.text and not part.thought)
+            if event.content
+            else ""
+        )
+        if event.partial:
+            self.partial_text += text
+        elif text:
+            self.reply_text = text
+            self.partial_text = ""
+
+    def failed(self, message: str) -> None:
+        if self.state != TaskState.TASK_STATE_FAILED:
+            self.state = TaskState.TASK_STATE_FAILED
+            self.message = _agent_message(message)
+
+    def cancelled(self) -> None:
+        if self.state != TaskState.TASK_STATE_FAILED:
+            self.state = TaskState.TASK_STATE_CANCELED
+            self.message = _agent_message("The reply was stopped before it finished. Please try again.")
 
     def saw(self, event: Any) -> None:
         if not isinstance(event, TaskStatusUpdateEvent):
@@ -357,6 +389,57 @@ class ForgeA2aExecutor(A2aAgentExecutor):
         return self._executor if isinstance(self._executor, AgentExecutor) else self._executor(context)
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        # The transport and suspended executor share one outcome. Conversion
+        # errors must reach the audit before that executor is closed.
+        call = context.call_context
+        executor = self.executor_of(call)
+        app_name = str(call.state.get(APP_KEY) or "")
+        owns_outcome = current_turn() is None
+        # The conversation's lease, once the turn takes it: given back once its outcome is kept.
+        held: list[TurnLease] = []
+        with turn_scope() as outcome:
+
+            async def save_outcome() -> None:
+                try:
+                    # A turn whose conversation went to another writes nothing to it.
+                    if owns_outcome and context.context_id and not any(lease.lost for lease in held):
+                        # Match ADK's request converter, including anonymous users.
+                        user_id = (
+                            call.user.user_name
+                            if call.user and call.user.user_name
+                            else f"A2A_USER_{context.context_id}"
+                        )
+                        await persist_turn(
+                            outcome,
+                            sessions=executor.sessions,
+                            app_name=app_name.partition("@")[0],
+                            user_id=user_id,
+                            session_id=context.context_id,
+                            author=app_name,
+                        )
+                finally:
+                    for lease in held:
+                        await lease.release()
+
+            try:
+                await self._execute(context, event_queue, executor, save_outcome, held)
+            except Exception as error:
+                outcome.observe(error_event(app_name, error))
+                raise
+            except BaseException:
+                outcome.cancel()
+                raise
+            finally:
+                await save_outcome()
+
+    async def _execute(
+        self,
+        context: RequestContext,
+        event_queue: EventQueue,
+        executor: AgentExecutor,
+        save_outcome: Callable[[], Awaitable[None]],
+        held: list[TurnLease],
+    ) -> None:
         message, task_id, context_id = context.message, context.task_id, context.context_id
         if message is None or not task_id or not context_id:
             raise ValueError("An A2A task needs a message, a task ID and a context ID")
@@ -368,9 +451,12 @@ class ForgeA2aExecutor(A2aAgentExecutor):
         updater = TaskUpdater(event_queue, task_id, context_id)
         call = context.call_context
         app_name = str(call.state.get(APP_KEY) or "")
-        executor = self.executor_of(call)
+        turn = _Turn()
         try:
-            resolved = await executor.resolve(app_name)
+            resolved = call.state.get(RESOLVED_KEY)
+            if resolved is None:
+                # Embedded users may call the executor without HTTP routes.
+                resolved = await executor.resolve(app_name)
             run = convert_a2a_request_to_agent_run_request(context, convert_a2a_part_to_genai_part)
             state = _state_of(context)
             user_id, session_id = str(run.user_id), str(run.session_id)
@@ -383,6 +469,21 @@ class ForgeA2aExecutor(A2aAgentExecutor):
                 await executor.sessions.create_session(
                     app_name=resolved.document.id, user_id=user_id, session_id=session_id
                 )
+            request = RunRequest(
+                app_name=app_name,
+                user_id=user_id,
+                session_id=session_id,
+                new_message=run.new_message,
+                streaming=False,
+                state_delta=state,
+            )
+            # One turn at a time in the conversation: a message sent while
+            # another runs is refused, and nothing of it runs.
+            try:
+                held.append(await executor.take_turn(request, resolved=resolved))
+            except TurnBusy as error:
+                await updater.reject(_agent_message(str(error)))
+                return
             await updater.start_work()
             # What ADK's converters read of an invocation: the app, user and session the events are of.
             invocation: Any = SimpleNamespace(
@@ -392,33 +493,68 @@ class ForgeA2aExecutor(A2aAgentExecutor):
                 invocation_id=None,
                 branch=None,
             )
-            turn = _Turn()
-            request = RunRequest(
-                app_name=app_name,
-                user_id=user_id,
-                session_id=session_id,
-                new_message=run.new_message,
-                streaming=False,
-                state_delta=state,
-            )
-            async for event in executor.run(request):
-                if event.partial:
-                    # Streamed pieces: the whole event follows them.
-                    continue
-                for a2a_event in convert_event_to_a2a_events(event, invocation, task_id, context_id):
-                    turn.saw(a2a_event)
-                    await event_queue.enqueue_event(a2a_event)
+            async with aclosing(executor.run(request, resolved=resolved, lease=held[0])) as events:
+                try:
+                    async for event in events:
+                        turn.remember_reply(event)
+                        if event.interrupted and not (event.error_code or event.error_message):
+                            turn.cancelled()
+                            continue
+                        if event.error_code or event.error_message:
+                            # ADK's converter publishes a final failure before its
+                            # content. Keep that content as an incomplete artifact,
+                            # then publish the terminal status once at _finish.
+                            turn.failed(
+                                event.error_message
+                                or f"The agent could not finish its reply ({event.error_code})."
+                            )
+                            continue
+                        if event.partial:
+                            # Ordinary streamed pieces have a complete event
+                            # later; a provider error can terminate a fragment.
+                            continue
+                        for a2a_event in convert_event_to_a2a_events(event, invocation, task_id, context_id):
+                            turn.saw(a2a_event)
+                            await event_queue.enqueue_event(a2a_event)
+                except Exception as error:
+                    outcome = current_turn()
+                    if outcome is not None:
+                        failed = error_event(app_name, error)
+                        outcome.fail(
+                            failed.error_code or "INTERNAL_ERROR",
+                            failed.error_message or "The agent ran into a problem. Try again.",
+                            replace=outcome.error_code == "INTERNAL_ERROR"
+                            and turn.state != TaskState.TASK_STATE_FAILED,
+                        )
+                    raise
+                except BaseException:
+                    outcome = current_turn()
+                    if outcome is not None:
+                        outcome.cancel()
+                    raise
         except StateRefused as error:
+            await save_outcome()
+            await updater.reject(_agent_message(str(error)))
+            return
+        except AccessRefused as error:
+            # The agent itself would say what it needs; so does the task.
+            await save_outcome()
             await updater.reject(_agent_message(str(error)))
             return
         except (AgentNotFound, BuildError) as error:
-            await updater.failed(_agent_message(str(error)))
+            log.warning("A2A task %s of %s: %s", task_id, app_name, error)
+            if outcome := current_turn():
+                outcome.observe(error_event(app_name, error))
+            await save_outcome()
+            await updater.failed(_agent_message(CANT_BUILD if isinstance(error, BuildError) else str(error)))
             return
         except Exception as error:
             log.exception("A2A task %s of %s failed", task_id, app_name)
-            await updater.failed(_agent_message(error_event(app_name, error).error_message or str(error)))
-            return
-        await _finish(updater, turn, event_queue, task_id, context_id)
+            failed = error_event(app_name, error)
+            if outcome := current_turn():
+                outcome.observe(failed)
+            turn.failed(failed.error_message or str(error))
+        await _finish(updater, turn, event_queue, task_id, context_id, save_outcome)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         if not context.task_id or not context.context_id:
@@ -427,21 +563,48 @@ class ForgeA2aExecutor(A2aAgentExecutor):
 
 
 async def _finish(
-    updater: TaskUpdater, turn: _Turn, event_queue: EventQueue, task_id: str, context_id: str
+    updater: TaskUpdater,
+    turn: _Turn,
+    event_queue: EventQueue,
+    task_id: str,
+    context_id: str,
+    save_outcome: Callable[[], Awaitable[None]],
 ) -> None:
     """Ends the task as the turn did: its reply as the artifact, or failed or waiting with why."""
+    if turn.state == TaskState.TASK_STATE_WORKING and (turn.message is None or not len(turn.message.parts)):
+        message = "The agent ended without returning a reply. Please try again."
+        if outcome := current_turn():
+            outcome.fail("EMPTY_AGENT_RESPONSE", message)
+        turn.failed(message)
     if turn.state != TaskState.TASK_STATE_WORKING:
+        # Consumers can reload history as soon as they receive terminal status.
+        await save_outcome()
+        text = turn.partial_text or turn.reply_text
+        if turn.state in (TaskState.TASK_STATE_FAILED, TaskState.TASK_STATE_CANCELED) and text:
+            await event_queue.enqueue_event(
+                TaskArtifactUpdateEvent(
+                    task_id=task_id,
+                    context_id=context_id,
+                    artifact=Artifact(
+                        artifact_id=f"{task_id}-reply",
+                        name="partial reply",
+                        parts=[Part(text=text)],
+                        metadata={"forge": {"incomplete": True}},
+                    ),
+                    last_chunk=True,
+                )
+            )
         await updater.update_status(turn.state, message=turn.message)
         return
-    if turn.message is not None and len(turn.message.parts):
-        await event_queue.enqueue_event(
-            TaskArtifactUpdateEvent(
-                task_id=task_id,
-                context_id=context_id,
-                artifact=Artifact(artifact_id=f"{task_id}-reply", name="reply", parts=turn.message.parts),
-                last_chunk=True,
-            )
+    assert turn.message is not None
+    await event_queue.enqueue_event(
+        TaskArtifactUpdateEvent(
+            task_id=task_id,
+            context_id=context_id,
+            artifact=Artifact(artifact_id=f"{task_id}-reply", name="reply", parts=turn.message.parts),
+            last_chunk=True,
         )
+    )
     await updater.complete()
 
 
@@ -484,6 +647,26 @@ class ForgeRequestHandler(DefaultRequestHandler):
     conversation can have, and only callers the server knows list tasks.
     """
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # Both SDK serializers expose unexpected exceptions verbatim. Guard
+        # the public callbacks, including service overrides, before either
+        # version receives an exception from execution or task persistence.
+        for name in RequestHandler.__abstractmethods__:
+            callback = getattr(self, name)
+            setattr(
+                self,
+                name,
+                _safe_a2a_callback(
+                    callback,
+                    streaming=name
+                    in {
+                        "on_message_send_stream",
+                        "on_subscribe_to_task",
+                    },
+                ),
+            )
+
     async def on_message_send(self, params: SendMessageRequest, context: ServerCallContext) -> Message | Task:
         _check_context(params)
         return await super().on_message_send(params, context)
@@ -502,6 +685,32 @@ class ForgeRequestHandler(DefaultRequestHandler):
                 "get a task by its ID instead"
             )
         return await super().on_list_tasks(params, context)
+
+
+def _safe_a2a_callback(callback: Any, *, streaming: bool) -> Any:
+    def failed(error: Exception) -> None:
+        if isinstance(error, (A2AError, HTTPException)) and not isinstance(error, InternalError):
+            raise error
+        log.exception("A2A %s failed", callback.__name__)
+        raise InternalError(message="The agent service ran into a problem. Please try again.") from error
+
+    @functools.wraps(callback)
+    async def call(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await callback(*args, **kwargs)
+        except Exception as error:
+            failed(error)
+
+    @functools.wraps(callback)
+    async def stream(*args: Any, **kwargs: Any) -> AsyncGenerator[Event]:
+        try:
+            async with aclosing(callback(*args, **kwargs)) as events:
+                async for event in events:
+                    yield event
+        except Exception as error:
+            failed(error)
+
+    return stream if streaming else call
 
 
 @dataclass(frozen=True)
@@ -545,6 +754,7 @@ class _CallContextBuilder(DefaultServerCallContextBuilder):
         context = super().build(request)
         context.state[AGENT_KEY] = request.state.forge_a2a_agent
         context.state[APP_KEY] = request.state.forge_a2a_app
+        context.state[RESOLVED_KEY] = getattr(request.state, "forge_a2a_resolved", None)
         context.state[REQUEST_KEY] = request
         who = self.caller(request)
         if who:
@@ -564,6 +774,7 @@ def create_a2a_router(
     security: Mapping[str, SecurityScheme] | None = None,
     base_url: str | None = None,
     provider: str | None = None,
+    admit: AdmitCall | None = None,
     authorize: AuthorizeCall | None = None,
     services: Sequence[A2aService] = (),
 ) -> APIRouter:
@@ -587,6 +798,9 @@ def create_a2a_router(
     :param base_url: The server's public address (``https://agents.example.com``),
         for the cards; the request's own by default.
     :param provider: Who runs the agents, for the cards.
+    :param admit: Decides by an agent's ID and organization whether a
+        request may read its card or call it, before anything of it is read
+        (as the run API's ``admit``).
     :param authorize: Decides per agent whether a request may read its card
         (``card``) or call it (``a2a``), once it's found; refuses by raising
         ``HTTPException``, before any task is touched.
@@ -632,12 +846,21 @@ def create_a2a_router(
     router = APIRouter()
 
     async def found(request: Request, app_name: str, action: CallAction) -> ChatAgentDocument:
+        executor_ = of(request)
         try:
-            resolved = await of(request).resolve(app_name)
+            # Let in by its ID and organization before anything of it is read.
+            located = await executor_.locate(app_name)
+            if admit is not None:
+                await admit(request, located, action=action)
+            resolved = await executor_.resolve(app_name)
         except AgentNotFound as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+        except BuildError as exc:
+            log.warning("%s can't be built: %s", app_name, exc)
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, CANT_BUILD) from exc
         if authorize is not None:
             await authorize(request, resolved, action=action, user_id=None)
+        request.state.forge_a2a_resolved = resolved
         return resolved.document
 
     async def card(request: Request, name: str, rpc_route: str, **params: str) -> Response:

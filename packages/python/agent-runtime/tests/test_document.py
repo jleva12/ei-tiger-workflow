@@ -1,10 +1,11 @@
 import copy
 import json
+import time
 from typing import Any
 
 import pytest
 
-from forge_agent_runtime.document import DocumentError, load_document, parse_document
+from forge_agent_runtime.document import MOST_EDGES, MOST_NODES, DocumentError, load_document, parse_document
 from forge_agent_runtime.templating import TemplateError, render, template_data
 from tests.conftest import EXAMPLE
 
@@ -71,6 +72,45 @@ def test_what_adk_cant_build_is_refused(example):
     found = problems(task)
     assert any("can't hand off to anyone" in p for p in found)
     assert any("in a circle" in p for p in found)
+
+
+def layered(layers: int, *, back: bool = False) -> dict[str, Any]:
+    """A chat agent whose sub-agents come in layers of two, each calling both of the next: 2^layers ways through."""
+    nodes: list[dict[str, Any]] = [{"id": "root", "kind": "agent", "name": "Root", "config": {}}]
+    edges: list[dict[str, Any]] = []
+    previous = ["root"]
+    for layer in range(layers):
+        current = [f"n{layer}_{i}" for i in range(2)]
+        nodes.extend({"id": n, "kind": "sub_agent", "name": f"Agent {n}", "config": {}} for n in current)
+        edges.extend(
+            {"id": f"{s}-{t}", "source": s, "source_output": "tools", "target": t}
+            for s in previous
+            for t in current
+        )
+        previous = current
+    if back:
+        edges.append({"id": "back", "source": previous[0], "source_output": "tools", "target": "n0_0"})
+    return {"format": "forge.chat_agent/v1", "id": "layers", "name": "Layers", "nodes": nodes, "edges": edges}
+
+
+def test_the_circle_check_walks_each_agent_once_however_many_ways_through_there_are():
+    started = time.monotonic()
+    parse_document(layered(60))
+    # Walking every way through 60 layers would take for ever (about 1.9 s at 18).
+    assert time.monotonic() - started < 2
+
+    found = [p for p in problems(layered(60, back=True)) if "in a circle" in p]
+    names = " → ".join(f"Agent n{layer}_0" for layer in range(60))
+    assert found == [f"{names} → Agent n0_0 call or hand off to each other in a circle."]
+
+
+def test_a_document_with_too_many_nodes_or_edges_is_refused_before_its_checked():
+    big = layered(MOST_NODES // 2 + 1)
+    big["edges"] *= 2
+    assert problems(big) == [
+        f"It has {len(big['nodes']):,} nodes; a chat agent has at most {MOST_NODES:,}.",
+        f"It has {len(big['edges']):,} edges; a chat agent has at most {MOST_EDGES:,}.",
+    ]
 
 
 def test_templates_fill_in_the_request_and_the_state():

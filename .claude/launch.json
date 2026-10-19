@@ -97,6 +97,63 @@
         "codegraph-mcp"
       ],
       "port": 8103
+    },
+    {
+      "name": "desktop-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "apps/forge-web",
+        "run",
+        "dev:desktop"
+      ],
+      "port": 5195
+    },
+    {
+      "name": "admin-desktop",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "FORGE_ADMIN_PORT=8106",
+        "FORGE_ADMIN_RELOAD=false",
+        "FORGE_ADMIN_MIGRATE_ON_START=false",
+        "SPANNER_EMULATOR_HOST=127.0.0.1:19030",
+        "uv",
+        "run",
+        "--directory",
+        "apps/forge-admin-api",
+        "forge-admin"
+      ],
+      "port": 8106
+    },
+    {
+      "name": "web-desktop",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "API_PROXY_TARGET=http://127.0.0.1:8106",
+        "npm",
+        "--prefix",
+        "apps/forge-web",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5196",
+        "--strictPort"
+      ],
+      "port": 5196
+    },
+    {
+      "name": "desktop-web-8106",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "VITE_DESKTOP_API_URL=http://localhost:8106/api/v1",
+        "npm",
+        "--prefix",
+        "apps/forge-web",
+        "run",
+        "dev:desktop"
+      ],
+      "port": 5195
     }
   ]
 }

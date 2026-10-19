@@ -113,22 +113,29 @@ class DocumentStore(Protocol):
         ...
 
     async def register(self, record: DocumentRecord) -> None:
-        """Create/refresh the record as PENDING (called by the API at upload time)."""
+        """Create/refresh as PENDING, advancing any existing fence. This is
+        the only operation that explicitly recreates a tombstoned document."""
         ...
 
-    async def begin_run(self, record: DocumentRecord) -> int:
-        """Mark PROCESSING, bump and return the fencing token ``run_seq``."""
+    async def begin_run(self, record: DocumentRecord, *, expected_run_seq: int | None = None) -> int:
+        """Mark PROCESSING, bump and return ``run_seq``. Reject tombstones;
+        only register explicitly recreates a deleted document. When supplied,
+        expected_run_seq must match (0 for missing), including across source loading."""
         ...
 
     async def is_current_run(self, tenant_id: str, doc_id: str, run_seq: int) -> bool: ...
 
     async def complete_run(self, tenant_id: str, doc_id: str, run_seq: int, *, fields: dict[str, Any]) -> bool:
-        """Mark READY + set fields, only if ``run_seq`` is still current."""
+        """Atomically mark READY and select published_run_seq=run_seq, only
+        if the fence is current. Staged chunks are complete before this call."""
         ...
 
-    async def fail_run(self, tenant_id: str, doc_id: str, run_seq: int | None, *, error: str) -> bool:
+    async def fail_run(
+        self, tenant_id: str, doc_id: str, run_seq: int | None, *, error: str, expected_run_seq: int | None = None
+    ) -> bool:
         """Mark FAILED if ``run_seq`` is current. ``None`` fails the record only
-        while it is still PENDING (no run claimed it, e.g. the file failed to load)."""
+        while it is still PENDING (no run claimed it, e.g. the file failed to load),
+        and, when provided, its fence still matches expected_run_seq."""
         ...
 
     async def list(
@@ -141,7 +148,8 @@ class DocumentStore(Protocol):
     ) -> list[DocumentRecord]: ...
 
     async def delete(self, tenant_id: str, doc_id: str) -> bool:
-        """Tombstone the record and advance the fence so in-flight runs lose."""
+        """Tombstone even an unknown ID and advance its fence. Return whether
+        a live record existed; pre-registration in-flight runs must also lose."""
         ...
 
 
@@ -154,19 +162,15 @@ class ChunkStore(Protocol):
     async def replace_document_chunks(
         self, tenant_id: str, doc_id: str, run_seq: int, chunks: Sequence[Chunk]
     ) -> ReplaceStats:
-        """Write ``chunks`` tagged ``run_seq`` without overwriting chunks owned
-        by a newer run. New chunks are written unpublished: search doesn't see
-        them until :meth:`publish_run`, so the document's last version keeps
-        answering while a new one is written, and what a failed or superseded
-        run wrote never shows. A chunk already there (the same text in the
-        same place) keeps whether it's published. Older runs' chunks stay
-        until the run is published."""
+        """Stage an immutable generation, retaining public chunk IDs. Existing
+        published generations are never overwritten, even for identical IDs.
+        DocumentStore.complete_run atomically makes the whole generation visible."""
         ...
 
     async def publish_run(self, tenant_id: str, doc_id: str, run_seq: int) -> int:
-        """Make ``run_seq``'s chunks searchable and remove the chunks older runs
-        left, so search switches to the document's new version at once.
-        Idempotent; harmless for a run a newer one has published since.
+        """Collect generations older than the authoritative published pointer.
+        Publication already committed in DocumentStore.complete_run; cleanup
+        failure is logged, never changes visibility or fails that completed run.
 
         :return: How many older chunks were removed.
         """
@@ -176,11 +180,20 @@ class ChunkStore(Protocol):
         """Remove what a superseded run wrote and never published."""
         ...
 
-    async def delete_document_chunks(self, tenant_id: str, doc_id: str) -> int: ...
+    async def delete_document_chunks(self, tenant_id: str, doc_id: str) -> int:
+        """Clean up tombstoned contents without deleting a later recreation."""
+        ...
 
-    async def get_chunks(self, tenant_id: str, chunk_ids: Sequence[str]) -> list[Chunk]: ...
+    async def get_chunks(self, tenant_id: str, chunk_ids: Sequence[str]) -> list[Chunk]:
+        """Only published chunks, preserving public IDs and requested order."""
+        ...
 
-    async def get_section(self, tenant_id: str, doc_id: str, section_key: str) -> list[Chunk]: ...
+    async def get_section(
+        self, tenant_id: str, doc_id: str, section_key: str, *, generation: int | None = None
+    ) -> list[Chunk]:
+        """Read a published section, restricted to the exact generation when
+        supplied. Return no rows if that generation is no longer available."""
+        ...
 
 
 @runtime_checkable

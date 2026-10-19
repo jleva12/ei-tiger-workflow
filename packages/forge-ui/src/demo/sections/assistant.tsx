@@ -65,6 +65,23 @@ export function AssistantSection() {
       </Specimen>
 
       <Specimen
+        title="Replies that arrive whole"
+        description="An agent server that doesn't stream (forge-agent-runtime's with_streaming(False)) sends each reply once the model is done. The thread still writes it in word by word, with StreamingText's look, and then shows it as plain Markdown; a reply from the conversation's history is shown as it is."
+        variant="canvas"
+        className="p-0 @max-[600px]/shell:p-0"
+        code={`// Nothing to set: a run whose events have no partial ones is written in.
+const { runtime } = useAdkAssistant({
+  adk: { url: "http://localhost:8000", appName: "my_agent", userId },
+})`}
+      >
+        <div className="p-4">
+          <div className="overflow-hidden rounded-(--radius-band) border bg-background shadow-(--shadow-float)">
+            <AssistantPreview whole className="h-[640px] min-w-0" />
+          </div>
+        </div>
+      </Specimen>
+
+      <Specimen
         title="Floating assistant"
         description="AssistantModal puts the same agent behind a launcher in the corner of any page: a resizable panel with the conversation, past conversations and a new-conversation button. It opens itself when the agent starts replying."
         variant="canvas"

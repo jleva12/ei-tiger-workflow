@@ -175,6 +175,60 @@ def test_a_failed_run_answers_with_its_errors():
     assert len(no_python.deleted) == 1
 
 
+def test_output_budget_is_shared_by_stdout_and_stderr_and_stops_the_stream():
+    class NoisyGateway(Gateway):
+        chunks_read = 0
+        stream_closed = False
+
+        def exec_stream(self, *args: Any, **kwargs: Any) -> Iterator[ExecChunk | ExecResult]:
+            try:
+                for channel, data in [
+                    ("stdout", b"hello"),
+                    ("stderr", b"error" * 100),
+                    ("stdout", b"unread"),
+                ]:
+                    self.chunks_read += 1
+                    yield ExecChunk(channel, data)
+            finally:
+                self.stream_closed = True
+
+    gateway = NoisyGateway()
+    code = OpenShellCodeExecutor(client=gateway, max_output_bytes=8)
+    ran = code.execute_code(CONTEXT, CodeExecutionInput(code="print('many bytes')"))
+    assert ran.stdout == "hello"
+    assert ran.stderr == "err\nCode execution stopped: combined output exceeded 8 bytes."
+    assert ran.exit_code is None
+    assert gateway.chunks_read == 2 and gateway.stream_closed
+    assert gateway.deleted == [gateway.created[0]["name"]]
+
+
+def test_default_output_limit_does_not_drain_a_continuously_printing_sandbox():
+    class EndlessGateway(Gateway):
+        chunks_read = 0
+
+        def exec_stream(self, *args: Any, **kwargs: Any) -> Iterator[ExecChunk | ExecResult]:
+            block = b"x" * (1024 * 1024)
+            while True:
+                self.chunks_read += 1
+                assert self.chunks_read <= 2, "the output limit must terminate stream consumption"
+                yield ExecChunk("stdout", block)
+
+    gateway = EndlessGateway()
+    ran = executor(gateway).execute_code(CONTEXT, CodeExecutionInput(code="while True: print('x')"))
+    assert len(ran.stdout) == 1024 * 1024
+    assert "combined output exceeded" in ran.stderr
+    assert gateway.chunks_read == 2 and len(gateway.deleted) == 1
+
+
+def test_output_exactly_at_the_limit_can_finish_successfully():
+    gateway = Gateway(stdout=b"1234", stderr=b"warn")
+    ran = OpenShellCodeExecutor(client=gateway, max_output_bytes=8).execute_code(
+        CONTEXT, CodeExecutionInput(code="print('1234')")
+    )
+    assert (ran.stdout, ran.stderr, ran.exit_code) == ("1234", "", 0)
+    assert len(gateway.deleted) == 1
+
+
 def test_a_run_past_its_time_keeps_what_it_printed_and_says_it_was_stopped():
     gateway = Gateway(
         stdout=b"started\n",

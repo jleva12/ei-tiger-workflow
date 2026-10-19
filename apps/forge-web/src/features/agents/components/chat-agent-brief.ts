@@ -33,6 +33,13 @@ function agentOf(step: ChatStep, mode?: string): BriefAgent {
         kind: "sub_agent",
         mode: mode ?? step.config.mode,
       }
+    case "intake_agent":
+      return {
+        name: step.name,
+        description: step.config.description,
+        kind: "intake_agent",
+        mode: "task",
+      }
     case "saved_agent":
       return {
         name: step.name,

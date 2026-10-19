@@ -4,16 +4,22 @@ cron. tests/test_saq_redis.py runs the same code on a real Redis."""
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import socket
 from datetime import timedelta
 from typing import Any
 
 import pytest
+from redis import asyncio as aioredis
+from saq import Job
+from saq.job import Status
 
-from forge_async_worker import saq_worker
+from forge_async_worker import jobs, saq_worker
 from forge_async_worker.queue import HEARTBEAT, JOB_OPTIONS, RunQueue
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
 from forge_task_adk_workflows.run_store import RunStore
+from forge_tasks.control import JobControl
 from forge_tasks.tasks import JobSpec
 
 from .conftest import START, FakeJob, FakeSaqQueue, Worker, worker_settings
@@ -48,11 +54,14 @@ async def test_the_job_functions_run_the_workers_jobs(worker: Worker) -> None:
     }
 
 
-async def test_jobs_run_under_the_workers_settings() -> None:
+async def test_jobs_run_under_the_workers_settings(worker: Worker) -> None:
     job = FakeJob()  # as another service enqueues it: SAQ's defaults
-    await saq_worker._own_policy({"job": job})
-    assert (job.timeout, job.heartbeat, job.retries, job.touched) == (0, HEARTBEAT, 1, 1)
-    await saq_worker._own_policy({"job": job})
+    await saq_worker._own_policy(context(worker, job))
+    # SAQ never takes a run's job for lost while its attempt may go on (its lease says whether it's
+    # alive): only past its attempt's time and a while, when its worker has stopped it, or died.
+    assert worker.state.jobs is not None and worker.state.jobs.attempt_seconds == jobs.ATTEMPT_SECONDS
+    assert (job.timeout, job.heartbeat, job.retries, job.touched) == (7800, HEARTBEAT, 1, 1) and HEARTBEAT == 0
+    await saq_worker._own_policy(context(worker, job))
     assert job.touched == 1  # already right: nothing written
 
     expiry = FakeJob("expire_pause")
@@ -61,6 +70,27 @@ async def test_jobs_run_under_the_workers_settings() -> None:
     other = FakeJob("something_else")
     await saq_worker._own_policy({"job": other})
     assert other.touched == 0
+
+
+async def test_document_jobs_use_the_execution_timeout_instead_of_an_unmaintained_heartbeat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = FakeJob("run_job")
+    await saq_worker._own_policy({"job": policy})
+    assert (policy.timeout, policy.heartbeat) == (1800, 0)
+    job = Job(
+        function="run_job",
+        status=Status.ACTIVE,
+        started=1000,
+        touched=1000,
+        **JOB_OPTIONS["run_job"],
+    )
+    # SAQ uses millisecond timestamps: long healthy ingestion is not stuck.
+    monkeypatch.setattr("saq.job.now", lambda: 1000 + 121_000)
+    assert not job.stuck
+    # The existing execution deadline still recovers a stopped worker's job.
+    monkeypatch.setattr("saq.job.now", lambda: 1000 + 1801_000)
+    assert job.stuck
 
 
 async def test_the_queue_sends_each_job_with_its_settings_and_key() -> None:
@@ -134,6 +164,185 @@ def test_the_job_queue_is_saqs_adk_workflows_queue_with_its_upkeeps() -> None:
     assert queue.job_options == JOB_OPTIONS
     documents = saq_worker.job_queue(worker_settings(), "documents")
     assert documents.queues == (documents.queue,) and documents.name == "documents"
+    assert all(isinstance(each, saq_worker.PatientQueue) for each in (*queue.queues, *documents.queues))
+
+
+async def test_a_worker_whose_redis_is_away_tries_it_again_a_moment_apart(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from saq import Worker as SaqWorker
+
+    monkeypatch.setattr(saq_worker, "DEQUEUE_PAUSE", 0.1)
+    monkeypatch.setattr(saq_worker, "DEQUEUE_PAUSE_MAX", 0.2)
+    tried: list[float] = []
+
+    class Counted(saq_worker.PatientQueue):
+        async def dequeue(self, timeout: float = 0.0, poll_interval: float = 0.0) -> Any:
+            tried.append(asyncio.get_running_loop().time())
+            return await super().dequeue(timeout, poll_interval)
+
+    queue = Counted.from_url("redis://127.0.0.1:1/0", name="away")  # nothing answers there
+    worker = SaqWorker(queue, functions=[saq_worker.run_job], concurrency=4)
+    stop = asyncio.Event()
+    asyncio.get_running_loop().call_later(1.0, stop.set)
+    with caplog.at_level(logging.WARNING, logger=saq_worker.log.name):
+        await saq_worker.run_workers([worker], grace_period=0, stop=stop)
+    await queue.redis.aclose()  # SAQ's disconnect asks Redis too
+
+    # Each of its four dequeues at once tries again 0.1 to 0.2 s after it failed:
+    # SAQ alone tries again at once, thousands of times a second.
+    assert 4 < len(tried) <= 4 * (1.0 / 0.1 + 1)
+    said = [record.getMessage() for record in caplog.records if record.name == saq_worker.log.name]
+    assert len(said) == 1 and said[0].startswith("queue away can't be read")
+
+
+async def test_a_queue_whose_redis_answers_again_dequeues_at_once(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from saq.queue.redis import RedisQueue
+
+    monkeypatch.setattr(saq_worker, "DEQUEUE_PAUSE", 0.01)
+    away = True
+
+    async def dequeue(self: RedisQueue, timeout: float = 0.0, poll_interval: float = 0.0) -> None:
+        if away:
+            raise ConnectionError("Connection refused")
+
+    async def ping() -> bool:
+        await dequeue(queue)
+        return True
+
+    monkeypatch.setattr(RedisQueue, "dequeue", dequeue)
+    queue = saq_worker.PatientQueue.from_url("redis://127.0.0.1:1/0", name="back")
+    monkeypatch.setattr(queue.redis, "ping", ping)
+
+    with caplog.at_level(logging.INFO, logger=saq_worker.log.name):
+        for _ in range(2):
+            with pytest.raises(ConnectionError):
+                await queue.dequeue()
+        assert queue.failing_since is not None
+        away = False
+        assert await queue.dequeue(timeout=1) is None  # nothing queued within it
+        assert queue.failing_since is None
+        away = True  # away again, later: a new outage
+        with pytest.raises(ConnectionError):
+            await queue.dequeue()
+    await queue.redis.aclose()  # SAQ's disconnect asks Redis too
+
+    said = [record.getMessage().split(" (")[0] for record in caplog.records if record.name == saq_worker.log.name]
+    assert said == ["queue back can't be read", "queue back can be read again", "queue back can't be read"]
+
+
+async def test_a_running_runs_job_is_never_swept_however_long_redis_doesnt_hear_from_it(
+    worker: Worker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job = FakeJob()
+    await saq_worker._own_policy(context(worker, job))
+    swept = Job(
+        function="run_adk",
+        status=Status.ACTIVE,
+        started=1000,
+        touched=1000,
+        timeout=job.timeout,
+        heartbeat=job.heartbeat,
+        retries=job.retries,
+    )
+    # Untouched for an hour (its worker lost Redis): its attempt may still hold its lease.
+    monkeypatch.setattr("saq.job.now", lambda: 1000 + 3600_000)
+    assert not swept.stuck
+    # Past what its attempt may take, and a while: its worker died with it.
+    monkeypatch.setattr("saq.job.now", lambda: 1000 + (worker.state.jobs.job_seconds + 1) * 1000)
+    assert swept.stuck
+
+
+class Offline(saq_worker.PatientQueue):
+    """A PatientQueue on no Redis: what Redis's BLMOVE would hand its dequeues
+    comes from ``arrivals``, and a job put back goes to its head; what SAQ
+    writes of a job is dropped."""
+
+    def __init__(self) -> None:
+        super().__init__(aioredis.from_url("redis://127.0.0.1:1/0"), name="offline")
+        self.arrivals: asyncio.Queue[Job] = asyncio.Queue()
+        self.put_back: list[str] = []
+
+    def arrive(self, run_id: str) -> None:
+        self.arrivals.put_nowait(Job(function="run_adk", kwargs={"run_id": run_id}, queue=self))
+
+    async def _put_back(self, job: Job) -> None:
+        self.put_back.append(job.kwargs["run_id"])  # type: ignore[index]
+        rest = [self.arrivals.get_nowait() for _ in range(self.arrivals.qsize())]
+        for each in (job, *rest):
+            self.arrivals.put_nowait(each)
+
+    async def _update(self, job: Job, status: Status | None = None, **kwargs: Any) -> None:
+        return None
+
+    async def _finish(self, job: Job, status: Status, *, result: Any = None, error: str | None = None) -> None:
+        return None
+
+    async def _retry(self, job: Job, error: str | None) -> None:
+        return None
+
+
+async def test_a_worker_that_stops_takes_no_new_runs(worker: Worker, monkeypatch: pytest.MonkeyPatch) -> None:
+    """IT-7: SAQ's worker dequeued until it stopped, and its stop cut off what it took meanwhile."""
+    from saq import Worker as SaqWorker
+    from saq.queue.redis import RedisQueue
+
+    monkeypatch.setattr(saq_worker, "TAKE_SECONDS", 0.2)
+
+    async def blmove(self: Offline, timeout: float = 0.0, poll_interval: float = 0.0) -> Job | None:
+        try:
+            return await asyncio.wait_for(self.arrivals.get(), timeout)
+        except TimeoutError:
+            return None
+
+    monkeypatch.setattr(RedisQueue, "dequeue", blmove)
+    busy, release = asyncio.Event(), asyncio.Event()
+
+    async def holds(control: JobControl, index: int) -> None:
+        busy.set()
+        await release.wait()
+
+    worker.task.hook = holds
+    queue = Offline()
+    saq = SaqWorker(queue, functions=[saq_worker.run_adk], concurrency=3, before_process=saq_worker._own_policy)
+    saq.context[saq_worker.CONTEXT_KEY] = worker.state
+
+    async def no_upkeep() -> list[Any]:
+        return []
+
+    monkeypatch.setattr(saq, "upkeep", no_upkeep)  # SAQ's sweeps and stats, on Redis
+    running, held, new = await worker.start({"do": "hook"}), await worker.start({"do": "step"}), None
+    stop = asyncio.Event()
+    serving = asyncio.create_task(saq_worker.run_workers([saq], grace_period=10, stop=stop))
+    try:
+        queue.arrive(running["id"])
+        await asyncio.wait_for(busy.wait(), 5)
+
+        stop.set()  # SIGTERM, while a run runs and two dequeues wait
+        for _ in range(100):
+            if queue.closed:
+                break
+            await asyncio.sleep(0.01)
+        queue.arrive(held["id"])  # taken by a dequeue that was out: it goes back
+        await asyncio.sleep(0.5)  # every dequeue back from Redis, and waiting for the stop
+        new = await worker.start({"do": "step"})
+        queue.arrive(new["id"])
+        await asyncio.sleep(0.5)
+
+        # Each dequeue out may take it once (Redis hands a job to whichever waits longest), then waits.
+        assert set(queue.put_back) == {held["id"]} and len(queue.parked) == 2
+        for run in (held, new):
+            assert await worker.kinds(run["id"]) == ["created"]  # never taken
+        assert not serving.done()  # the running run has its grace period
+    finally:
+        release.set()
+        await asyncio.wait_for(serving, 10)
+    await queue.redis.aclose()
+
+    assert (await worker.get(running["id"]))["status"] == "succeeded"
+    assert [job.kwargs["run_id"] for job in [queue.arrivals.get_nowait() for _ in range(2)]] == [held["id"], new["id"]]
 
 
 async def test_runs_and_their_upkeep_have_a_worker_each(worker: Worker) -> None:

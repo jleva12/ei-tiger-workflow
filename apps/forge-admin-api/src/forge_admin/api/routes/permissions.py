@@ -77,7 +77,7 @@ class PermissionRead(Audited):
     groups: list[str] = []
 
 
-def _checked_groups(names: list[str]) -> list[str]:
+def checked_groups(names: list[str]) -> list[str]:
     """
     :return: The names, each once.
     :raises HTTPException: 422 for one too long to keep.
@@ -154,7 +154,7 @@ async def create_permission(
     :return: The new permission.
     """
     await authorize(session, enforcer, user, "permissions:create", SITE)
-    groups = _checked_groups(body.groups)
+    groups = checked_groups(body.groups)
     resource, action = body.key.split(":")
     await _require_free(session, resource, action)
     permission = Permission(
@@ -212,7 +212,7 @@ async def update_permission(
     if body.description is not None:
         permission.description = body.description
     if body.groups is not None:
-        await set_permission_groups(session, permission, _checked_groups(body.groups))
+        await set_permission_groups(session, permission, checked_groups(body.groups))
     await commit_or_conflict(session, KEY_TAKEN)
     return await _read(session, permission)
 

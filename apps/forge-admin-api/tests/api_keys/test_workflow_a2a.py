@@ -6,7 +6,7 @@ import uuid
 from typing import Any
 
 import pytest
-from key_world import ADMIN, AGENT, ORG, World
+from key_world import ADMIN, AGENT, MEMBER, ORG, World
 from runtime_world import INPUT, QUESTION, SHIP, Runtime
 
 V1 = {"A2A-Version": "1.0"}
@@ -25,9 +25,10 @@ def rpc(
     *,
     ref: str = SHIP,
     v1: bool = True,
-    user: str | None = None,
+    user: str | None = MEMBER,
     key: str | None = None,
 ) -> dict[str, Any]:
+    """A JSON-RPC call: as a member of Acme, a key, or anonymously (None)."""
     response = runtime.world.call(
         "POST",
         f"/a2a/{ref}",
@@ -69,7 +70,7 @@ def test_a_workflows_card_says_what_it_takes(runtime: Runtime) -> None:
     card = runtime.world.call(
         "GET",
         f"/a2a/{SHIP}/.well-known/agent-card.json",
-        None,
+        MEMBER,
         prefix="/api/v1/runtime",
     ).json()
     assert (card["name"], card["version"]) == ("Ship", "1")
@@ -81,7 +82,7 @@ def test_a_workflows_card_says_what_it_takes(runtime: Runtime) -> None:
     chat = runtime.world.call(
         "GET",
         f"/a2a/{AGENT}/.well-known/agent-card.json",
-        None,
+        MEMBER,
         prefix="/api/v1/runtime",
     )
     assert chat.json()["name"] == "Acme helper"
@@ -94,12 +95,29 @@ def test_a_task_is_a_run_of_the_workflow(runtime: Runtime) -> None:
     assert (run["status"], run["version"], run["requested_by"]) == (
         "queued",
         "1",
-        "anonymous",
+        MEMBER,
     )
     assert run["payload"]["input"] == {"key": "a1"}
     assert run["payload"]["trigger"]["protocol"] == "a2a"
     assert run["payload"]["trigger"]["task_id"] == task["id"]
     assert task["metadata"]["forge"]["run_id"] == run["id"]
+    # Over A2A, by someone signed in: theirs, verified.
+    assert (run["trigger_type"], run["channel"], run["auth_method"]) == (
+        "a2a",
+        "a2a",
+        "jwt",
+    )
+    assert (run["on_behalf_of"], run["on_behalf_of_verified"]) == (MEMBER, True)
+    # Nobody unknown starts one.
+    anonymous = runtime.world.call(
+        "POST",
+        f"/a2a/{SHIP}",
+        None,
+        {"jsonrpc": "2.0", "id": 1, "method": "SendMessage", "params": {}},
+        prefix="/api/v1/runtime",
+        headers=V1,
+    )
+    assert anonymous.status_code == 401
 
 
 def test_input_comes_as_json_text_too_and_must_fit(runtime: Runtime) -> None:
@@ -108,6 +126,9 @@ def test_input_comes_as_json_text_too_and_must_fit(runtime: Runtime) -> None:
     rejected = send(runtime, {"text": "hello"})["result"]["task"]
     assert rejected["status"]["state"] == "TASK_STATE_REJECTED"
     assert "doesn't fit the start" in rejected["status"]["message"]["parts"][0]["text"]
+    # The task it rejected is kept as a refused start.
+    [refused], _ = runtime.call(runtime.runs.refused, ORG)
+    assert (refused["trigger_type"], refused["status_code"]) == ("a2a", 422)
 
 
 def test_a_0_3_caller_sends_a_data_part(runtime: Runtime) -> None:
@@ -165,8 +186,9 @@ def test_approvals_are_decided_only_by_those_the_step_names(runtime: Runtime) ->
         runtime, {"text": "approve"}, taskId=task["id"], contextId=task["contextId"]
     )
     assert refused["result"]["task"]["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+    # A member isn't one of the admins it names.
     assert (
-        "never anonymously"
+        "Requires agents:approve"
         in refused["result"]["task"]["status"]["message"]["parts"][0]["text"]
     )
     assert run_of(runtime, task)["status"] == "paused"
@@ -277,7 +299,10 @@ def test_tasks_are_their_callers(runtime: Runtime) -> None:
     task = rpc(runtime, "SendMessage", {"message": message}, key=secret)["result"][
         "task"
     ]
-    assert run_of(runtime, task)["requested_by_name"] == "API key CI"
+    run = run_of(runtime, task)
+    assert run["requested_by_name"] == "API key CI"
+    assert (run["auth_method"], run["on_behalf_of_verified"]) == ("api_key", True)
+    assert run["api_key_id"] == run["requested_by"].removeprefix("apikey:")
     # Not found by anyone else.
     other = rpc(runtime, "GetTask", {"id": task["id"]})
     assert "error" in other

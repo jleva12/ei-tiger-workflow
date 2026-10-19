@@ -182,7 +182,11 @@ export type FailureFact = {
 }
 
 export type OrganizationOverview = {
-  period: OverviewPeriod
+  /** `custom` for days the reader picked. */
+  period: OverviewPeriod | "custom"
+  /** The period's first and last days, in the reader's time zone (YYYY-MM-DD). */
+  first_day: string
+  last_day: string
   unit: "day" | "week"
   time_zone: string
   /** When the API read it. */
@@ -223,31 +227,114 @@ const timeZone = () => {
   }
 }
 
+/**
+ * What the overview reads: one of its periods, or days the reader picked,
+ * first to last (YYYY-MM-DD, in their time zone).
+ */
+export type OverviewSpan = OverviewPeriod | { from: string; to: string }
+
+const spanKey = (span: OverviewSpan) =>
+  typeof span === "string" ? span : `${span.from}..${span.to}`
+
 export const overviewKeys = {
   all: ["organization-overview"] as const,
-  of: (organizationId: string, period: OverviewPeriod, zone: string) =>
-    [...overviewKeys.all, organizationId, period, zone] as const,
+  of: (organizationId: string, span: OverviewSpan, zone: string) =>
+    [...overviewKeys.all, organizationId, spanKey(span), zone] as const,
 }
 
 /** Every couple of minutes is live enough for a daily overview. */
 const REFRESH_MS = 120_000
 
-/** The organization's overview for a period; the last one stays while the next loads. */
+/** The organization's overview for a span; the last one stays while the next loads. */
 export function useOrganizationOverview(
   organizationId: string,
-  period: OverviewPeriod
+  span: OverviewSpan
 ) {
   const [zone] = React.useState(timeZone)
   return useQuery({
-    queryKey: overviewKeys.of(organizationId, period, zone),
+    queryKey: overviewKeys.of(organizationId, span, zone),
     queryFn: ({ signal }) =>
       api.get<OrganizationOverview>(
         `/organizations/${encodeURIComponent(organizationId)}/overview`,
-        { params: { period, time_zone: zone }, signal }
+        {
+          params:
+            typeof span === "string"
+              ? { period: span, time_zone: zone }
+              : { start: span.from, end: span.to, time_zone: zone },
+          signal,
+        }
       ),
     placeholderData: keepPreviousData,
     refetchInterval: REFRESH_MS,
   })
+}
+
+/* Its period in words ----------------------------------------------------- */
+
+/** A day as the API sends it (YYYY-MM-DD), at the reader's midnight. */
+export const dayOf = (day: string) => {
+  const [year, month, date] = day.split("-").map(Number)
+  return new Date(year, month - 1, date)
+}
+
+const monthDay = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+})
+const monthDayYear = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+})
+
+/**
+ * Some days as a range, "Sep 1 – Sep 10"; with the years when they're not
+ * this one, or not the same.
+ */
+export function daysLabel(first: string, last: string, today = new Date()) {
+  const from = dayOf(first)
+  const to = dayOf(last)
+  const years =
+    from.getFullYear() !== to.getFullYear() ||
+    to.getFullYear() !== today.getFullYear()
+  const format = years ? monthDayYear : monthDay
+  return first === last
+    ? format.format(from)
+    : `${format.format(from)} – ${format.format(to)}`
+}
+
+/**
+ * The overview's period, worded for wherever it's said: in a sentence
+ * ("in the last 7 days", "between Sep 1 and Sep 10"), opening one, as a
+ * label ("Last 7 days", "Sep 1 – Sep 10"), and its length ("7 days"), for
+ * the one before.
+ */
+export function periodWords(
+  overview: Pick<OrganizationOverview, "period" | "first_day" | "last_day">
+) {
+  if (overview.period !== "custom") {
+    const { label } = OVERVIEW_PERIODS[overview.period]
+    return {
+      within: `in the last ${label}`,
+      opening: `In the last ${label}`,
+      label: `Last ${label}`,
+      length: label,
+    }
+  }
+  const { first_day: first, last_day: last } = overview
+  const days =
+    Math.round((dayOf(last).getTime() - dayOf(first).getTime()) / 86_400_000) +
+    1
+  const label = daysLabel(first, last)
+  const [from, to] = label.split(" – ")
+  const within = to ? `between ${from} and ${to}` : `on ${from}`
+  return {
+    within,
+    // Days lead a sentence with a comma: "Between Sep 1 and Sep 10, 8…".
+    opening: `${within[0].toUpperCase()}${within.slice(1)},`,
+    label,
+    length: `${days.toLocaleString()} ${days === 1 ? "day" : "days"}`,
+  }
 }
 
 /* Summing ----------------------------------------------------------------- */
@@ -335,7 +422,8 @@ export const emptyTotals = (): Totals => ({
 
 const KINDS: SubjectKind[] = ["workflow", "agent", "assistant"]
 
-const addUsage = (totals: Totals, fact: UsageFact) => {
+/** Add a model call fact to some totals. */
+export const addUsage = (totals: Totals, fact: UsageFact) => {
   totals.input += fact.input
   totals.cached += fact.cached
   totals.output += fact.output
@@ -347,7 +435,8 @@ const addUsage = (totals: Totals, fact: UsageFact) => {
   totals.unpriced += fact.unpriced
 }
 
-const addActivity = (totals: Totals, fact: ActivityFact) => {
+/** Add a run or invocation fact to some totals. */
+export const addActivity = (totals: Totals, fact: ActivityFact) => {
   totals.started += fact.started
   totals.succeeded += fact.succeeded
   totals.failed += fact.failed

@@ -47,19 +47,21 @@ function EditorSkeleton({
 }
 
 /**
- * A complete rich text field on Tiptap. See `rich-text-editor.tsx` for the
- * props; this wrapper loads the editor on first render and shows a field
- * skeleton meanwhile.
+ * The Markdown rich text editor. See `rich-text-editor.tsx` for the props;
+ * this wrapper loads it on first render and shows a field skeleton
+ * meanwhile. A `ref` gets the controller once it has loaded.
  */
 export function RichTextEditor(props: RichTextEditorProps) {
-  const readOnly = Boolean(props.readOnly || props.disabled)
+  const editable = !props.readOnly && !props.disabled
+  const toolbar =
+    !props.headless &&
+    (typeof props.toolbar === "boolean"
+      ? props.toolbar
+      : (props.toolbar?.enabled ?? editable))
   return (
     <React.Suspense
       fallback={
-        <EditorSkeleton
-          className={props.className}
-          toolbar={props.toolbar ?? !readOnly}
-        />
+        <EditorSkeleton className={props.className} toolbar={toolbar} />
       }
     >
       <Editor {...props} />
@@ -67,7 +69,7 @@ export function RichTextEditor(props: RichTextEditorProps) {
   )
 }
 
-/** Saved rich text, shown read-only; loads the editor like `RichTextEditor`. */
+/** Saved Markdown, shown read-only; loads the editor like `RichTextEditor`. */
 export function RichTextView(props: React.ComponentProps<typeof View>) {
   return (
     <React.Suspense

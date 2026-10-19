@@ -3,25 +3,36 @@ signed where the credential may go, refused where it may not; OpenAPI specs
 fetched and called as HTTP tools' requests are (never the runtime's own
 network); and a spec's operations listed by the names its tools get."""
 
+import asyncio
 import copy
-from typing import Any
+import json
+import time
+from typing import Any, cast
 
 import httpx
 import pytest
+from google.adk.tools.tool_context import ToolContext
 
 from forge_agent_runtime.build import BuildError, build_tools
 from forge_agent_runtime.openapi import (
+    MAX_SPEC_VALUES,
     SpecError,
     describe_spec,
+    expanded_size,
     fetch_spec,
     guarded_client,
     load_spec,
+    read_spec,
+    spec_toolset,
     toolset_of,
 )
 from forge_agent_runtime.services import RequestAuth, RuntimeServices
-from forge_agent_runtime.tools import HttpTool, MissingSetting, fill_references
+from forge_agent_runtime.tools import GuardedTools, HttpTool, MissingSetting, fill_references, http_client
 from forge_common.adk import ToolFailure
 from tests.conftest import BILLING_SPEC, EXAMPLE_HOSTS
+
+# These credential-only requests deliberately omit the optional chat state.
+NO_CONTEXT = cast(ToolContext, None)
 
 
 class Credentials:
@@ -69,7 +80,7 @@ async def test_an_http_tool_signs_its_request_with_its_credential():
 
     provider = Credentials()
     made = tool(handler, url="https://api.example.com/orders/{id}?page={page}", credentials=provider)
-    got = await made.run_async(args={"id": "7", "page": 2}, tool_context=None)
+    got = await made.run_async(args={"id": "7", "page": 2}, tool_context=NO_CONTEXT)
     assert got == {"status": 200, "body": {"ok": True}}
     assert seen[0].headers["authorization"] == "Bearer t0k"
     assert seen[0].headers["accept"] == "application/json"
@@ -88,7 +99,7 @@ async def test_a_url_keeps_its_own_query_beside_the_arguments_and_the_credential
         handler,
         url="https://api.example.com/search?type=issue&id={id}&page={page}",
         credentials=Credentials(),
-    ).run_async(args={"id": "7", "page": 2}, tool_context=None)
+    ).run_async(args={"id": "7", "page": 2}, tool_context=NO_CONTEXT)
     assert dict(seen[0].url.params) == {"type": "issue", "id": "7", "page": "2", "key": "k1"}
 
 
@@ -98,7 +109,7 @@ async def test_a_credential_refused_for_where_the_tool_calls_fails_the_call():
 
     with pytest.raises(ToolFailure, match="only sent to https://api.example.com"):
         await tool(handler, url="https://elsewhere.example.com/x/{id}", credentials=Credentials()).run_async(
-            args={"id": "1"}, tool_context=None
+            args={"id": "1"}, tool_context=NO_CONTEXT
         )
 
 
@@ -111,7 +122,7 @@ async def test_a_redirect_elsewhere_goes_without_the_credential():
             return httpx.Response(302, headers={"location": "https://elsewhere.example.com/moved"})
         return httpx.Response(200, json={})
 
-    await tool(handler, credentials=Credentials()).run_async(args={"id": "1"}, tool_context=None)
+    await tool(handler, credentials=Credentials()).run_async(args={"id": "1"}, tool_context=NO_CONTEXT)
     assert seen[0].headers["authorization"] == "Bearer t0k"
     assert "authorization" not in seen[1].headers
     assert "key" not in dict(seen[1].url.params)
@@ -136,14 +147,18 @@ async def test_a_tool_naming_a_credential_needs_the_hosted_runtime(models, web):
         services=services(credentials=Credentials()),
         organization_id="org_1",
     )
-    assert built[0].items[0].credential == "cred_1"
+    group = built[0]
+    assert isinstance(group, GuardedTools)
+    made = group.items[0]
+    assert isinstance(made, HttpTool)
+    assert made.credential == "cred_1"
 
 
 # ----------------------------------------------------------------- OpenAPI
 
 
 async def test_a_spec_lists_its_operations_by_their_tools_names():
-    spec = copy.deepcopy(BILLING_SPEC)
+    spec: dict[str, Any] = copy.deepcopy(BILLING_SPEC)
     spec["paths"]["/charges"]["get"]["summary"] = "Lists the charges"
     spec["paths"]["/health"] = {"get": {"responses": {"200": {"description": "ok"}}}}
     spec["components"] = {"securitySchemes": {"key": {"type": "apiKey", "in": "header", "name": "X-Api-Key"}}}
@@ -171,6 +186,107 @@ def test_a_spec_that_isnt_one_says_why():
     with pytest.raises(SpecError, match="no paths"):
         load_spec("openapi: 3.0.0\ninfo: {title: x}\n")
     assert load_spec("openapi: 3.0.0\npaths: {}\n")["openapi"] == "3.0.0"
+
+
+def alias_bomb(levels: int = 9) -> str:
+    """About 500 bytes of YAML that come to 10^levels values once its aliases are followed."""
+    lines = ["openapi: 3.0.0", "paths: {}", "l0: &l0 [x, x, x, x, x, x, x, x, x, x]"]
+    for level in range(1, levels):
+        lines.append(f"l{level}: &l{level} [{', '.join([f'*l{level - 1}'] * 10)}]")
+    return "\n".join(lines) + "\n"
+
+
+def multiplying(levels: int) -> dict[str, Any]:
+    """A JSON spec whose schemas each refer twice to the next: 2^levels values with each $ref written out."""
+    schemas: dict[str, Any] = {
+        f"L{i}": {
+            "type": "object",
+            "properties": {name: {"$ref": f"#/components/schemas/L{i + 1}"} for name in ("a", "b")},
+        }
+        for i in range(levels)
+    }
+    schemas[f"L{levels}"] = {"type": "string"}
+    spec: dict[str, Any] = copy.deepcopy(BILLING_SPEC)
+    spec["components"] = {"schemas": schemas}
+    get = spec["paths"]["/charges"]["get"]
+    get["responses"] = {
+        "200": {
+            "description": "ok",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/L0"}}},
+        }
+    }
+    return spec
+
+
+def test_a_spec_with_yaml_aliases_is_refused_before_theyre_followed():
+    started = time.monotonic()
+    with pytest.raises(SpecError, match=r"YAML alias \(line 4\)"):
+        load_spec(alias_bomb())
+    assert time.monotonic() - started < 0.5
+    # An anchor alone repeats nothing.
+    assert load_spec("openapi: 3.0.0\npaths: &paths {}\n")["paths"] == {}
+
+
+def test_a_spec_whose_references_multiply_is_refused_before_adk_writes_them_out():
+    assert expanded_size(multiplying(10)) < MAX_SPEC_VALUES
+    assert load_spec(json.dumps(multiplying(10)))["components"]
+    # A few kilobytes that ADK's parser would take minutes to write out.
+    started = time.monotonic()
+    with pytest.raises(SpecError, match=r"\$ref written out"):
+        load_spec(json.dumps(multiplying(40)))
+    assert time.monotonic() - started < 0.5
+    # A schema that refers to itself is cut there, as the parser cuts it.
+    looped: dict[str, Any] = copy.deepcopy(BILLING_SPEC)
+    looped["components"] = {
+        "schemas": {"Node": {"properties": {"next": {"$ref": "#/components/schemas/Node"}}}}
+    }
+    assert expanded_size(looped) < 100
+
+
+async def test_a_big_spec_is_read_off_the_event_loop_which_carries_on_meanwhile():
+    # About half a second of ADK's parser: the loop serves everyone else meanwhile.
+    text = json.dumps(multiplying(14))
+    ticks: list[float] = []
+    reading = True
+
+    async def tick() -> None:
+        while reading:
+            ticks.append(time.monotonic())
+            await asyncio.sleep(0.01)
+
+    ticker = asyncio.create_task(tick())
+    await asyncio.sleep(0)
+    started = time.monotonic()
+    toolset = await spec_toolset(text, operations=["list_charges"])
+    finished = time.monotonic()
+    reading = False
+    await ticker
+    assert [tool.name for tool in await toolset.get_tools()] == ["list_charges"]
+    during = [at for at in ticks if started < at < finished]
+    assert finished - started > 0.1
+    assert len(during) >= 5, f"the loop ran {len(during)} times in {finished - started:.2f} s"
+
+    assert (await read_spec(text))["components"]
+    with pytest.raises(SpecError, match="YAML alias"):
+        await read_spec(alias_bomb())
+
+
+async def test_an_openapi_tool_with_a_spec_that_multiplies_doesnt_build_pasted_or_fetched(models):
+    bomb = alias_bomb()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=bomb)
+
+    for config in ({"source": "inline", "spec": bomb}, {"url": "https://api.example.com/openapi.yaml"}):
+        with pytest.raises(BuildError, match="YAML alias"):
+            await build_tools(
+                "Billing",
+                "openapi",
+                config,
+                models=models,
+                http=http_client(transport=httpx.MockTransport(handler)),
+                services=services(),
+            )
 
 
 async def test_a_spec_is_fetched_as_a_tools_request_is():

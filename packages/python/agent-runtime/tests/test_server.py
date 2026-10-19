@@ -1,14 +1,19 @@
+import asyncio
 import contextlib
+import contextvars
 import copy
 import json
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from google.adk.events import Event
 from google.genai import types
 
 from forge_agent_runtime.cli import main as cli
@@ -23,9 +28,12 @@ from forge_agent_runtime.executor import (
     StateRefused,
     check_state,
 )
-from forge_agent_runtime.server import create_app, create_router
+from forge_agent_runtime.leases import MemoryTurnLeases, TurnKey, TurnLease
+from forge_agent_runtime.server import KEEPALIVE, _stream, create_app, create_router
 from forge_agent_runtime.services import RuntimeServices
-from tests.conftest import EXAMPLE, EXAMPLE_HOSTS, call, text, without
+from forge_common.adk.models import ProviderModels
+from forge_common.model_provider import parse_model_provider_yaml
+from tests.conftest import EXAMPLE, EXAMPLE_HOSTS, PROVIDERS, ScriptedLlm, call, text, without
 
 AGENT = "ca_1k2cuqsuev"
 STATE = {
@@ -68,12 +76,13 @@ def client(agent_file, models, web, orders):
         yield client
 
 
-def events(response) -> list[dict[str, Any]]:
+def events(response, *, lifecycle=False) -> list[dict[str, Any]]:
     assert response.status_code == 200, response.text
     assert response.headers["content-type"].startswith("text/event-stream")
-    return [
+    got = [
         json.loads(m.removeprefix("data: ")) for m in response.text.split("\n\n") if m.startswith("data: ")
     ]
+    return got if lifecycle else [e for e in got if "forge:turn" not in e.get("customMetadata", {})]
 
 
 def session(client, user="ada", **state) -> str:
@@ -271,6 +280,34 @@ def test_unknown_agents_and_conversations_are_404s(client):
     assert client.get(f"/apps/{AGENT}/users/ada/sessions/{sid}").status_code == 404
 
 
+@pytest.mark.parametrize("delete_missing", [False, True])
+def test_session_deletion_keeps_shared_and_other_sessions_artifacts(agent_file, models, delete_missing):
+    executor = AgentExecutor(FileAgentSource(agent_file), models=models)
+
+    async def seed_artifacts():
+        for filename, sid in (("user:profile.txt", "first"), ("notes.txt", "first"), ("other.txt", "second")):
+            await executor.artifacts.save_artifact(
+                app_name=AGENT,
+                user_id="ada",
+                session_id=sid,
+                filename=filename,
+                artifact=types.Part(text=filename),
+            )
+
+    async def remaining(sid):
+        return await executor.artifacts.list_artifact_keys(app_name=AGENT, user_id="ada", session_id=sid)
+
+    with TestClient(create_app(executor)) as client:
+        assert client.portal is not None
+        client.portal.call(seed_artifacts)
+        target = "missing" if delete_missing else "first"
+        assert client.delete(f"/apps/{AGENT}/users/ada/sessions/{target}").status_code == 204
+        assert client.portal.call(remaining, "second") == ["other.txt", "user:profile.txt"]
+        assert client.portal.call(remaining, "first") == (
+            ["notes.txt", "user:profile.txt"] if delete_missing else ["user:profile.txt"]
+        )
+
+
 def test_the_agent_says_what_it_takes(client):
     got = client.get(f"/apps/{AGENT}").json()
     assert got["entry"] == "support_assistant"
@@ -281,6 +318,79 @@ def test_a_failure_after_the_stream_starts_is_an_event(client, llm):
     llm.turns = [RuntimeError("boom")]
     got = events(run(client, session(client), "hi", stateDelta={"customer_tier": "free"}))
     assert got[-1]["errorCode"] == "INTERNAL_ERROR"
+
+
+class SlowLlm(ScriptedLlm):
+    """Thinks for a while before each answer, as a turn waiting on a slow tool would be quiet."""
+
+    delay: float = 0.3
+
+    async def generate_content_async(self, llm_request, stream=False):
+        await asyncio.sleep(self.delay)
+        async for response in super().generate_content_async(llm_request, stream):
+            yield response
+
+
+def test_a_quiet_turn_keeps_its_stream_alive(agent_file, web):
+    llm = SlowLlm(turns=[[text("Here now.")]])
+    models = ProviderModels(parse_model_provider_yaml(PROVIDERS), build=lambda _: llm)
+    executor = AgentExecutor(
+        FileAgentSource(agent_file),
+        models=models,
+        services=RuntimeServices(allowed_hosts=("api.example.com",)),
+        http=web(),
+    )
+    app = FastAPI()
+    app.include_router(create_router(executor, keepalive=0.05))
+    with TestClient(app) as client:
+        response = run(client, session(client), "hi", stateDelta={"customer_tier": "free"})
+
+    # Said while the model thought, before its answer; skipped as events.
+    assert response.text.startswith(":ok\n\n")
+    assert KEEPALIVE in response.text
+    assert response.text.index(KEEPALIVE) < response.text.index('"Here now."')
+    assert events(response)[-1]["content"]["parts"][0]["text"] == "Here now."
+
+
+step: contextvars.ContextVar[str] = contextvars.ContextVar("step", default="none")
+
+
+class QuietExecutor:
+    """A turn that keeps a context variable from one step to the next, then
+    goes quiet until it's stopped."""
+
+    def __init__(self) -> None:
+        self.stopped = asyncio.Event()
+
+    async def run(self, body: Any, *, resolved: Any = None, lease: Any = None) -> AsyncIterator[Any]:
+        step.set("first")
+        yield Event(author="agent", content=types.Content(role="model", parts=[text("one")]))
+        yield Event(author="agent", content=types.Content(role="model", parts=[text(step.get())]))
+        try:
+            await asyncio.sleep(60)
+        finally:
+            self.stopped.set()
+
+
+async def test_a_turn_runs_in_one_task_and_stops_with_its_stream() -> None:
+    executor = QuietExecutor()
+    body: Any = SimpleNamespace(app_name=AGENT, session_id="s1")
+    leases = MemoryTurnLeases()
+    key = TurnKey(AGENT, "ada", "s1")
+    lease = await TurnLease.take(leases, key)
+    stream = _stream(executor, body, "agent", lease=lease, keepalive=0.05)  # type: ignore[arg-type]
+
+    said = [await anext(stream) for _ in range(5)]
+    assert said[0] == ":ok\n\n"
+    # What a step set, the next step reads: the turn's steps share one context.
+    assert json.loads(said[1].removeprefix("data: "))["customMetadata"]["forge:turn"]["status"] == "running"
+    assert json.loads(said[3].removeprefix("data: "))["content"]["parts"][0]["text"] == "first"
+    assert said[4] == KEEPALIVE
+
+    # The person goes away: the turn stops with the stream, and the conversation is free.
+    await stream.aclose()
+    await asyncio.wait_for(executor.stopped.wait(), 1)
+    assert await leases.acquire(key, owner="next", seconds=30)
 
 
 async def test_versions_are_pinned_and_built_agents_reused(tmp_path, example, models, web):
@@ -421,6 +531,37 @@ def test_authorize_decides_each_call_before_the_agent_is_built(agent_file, model
     assert built == []
 
 
+@pytest.mark.parametrize("decided", [False, True, None])
+def test_streaming_decides_whether_a_turns_replies_stream(agent_file, models, web, llm, decided):
+    seen: list[str] = []
+
+    async def streaming(request, agent):
+        seen.append(agent.document.id)
+        return decided
+
+    executor = AgentExecutor(
+        FileAgentSource(agent_file),
+        models=models,
+        http=web(),
+        services=RuntimeServices(allowed_hosts=EXAMPLE_HOSTS),
+    )
+    app = FastAPI()
+    app.include_router(create_router(executor, streaming=streaming))
+    with TestClient(app) as client:
+        llm.turns = [[text("Your order A1 has shipped.")], [text("Still shipped.")]]
+        sid = session(client, customer_tier="pro")
+        # Asked to stream, and asked not to: what it decides holds either way.
+        for asked in (True, False):
+            got = events(run(client, sid, "Where's A1?", streaming=asked))
+            assert got[-1]["content"]["parts"][0]["text"] in {
+                "Your order A1 has shipped.",
+                "Still shipped.",
+            }
+            streamed = any(e.get("partial") for e in got)
+            assert streamed is (asked if decided is None else decided)
+    assert seen == [AGENT, AGENT]
+
+
 def test_a_conversation_follows_the_workflow_runs_its_calls_started(agent_file, models, web):
     from fastapi import FastAPI, HTTPException
 
@@ -431,7 +572,13 @@ def test_a_conversation_follows_the_workflow_runs_its_calls_started(agent_file, 
         async def describe(self, workflow_id, *, organization_id):
             raise LookupError(workflow_id)
 
-        async def run(self, workflow_id, workflow_input, *, organization_id, context):
+        async def run(self, workflow_id, workflow_input, *, organization_id, context, wait=None):
+            raise AssertionError("not run here")
+
+        async def intend(self, starts, *, organization_id, context, source):
+            raise AssertionError("not run here")
+
+        async def dispatch(self, run_id, *, organization_id, wait):
             raise AssertionError("not run here")
 
         async def progress(self, **asking):

@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 import pytest
 from forge_task_adk_workflows.files import FILE_TYPES
-from key_world import World
+from key_world import MEMBER, World
 from runtime_world import PAPERS, SHIP, Runtime
 from test_workflow_a2a import rpc
 
@@ -38,7 +38,13 @@ def upload(
         f"/api/v1/runtime/workflows/{ref}/runs",
         data={"input": json.dumps(INPUT), **fields},
         files=[("files", file) for file in files],
+        headers=signed_in(runtime),
     )
+
+
+def signed_in(runtime: Runtime) -> dict[str, str]:
+    """What a member of Acme sends: their sign-in."""
+    return {"Authorization": f"Bearer {runtime.world.tokens[MEMBER]}"}
 
 
 def kept(runtime: Runtime, run: dict[str, Any], name: str) -> bytes | None:
@@ -212,7 +218,7 @@ def test_what_isnt_a_run_s_body_is_refused(runtime: Runtime) -> None:
     xml = runtime.world.client.post(
         f"/api/v1/runtime/workflows/{PAPERS}/runs",
         content=b"<run/>",
-        headers={"Content-Type": "text/xml"},
+        headers={"Content-Type": "text/xml", **signed_in(runtime)},
     )
     assert xml.status_code == 415
     assert runtime.queue.queued == []
@@ -283,7 +289,7 @@ def test_a_workflow_s_card_says_what_files_it_takes(runtime: Runtime) -> None:
     card = runtime.world.call(
         "GET",
         f"/a2a/{PAPERS}/.well-known/agent-card.json",
-        None,
+        MEMBER,
         prefix="/api/v1/runtime",
     ).json()
     assert card["defaultInputModes"] == [

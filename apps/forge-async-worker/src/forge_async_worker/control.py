@@ -13,10 +13,15 @@ The control an ADK workflow run's job gets on the worker
   ``wait_for`` raises it for every gate the run waits at together, each
   decided on its own, with the time it waits for too, if any. A decision
   queues the run again, and its next attempt reads the decision from the
-  same call.
+  same call. A gate a workflow's call waits at for the run it started
+  (``child_run``) is the run store's to decide, as that run ends.
 - **Waits.** ``wait_until`` raises :class:`WaitRun`, which the worker makes
   the run's wait, queueing ``run_adk`` for the time.
-- **Notes** go on the run's activity. There are no other runs to find.
+- **Notes** go on the run's activity, while the worker has the run (fenced
+  on its lease, as its checkpoints are). There are no other runs to find.
+- **Holding.** The attempt's writes elsewhere (its ADK session's events)
+  land inside ``holding``, which holds the worker's lease on the run as they
+  do: an attempt whose lease ran out writes nothing more.
 - **Stopping.** Abandoned while it runs, a run stops at its next checkpoint,
   which raises :class:`StopRun` (and ``should_stop`` says so once the worker
   learns it renewing the lease, which stops the job too); the worker
@@ -36,7 +41,7 @@ from typing import Any, NoReturn
 
 from sqlalchemy import exc as db
 
-from forge_task_adk_workflows.run_store import Actor, CancelRequested, RunStore, new_id
+from forge_task_adk_workflows.run_store import CHILD_RUN, Actor, CancelRequested, RunStore, new_id
 from forge_tasks.control import ControlSignal, Decision, Gate, RunState
 from forge_tasks.errors import TransientError
 
@@ -53,7 +58,7 @@ class PauseRun(ControlSignal):
 
     def __init__(self, gates: Sequence[dict[str, Any]], *, until: datetime | None = None, reason: str = "") -> None:
         first = gates[0]
-        what = "an answer" if first["kind"] == HUMAN_INPUT else "a decision"
+        what = {HUMAN_INPUT: "an answer", CHILD_RUN: "a run it started"}.get(first["kind"], "a decision")
         more = f" (and {len(gates) - 1} more)" if len(gates) > 1 else ""
         super().__init__(f"waits for {what}: {first['reason']}{more}")
         self.gates = list(gates)
@@ -145,7 +150,18 @@ class RunControl:
                 raise StopRun() from None
 
     async def note(self, message: str, **attributes: Any) -> None:
-        await self.store.note(self.run_id, message, attributes=attributes or None)
+        """:raises LostLease: The worker lost the run: nothing is noted."""
+        await self.store.note(self.run_id, message, attributes=attributes or None, owner=self.owner)
+
+    def holding(self) -> contextlib.AbstractAsyncContextManager[None]:
+        """
+        While inside, the worker has the run (``RunStore.holding``): for the
+        attempt's writes elsewhere (its ADK session's events) that mustn't
+        land once another worker may have it.
+
+        :raises LostLease: The worker lost the run.
+        """
+        return self.store.holding(self.run_id, owner=self.owner)
 
     def should_stop(self) -> bool:
         return self.stopping
@@ -196,7 +212,7 @@ class RunControl:
         asked = [
             {
                 "key": gate.key,
-                "kind": HUMAN_INPUT if gate.details.get("kind") == HUMAN_INPUT else APPROVAL,
+                "kind": gate.details["kind"] if gate.details.get("kind") in (HUMAN_INPUT, CHILD_RUN) else APPROVAL,
                 "reason": gate.reason,
                 "details": dict(gate.details),
                 "deadline": now + timedelta(seconds=gate.timeout_seconds) if gate.timeout_seconds is not None else None,

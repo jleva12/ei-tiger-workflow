@@ -34,6 +34,12 @@ import {
   type AssistantSourcesConfig,
 } from "./sources"
 import type { AdkArtifactsApi } from "./use-adk-assistant"
+import { AdkTurnStatus } from "./turn-status"
+import { useHistoryBlocked } from "./history-context"
+import {
+  AssistantHistoryProvider,
+  AssistantHistoryStatus,
+} from "./history-status"
 
 type SuggestionList = Parameters<typeof Suggestions>[0]
 type Toolkit = NonNullable<Parameters<typeof Tools>[0]>["toolkit"]
@@ -246,8 +252,10 @@ function AssistantProvider({
   return (
     <AssistantSettingsContext.Provider value={settings}>
       <AssistantRuntimeProvider runtime={runtime} config={config}>
-        <AutoTitle />
-        {children}
+        <AssistantHistoryProvider runtime={runtime}>
+          <AutoTitle />
+          {children}
+        </AssistantHistoryProvider>
       </AssistantRuntimeProvider>
     </AssistantSettingsContext.Provider>
   )
@@ -294,7 +302,17 @@ function AssistantComposerActions() {
   )
 }
 
+function AssistantRunStatus() {
+  return (
+    <>
+      <AssistantHistoryStatus />
+      <AdkTurnStatus />
+    </>
+  )
+}
+
 const threadComponents = {
+  RunStatus: AssistantRunStatus,
   Welcome: AssistantWelcomeMessage,
   ToolFallback: AdkToolFallback,
   MessageHeader: AdkMessageAuthor,
@@ -309,6 +327,7 @@ const threadComponents = {
  * `AssistantProvider`.
  */
 function AssistantThread() {
+  const historyBlocked = useHistoryBlocked()
   const {
     commands,
     composerContext,
@@ -343,6 +362,12 @@ function AssistantThread() {
       composerTrailingActions,
     ]
   )
+  if (historyBlocked)
+    return (
+      <div className="h-full p-4">
+        <AssistantHistoryStatus />
+      </div>
+    )
   return (
     <Thread
       components={components}

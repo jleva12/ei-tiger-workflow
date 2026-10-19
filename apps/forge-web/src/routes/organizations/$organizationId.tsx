@@ -4,11 +4,8 @@ import { createFileRoute } from "@tanstack/react-router"
 import { LEVELS } from "@/features/admin/components/levels"
 import { AdkRunPage } from "@/features/runs/components/adk-run-page"
 import { OrganizationOverview } from "@/features/overview/components/organization-overview"
-import { PeriodSwitch } from "@/features/overview/components/panels"
-import {
-  DEFAULT_PERIOD,
-  isOverviewPeriod,
-} from "@/features/overview/lib/overview"
+import { OverviewControls } from "@/features/overview/components/overview-controls"
+import { overviewViewOf, withView } from "@/features/overview/lib/overview-view"
 import { OrganizationAgents } from "@/features/adk-workflows/components/organization-agents"
 import { OrganizationChatAgents } from "@/features/agents/components/organization-chat-agents"
 import { OrganizationMcpServers } from "@/features/mcp-servers/components/organization-mcp-servers"
@@ -17,6 +14,7 @@ import { OrganizationSkills } from "@/features/skills/components/organization-sk
 import { OrganizationApiKeys } from "@/features/api-keys/components/organization-api-keys"
 import { OrganizationKnowledge } from "@/features/knowledge/components/organization-knowledge"
 import { OrganizationMembers } from "@/features/admin/components/organization-members"
+import { OrganizationAgentAccess } from "@/features/agent-access/components/organization-agent-access"
 import { ConversationList } from "@/features/conversations/components/conversation-list"
 import { ConversationPage } from "@/features/conversations/components/conversation-page"
 import {
@@ -33,7 +31,7 @@ import { OrganizationWorkspaceNav } from "@/features/organizations/components/or
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useMyOrganizations } from "@/lib/access"
-import { isAdkRunTab } from "@/features/runs/lib/runs"
+import { isAdkRunTab, readRunFilters } from "@/features/runs/lib/runs"
 import { useScopeAccess } from "@/lib/hierarchy"
 import { usePageContext } from "@/features/assistant/lib/page-context"
 import {
@@ -63,7 +61,9 @@ import {
  * the old `view=code-repositories` lands there) the GitHub repositories it
  * ingests into the code graph, one open in a side panel (`repository`);
  * Members is who
- * holds which role in it, which its admins change. Configuring an
+ * holds which role in it, which its admins change; Agent access is its own
+ * agent permissions, linked to company groups and API keys, which its agents
+ * and workflows ask for. Configuring an
  * organization is also site administration, at
  * /admin/organizations/$organizationId.
  */
@@ -109,11 +109,12 @@ export const Route = createFileRoute("/organizations/$organizationId")({
     const repositories = legacy || search.knowledgeTab === "repositories"
     return {
       view: view === DEFAULT_VIEW ? undefined : view,
-      ...(view === "overview" &&
-        isOverviewPeriod(search.period) &&
-        search.period !== DEFAULT_PERIOD && { period: search.period }),
+      ...(view === "overview" && overviewViewOf(search)),
       ...(view === "agents" &&
-        search.agentsTab === "runs" && { agentsTab: "runs" as const }),
+        (search.agentsTab === "runs" || search.agentsTab === "refused") && {
+          agentsTab: search.agentsTab,
+          ...readRunFilters(search),
+        }),
       ...(view === "agents" &&
         typeof search.agentRun === "string" &&
         search.agentRun && {
@@ -148,8 +149,20 @@ function OrganizationWorkspacePage() {
   const { organizationId } = Route.useParams()
   const {
     view = DEFAULT_VIEW,
-    period = DEFAULT_PERIOD,
+    period,
+    from,
+    to,
+    only,
+    focus,
     agentsTab = "overview",
+    workflow,
+    trigger,
+    person,
+    via,
+    apiKey,
+    root,
+    startedFrom,
+    startedTo,
     agentRun,
     agentRunTab = "overview",
     mcpServer,
@@ -166,6 +179,13 @@ function OrganizationWorkspacePage() {
     conversationUser,
   } = Route.useSearch()
   const navigate = Route.useNavigate()
+  // What the overview shows, as its address keeps it; changed in place.
+  const overviewView = { period, from, to, only, focus }
+  const changeOverview = (change: Partial<typeof overviewView>) =>
+    void navigate({
+      search: (last) => withView(last, change),
+      replace: true,
+    })
   const myOrganizations = useMyOrganizations()
   // Your membership: the organization as your organizations list it, or nothing.
   const organization = myOrganizations.data?.find(
@@ -258,22 +278,17 @@ function OrganizationWorkspacePage() {
       {view === "overview" ? (
         <>
           <ShellHeaderActions>
-            <PeriodSwitch
-              value={period}
-              onValueChange={(next) =>
-                void navigate({
-                  search: {
-                    period: next === DEFAULT_PERIOD ? undefined : next,
-                  },
-                  replace: true,
-                })
-              }
+            <OverviewControls
+              organizationId={organizationId}
+              view={overviewView}
+              onView={changeOverview}
             />
           </ShellHeaderActions>
           <OrganizationOverview
             organizationId={organizationId}
             organizationName={organization.name}
-            period={period}
+            view={overviewView}
+            onView={changeOverview}
             onOpenRun={(id) =>
               void navigate({ search: { view: "agents", agentRun: id } })
             }
@@ -301,6 +316,20 @@ function OrganizationWorkspacePage() {
               onAssigningChange={setAssigning}
             />
           </>
+        )
+      ) : view === "agent-access" ? (
+        !canReadMembers ? (
+          <PageEmpty
+            illustration="locked"
+            title="You can't see this organization's agent access"
+            description={`Ask one of ${organization.name}'s admins who may use its agents.`}
+          />
+        ) : (
+          <OrganizationAgentAccess
+            organizationId={organizationId}
+            organizationName={organization.name}
+            canManage={can("agent_access:manage")}
+          />
         )
       ) : view === "api-keys" ? (
         !canManageKeys ? (
@@ -459,6 +488,11 @@ function OrganizationWorkspacePage() {
           onOpenRun={(id) =>
             void navigate({ search: { view: "agents", agentRun: id } })
           }
+          onFilterRuns={(filters) =>
+            void navigate({
+              search: { view: "agents", agentsTab: "runs", ...filters },
+            })
+          }
         />
       ) : (
         // Each workflow opens its builder, a page of its own.
@@ -466,12 +500,35 @@ function OrganizationWorkspacePage() {
           organizationId={organizationId}
           organizationName={organization.name}
           tab={agentsTab}
-          onTabChange={(next) =>
+          filters={{
+            workflow,
+            trigger,
+            person,
+            via,
+            apiKey,
+            root,
+            startedFrom,
+            startedTo,
+          }}
+          canListKeys={canManageKeys}
+          onTabChange={(next, filters) =>
             void navigate({
               search: {
                 view: "agents",
-                agentsTab: next === "runs" ? "runs" : undefined,
+                agentsTab: next === "overview" ? undefined : next,
+                // Runs and Refused starts keep what they're narrowed to.
+                ...(next !== "overview" && filters),
               },
+              replace: true,
+            })
+          }
+          onFiltersChange={(next) =>
+            void navigate({
+              search: (prev) => ({
+                view: "agents",
+                agentsTab: prev.agentsTab,
+                ...next,
+              }),
               replace: true,
             })
           }

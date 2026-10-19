@@ -127,7 +127,7 @@ A detail view replaces toolbar, content and footer with `TaskPage`
 | Show, hide or disable UI by role or permission (Casbin) | `Guard` (`fallback` → `PageEmpty`/`PanelEmpty illustration="locked"`), `useGuard`, `useCan` | `@/lib/user-access-provider`, `@/lib/user-access` |
 | AI assistant / chat for a Google ADK agent (conversations, tool approvals, sign-in, hand-offs, model and thinking picker, voice input, / commands, reply feedback) | `AssistantScreen` (full screen) or `AssistantModal` (floating launcher on any page) + `useAdkAssistant` (`showModels` for the composer's model section) | `assistant` |
 | Around an agent's conversation: task progress, plan / notes / canvas panels, response and context stats, chat history palette, follow-ups, tools menu, cards for tools | `useAgentWorkspace` + `ProgressDock`, `PlanPanel`, `NotesPanel`, `CanvasPanel`, `ContextMeter`, `MessageStats`, `ChatHistoryPalette`, `ToolsMenu`, `toolUIs` in `AssistantScreen`'s slots | `agent-workspace` |
-| Rich text (formatted descriptions, comments, documents, Markdown or HTML values) | `RichTextEditor` (`preset`, `format`), `RichTextView` | `rich-text-editor` |
+| Rich text (formatted descriptions, comments, documents) as Markdown, with custom actions, a controller for inserting content, and optional AI | `RichTextEditor` (`preset`, `features`, `actions`, `ai`, `ref`), `RichTextView`; `headless` for custom UIs | `rich-text-editor` |
 
 Primitives worth knowing: `Button` (variants `default` = the dark primary,
 `outline`, `secondary`, `ghost`, `destructive` (tinted, not solid), `link`;
@@ -315,7 +315,7 @@ the matching file before building something similar:
 | DataTable configurations | `src/demo/sections/data-table.tsx` |
 | ADK assistant against a simulated agent (every ADK feature) | `src/demo/assistant-preview.tsx`, `src/demo/assistant-mock.ts` |
 | Agent workspace (plan, progress, notes, citations) against a scripted agent | `src/demo/sections/agent-workspace.tsx`, `src/demo/agent-workspace-mock.ts` |
-| Rich text editor presets, Markdown value, mentions, read-only view | `src/demo/sections/rich-text-editor.tsx` |
+| Rich text editor: Markdown value, AI (simulated stream), custom action, controller, configured toolbar, read-only view | `src/demo/sections/rich-text-editor.tsx` |
 | A small app on the dynamic shell (per-page sub nav, header, slots, access) | `src/demo/dynamic-shell-preview.tsx` |
 
 In a consuming app the demo isn't installed; the patterns above and

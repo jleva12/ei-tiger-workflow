@@ -44,8 +44,8 @@ app = server.create_app()  # built once, the same object afterwards
   stands in for the deployment's API key. Keys can't use the routes only
   people may (the users directory, the assistant, API keys themselves).
 - **The runtime** (`/api/v1/runtime`): the organizations' agents and
-  workflows for outside callers, public or not by `FORGE_ADMIN_AGENT_RUNTIME_PUBLIC`
-  (see [The runtime](#the-runtime)).
+  workflows for outside callers with an API key or a sign-in (see
+  [The runtime](#the-runtime)).
 - **Public routes**: routers in `PUBLIC_ROUTERS` mount at the root with
   neither the API key nor a user, and check their callers themselves. There
   are none at the moment.
@@ -103,6 +103,15 @@ src/forge_admin/
     serve.py             forge-admin: logging, migrations, uvicorn
     seed.py              forge-admin-seed: the site administrator
     token.py             forge-admin-token: a bearer token for a user, optionally for an organization
+  helpers/               Helper agents the web console calls by name (instruction writer, skill creator)
+    helpers.yaml         Each helper: instruction, kit, toolsets, model, limits, permission, sync or background
+    config.py            helpers.yaml's shape and loading
+    kit.py               What a helper's Python provides (Kit, HelperToolset) and is handed (HelperRun)
+    registry.py          Every kit and toolset helpers.yaml can name; load()
+    executor.py          Helpers (the configuration checked) and the one executor, perform()
+    jobs.py              Background helpers' jobs (helper_jobs)
+    organization.py      The organization toolset: what the organization has, read-only
+    text.py              The text kit: a helper that's only configuration
   db/                    Persistence
     base.py              Base and AuditBase, which every model derives from; column types
     session.py           Engine, per-request sessions (get_session), ping
@@ -183,6 +192,7 @@ answers 404 before the permission is checked. A `{scope}` is `site` or
 | GET | `/me/access?scope=` | Your roles and Casbin policies in a scope (the site by default) | a signed-in user |
 | GET | `/me/memberships` | Every role you hold, and where | a signed-in user |
 | GET | `/me/organizations` | The organizations you hold a role in, with your roles there; a site role alone doesn't list any | a signed-in user |
+| GET | `/me/chat-agents` | The published chat agents of the organizations you're a member of, as their latest published versions have them (name, description, version, their agents' and workflow tools' names): what the desktop app offers to add and runs as you through the runtime | a signed-in user |
 | GET | `/authz/model` | The shared Casbin model file, as text | no user (the API key when one is set) |
 | GET | `/authz/subjects/{subject}/access?scope=` | Anyone's roles and policies in a scope | `members:read` there |
 
@@ -384,8 +394,9 @@ Below `/api/v1/runtime`, for outside apps; who may call is
 | GET | `/runtime/a2a/{app}/.well-known/agent-card.json` | A chat agent's or workflow's A2A card (`ca_…`, `ag_…`) |
 | POST | `/runtime/a2a/{app}` | A2A JSON-RPC, 1.0 and 0.3 |
 | GET | `/runtime/apps/{app}/users/{user}/sessions/{session}/workflow-runs/{call}` (and under `/runtime/pages/{token}`) | How the workflow run a chat's call of a workflow tool started is going, for the person whose conversation it is: its status and the steps it reached, with their times (no inputs or outputs); the chat draws it as a card while the call waits |
-| GET | `/runtime/pages/{token}` | A chat page: the agent shared at a link (`/chat/{token}` in the console), its name, description, the page's settings (`chat_agents/page_settings.py`: words, prompt suggestions, what it hides, follow-ups, theme, accent, message style, corners, font, width), its agents' and workflow tools' names, and `appName` |
-| POST | `/runtime/pages/{token}/run_sse`; GET, POST `/runtime/pages/{token}/apps/{app}/users/{visitor}/sessions`… | The run API through a chat page's link, for anyone who has it, public runtime or not: its agent's latest published version only, into visitors' conversations (`visitor_…`) |
+| GET | `/runtime/pages/{token}` | A chat page: the agent shared at a link (`/chat/{token}` in the console), its name, description, the page's settings (`chat_agents/page_settings.py`: words, prompt suggestions, what it hides, follow-ups, a button opening it in the desktop app (`desktop_link`, `forge-agents://add?…`), theme, accent, message style, corners, font, width), its agents' and workflow tools' names, and `appName` |
+| POST | `/runtime/pages/{token}/run_sse`; GET, POST `/runtime/pages/{token}/apps/{app}/users/{visitor}/sessions`… | The run API through a chat page's link, for anyone who has it: its agent's latest published version only, into the visitor's own conversations, each call sending the token the API signed for them (`X-Forge-Visitor`) |
+| POST | `/runtime/pages/{token}/visitors` | A chat page's visitor: their user ID (`visitor_…`) and the token saying so (`chat_agents/visitors.py`); sent with a token still good, the same visitor with a new one |
 | GET | `/runtime/workflows/{ref}` | A workflow at a version (`ag_x`, `ag_x@3`, `ag_x@draft`): its name, what it does, the input its start takes |
 | POST | `/runtime/workflows/{ref}/runs` | Run it, `{"input", "wait"?}`: 201 with the run (and `Location`), once it pauses or ends or `wait` runs out |
 | GET | `/runtime/workflows/{ref}/runs/{run}?wait=` | Follow a run |
@@ -713,27 +724,44 @@ chat agents over ADK's run API (`chat_agents/runtime.py`, the
 URLs, by name (`ca_…`, `ag_…`; workflows' is `adk_workflows/a2a.py`, an
 `A2aService` of the runtime's A2A router).
 
-Who may call is one setting, `FORGE_ADMIN_AGENT_RUNTIME_PUBLIC`
-(`auth/runtime_access.py`):
+Who may call (`auth/runtime_access.py`): every call needs an organization's
+API key or a Forge sign-in holding `agents:run` in the organization the agent
+or workflow is theirs (`agents:manage` for its draft, `ca_x@draft`,
+`ag_x@draft`); a key only ever reaches its own organization's. Callers are
+let in by the agent's ID and organization before anything of it is read:
+another organization's agent, or one that isn't there, is 404 either way,
+and one that can't be built says so without why. Cards need the same, and
+say how to sign in. The only way in without a key or a sign-in is a
+published agent's chat page, through its link.
 
-- **Public** (the default): anyone may, with no credentials. Credentials
-  sent must be valid, and say who's calling: their A2A tasks and runs are
-  theirs, and their usage.
-- **Not public**: every call needs an organization's API key or a Forge
-  sign-in holding `agents:run` in the organization the agent or workflow is
-  theirs; a key only ever reaches its own organization's. A person's ADK
-  conversations are their own (`userId` is theirs); a key's are its end
-  users', any ID but a Forge user's or another key's. Cards need the same,
-  and say how to sign in.
+Conversations are kept under who the caller is, not the `userId` a call
+names: a person's are their own (they name themself; anyone else is 403); a
+key's are its end users', kept as `apikey:<id>/<user>`, so no other key of
+the organization, nor anyone else, reaches them; a chat page's visitors are
+whoever the token the API signed for them says (`X-Forge-Visitor`,
+`chat_agents/visitors.py`). Their intake requests and the workflow runs
+their calls start follow the same IDs. Every turn checks the chat agent's
+rule as it starts, so access taken away stops a conversation already handed
+to a sub-agent; and an older version, or the draft, is held to the rules
+the live version takes to reach what it uses (`chat_agents/access.py`).
 
-A workflow run started from outside runs as its caller (`apikey:<id>`, a
-person, or `anonymous`), its trigger `{"type": "runtime", "protocol":
-"rest"|"a2a", …}`. It's its starter's to follow, answer and cancel (an
-anonymous one is anyone's who has its ID); otherwise reading needs
+A workflow run started from outside runs as its caller (`apikey:<id>` or a
+person), its trigger `{"type": "runtime", "protocol": "rest"|"a2a", …}`.
+It's its starter's to follow, answer and cancel; otherwise reading needs
 `organizations:read`, answering `agents:run`, cancelling
 `agents:manage_runs`; anything else answers 404. Approvals are decided only
-by callers holding what the step asks of its approvers: never anonymously.
+by callers holding what the step asks of its approvers.
 `wait` is capped at `FORGE_ADMIN_WORKFLOW_RUNTIME_WAIT` (60 seconds).
+
+A start sent with an `Idempotency-Key` header (up to 255 printable ASCII
+characters) is safe to retry: its run's ID is UUID5 of the key in the
+organization's namespace, so the same key from the same caller starts one
+run, and sending it again answers that run (200, not 201). The key with
+another input, or another caller's key of the same name, answers 409.
+Anonymous callers' keys are ignored (an anonymous run is read by its ID,
+which a key mustn't make guessable). The console's start
+(`…/agents/{agent}/runs`) and resubmit (`…/adk-runs/{run}/resubmit`) take
+the header too.
 
 Over A2A a task is a run (its ID the run's): the first message's data part
 (or text, as JSON) is the input; the task is `working` while the run goes,
@@ -935,6 +963,36 @@ No toolset reaches ADK workflows, their runs or agents yet; on those pages
 the assistant says so (`screens.yaml`'s `organization` screen). Left out on
 purpose: deleting organizations, roles, permissions or users.
 
+## Helper agents
+
+Beside the assistant, the web console calls single-purpose helper agents
+from a dialog or a button: the instruction writer (the ✨ in an LLM agent's
+instruction) and the skill creator (the skills vault). Each is an entry in
+`helpers/helpers.yaml` (or the file `FORGE_ADMIN_AGENT_HELPERS` names): its
+instruction, its kit, its toolsets, its model and thinking level, how long
+it may take, the permission running it takes, and whether the request waits
+for it (`sync`) or it runs as a job (`background`). They all go through one
+entry point and one executor:
+
+| Route | What it does |
+|---|---|
+| `POST /organizations/{id}/helpers/{name}` | The body is the helper's input. A `sync` helper answers `{helper, result, notes, model}`; a `background` one answers 202 with its job |
+| `GET /organizations/{id}/helpers/{name}/jobs` | A background helper's jobs from the last week (`organizations:read`); one left running by a restart is said to have failed |
+| `DELETE /organizations/{id}/helpers/{name}/jobs/{job}` | Dismisses a job (the helper's permission); one still running goes on |
+
+A helper's Python is its kit (`helpers/kit.py`): the input it takes, the
+message the model is sent, and what its answer becomes
+(`instruction_writer/kit.py`, `skills/creator.py`). The `text` kit takes
+`{ask, context?}` and gives back `{text}`, so a helper using it is only
+configuration. Toolsets are named and shared, as in `screens.yaml`
+(`organization` reads what the organization has; `skill_vault` is the skill
+creator's `save_skill`), and `hand_in` names the tool whose last accepted
+call is the result. Each run is its own in-memory ADK conversation on the
+assistant's models, and its calls count as the assistant's. Background jobs
+are kept in `helper_jobs` (`0032helper_jobs`). The file is read and checked
+at startup: a helper naming a kit, toolset, tool or model that doesn't exist
+stops the API; restart it after a change.
+
 ## Sign-in and the local site administrator
 
 Every request signs in the way it will in production: an
@@ -983,7 +1041,10 @@ The web console reaches the API at `VITE_API_URL`:
 `http://localhost:8101/api/v1` for `make web` (as in
 `apps/forge-web/.env.example`), `http://localhost:18201/api/v1` for `make up`
 (`.env.compose`). `.env.example` already allows both consoles' origins in
-`FORGE_ADMIN_CORS_ORIGINS`.
+`FORGE_ADMIN_CORS_ORIGINS`, and the desktop app's (`apps/forge-desktop`): its
+dev server's, `http://localhost:5195`, and its window's, `tauri://localhost`
+on macOS and Linux and `http://tauri.localhost` on Windows. A deployment
+whose people use the desktop app adds those two.
 
 ## Run locally
 
@@ -1093,7 +1154,7 @@ of it reaches the settings unless `.env` references it. `make env` creates
 | `FORGE_ADMIN_NAME` | `forge-admin` | The service's name, in `/info` and the API docs |
 | `FORGE_ADMIN_API_PREFIX` | `/api/v1` | Prefix for `/info` and every router in `ROUTERS` |
 | `FORGE_ADMIN_DOCS_ENABLED` | `true` | Serve `/docs` and `/openapi.json` |
-| `FORGE_ADMIN_CORS_ORIGINS` | `[]` | JSON array of allowed browser origins (`.env.example`: both web consoles) |
+| `FORGE_ADMIN_CORS_ORIGINS` | `[]` | JSON array of allowed browser origins (`.env.example`: both web consoles and the desktop app) |
 | `FORGE_ADMIN_API_KEY` | unset | Require this `X-API-Key` on routes below the prefix |
 | `FORGE_ADMIN_JWT_SECRET` | unset | HS256 key for bearer tokens (32+ characters); unset, tokens are refused and the assistant has no tools |
 | `FORGE_ADMIN_JWT_ISSUER` / `_AUDIENCE` | unset | When set, tokens must carry this `iss` / `aud`, and minted ones do (`.env.example`: `forge-local` / `forge-admin`) |
@@ -1110,6 +1171,7 @@ of it reaches the settings unless `.env` references it. `make env` creates
 | `FORGE_ADMIN_AGENT_MODEL` | the configuration's default, or `gemini-3.5-flash` | The model the assistant runs on until a conversation chooses: `provider/model`, or an id only one provider has |
 | `FORGE_ADMIN_AGENT_MODELS` | `[]` | JSON array: with a model provider configuration, which of its models a conversation may choose (all when empty); without, other Gemini models |
 | `FORGE_ADMIN_AGENT_SCREENS` | unset | A screen configuration shaped like `assistant/screens.yaml`, which is used when this is unset |
+| `FORGE_ADMIN_AGENT_HELPERS` | unset | The helper agents, a file shaped like `helpers/helpers.yaml`, which is used when this is unset (see [Helper agents](#helper-agents)) |
 | `FORGE_ADMIN_MCP_SERVER_DEFAULTS` | unset | The MCP servers offered ready-made, a file shaped like `mcp_servers/default_servers.yaml`, which is used when this is unset (see [MCP servers](#mcp-servers)) |
 | `FORGE_ADMIN_CODEGRAPH_MCP_URL` | `http://localhost:8103/mcp` | Where the ready-made code explorer is (a reference of `default_servers.yaml`, not a setting); Compose sets the stack's |
 | `FORGE_ADMIN_HOST` / `_PORT` | `127.0.0.1` / `8101` | Listener; the image sets `0.0.0.0` |

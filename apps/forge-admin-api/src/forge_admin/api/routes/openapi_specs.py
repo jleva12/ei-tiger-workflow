@@ -14,7 +14,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, status
 from forge_agent_runtime import RuntimeServices
-from forge_agent_runtime.openapi import SpecError, describe_spec, fetch_spec, load_spec
+from forge_agent_runtime.openapi import SpecError, describe_spec, fetch_spec, read_spec
 from forge_agent_runtime.services import RequestAuth
 from forge_agent_runtime.tools import MissingSetting, fill_references, http_client
 from forge_mcp_servers import ApiCredentials, CredentialUnavailable, sends_to
@@ -130,7 +130,7 @@ async def read_openapi_spec(
             except SpecError as error:
                 raise _unprocessable(str(error)) from None
     try:
-        found = await describe_spec(load_spec(text))
+        found = await describe_spec(await read_spec(text))
     except SpecError as error:
         raise _unprocessable(str(error)) from None
     return SpecRead.model_validate(

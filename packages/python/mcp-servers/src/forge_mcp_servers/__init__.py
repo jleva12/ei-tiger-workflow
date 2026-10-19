@@ -29,7 +29,12 @@ from forge_mcp_servers.api_credentials import (
 from forge_mcp_servers.secrets import SecretBox, SecretsError
 from forge_mcp_servers.service import McpServers, ServerRow
 from forge_mcp_servers.store import SqlServerStore, StoredServer
-from forge_mcp_servers.toolset import McpServerGone, ServerStore, mcp_toolset
+from forge_mcp_servers.toolset import (
+    McpServerChanged,
+    McpServerGone,
+    ServerStore,
+    mcp_toolset,
+)
 
 __all__ = [
     "CREDENTIAL_METHODS",
@@ -42,6 +47,7 @@ __all__ = [
     "request_credentials",
     "sends_to",
     "McpServerGone",
+    "McpServerChanged",
     "McpServers",
     "SecretBox",
     "SecretsError",

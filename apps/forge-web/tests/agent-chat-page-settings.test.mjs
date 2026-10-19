@@ -36,8 +36,10 @@ test("a page without a setting (an older page or server) has its default", () =>
   assert.equal(older.hide_history, true)
   assert.equal(older.follow_ups, true)
   assert.equal(older.theme, "light")
-  // Visitors can switch the theme until the page turns it off.
+  // Visitors can switch the theme until the page turns it off; the page
+  // offers the desktop app only once it's turned on.
   assert.equal(older.theme_toggle, true)
+  assert.equal(older.desktop_link, false)
   assert.equal(older.accent, null)
   // Only settings: not the page's link or who changed it.
   assert.equal("token" in older, false)

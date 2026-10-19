@@ -13,6 +13,7 @@ import {
   TextField,
 } from "@/features/builder/components/fields/basic-fields"
 import { ModelFields } from "@/features/builder/components/fields/model-fields"
+import { MarkdownTemplateField } from "@/features/builder/components/fields/markdown-template-field"
 import { SchemaField } from "@/features/builder/components/fields/schema-field"
 import { KindGlyph } from "@/features/builder/components/glyph"
 import { FieldsReadOnly } from "@/features/builder/components/fields/read-only"
@@ -61,6 +62,7 @@ import {
   type ToolLookups,
 } from "@/features/agents/components/tool-fields"
 import { InstructionWriter } from "@/features/agents/components/instruction-writer"
+import { instructionEditor } from "@/features/agents/lib/instruction-writer"
 import { FolderPlace } from "@/features/adk-workflows/components/folder-place"
 import { chatKindInfo } from "@/features/agents/lib/catalog"
 import type { ExpressionSetting } from "@/features/steps/lib/fields"
@@ -202,6 +204,60 @@ function Setting({
   /** How it's written while the node doesn't hold it yet (an input not filled in). */
   fallback?: Pick<ExpressionSetting, "mode" | "check">
 }) {
+  const { scope, spec, issues, key } = useSetting(id, setting, fallback)
+  if (!spec) return null
+  return (
+    <ExpressionField
+      {...field}
+      mode={spec.mode}
+      scope={scope}
+      check={spec.check}
+      issues={issues}
+      field={key}
+    />
+  )
+}
+
+/**
+ * An instruction: a Markdown template, its first lines here and the whole
+ * of it in the rich text editor in a card beside, checked against what the
+ * node can read as the other settings are.
+ */
+function InstructionSetting({
+  id,
+  setting,
+  ...field
+}: Omit<
+  React.ComponentProps<typeof MarkdownTemplateField>,
+  "scope" | "check" | "issues" | "field"
+> & {
+  id: string
+  /** Its key in adk-workflows/lib/fields.ts. */
+  setting: string
+}) {
+  const { scope, spec, issues, key } = useSetting(id, setting)
+  if (!spec) return null
+  return (
+    <MarkdownTemplateField
+      {...field}
+      scope={scope}
+      check={spec.check}
+      issues={issues}
+      field={key}
+    />
+  )
+}
+
+/**
+ * What a setting of node `id` reads (its scope), how it's written and held
+ * (from its kind), and its issues but for its expression's, which the field
+ * checks itself.
+ */
+function useSetting(
+  id: string,
+  setting: string,
+  fallback?: Pick<ExpressionSetting, "mode" | "check">
+) {
   const scopeOf = useAgentBuilder((s) => s.scopeOf)
   const step = useAgentBuilder((s) => s.nodes.find((n) => n.id === id)?.data)
   const chatAgents = useAgentBuilder((s) => s.lookups.chatAgents)
@@ -220,19 +276,13 @@ function Setting({
         : undefined) ?? fallback,
     [step, setting, fallback, chatAgents, workflows]
   )
-  // Its issues, but for its expression's: it checks those itself.
   const { issues, key } = useFieldIssues(setting, { whole: true })
-  if (!spec) return null
-  return (
-    <ExpressionField
-      {...field}
-      mode={spec.mode}
-      scope={scope}
-      check={spec.check}
-      issues={issues.filter((i) => !i.id.includes(":field:"))}
-      field={key}
-    />
-  )
+  return {
+    scope,
+    spec,
+    issues: issues.filter((i) => !i.id.includes(":field:")),
+    key,
+  }
 }
 
 const code = (text: string) => (
@@ -1249,30 +1299,39 @@ function LlmFields({
         onChange={(value) => set("description", value)}
         description="Other agents read this when deciding to hand off to it."
       />
-      <Setting
+      <InstructionSetting
         id={id}
         setting={instruction}
         label="Instruction"
         value={config.instruction}
-        multiline
-        rows={6}
         placeholder="What the agent should do, and how."
         onChange={(value) => set("instruction", value)}
-        actions={
+        writer={({ value, onApply }) => (
           <InstructionWriter
             organizationId={organizationId}
-            value={config.instruction}
-            onApply={(value) => set("instruction", value)}
+            value={value}
+            onApply={onApply}
             brief={() =>
               workflowInstructionBrief(store.getState(), id, path, client)
             }
           />
+        )}
+        ai={instructionEditor(organizationId, () =>
+          workflowInstructionBrief(store.getState(), id, path, client)
+        )}
+        editorDescription={
+          <>
+            What the agent is told, in Markdown. {code("{{")} puts in the
+            run&apos;s data as it runs: the input, what an earlier node handed
+            on ({code("steps")}), or what a sub-agent answered ({code("state")}
+            ).
+          </>
         }
         description={
           <>
-            Type {code("{{")} to put in the run&apos;s data as it runs: the
-            input, what an earlier node handed on ({code("steps")}), or what a
-            sub-agent answered ({code("state")}).
+            {code("{{")} puts in the run&apos;s data as it runs: the input, what
+            an earlier node handed on ({code("steps")}), or what a sub-agent
+            answered ({code("state")}).
           </>
         }
       />
@@ -1712,6 +1771,7 @@ function PiToolsField({
 
 function PiAgentFields({ id, config }: Props<"pi_agent">) {
   const { set, patch } = useNodeBind<"pi_agent">(id, config)
+  const organizationId = useAgentBuilder((s) => s.meta.organization_id)
   return (
     <>
       <Setting
@@ -1753,15 +1813,15 @@ function PiAgentFields({ id, config }: Props<"pi_agent">) {
           </>
         }
       />
-      <Setting
+      <InstructionSetting
         id={id}
         setting="instruction"
         label="Instruction"
         value={config.instruction}
-        multiline
-        rows={3}
         placeholder="Only ever read: never change a file."
         onChange={(value) => set("instruction", value)}
+        editorDescription="Added to pi's own instructions, which already make it a coding agent. Markdown, sent as written."
+        ai={instructionEditor(organizationId)}
         description="Added to pi's own instructions, which already make it a coding agent."
       />
       <PiToolsField

@@ -24,6 +24,11 @@ copied back.
   its time, it's sent SIGTERM, then SIGKILL; a run stopped (abandoned) stops
   it too. What it wrote to stdout and stderr is kept up to a limit each: the
   end of it.
+- **It goes with its worker.** Its process group is tied to the worker's
+  process (``forge_common.processes``): a worker that dies, ``kill -9`` too,
+  takes its commands with it. Each carries its step's key as a tag, so the
+  run's next attempt on the same machine stops what a worker that froze left
+  running (:func:`stop_leftovers`) before it decides what became of the step.
 """
 
 from __future__ import annotations
@@ -36,6 +41,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from forge_common.processes import TAG_PREFIX, Tie, stop_tagged
+
 from forge_task_adk_workflows.support.errors import StepFailed
 
 #: How a worker that doesn't run commands is set to.
@@ -47,6 +54,11 @@ NO_COMMANDS = (
 VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 #: The variable every command reads its run's folder from.
 WORKSPACE_VARIABLE = "WORKSPACE"
+#: The variable a command reads its step's key from: the same for every
+#: attempt of the step's one execution (``graph.factories.base.Attempt``).
+KEY_VARIABLE = "FORGE_IDEMPOTENCY_KEY"
+#: Variables a step's own can't be called.
+RESERVED_VARIABLES = frozenset({WORKSPACE_VARIABLE, KEY_VARIABLE})
 #: The worker's own variables every command gets, when the worker has them.
 PASSED = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR")
 #: Nothing it runs asks for a password or a choice: there's nobody to answer.
@@ -159,6 +171,7 @@ async def run_command(
     env: Mapping[str, str],
     seconds: float,
     max_bytes: int,
+    key: str = "",
 ) -> Finished:
     """
     Run a command by bash, to its end.
@@ -168,11 +181,13 @@ async def run_command(
     :param env: Its whole environment.
     :param seconds: How long it may take.
     :param max_bytes: The most of stdout, and of stderr, kept.
+    :param key: Its step's key: what it's found by should it outlive its
+        attempt (:func:`stop_leftovers`).
     :return: How it ended, whatever its exit code.
     :raises StepFailed: When it can't start, or doesn't finish in time (with
         what it wrote by then).
     """
-    return await run_program((*BASH, command), cwd=cwd, env=env, seconds=seconds, max_bytes=max_bytes)
+    return await run_program((*BASH, command), cwd=cwd, env=env, seconds=seconds, max_bytes=max_bytes, key=key)
 
 
 async def run_program(
@@ -182,31 +197,40 @@ async def run_program(
     env: Mapping[str, str],
     seconds: float,
     max_bytes: int,
+    key: str = "",
 ) -> Finished:
     """
     Run a program with its arguments as they are (no shell), to its end, as
-    :func:`run_command` runs bash: in a process group of its own, stopped
-    past its time, the end of what it wrote kept.
+    :func:`run_command` runs bash: in a process group of its own, tied to the
+    worker's process, stopped past its time, the end of what it wrote kept.
 
     :param argv: The program, found on ``env``'s PATH, and its arguments.
+    :param key: Its step's key, its tie's tag (:func:`stop_leftovers`); empty for none.
     :return: How it ended, whatever its exit code.
     :raises StepFailed: When it can't start, or doesn't finish in time.
     """
+    tie = Tie(tag_of(key) if key else "")
     try:
         process = await asyncio.create_subprocess_exec(
-            *argv,
+            *tie.argv(argv, path=env.get("PATH", os.defpath)),
             cwd=cwd,
             env=dict(env),
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            # A process group of its own, without the worker's terminal.
+            # A process group of its own, without the worker's terminal; its
+            # watcher in it, holding the tie's pipe.
             start_new_session=True,
+            pass_fds=tie.fds,
         )
     except FileNotFoundError:
+        tie.close()
         raise StepFailed(f"{argv[0]} isn't on this worker's PATH") from None
     except (OSError, ValueError) as error:
+        tie.close()
         raise StepFailed(f"{argv[0]} can't start: {getattr(error, 'strerror', None) or error}") from None
+    finally:
+        tie.started()
     out, err = Tail(max_bytes), Tail(max_bytes)
     reading = asyncio.ensure_future(asyncio.gather(out.read(process.stdout), err.read(process.stderr)))
     timed_out = False
@@ -236,6 +260,8 @@ async def run_program(
             # Stopped itself (its run abandoned): the command stops too.
             _signal(process.pid, signal.SIGKILL)
         reading.cancel()
+        # Its group is gone (killed): its watcher has nothing left to watch.
+        tie.close()
     ended = finished(process.returncode if process.returncode is not None else -signal.SIGKILL, out, err)
     if timed_out:
         raise StepFailed(
@@ -243,6 +269,22 @@ async def run_program(
             details={"stdout": ended.stdout, "stderr": ended.stderr},
         )
     return ended
+
+
+def tag_of(key: str) -> str:
+    """:return: The tag a step's commands carry (their tie's): its key's."""
+    return f"{TAG_PREFIX}step={key}"
+
+
+async def stop_leftovers(key: str) -> int:
+    """
+    Stop what a step's earlier attempt left running on this machine (its
+    worker froze, or lost the run, rather than die): every process group of
+    a command tagged with its key, killed, and waited for.
+
+    :return: How many were.
+    """
+    return await stop_tagged(tag_of(key))
 
 
 def last_line(text: str, limit: int = 300) -> str:

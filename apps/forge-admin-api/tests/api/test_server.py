@@ -37,6 +37,8 @@ def test_health_probes_and_info(settings: Settings) -> None:
     assert ready.status_code == 503
     assert ready.json() == {"status": "unavailable"}
     assert info.json()["name"] == "forge-admin"
+    # The most a Workflow tool's "Wait up to" can be, for the builder to say.
+    assert info.json()["agent_workflow_wait_max"] == settings.agent_workflow_wait_max
 
 
 def test_routers_are_mounted_below_the_api_prefix(settings: Settings) -> None:

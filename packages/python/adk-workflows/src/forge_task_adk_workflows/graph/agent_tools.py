@@ -11,15 +11,17 @@ carries (its payload's snapshots, ``graph.uses``), when they're first used.
 - :func:`agent_node`: an ``llm`` node whose ``source`` is ``agent``: the
   agent from the Agents page, whole (its instruction, model, tools and
   hand-offs), sent the node's message, with its input schema's fields set
-  from the run's data.
+  from the run's data. Tools of its that can't be listed fail its step too
+  (:class:`StepTools`), where a chat would run without them.
 - :class:`AgentServices`: what both use: the models, the runtime's services
   (``${NAME}`` filled in from the worker's environment, where HTTP may go,
   the organization's MCP servers), knowledge base search, and the run's
   snapshots; and the toolsets a run opened, closed when it stops.
 - :class:`ChildRuns` and :class:`RunWorkflows`: a workflow called as a tool
-  is a run of its own, started and waited for, as the hosted runtime's are,
-  under an ID its call makes for it (:func:`child_run_id`): a call answered
-  after its worker stopped is answered with the run it started.
+  is a run of its own, under an ID its call makes for it (:func:`child_run_id`):
+  a call answered after its worker stopped is answered with the run it
+  started. The calling run doesn't wait for it in its worker's slot: it
+  pauses until that run ends (:meth:`RunWorkflows.waits_apart`).
 - :func:`reads_only` and :func:`note_tool_calls`: which tools only read, and
   the run's note of each other call, made before it runs.
 """
@@ -43,11 +45,19 @@ from forge_agent_runtime import (
     build_tools,
     parse_document,
 )
+from forge_agent_runtime.access import HeldAccess, caller_from_json
 from forge_agent_runtime.document import DocumentError
 from forge_agent_runtime.executor import check_state
 from forge_agent_runtime.services import ToolValues
 from forge_agent_runtime.templating import REQUEST_KEY
-from forge_agent_runtime.tools import HttpTool, KnowledgeBaseTool, SystemDesignTool, WorkflowTool
+from forge_agent_runtime.tools import (
+    CalledAgent,
+    HttpTool,
+    KnowledgeBaseTool,
+    LentToolset,
+    SystemDesignTool,
+    WorkflowTool,
+)
 from forge_codegraph import (
     Repository,
     Searched,
@@ -58,6 +68,7 @@ from forge_codegraph import (
     system_summary,
 )
 from forge_codegraph_query import GraphError
+from forge_common.adk import ForgeBaseToolset
 from forge_common.patterns import schema_errors
 from google.adk import Context, Event
 from google.adk.agents import BaseAgent, LlmAgent
@@ -84,10 +95,15 @@ log = logging.getLogger(__name__)
 #: Seconds a run waits for each thing it opened to finish closing (an MCP
 #: session, its runner), as ADK's own runner waits for a toolset.
 CLOSE_SECONDS = 10.0
-#: How long a workflow called as a tool is polled for its end.
+#: How often a workflow called as a tool by a sub-agent's own runner (which a
+#: run can't pause) is read until it ends.
 _POLL = 0.5
-#: A run that's still going (the run store's open statuses, but paused).
+#: A run that's still going (the run store's open statuses, but paused):
+#: what a call waiting in place waits through.
 _GOING = frozenset({"queued", "running", "waiting"})
+#: A run that ended (the run store's finished statuses): what a call waiting
+#: apart waits for.
+_ENDED = frozenset({"succeeded", "failed", "abandoned"})
 #: What the IDs of the runs a run's calls start are made in (:func:`child_run_id`).
 _CHILDREN = uuid.UUID("5f0e6a2c-8f53-4c3e-9a4e-0d7b3c1f2a61")
 #: Tools that only read: calling one again does nothing it didn't.
@@ -147,6 +163,8 @@ class AgentServices:
     :ivar knowledge_bases: The knowledge bases it carries: name, description and
         kind, and a graph one's repositories, by ID (per run).
     :ivar skills: The skills its LLM agents' Skills tools use, whole, by ID (per run).
+    :ivar access: What whoever the run is for held of the agent permissions its
+        agents' rules name, as it started (``caller_json``; per run); None: nobody holds any.
     :ivar workflows: Runs the workflows its LLM agents call (per run).
     :ivar opened: The toolsets the run built: closed when it stops.
     """
@@ -161,6 +179,7 @@ class AgentServices:
     chat_agents: Mapping[str, dict[str, Any]] = field(default_factory=dict)
     knowledge_bases: Mapping[str, dict[str, Any]] = field(default_factory=dict)
     skills: Mapping[str, dict[str, Any]] = field(default_factory=dict)
+    access: Mapping[str, Any] | None = None
     workflows: Any = None
     opened: list[BaseToolset] = field(default_factory=list)
 
@@ -172,6 +191,7 @@ class AgentServices:
         knowledge_bases: Mapping[str, dict[str, Any]],
         workflows: Any = None,
         skills: Mapping[str, dict[str, Any]] | None = None,
+        access: Mapping[str, Any] | None = None,
     ) -> "AgentServices":
         """:return: These services for one run: what it carries, and nothing opened yet."""
         return replace(
@@ -180,6 +200,7 @@ class AgentServices:
             chat_agents=dict(chat_agents),
             knowledge_bases=dict(knowledge_bases),
             skills=dict(skills or {}),
+            access=access,
             workflows=workflows,
             opened=[],
         )
@@ -190,12 +211,17 @@ class AgentServices:
         return {f"{doc.get('id')}@{doc.get('version')}": doc for doc in self.chat_agents.values()}
 
     def tool_services(self) -> RuntimeServices:
-        """:return: The runtime's services for this run's tools: its knowledge bases, workflows and skills."""
+        """
+        :return: The runtime's services for this run's tools: its knowledge
+            bases, workflows and skills, and what its agents' rules are
+            checked against: what whoever it's for held as it started.
+        """
         return replace(
             self.runtime,
             knowledge_bases=SnapshotKnowledgeBases(self.knowledge_bases, self.search, self.code),
             workflows=self.workflows,
             skills=BundledSkills(self.skills),
+            access=HeldAccess(caller_from_json(self.access)) if self.access is not None else None,
         )
 
     def keep(self, built: Sequence[Any]) -> None:
@@ -396,7 +422,9 @@ class LazyToolset(BaseToolset):
         for item in await self._build():
             if isinstance(item, BaseToolset):
                 try:
-                    tools.extend(await item.get_tools(readonly_context))
+                    # A chat agent runs without tools that won't list; a step fails.
+                    listing = item.get_tools_or_raise if isinstance(item, ForgeBaseToolset) else item.get_tools
+                    tools.extend(await listing(readonly_context))
                 except Exception as error:  # An MCP server that won't connect, or lets nothing in.
                     self.failure = RunFailed(f"{self.where}: {type(error).__name__}: {error}", step=self.step)
                     raise self.failure from None
@@ -417,7 +445,77 @@ class LazyToolset(BaseToolset):
                 await item.close()
 
 
-def failing_tools_first(tools: Sequence[LazyToolset], callback: Any) -> Callable[..., Any]:
+class StepTools(LentToolset):
+    """
+    A toolset of an Agents-page agent a step runs (:func:`agent_node`), or of
+    one it hands off to or calls as a tool: used as the agent has it, but
+    when its tools can't be listed (an MCP server that won't connect), the
+    step fails saying why (``failure``, :func:`fail_unlisted_tools`), as an
+    LLM step's own tools do, where a chat agent would run without them. The
+    run closes the toolset (``AgentServices.keep``), not a runner it's lent to.
+
+    :param label: How the failure names the step: ``Triage (triage)``.
+    :param step: The step's ID.
+    """
+
+    def __init__(self, toolset: BaseToolset, *, label: str, step: str | None) -> None:
+        super().__init__(toolset)
+        self.label = label
+        self.step = step
+        self.failure: RunFailed | None = None
+
+    async def get_tools(self, readonly_context: ReadonlyContext | None = None) -> list[BaseTool]:
+        toolset = self.toolset
+        listing = toolset.get_tools_or_raise if isinstance(toolset, ForgeBaseToolset) else toolset.get_tools_with_prefix
+        try:
+            tools = await listing(readonly_context)
+        except Exception as error:
+            agent = readonly_context.agent_name if readonly_context is not None else "its agent"
+            self.failure = RunFailed(
+                f"{self.label} failed: tools of {agent} can't be used: {type(error).__name__}: {error}",
+                step=self.step,
+            )
+            raise self.failure from None
+        # Listed again once it can be (the step run again): it no longer fails it.
+        self.failure = None
+        return tools
+
+
+def fail_unlisted_tools(agent: BaseAgent, *, label: str, step: str | None) -> None:
+    """
+    Gives an Agents-page agent a step runs, and every agent it hands off to
+    or calls as a tool, :class:`StepTools` in place of its toolsets, and has
+    each check them all first among its ``before_model_callback``: tools any
+    of them can't list fail the step, however the call that reached it ends.
+    """
+    listed: list[StepTools] = []
+    agents: list[LlmAgent] = []
+
+    def visit(at: BaseAgent) -> None:
+        if isinstance(at, LlmAgent):
+            agents.append(at)
+            tools: list[Any] = []
+            for tool in at.tools:
+                own = tool.toolset if isinstance(tool, LentToolset) else tool
+                if isinstance(own, CalledAgent):
+                    # An agent it calls as a tool: its own toolsets, on a runner of its own.
+                    visit(own.tool.agent)
+                elif isinstance(own, BaseToolset):
+                    tool = StepTools(own, label=label, step=step)
+                    listed.append(tool)
+                tools.append(tool)
+            at.tools = tools
+        for sub in at.sub_agents:
+            visit(sub)
+
+    visit(agent)
+    check = failing_tools_first(listed, None)
+    for at in agents:
+        current = at.before_model_callback
+        at.before_model_callback = [check, *(current if isinstance(current, list) else [current] if current else [])]
+
+
+def failing_tools_first(tools: Sequence[LazyToolset | StepTools], callback: Any) -> Callable[..., Any]:
     """
     An LLM agent's ``before_model_callback``: it fails its step when one of
     its tools couldn't be set up (ADK would have it answer without it), then
@@ -437,18 +535,21 @@ def failing_model_errors(label: str, step: str | None) -> Callable[..., None]:
     """
     An LLM agent's ``after_model_callback``: a model that answers with an error
     instead of an answer fails the agent's step, as a model that raised would.
-    ADK reports some failures that way without raising (``error_code``: a
-    Gemini answer stopped for SAFETY, RECITATION or MAX_TOKENS with nothing
-    said, a blocked prompt); the step would end with no answer, and the steps
-    after it run on without one.
+    ADK reports some failures that way without raising, including errors on
+    partial responses and interrupted generations. Those must not let later
+    steps run on an unfinished answer.
 
     :param label: How the failure names the step: ``Triage (triage)``.
     :param step: The step's ID.
     """
 
     def check(callback_context: CallbackContext, llm_response: LlmResponse) -> None:
-        if llm_response.error_code and not llm_response.partial:
+        if llm_response.error_code or llm_response.error_message:
             raise RunFailed(f"{label} failed: {model_error(llm_response)}", step=step)
+        if llm_response.interrupted:
+            raise RunFailed(
+                f"{label} failed: its model stopped before finishing its response. Please try again.", step=step
+            )
 
     return check
 
@@ -468,7 +569,7 @@ def model_error(llm_response: LlmResponse) -> str:
         the code means, and how many tokens it had answered with (``its model
         answered with an error (MAX_TOKENS) after 1,024 output tokens: ...``).
     """
-    code = str(getattr(llm_response.error_code, "value", llm_response.error_code))
+    code = str(getattr(llm_response.error_code, "value", llm_response.error_code) or "MODEL_ERROR")
     usage = llm_response.usage_metadata
     tokens = usage.candidates_token_count if usage is not None else None
     after = f" after {tokens:,} output tokens" if tokens else ""
@@ -605,6 +706,7 @@ def agent_node(
                     # It reads the run's files and saves its own, as the run's LLM agents do.
                     add_tools(agent, file_tools(file.name for file in services.files))
                 fail_model_errors(agent, failing_model_errors(label, step))
+                fail_unlisted_tools(agent, label=label, step=step)
                 note_tool_calls(agent, getattr(services, "tool_calls", None))
                 built.append(agent)
             return built[0]
@@ -650,7 +752,10 @@ def agent_node(
                 callback_context.state[key] = value
             return None
 
-        running = agent.clone(update={"before_agent_callback": set_state})
+        # Before its own: the check of its node's rule, when it has one.
+        current = agent.before_agent_callback
+        kept = current if isinstance(current, list) else [current] if current else []
+        running = agent.clone(update={"before_agent_callback": [set_state, *kept]})
         # What it asks its agent, kept before the agent runs: the run page
         # shows it, though the agent fail.
         yield Event(custom_metadata={CALLED_WITH_KEY: {"message": text, "inputs": as_data(checked)}})
@@ -664,23 +769,69 @@ class RunWorkflows:
     """
     The workflows a run's LLM agents call as tools (the runtime's
     ``WorkflowRunner``): each a run of its own, of the document the run
-    carries, as the member the run acts as, waited for a while. A run that
-    pauses (an approval, a person's answer) or takes longer answers with
-    where it got to. Each call's run has the ID the call makes for it
+    carries, as the member the run acts as, waited for a while (the call's
+    wait). Each call's run has the ID the call makes for it
     (:func:`child_run_id`): a call answered after its worker stopped is
-    answered with the run it started (:meth:`attach`), never another.
+    answered with the run it started, never another.
+
+    A call made in the run's own invocation (:meth:`waits_apart`) starts its
+    run and returns nothing: its tool is long-running there
+    (``forge_agent_runtime.WorkflowTools``), so ADK pauses its agent at the
+    call, and the calling run waits for the run at a gate of its own (runs.py),
+    its worker's slot given back meanwhile. The run's end (or the call's wait
+    being up) answers the call with the run as it is then (:meth:`answer_of`).
+    A call made anywhere else (a sub-agent's tool, which runs in a runner of
+    its own that the run can't pause) waits for its run in place (:meth:`attach`).
 
     :param payload: The calling run (its ``RunPayload``, as a dict).
     :param run_id: The calling run's ID.
     :param children: Starts and reads runs.
     :param wait: Seconds to wait for one.
+    :param invocation_id: The calling run's ADK invocation: calls made in it
+        wait for their runs apart. None: every call waits in place.
+    :param adopted: Calls answered by a run an earlier call started, by call
+        ID (an agent that sees only its own turn making that call again while
+        the run still goes): ``{run, since, wait}``, the run, and when the call
+        was made and how long it waits. They start no run of their own. Kept
+        with the run.
     """
 
-    def __init__(self, payload: dict[str, Any], *, run_id: str, children: ChildRuns, wait: float) -> None:
+    def __init__(
+        self,
+        payload: dict[str, Any],
+        *,
+        run_id: str,
+        children: ChildRuns,
+        wait: float,
+        invocation_id: str | None = None,
+        adopted: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         self.payload = payload
         self.run_id = run_id
         self.children = children
         self.wait = wait
+        self.invocation_id = invocation_id
+        self.adopted = adopted if adopted is not None else {}
+        #: What calls waiting apart that failed answer (their tool's failure), by call ID: for this attempt.
+        self.failures: dict[str, dict[str, Any]] = {}
+
+    def waits_apart(self, context: Any) -> bool:
+        """:return: Whether a call made in ``context`` waits for its run apart
+        from the call: in the run's own invocation, which can pause."""
+        return self.invocation_id is not None and getattr(context, "invocation_id", None) == self.invocation_id
+
+    def refused(self, context: Any, answer: dict[str, Any]) -> None:
+        """A call waiting apart failed before its run started (input that
+        doesn't fit the workflow's start, a run that can't be started): the
+        calling run answers it with ``answer``, its tool's failure."""
+        call_id = getattr(context, "function_call_id", None)
+        if call_id:
+            self.failures[str(call_id)] = dict(answer)
+
+    def child_of(self, call_id: str) -> str:
+        """:return: The run a call waits for: the one it started, or the one it was answered by."""
+        adopted = self.adopted.get(call_id)
+        return str(adopted["run"]) if adopted else child_run_id(self.run_id, call_id)
 
     def _document(self, workflow_id: str) -> dict[str, Any]:
         """:param workflow_id: Its reference: ``ag_x``, ``ag_x@3``, ``ag_x@draft``."""
@@ -699,7 +850,13 @@ class RunWorkflows:
         return str(document.get("name") or workflow_id), str(document.get("description") or ""), schema
 
     async def run(
-        self, workflow_id: str, workflow_input: dict[str, Any], *, organization_id: str | None, context: Any
+        self,
+        workflow_id: str,
+        workflow_input: dict[str, Any],
+        *,
+        organization_id: str | None,
+        context: Any,
+        wait: float | None = None,
     ) -> Any:
         document = self._document(workflow_id)
         call_id = getattr(context, "function_call_id", None)
@@ -709,7 +866,9 @@ class RunWorkflows:
             if problems:
                 raise ValueError("The input doesn't fit the workflow's start: " + "; ".join(problems[:5]))
         payload = {
-            **{key: self.payload.get(key) for key in ("tenant_id", "saved", "chat_agents", "knowledge_bases")},
+            **{
+                key: self.payload.get(key) for key in ("tenant_id", "saved", "chat_agents", "knowledge_bases", "skills")
+            },
             # It's called by reference (ag_x@3): the run is of the workflow,
             # at the version it carries (published) or its draft.
             "agent_id": workflow_id.partition("@")[0],
@@ -721,24 +880,37 @@ class RunWorkflows:
             "session_id": str(uuid.uuid4()),
             "run_as": self.payload.get("run_as"),
             "run_as_name": self.payload.get("run_as_name") or "",
+            # What whoever the calling run is for held of the permissions its
+            # agents' rules name, as it started (the agents of the workflows
+            # it calls among them): the run's own agents are checked against
+            # it too, whether its call waits apart or in place.
+            "agent_access": self.payload.get("agent_access"),
             "trigger": {
                 "type": "workflow",
                 "run_id": self.run_id,
                 "agent_id": self.payload.get("agent_id"),
                 "tool_of": getattr(context, "agent_name", None),
                 "call_id": call_id,
+                # How long its call waits for it: the calling run's gate's deadline.
+                "wait_seconds": self.wait if wait is None else wait,
             },
         }
-        child = await self.children.start(payload, run_id=child_run_id(self.run_id, call_id) if call_id else None)
-        return await self.attach(child)
+        child = self.child_of(call_id) if call_id and call_id in self.adopted else None
+        if child is None:
+            child = await self.children.start(payload, run_id=child_run_id(self.run_id, call_id) if call_id else None)
+        if call_id and self.waits_apart(context):
+            return None  # the calling run waits for it, and answers the call
+        return await self.attach(child, wait=wait)
 
-    async def attach(self, child: str) -> dict[str, Any]:
+    async def attach(self, child: str, *, wait: float | None = None) -> dict[str, Any]:
         """
         :param child: A run a call started.
+        :param wait: Seconds to wait for it, as its Workflow tool says; None
+            for this runner's default.
         :return: What the call answers: the run's ID and status, and its
             result or error once it ended; waited for a while first.
         """
-        deadline = asyncio.get_running_loop().time() + self.wait
+        deadline = asyncio.get_running_loop().time() + (self.wait if wait is None else wait)
         current: dict[str, Any] | None = None
         while True:
             current = await self.children.get(child)
@@ -746,12 +918,27 @@ class RunWorkflows:
             if status not in _GOING or asyncio.get_running_loop().time() > deadline:
                 break
             await asyncio.sleep(_POLL)
-        answer: dict[str, Any] = {"run_id": child, "status": status}
+        return self.answer_of(child, current)
+
+    @staticmethod
+    def answer_of(child: str, current: Mapping[str, Any] | None) -> dict[str, Any]:
+        """
+        :param current: The run as the run store has it now; None when there's no such run.
+        :return: What a call answers of the run it started: the run's ID and
+            status (``missing`` when there's none), and its result or error
+            once it ended.
+        """
+        answer: dict[str, Any] = {"run_id": child, "status": current["status"] if current else "missing"}
         if current is not None:
             for key in ("result", "error"):
                 if current.get(key) is not None:
                     answer[key] = current[key]
         return answer
+
+    @staticmethod
+    def going(current: Mapping[str, Any] | None) -> bool:
+        """:return: Whether a run is there and hasn't ended (paused for a person, it's still going)."""
+        return current is not None and current.get("status") not in _ENDED
 
 
 __all__ = [

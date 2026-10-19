@@ -37,16 +37,21 @@ pipefail``, stdin empty, the end of its output kept), with these differences:
   whatever it left running is killed, before the folder is copied back. Past
   its time the gateway stops it, its processes get SIGTERM, 2 seconds, then
   SIGKILL. A run stopped (abandoned) deletes its sandbox, which stops the
-  command. A process killed by a signal exits with 128 and the signal's
-  number, as bash reports it.
+  command; a command still waiting for a thread never starts, and one whose
+  sandbox is being made has it deleted as soon as it exists, nothing run in
+  it. A process killed by a signal exits with 128 and the signal's number,
+  as bash reports it.
 
 A sandbox per command rather than one per run: the folder stays where every
 other step and every attempt of the run finds it, a paused run (waiting on a
 person for days, then carried on by another worker) holds no sandbox, and
 nothing outlives its step that would need finding and deleting after a crash
-(its sandboxes carry the label ``forge=bash-step``). Starting a sandbox and
-copying the folder is the price: a few seconds per step on the VM driver, and
-the folder's size each way.
+(its sandboxes carry the label ``forge=bash-step``), but for a command whose
+worker died as it ran: its sandbox carries its step's key too
+(``forge-step``), and the run's next attempt deletes it (:meth:`OpenShellCommands.stop`)
+before it decides what became of the step. Starting a sandbox and copying
+the folder is the price: a few seconds per step on the VM driver, and the
+folder's size each way.
 """
 
 from __future__ import annotations
@@ -95,6 +100,8 @@ SANDBOX_WORKSPACE = "/sandbox/workspace"
 STAGING = "/sandbox/.forge"
 #: Every sandbox this makes carries it, so a gateway's operator can find them.
 LABELS = {"forge": "bash-step"}
+#: The label a sandbox carries its step's key in (``graph.factories.base.Attempt``).
+KEY_LABEL = "forge-step"
 #: What its sandboxes' names start with; a random part makes each its own
 #: (OpenShell's names are at most 19 characters).
 NAME_PREFIX = "forge-bash-"
@@ -231,6 +238,10 @@ class _CopyBack(Exception):
     """The command's changes couldn't be copied back: the message says why."""
 
 
+class _Stopped(Exception):
+    """Its run stopped: the job goes no further (nobody waits for what it says)."""
+
+
 class _Paths:
     """The run's folder's path on the worker and in the sandbox, each
     changed to the other."""
@@ -316,6 +327,7 @@ class OpenShellCommands:
         env: Mapping[str, str],
         seconds: float,
         max_bytes: int,
+        key: str = "",
     ) -> Finished:
         """
         Run a command by bash in a new sandbox, to its end, the run's folder
@@ -327,23 +339,49 @@ class OpenShellCommands:
         :param env: Its variables (the sandbox has its own PATH and HOME).
         :param seconds: How long it may take.
         :param max_bytes: The most of stdout, and of stderr, kept.
+        :param key: Its step's key, which its sandbox carries (:meth:`stop`).
         :return: How it ended, whatever its exit code.
         :raises StepFailed: When it can't run (no sandbox, a folder too big
             to copy), doesn't finish in time, or what it changed can't be
             copied back (with what it wrote).
         """
-        job = _Job(self, command, workspace=workspace, folder=folder, env=env, seconds=seconds, max_bytes=max_bytes)
-        loop = asyncio.get_running_loop()
-        running = loop.run_in_executor(self._threads, job.run)
+        job = _Job(
+            self, command, workspace=workspace, folder=folder, env=env, seconds=seconds, max_bytes=max_bytes, key=key
+        )
+        queued = self._threads.submit(job.run)
+        running = asyncio.wrap_future(queued)
         running.add_done_callback(_settled)
         try:
             return await asyncio.shield(running)
         except asyncio.CancelledError:
-            # Its run stopped (abandoned): the sandbox goes now, which stops
-            # the command; nothing it did comes back.
+            # Its run stopped (abandoned): a job still waiting for a thread
+            # never starts; else its sandbox goes now (once made, when it's
+            # being made), which stops the command; nothing it did comes back.
             job.stopped.set()
-            await asyncio.shield(asyncio.to_thread(job.discard))
+            if not queued.cancel():
+                await asyncio.shield(asyncio.to_thread(job.discard))
             raise
+
+    async def stop(self, key: str) -> int:
+        """
+        Delete the sandboxes a step's command left behind: an earlier
+        attempt's, whose worker died as it ran (a sandbox lives on without
+        it), found by the step's key.
+
+        :return: How many there were; 0 too when the gateway can't say.
+        """
+        return await asyncio.to_thread(self._stop, key)
+
+    def _stop(self, key: str) -> int:
+        try:
+            client = self.gateway()
+            found = client.list_all(workspace=self.settings.workspace, label_selector=f"{KEY_LABEL}={key}")
+        except (StepFailed, grpc.RpcError, SandboxError) as error:
+            log.warning("adk_workflows: the sandboxes of step %s couldn't be looked for: %s", key, error)
+            return 0
+        for sandbox in found:
+            delete_sandbox(client, sandbox.name, self.settings.workspace)
+        return len(found)
 
 
 def _settled(future: Future[Any] | asyncio.Future[Any]) -> None:
@@ -383,6 +421,7 @@ class _Sender:
         self.buffer.clear()
 
     def _send(self, script: str, piece: bytes) -> None:
+        self.job._going()
         try:
             done: ExecResult = self.client.exec(
                 self.job.name,
@@ -419,6 +458,7 @@ class _Job:
         env: Mapping[str, str],
         seconds: float,
         max_bytes: int,
+        key: str = "",
     ) -> None:
         self.owner = owner
         self.command = command
@@ -431,27 +471,51 @@ class _Job:
         self.seconds = seconds
         self.max_bytes = max_bytes
         self.name = NAME_PREFIX + uuid.uuid4().hex[:8]
+        self.labels = {**LABELS, KEY_LABEL: key} if key else LABELS
         self.sandbox_workspace = owner.settings.workspace
         self.stopped = threading.Event()
+        #: Held while the sandbox is made, so a discard meanwhile waits for it to exist.
+        self._making = threading.Lock()
+        #: The client that made (or was making) the sandbox; None before.
+        self._made_by: Any = None
 
     def discard(self) -> None:
-        """Delete the sandbox now (its run stopped)."""
-        if self.owner.client is not None:
-            delete_sandbox(self.owner.client, self.name, self.sandbox_workspace)
+        """Delete the sandbox now (its run stopped): at once when it's made,
+        as soon as it exists when it's being made; when it isn't yet, it
+        never will be."""
+        self.stopped.set()
+        with self._making:
+            client = self._made_by
+        if client is not None:
+            delete_sandbox(client, self.name, self.sandbox_workspace)
+
+    def _going(self) -> None:
+        """:raises _Stopped: Its run stopped: nothing more is asked of the sandbox."""
+        if self.stopped.is_set():
+            raise _Stopped
 
     def run(self) -> Finished:
         client = self.owner.gateway()
+        with self._making:
+            self._going()
+            self._made_by = client
+            try:
+                client.create(
+                    workspace=self.sandbox_workspace, spec=self.owner.spec, name=self.name, labels=self.labels
+                )
+            except (grpc.RpcError, SandboxError) as error:
+                raise StepFailed(f"OpenShell couldn't make its sandbox: {reason(error)}") from None
         try:
-            client.create(workspace=self.sandbox_workspace, spec=self.owner.spec, name=self.name, labels=LABELS)
-        except (grpc.RpcError, SandboxError) as error:
-            raise StepFailed(f"OpenShell couldn't make its sandbox: {reason(error)}") from None
-        try:
+            self._going()
             try:
                 wait_ready(client, self.name, self.owner.settings)
             except SandboxUnavailable as error:
                 raise StepFailed(str(error)) from None
+            self._going()
             manifest = self._copy_in(client)
+            self._going()
             ended, timed_out = self._command(client)
+            self._going()
             if timed_out:
                 self._stop(client)
             try:
@@ -551,6 +615,8 @@ class _Job:
             )
 
     def _copy_out(self, client: Any, manifest: Manifest) -> Applied:
+        if self.stopped.is_set():
+            raise _CopyBack("its run stopped")
         with tempfile.TemporaryFile() as archive:
             self._receive(client, archive)
             if self.stopped.is_set():

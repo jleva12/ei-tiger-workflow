@@ -63,12 +63,15 @@ class Settings(BaseSettings):
     jwt_audience: str | None = None
     # The token claim listing the company groups (from its directory) the
     # user is in: a list of names, e.g. ["Forge Admins"]. Permissions linked
-    # to a group (Permissions > Link permissions) are theirs on the whole site.
+    # to a group are theirs: the site's (Permissions), on the whole site, and
+    # an organization's agent permissions (Agent access), in it. Tokens Forge
+    # mints carry it too (forge-admin-token, the assistant's).
     jwt_groups_claim: str = Field(default="groups", min_length=1)
     # LOCAL DEVELOPMENT ONLY: treat API requests without a bearer token as
     # this user. The tests use it; never set it in production.
     local_user_id: str | None = Field(default=None, max_length=255, pattern=r"^\S+$")
-    # LOCAL DEVELOPMENT ONLY: the company groups that user is in.
+    # LOCAL DEVELOPMENT ONLY: the company groups that user is in; also what
+    # forge-admin-token (make web-token) puts in a token by default.
     local_user_groups: list[str] = []
     # The web console's address, for links to its pages.
     web_url: str = "http://localhost:5190"
@@ -197,15 +200,22 @@ class Settings(BaseSettings):
     # What the assistant has on each screen: a YAML file in the shape of
     # assistant/screens.yaml, which is used when this is unset.
     agent_screens: Path | None = None
+    # The helper agents the web console calls by name (the instruction
+    # writer, the skill creator, ...): a YAML file in the shape of
+    # helpers/helpers.yaml, which is used when this is unset.
+    agent_helpers: Path | None = None
 
-    # Organizations' chat agents, run by ID at {api_prefix}/runtime
-    # (forge_agent_runtime's run API: run_sse and sessions). Public: anyone
-    # with an agent's or workflow's ID can call it, spending its model and
-    # calling its tools; set false to ask for an organization's API key or a
-    # Forge sign-in, holding agents:run where it is.
-    agent_runtime_public: bool = True
+    # Organizations' chat agents and workflows are run by ID at
+    # {api_prefix}/runtime (forge_agent_runtime's run API, A2A, the workflow
+    # API) by callers with an organization's API key or a Forge sign-in,
+    # holding agents:run where the agent is (forge_admin.auth.runtime_access).
+    # Nobody else reaches them but a chat page's visitors, through its link.
     # How many built chat agents the runtime keeps ready.
     agent_runtime_cache: int = Field(default=64, ge=1, le=4096)
+    # A conversation runs one turn at a time, across every process of the
+    # runtime (their leases are in this database): the seconds a turn waits
+    # for the one before it to finish before it's refused (409).
+    agent_turn_wait: float = Field(default=5.0, ge=0, le=60)
     # Where callers reach this API (https://forge.example.com), for the A2A
     # cards of chat agents ({api_prefix}/runtime/a2a/{agent}), when that isn't
     # where requests come to (behind a proxy). Unset, each request's own.
@@ -243,6 +253,11 @@ class Settings(BaseSettings):
     # (FORGE_OPENSHELL_*), confined by its policy, then deleted.
     agent_sandbox_mode: SandboxMode = "off"
     agent_openshell: OpenShellSettings = OpenShellSettings()
+    # The most seconds a chat agent waits for a workflow it called before it's
+    # told the run is still going (with its ID), whatever the Workflow tool's
+    # "Wait up to" says: .env.common's FORGE_AGENT_WORKFLOW_WAIT_MAX, which
+    # workflows' agents (the async worker) share.
+    agent_workflow_wait_max: float = Field(default=900.0, gt=0)
     # Standalone agent projects (the builder's Generate standalone agent): where
     # their runtime comes from. wheels: the wheels in starter_wheels are copied
     # into each project's vendor/, until the runtime is on PyPI; pypi:<version>
@@ -289,6 +304,7 @@ class Settings(BaseSettings):
     @field_validator(
         "agent_model",
         "agent_screens",
+        "agent_helpers",
         "mcp_server_defaults",
         "starter_wheels",
         "api_key",
