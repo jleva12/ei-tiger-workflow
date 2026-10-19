@@ -4,7 +4,8 @@ A supervisor talks with the person. It has no tools of its own: it hands
 each request to a specialist, an agent with one toolset (the access tools in
 ``access_tools.py``, the administration tools in ``admin_tools.py``, the
 knowledge base tools in ``knowledge_tools.py``, the code graph's tools in
-``code_tools.py``, the workflow builder's in ``workflow_tools.py``), and
+``code_tools.py``, the workflow builder's in ``workflow_tools.py``, the
+agent builder's in ``agent_tools.py``), and
 answers from what the specialist reports. With a few tools
 each, the specialists pick the right one more reliably than one agent
 offered all of them. Each specialist runs as an ADK
@@ -39,6 +40,7 @@ from pydantic import Field
 from forge_admin.assistant import (
     access_tools,
     admin_tools,
+    agent_tools,
     code_tools,
     knowledge_tools,
     language_models,
@@ -47,6 +49,7 @@ from forge_admin.assistant import (
 )
 from forge_admin.assistant.page_context import describe_page
 from forge_admin.assistant.person import PERSON, describe_person
+from forge_admin.assistant.route_tools import AskInWords
 from forge_admin.assistant.screens import AssistantToolset, Screens
 from forge_admin.config import Settings
 
@@ -482,6 +485,32 @@ def toolsets(settings: Settings, app: FastAPI | None = None) -> list[AssistantTo
                 "person's words, with the workflow's ID."
             ),
         ),
+        AssistantToolset(
+            name="agents",
+            title="Agent builder",
+            description=(
+                "Reads your organization's agents and builds them with you from what "
+                "you describe: adds their tools (knowledge bases, workflows, MCP "
+                "servers, APIs, skills) and specialist agents, writes their "
+                "instructions, checks what would stop them working, and tries the "
+                "draft. It changes drafts only, which you see on the canvas and can "
+                "undo; a try asks you first."
+            ),
+            toolset=agent_tools.toolset(app) if app is not None else None,
+            instruction=agent_tools.INSTRUCTION,
+            tools=agent_tools.TOOL_NAMES,
+            delegate=(
+                "Agent builder: an organization's agents from the Agents page (chat "
+                "agents); explaining what one does, designing an agentic system for "
+                "a goal, and building it on its draft (its sub-agents, intake agents "
+                "and saved agents; its tools: knowledge bases, workflows, MCP "
+                "servers, HTTP and OpenAPI tools, skills, memory, code execution, "
+                "rich answers; who may use it), writing each agent's instruction, "
+                "checking why it wouldn't work, trying it with sample messages, and "
+                "making new agents. Hand it the whole goal, in the person's words, "
+                "with the agent's ID."
+            ),
+        ),
     ]
 
 
@@ -521,4 +550,9 @@ def create_app(
         screens_file or settings.agent_screens,
         models=language_models.accepted_names(models),
     )
-    return App(name=APP_NAME, root_agent=supervisor(on_screens, models))
+    return App(
+        name=APP_NAME,
+        root_agent=supervisor(on_screens, models),
+        # Approvals ask the person in each tool's words, not ADK's.
+        plugins=[AskInWords()],
+    )

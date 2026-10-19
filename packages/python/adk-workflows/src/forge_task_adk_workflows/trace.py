@@ -100,12 +100,20 @@ def session_trace(session: Session, *, invocations: Collection[str] | None = Non
     state before its first and after its last.
 
     :param session: The session.
-    :param invocations: Only these invocations' events (the turns one may
-        read); None for every one.
+    :param invocations: Only these invocations' events and state changes
+        (the turns one may read); None for the whole session. Initial state
+        and other turns' changes have no authorized provenance and are omitted.
     :return: ``{"events", "state_before", "state_after", "state",
         "later_changes", "omitted"}``; ``step`` is None throughout.
     """
     mine = [event for event in session.events if invocations is None or event.invocation_id in invocations]
+    if invocations is not None:
+        # Filter before reconstructing snapshots: filtering only the displayed
+        # events would retain other organizations' state in before/after/state.
+        state: dict[str, Any] = {}
+        for event in mine:
+            state.update(_delta(event))
+        session = session.model_copy(update={"events": mine, "state": state})
     turns = {event.invocation_id for event in mine}
     return _traced(session, mine, turns, {}, set())
 

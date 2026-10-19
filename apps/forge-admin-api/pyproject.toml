@@ -48,7 +48,8 @@ dependencies = [
     "pycasbin>=2.8.0",
     "pydantic-settings>=2.15.0",
     "pyjwt>=2.10",
-    # The assistant's screen configuration (assistant/screens.yaml).
+    # The assistant's screen configuration (assistant/screens.yaml) and the
+    # helper agents' (helpers/helpers.yaml).
     "pyyaml>=6.0",
     "pymongo>=4.13",
     "saq[redis]>=0.26.4,<0.27",

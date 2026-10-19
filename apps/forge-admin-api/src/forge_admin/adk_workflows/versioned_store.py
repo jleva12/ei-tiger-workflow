@@ -446,6 +446,46 @@ class VersionedDocumentStore(DocumentStore):
         ).sort("version", -1)
         return await cursor.to_list()
 
+    async def set_access(
+        self,
+        organization_id: str,
+        document_id: str,
+        *,
+        permission_ids: list[int],
+        by: str,
+        by_name: str | None,
+    ) -> dict[str, Any] | None:
+        """
+        Say which of the organization's agent permissions let someone use the
+        document (a chat agent, a workflow), any one of them
+        (``forge_admin.chat_agents.access``); none for anyone who may call
+        the organization's agents. It holds for every version, and isn't a
+        change to the document: its revision and times stay as they are.
+
+        :return: The record; None when there's no such one.
+        """
+        collection = await self._ready()
+        return versioned(
+            await collection.find_one_and_update(
+                {
+                    "_id": document_id,
+                    "organization_id": organization_id,
+                    "deleted_at": None,
+                },
+                {
+                    "$set": {
+                        "access": {
+                            "permission_ids": permission_ids,
+                            "updated_at": now(),
+                            "updated_by": by,
+                            "updated_by_name": by_name,
+                        }
+                    }
+                },
+                return_document=ReturnDocument.AFTER,
+            )
+        )
+
     async def find(self, agent_id: str) -> dict[str, Any] | None:
         """:return: A document by its ID alone, for the runtime; None when it's gone."""
         collection = await self._ready()

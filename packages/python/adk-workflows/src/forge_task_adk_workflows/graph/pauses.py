@@ -8,9 +8,13 @@ timer. Each asks with its payload's ``kind``; an approval's ``expires_at``
 and a delay's ``until`` say when the timer answers it (an approval then
 rejects, a delay wakes). An LLM agent's tool that a person confirms pauses it
 too (ADK's ``adk_request_confirmation``): a ``tool_confirmation``, the tool
-and what the model would call it with in its payload. The run resumes when
-the question is answered: a message with the function response
-(:meth:`Pause.answer`), sent to ADK's runner for the same session.
+and what the model would call it with in its payload. So does a workflow it
+calls as a tool, on a worker (``RunWorkflows.waits_apart``): the call is
+long-running (ADK's ``long_running_tool_ids``), and its run waits for the run
+the call started (a ``child_run``, the tool and its arguments in its payload),
+answered under the tool's own name. The run resumes when the question is
+answered: a message with the function response (:meth:`Pause.answer`), sent
+to ADK's runner for the same session.
 """
 
 from dataclasses import dataclass
@@ -19,6 +23,8 @@ from typing import Any
 
 from google.adk.sessions import Session
 from google.genai import types
+
+from forge_task_adk_workflows.run_store import CHILD_RUN
 
 #: ADK's name for a node's question (``RequestInput``).
 REQUEST_INPUT = "adk_request_input"
@@ -40,13 +46,15 @@ class Pause:
 
     :ivar invocation_id: The run (ADK's invocation) that asked.
     :ivar interrupt_id: The question's ID (its function call's).
-    :ivar kind: ``approval``, ``human_input`` or ``delay``.
+    :ivar kind: ``approval``, ``human_input``, ``delay``, ``tool_confirmation``
+        or ``child_run``.
     :ivar message: What the person is asked.
     :ivar payload: The node's payload: the approvers and deadline of an
         approval, the time a delay ends.
     :ivar due: When the timer answers it; None when only a person does.
     :ivar name: The function call it is: a question (``adk_request_input``),
-        or a tool's confirmation (``adk_request_confirmation``).
+        a tool's confirmation (``adk_request_confirmation``), or a workflow's
+        call (its tool's name).
     :ivar path: The node that asked: where in the run its event is.
     """
 
@@ -90,18 +98,24 @@ def pending_pauses(session: Session) -> list[Pause]:
     :param session: A run's ADK session, as its session service reads it.
     :return: The questions its runs wait on, oldest first.
     """
-    # A question is answered by the first answer with its ID after it: an ID
-    # may be asked again, in a later run of the session.
+    # A question is answered by the first answer with its ID (and name) after
+    # it: an ID may be asked again, in a later run of the session.
     waiting: dict[str, list[Pause]] = {}
     order: list[Pause] = []
     for event in session.events:
         for response in event.get_function_responses():
             asked = waiting.get(response.id or "")
-            if response.name in (REQUEST_INPUT, REQUEST_CONFIRMATION) and asked:
+            if asked and response.name == asked[0].name:
                 order.remove(asked.pop(0))
+        long_running = set(event.long_running_tool_ids or ())
         for call in event.get_function_calls():
             if call.name == REQUEST_CONFIRMATION and call.id:
                 pause = _confirmation(event, call)
+                waiting.setdefault(call.id, []).append(pause)
+                order.append(pause)
+                continue
+            if call.name != REQUEST_INPUT and call.id and call.id in long_running:
+                pause = _child_run(event, call)
                 waiting.setdefault(call.id, []).append(pause)
                 order.append(pause)
                 continue
@@ -141,6 +155,22 @@ def _confirmation(event: Any, call: types.FunctionCall) -> Pause:
         payload={"kind": TOOL_CONFIRMATION, "tool": tool, "args": arguments, "agent": event.author},
         due=None,
         name=REQUEST_CONFIRMATION,
+        path=str(getattr(info, "path", "") or ""),
+    )
+
+
+def _child_run(event: Any, call: types.FunctionCall) -> Pause:
+    """A workflow's long-running call, as a pause: the run waits for the run it started."""
+    info = getattr(event, "node_info", None)
+    tool = str(call.name or "a workflow")
+    return Pause(
+        invocation_id=event.invocation_id,
+        interrupt_id=str(call.id),
+        kind=CHILD_RUN,
+        message="",
+        payload={"kind": CHILD_RUN, "tool": tool, "args": dict(call.args or {}), "agent": event.author},
+        due=None,
+        name=tool,
         path=str(getattr(info, "path", "") or ""),
     )
 

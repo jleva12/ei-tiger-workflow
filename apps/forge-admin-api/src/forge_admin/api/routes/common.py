@@ -3,7 +3,8 @@
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Path, status
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +12,7 @@ from forge_admin.auth.access import UUID_PATTERN
 from forge_admin.auth.api_keys import key_id_of
 from forge_admin.db.audit import UtcDateTime
 from forge_admin.db.session import get_session
-from forge_admin.models import ApiKey, Organization, User
+from forge_admin.models import AgentPermission, ApiKey, Organization, User
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 Name = Annotated[
@@ -67,6 +68,52 @@ def apply_update(node: Organization, body: NodeUpdate) -> None:
         node.name = body.name
     if body.description is not None:
         node.description = body.description
+
+
+class AccessRead(BaseModel):
+    """
+    Which of the organization's agent permissions let someone use a chat
+    agent or a workflow (``forge_admin.chat_agents.access``).
+    """
+
+    #: Any one of them does; none for anyone who may call the organization's agents.
+    permission_ids: list[int]
+    updated_at: UtcDateTime
+    updated_by: str
+    updated_by_name: str | None
+
+
+class AccessChange(BaseModel):
+    """Which of the organization's agent permissions let someone use it."""
+
+    #: Any one of them does; empty for anyone who may call the organization's agents.
+    permission_ids: list[int] = Field(max_length=50)
+
+
+async def checked_permission_ids(
+    session: AsyncSession, organization_id: str, ids: list[int]
+) -> list[int]:
+    """
+    :return: The IDs, each once, in order.
+    :raises HTTPException: 422 for one that isn't one of the organization's
+        agent permissions.
+    """
+    wanted = list(dict.fromkeys(ids))
+    known = set(
+        await session.scalars(
+            select(AgentPermission.id).where(
+                AgentPermission.organization_id == organization_id,
+                AgentPermission.id.in_(wanted),
+            )
+        )
+    )
+    unknown = [i for i in wanted if i not in known]
+    if unknown:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"Unknown agent permission IDs: {unknown}",
+        )
+    return wanted
 
 
 async def commit_or_conflict(session: AsyncSession, detail: str) -> None:

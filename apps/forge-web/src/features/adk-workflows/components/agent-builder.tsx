@@ -103,11 +103,15 @@ import {
   usePageContext,
   usePageFocus,
 } from "@/features/assistant/lib/page-context"
-import { useWorkflowChanges } from "@/features/assistant/lib/workflow-changes"
+import {
+  changeSummary,
+  useWorkflowChanges,
+} from "@/features/assistant/lib/builder-changes"
 import { useAgentStepModels } from "@/features/steps/lib/models"
 import { AdkRunDialog, AdkRunsMenu } from "@/features/runs/components/adk-runs"
 import { AgentDetails } from "./agent-details"
 import { TestRunOverlay, TestRunPanel } from "./test-run-panel"
+import { WorkflowAccessSetting } from "./workflow-access"
 import { WorkflowRunInfo } from "./workflow-versions"
 import { agentFileName } from "./agent-files"
 import {
@@ -532,7 +536,7 @@ function Builder({
       requestAnimationFrame(() => api.getState().requestFit())
       toast.add({
         title: "The assistant changed this workflow",
-        description: change.done.slice(0, 4).join(". ") || undefined,
+        description: changeSummary(change),
         type: "success",
         actionProps: {
           children: "Undo",
@@ -904,6 +908,7 @@ function Builder({
             <>
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <WorkflowRunInfo record={record} viewing={viewing} />
+                <WorkflowAccessSetting record={record} canManage={canManage} />
                 <AgentDetails />
               </div>
               {/* Kept clear for the assistant's launcher, which floats here. */}

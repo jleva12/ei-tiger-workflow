@@ -31,19 +31,28 @@ The step fails when the worker doesn't run Pi agents (``pi_agent`` off), pi
 fails (a model error it gave up on, pi exiting) or it takes longer than its
 timeout (at most the worker's ``pi_max_seconds``): pi is then stopped, with
 the commands it started.
+
+- **Cut off.** pi goes with its worker (``forge_common.processes``), and its
+  commands read the step's key (``FORGE_IDEMPOTENCY_KEY``). A step cut off as
+  pi worked (the run stopped: its worker died or was stopped, or another
+  way's hiccup stopped the run) is run again when its tools only read; with
+  tools that change things (``bash``, ``edit``, ``write``) it may have, so
+  it isn't: what pi left running on this machine is stopped, and the run
+  fails, saying so.
 """
 
 import asyncio
 import functools
 import json
 import logging
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
 
 from forge_common.adk.models import ProviderModels
 from forge_common.adk.usage import Attribution, Tokens, UsageCall, cost_of, current_sink
 from forge_common.model_provider import ResolvedModel
-from forge_pi_agent import PiAgent, PiError, PiModel, PiOptions, PiResult, PiUsage, json_answer
+from forge_pi_agent import READ_ONLY_TOOLS, PiAgent, PiError, PiModel, PiOptions, PiResult, PiUsage, json_answer
 from google.adk import Context
 from google.adk.workflow import FunctionNode
 from pydantic import ValidationError
@@ -52,15 +61,18 @@ from forge_task_adk_workflows.graph.data import as_data
 from forge_task_adk_workflows.graph.errors import RunFailed
 from forge_task_adk_workflows.graph.factories.base import (
     BuildContext,
+    attempt,
     config_of,
     failed,
     label_of,
     settings_of,
+    started,
     text,
 )
 from forge_task_adk_workflows.graph.names import adk_name
 from forge_task_adk_workflows.graph.schemas import held_to, problems, to_model
 from forge_task_adk_workflows.graph.services import RunServices, model_id
+from forge_task_adk_workflows.support.commands import KEY_VARIABLE, stop_leftovers, tag_of
 from forge_task_adk_workflows.support.errors import StepFailed
 from forge_task_adk_workflows.support.expressions import as_text
 from forge_task_adk_workflows.support.step_settings import PiAgentConfig
@@ -109,11 +121,24 @@ def pi_agent(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
     schema = s.output_schema or None
     answer_type = to_model(schema) if schema else None
     chosen = model_id(config_of(node))
+    # Its tools only read: run again, should it be cut off, it changes nothing.
+    repeatable = set(s.tools) <= set(READ_ONLY_TOOLS)
 
     def fail(why: str) -> RunFailed:
         return RunFailed(f"{label} failed: {why}", step=node.get("id"))
 
-    async def run(adk: Context, node_input: Any) -> dict[str, Any]:
+    async def run(adk: Context, node_input: Any) -> AsyncGenerator[Any]:
+        step = attempt(adk)
+        if step.cut_off is not None and not repeatable:
+            where = step.elsewhere()
+            if where is None:
+                # Nothing of it goes on while the run decides what became of it.
+                await stop_leftovers(step.key)
+            raise fail(
+                "pi was cut off: the run stopped while it worked, so its tools may have changed things"
+                + (f" (it ran on {where}, where what it left may still be running)" if where else "")
+                + ". It isn't run again on its own: check what it did"
+            )
         if services.pi_command is None:
             raise fail(PI_OFF)
         models = services.model
@@ -148,10 +173,13 @@ def pi_agent(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
             instruction=instruction,
             context_files=s.context_files,
             command=services.pi_command,
-            env=PI_ENV,
+            env={**PI_ENV, KEY_VARIABLE: step.key},
+            tag=tag_of(step.key),
         )
         seconds = min(s.timeout_seconds, services.pi_max_seconds)
         results: list[PiResult] = []
+        if not repeatable:
+            yield started(step)
         try:
             async with asyncio.timeout(seconds), PiAgent(options) as pi:
                 result = await pi.prompt(f"{message}\n\n{schema_note(schema)}" if schema else message)
@@ -180,7 +208,7 @@ def pi_agent(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
         for each in results:
             usage += each.usage
         tokens = _tokens(usage)
-        return {
+        yield {
             "answer": answer,
             "tool_calls": [
                 {"tool": call.tool, "args": call.args, "is_error": call.is_error}
@@ -196,7 +224,8 @@ def pi_agent(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
             "folder": str(folder),
         }
 
-    return FunctionNode(name=name, func=run)
+    # Run again when the run carries on after it was cut off: again, or the run fails.
+    return FunctionNode(name=name, func=run, rerun_on_resume=True)
 
 
 def _fit(answer_type: Any, answer: str) -> tuple[Any, str | None]:

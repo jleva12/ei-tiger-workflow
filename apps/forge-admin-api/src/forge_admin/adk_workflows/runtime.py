@@ -15,13 +15,14 @@ The organizations' workflows for outside apps, over REST
 
 ``{ref}`` is ``ag_x`` (its latest published version), ``ag_x@3`` or
 ``ag_x@draft`` (``versions.py``, outside rules). Who may call is
-``forge_admin.auth.runtime_access``'s rule: anyone when the runtime is
-public, else an API key or sign-in with agents:run in the workflow's
-organization. A run is its starter's to read, answer and cancel (an
-anonymous one is anyone's who has its ID); others need organizations:read,
-agents:run, or agents:manage_runs there. Approvals are only ever decided by
-callers holding what the step asks of its approvers: never anonymous ones.
-Anything else answers 404, so runs don't leak.
+``forge_admin.auth.runtime_access``'s rule: an API key or sign-in with
+agents:run in the workflow's organization (agents:manage for its draft),
+decided before anything but its organization is read; another
+organization's workflow is one there isn't. A run is its starter's to read,
+answer and cancel; others need organizations:read, agents:run, or
+agents:manage_runs there. Approvals are only ever decided by callers holding
+what the step asks of its approvers. Anything else answers 404, so runs
+don't leak.
 """
 
 import logging
@@ -30,10 +31,21 @@ from contextlib import contextmanager
 from datetime import UTC
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Header,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    status,
+)
+from forge_agent_runtime import AgentNotFound, AgentRef
 from forge_task_adk_workflows.files import FILE_TYPES, RunFile, files_rule
 from forge_task_adk_workflows.run_store import (
     CANCELABLE,
+    CHILD_RUN,
     PAUSED,
     RUNNING,
     Actor,
@@ -54,14 +66,22 @@ from forge_admin.adk_workflows.files import (
     run_files,
     storage_errors,
 )
+from forge_admin.adk_workflows.provenance import runtime_start
 from forge_admin.adk_workflows.resources import RunResources
 from forge_admin.adk_workflows.runs import (
+    IDEMPOTENCY_KEY,
+    IDEMPOTENCY_PATTERN,
     AdkRunError,
+    AdkRunRefused,
     checked_answer,
+    idempotent_run_id,
     prepare_run,
     queue_run,
+    refuse_start,
+    same_input,
     settle,
     start_adk_run,
+    start_adk_run_once,
     start_schema,
 )
 from forge_admin.adk_workflows.versions import (
@@ -85,7 +105,20 @@ from forge_admin.api.routes.adk_workflow_runs import (
 from forge_admin.api.routes.adk_workflows import UNAVAILABLE, agent_store
 from forge_admin.api.routes.common import name_of
 from forge_admin.auth.access import Level, Scope, authorize
-from forge_admin.auth.runtime_access import Caller, RuntimeCaller, authorize_call
+from forge_admin.auth.runtime_access import (
+    MANAGE,
+    Caller,
+    RuntimeCaller,
+    admit_call,
+    caller_of,
+    require_standing,
+)
+from forge_admin.chat_agents.access import (
+    AgentUseRefused,
+    agent_user,
+    check_agent_use,
+    required_permissions,
+)
 from forge_admin.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -94,6 +127,8 @@ router = APIRouter(prefix="/workflows", tags=["workflow runtime"])
 
 #: The ADK session user of runs no one known started.
 ANONYMOUS = "anonymous"
+#: What a caller hears of a workflow that isn't there, or isn't theirs to know of.
+NO_WORKFLOW = "No such workflow"
 NO_SUCH_RUN = "There's no such run of this workflow"
 NOT_OPEN = "The run doesn't wait at that approval or question any more"
 
@@ -183,7 +218,9 @@ class RuntimePause(BaseModel):
     #: Names it in an answer or decision (``request_id``).
     id: str
     #: ``human_input`` (a question: send ``…/answers``) or ``approval``
-    #: (send ``…/decisions``), a tool call's confirmation among them.
+    #: (send ``…/decisions``), a tool call's confirmation among them; or
+    #: ``child_run``: a workflow its LLM agent called, waiting for the run
+    #: that started (nobody answers it: that run's end does).
     kind: str
     #: Whether it's a tool call waiting to be confirmed.
     confirmation: bool
@@ -247,11 +284,12 @@ def _iso(value: Any) -> str | None:
 
 
 def runtime_pause(run: dict[str, Any]) -> RuntimePause | None:
-    """:return: What a paused run waits for first, as outside apps see it."""
-    pause = run.get("pause")
-    if run.get("status") != PAUSED or not isinstance(pause, dict):
+    """:return: What a paused run waits for someone to answer first, as
+    outside apps see it; None while it waits for nobody (only for runs it
+    started to end)."""
+    if run.get("status") != PAUSED:
         return None
-    return runtime_gate(pause)
+    return next((gate for gate in runtime_gates(run) if gate.kind != CHILD_RUN), None)
 
 
 def runtime_gates(run: dict[str, Any]) -> list[RuntimePause]:
@@ -290,7 +328,7 @@ def runtime_run(request: Request, run: dict[str, Any]) -> RuntimeRun:
     links = {"self": base}
     pause = runtime_pause(run)
     gates = runtime_gates(run)
-    for gate in gates:
+    for gate in (gate for gate in gates if gate.kind != CHILD_RUN):
         links["answers" if gate.kind == HUMAN_INPUT else "decisions"] = (
             f"{base}/{'answers' if gate.kind == HUMAN_INPUT else 'decisions'}"
         )
@@ -341,23 +379,116 @@ def mongo_errors() -> Iterator[None]:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, UNAVAILABLE) from None
 
 
-async def found_workflow(request: Request, ref: str) -> ResolvedWorkflow:
+async def found_workflow(
+    request: Request, ref: str, *, starting: Literal["rest"] | None = None
+) -> ResolvedWorkflow:
     """
-    The workflow at the version named, once the caller may call it.
+    The workflow at the version named, once the caller may call it, and run
+    it when it's limited to some of the organization's agent permissions.
 
-    :raises HTTPException: 404 for no such workflow or version (or none
-        published, with how to run its draft); 401/403 as
-        ``authorize_call`` says; 503.
+    :param starting: To start a run of it, over the workflow API: a refusal
+        (403) is kept for the organization's audit.
+    :raises HTTPException: 404 for no such workflow, or another
+        organization's, or no such version (or none published, with how to
+        run its draft); 401/403 as ``admit_call`` says (its draft needs
+        agents:manage); 403 when it's limited and the caller holds none of
+        them; 503.
     """
+    try:
+        parsed = AgentRef.parse(ref)
+    except AgentNotFound as error:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from None
+    # Who may call it is decided by its organization before its versions are read.
     with mongo_errors():
-        try:
-            resolved = await resolve_workflow(
-                workflows_of(request), ref, organization_id=None, outside=True
+        record = await workflows_of(request).find(parsed.agent_id)
+    if record is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NO_WORKFLOW)
+    organization_id = record["organization_id"]
+    draft = parsed.version == "draft"
+
+    async def found() -> ResolvedWorkflow:
+        with mongo_errors():
+            try:
+                return await resolve_workflow(
+                    workflows_of(request),
+                    ref,
+                    organization_id=organization_id,
+                    outside=True,
+                )
+            except WorkflowNotFound as error:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from None
+
+    try:
+        caller = await admit_call(
+            request,
+            organization_id,
+            permission=MANAGE if draft else RUN,
+            missing=NO_WORKFLOW,
+        )
+    except HTTPException as error:
+        # One of the organization's own, refused: kept for its audit.
+        if starting is not None and error.status_code == status.HTTP_403_FORBIDDEN:
+            await refuse_runtime_start(
+                request,
+                caller_of(request),
+                await found(),
+                protocol=starting,
+                status_code=error.status_code,
+                reason=str(error.detail),
             )
-        except WorkflowNotFound as error:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from None
-    await authorize_call(request, resolved.record["organization_id"])
+        raise
+    resolved = await found()
+    try:
+        if required_permissions(resolved.record):
+            user = await agent_user(
+                request.app.state.enforcer,
+                organization_id,
+                caller.subject,
+                caller.groups,
+            )
+            async with request.app.state.sessionmaker() as session:
+                try:
+                    await check_agent_use(
+                        session, organization_id, [resolved.record], user
+                    )
+                except AgentUseRefused as error:
+                    raise HTTPException(status.HTTP_403_FORBIDDEN, str(error)) from None
+    except HTTPException as error:
+        if starting is not None and error.status_code == status.HTTP_403_FORBIDDEN:
+            await refuse_runtime_start(
+                request,
+                caller_of(request),
+                resolved,
+                protocol=starting,
+                status_code=error.status_code,
+                reason=str(error.detail),
+            )
+        raise
     return resolved
+
+
+async def refuse_runtime_start(
+    request: Request,
+    caller: RuntimeCaller,
+    resolved: ResolvedWorkflow,
+    *,
+    protocol: Literal["rest", "a2a"],
+    status_code: int,
+    reason: str,
+) -> None:
+    """Keep a start of the workflow the runtime refused, for its
+    organization's audit."""
+    actor = await caller_actor(request, caller)
+    await refuse_start(
+        run_store(request),
+        organization_id=resolved.record["organization_id"],
+        agent_id=resolved.record["_id"],
+        version=resolved.version,
+        status_code=status_code,
+        reason=reason,
+        requested_by=actor,
+        provenance=runtime_start(request, caller.subject, actor, protocol=protocol),
+    )
 
 
 def wait_of(settings: Settings, wanted: float) -> float:
@@ -391,8 +522,8 @@ async def holds(
 
 
 def started_by(run: dict[str, Any], caller: RuntimeCaller) -> bool:
-    """:return: Whether the caller started the run (an anonymous run: anyone anonymous)."""
-    return run.get("requested_by") == (caller.subject or ANONYMOUS)
+    """:return: Whether the caller started the run: never an anonymous caller's."""
+    return caller.subject is not None and run.get("requested_by") == caller.subject
 
 
 async def may(
@@ -422,16 +553,38 @@ async def start_runtime_run(
     run_id: str | None = None,
     trigger: dict[str, Any] | None = None,
     files: list[SentFile] | None = None,
-) -> dict[str, Any]:
+    retry_input: bool = True,
+) -> tuple[dict[str, Any], bool]:
     """
     Start a run of a workflow for an outside caller, as them, with the files
     it's sent saved as artifacts of its session.
 
-    :raises HTTPException: 422 for input or a file that doesn't fit, or a
-        workflow that doesn't build (naming the node); 503.
+    :param run_id: The ID its start makes for it (an A2A task's, an
+        idempotency key's): a start asked again for it is the run the first
+        made, when it's this caller's run of this workflow with this input.
+    :param retry_input: A retry must have the input the run started with
+        (an idempotency key's); False takes any (an A2A task's later message).
+    :return: The run, and whether this start made it.
+    :raises HTTPException: 403 when it uses an agent from the Agents page the
+        caller may not use; 409 when ``run_id`` is another start's; 422 for
+        input or a file that doesn't fit, or a workflow that doesn't build
+        (naming the node); 503.
     """
     record = resolved.run_record
     organization_id = record["organization_id"]
+    actor = await caller_actor(request, caller)
+    run_as = Actor(actor.id or ANONYMOUS, actor.name)
+    if run_id is not None:
+        # A retry: the run it made, whatever's changed since (nothing's checked again).
+        with store_errors():
+            found = await run_store(request).started_as(
+                run_id,
+                organization_id=organization_id,
+                agent_id=record["_id"],
+                requested_by=run_as,
+            )
+        if found is not None:
+            return (_retried(found, input) if retry_input else found), False
     artifacts = artifacts_of(request, files or [])
     queue = run_queue(request)
     with mongo_errors():
@@ -443,35 +596,59 @@ async def start_runtime_run(
                 RunResources(
                     organization_id,
                     chat_agents=getattr(request.app.state, "chat_agents", None),
+                    ui_components=getattr(request.app.state, "ui_components", None),
                     sessions=request.app.state.sessionmaker,
+                    user=await agent_user(
+                        request.app.state.enforcer,
+                        organization_id,
+                        caller.subject,
+                        caller.groups,
+                    ),
+                    workflows=workflows_of(request),
                 ),
                 files,
             )
         except AdkRunError as error:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)
-            ) from None
-    actor = await caller_actor(request, caller)
+            code = (
+                status.HTTP_403_FORBIDDEN
+                if isinstance(error, AdkRunRefused)
+                else status.HTTP_422_UNPROCESSABLE_CONTENT
+            )
+            await refuse_runtime_start(
+                request,
+                caller,
+                resolved,
+                protocol=protocol,
+                status_code=code,
+                reason=str(error),
+            )
+            raise HTTPException(code, str(error)) from None
+    started = {
+        "prepared": prepared,
+        "input": input,
+        "run_as": run_as.id,
+        "run_as_name": run_as.name,
+        "trigger": {
+            "type": "runtime",
+            "protocol": protocol,
+            "caller": caller.subject,
+            "ref": resolved.ref,
+            **(trigger or {}),
+        },
+        "version": resolved.version,
+        "artifacts": artifacts,
+        "provenance": runtime_start(request, caller.subject, actor, protocol=protocol),
+    }
     with store_errors(), storage_errors():
-        run = await start_adk_run(
-            run_store(request),
-            queue,
-            record,
-            prepared=prepared,
-            input=input,
-            run_as=actor.id or ANONYMOUS,
-            run_as_name=actor.name,
-            trigger={
-                "type": "runtime",
-                "protocol": protocol,
-                "caller": caller.subject,
-                "ref": resolved.ref,
-                **(trigger or {}),
-            },
-            version=resolved.version,
-            run_id=run_id,
-            artifacts=artifacts,
-        )
+        if run_id is None:
+            run = await start_adk_run(run_store(request), queue, record, **started)
+            created = True
+        else:
+            run, created = await start_adk_run_once(
+                run_store(request), queue, record, run_id=run_id, **started
+            )
+    if not created:
+        return (_retried(run, input) if retry_input else run), False
     logger.info(
         "%s ran workflow %s over %s with %d files: run %s",
         actor.id,
@@ -480,6 +657,21 @@ async def start_runtime_run(
         len(files or []),
         run["id"],
     )
+    return run, True
+
+
+def _retried(run: dict[str, Any], input: Any) -> dict[str, Any]:
+    """
+    :return: The run a start's retry asked for again.
+    :raises HTTPException: 409 when the retry's input isn't what the run
+        started with: the key, or task, was used for another start.
+    """
+    if not same_input(run, input):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "That idempotency key (or task) started a run with another input: "
+            "use a new one for another start.",
+        )
     return run
 
 
@@ -591,7 +783,8 @@ async def _run_of(
         run = await run_store(request).get(run_id)
     if run is None or run["agent_id"] != workflow_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, NO_SUCH_RUN)
-    await authorize_call(request, run["organization_id"])
+    # Its organization's own, then its starter or one who may read its runs.
+    await require_standing(request, run["organization_id"], missing=NO_SUCH_RUN)
     if not await may(request, caller, run, READ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, NO_SUCH_RUN)
     return run
@@ -680,23 +873,51 @@ async def start_workflow_run(
     response: Response,
     ref: WorkflowRef,
     caller: Caller,
+    idempotency_key: Annotated[
+        str | None,
+        Header(
+            alias=IDEMPOTENCY_KEY,
+            pattern=IDEMPOTENCY_PATTERN,
+            description="Makes the start safe to retry: the same key, from the same "
+            "caller, starts one run (answered 200 when it's sent again).",
+        ),
+    ] = None,
 ) -> RuntimeRun:
     """
     Run the workflow at the version named, as the caller, with an input that
     fits its start, and files when it takes them. With ``wait``, the answer
-    comes once the run pauses or ends, or the wait runs out.
+    comes once the run pauses or ends, or the wait runs out. With an
+    ``Idempotency-Key``, a retry of the start is the run it made (200), not
+    another.
     \f
-    :raises HTTPException: 404; 413 for a file too big; 422 for input or a
-        file that doesn't fit, or a workflow that doesn't build; 503 when runs
-        or files aren't set up.
+    :raises HTTPException: 404; 409 for a key used for another start; 413
+        for a file too big; 422 for input or a file that doesn't fit, or a
+        workflow that doesn't build; 503 when runs or files aren't set up.
     """
-    resolved = await found_workflow(request, ref)
+    resolved = await found_workflow(request, ref, starting="rest")
     body, files = await read_run_body(
         request, RunStart, Limits.of(request.app.state.settings)
     )
-    run = await start_runtime_run(
-        request, caller, resolved, body.input, protocol="rest", files=files
+    key = idempotency_key
+    # A caller nobody knows can't make a run's ID their key: anonymous runs
+    # are anyone's who has their ID, which a key mustn't make guessable.
+    run_id = (
+        idempotent_run_id(resolved.run_record["organization_id"], key)
+        if key is not None and caller.subject is not None
+        else None
     )
+    run, created = await start_runtime_run(
+        request,
+        caller,
+        resolved,
+        body.input,
+        protocol="rest",
+        files=files,
+        run_id=run_id,
+    )
+    if not created:
+        # The start was retried: the run it made, as it is now.
+        response.status_code = status.HTTP_200_OK
     run = await _settled(request, run, body.wait)
     shown = runtime_run(request, run)
     response.headers["Location"] = shown.links["self"]

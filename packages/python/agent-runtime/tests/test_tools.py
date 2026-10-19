@@ -1,7 +1,11 @@
+import asyncio
 import json
+from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
+from google.adk.tools.base_toolset import BaseToolset
 
 from forge_agent_runtime.executor import AgentExecutor, DirectoryAgentSource
 from forge_agent_runtime.services import RuntimeServices
@@ -120,3 +124,70 @@ async def test_a_big_answer_is_refused_and_a_guarded_tool_answers_instead_of_rai
 
     [confirmed] = await GuardedTools([small], confirm=True).get_tools()
     assert await confirmed.check_require_confirmation({}, None) is True
+
+
+class Session(BaseToolset):
+    """An MCP server's toolset whose session's closing fails, or never ends."""
+
+    def __init__(self, closing: Any) -> None:
+        super().__init__()
+        self.closing = closing
+
+    async def get_tools(self, readonly_context: Any = None) -> list[Any]:
+        return []
+
+    async def close(self) -> None:
+        await self.closing()
+
+
+async def _fails() -> None:
+    raise RuntimeError("the session is gone")
+
+
+async def _never_ends() -> None:
+    await asyncio.Event().wait()
+
+
+def _kept(path: str) -> bool:
+    return Path(path).exists()
+
+
+@pytest.mark.parametrize("closing", [_fails, _never_ends])
+async def test_closing_a_guarded_tool_deletes_the_results_it_kept_whole(tmp_path, closing):
+    def long(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"items": ["x" * 100] * 500})
+
+    guarded = GuardedTools([tool(long), Session(closing)])
+    guarded.result_dir = tmp_path
+    [orders] = await guarded.get_tools()
+    answer = await orders.run_async(args={"order_id": "1"}, tool_context=None)
+    kept = answer["complete_result_location"]
+    assert answer["truncated"] and _kept(kept)
+
+    if closing is _fails:
+        with pytest.raises(RuntimeError, match="the session is gone"):
+            await guarded.close()
+    else:
+        closing_it = asyncio.create_task(guarded.close())
+        await asyncio.sleep(0.01)
+        closing_it.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closing_it
+    # Though its session's closing failed or was cut off.
+    assert not _kept(kept)
+
+
+class Unreachable(BaseToolset):
+    """An MCP server's toolset whose server won't connect."""
+
+    async def get_tools(self, readonly_context: Any = None) -> list[Any]:
+        raise ConnectionError("Failed to get tools from MCP server")
+
+
+async def test_a_chat_agent_runs_without_tools_that_wont_list_and_a_step_learns_why():
+    for guarded in (GuardedTools([Unreachable()]), GuardedTools([GuardedTools([Unreachable()])])):
+        # As ADK lists them for a chat agent: none.
+        assert await guarded.get_tools() == []
+        # As a workflow's step lists them: why, from however deep.
+        with pytest.raises(ConnectionError, match="Failed to get tools"):
+            await guarded.get_tools_or_raise()

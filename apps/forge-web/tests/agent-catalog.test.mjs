@@ -306,7 +306,7 @@ test("a workflow's LLM agent is offered the tools served for workflows, called a
   assert.equal(tools.workflowToolKinds().includes("memory"), false)
   const tool = tools.newTool("saved_agent", [])
   assert.equal(tool.name, "Saved agent")
-  assert.deepEqual(tool.config, { agent: "" })
+  assert.deepEqual(tool.config, { agent: "", access: null })
   // One no longer served for workflows isn't offered, and is dropped when read.
   withCatalog(
     (served) => {

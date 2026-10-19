@@ -3,69 +3,98 @@ import { PluginKey } from "@tiptap/pm/state"
 import { Suggestion } from "@tiptap/suggestion"
 
 import { Kbd } from "@/components/ui/kbd"
-import { Icon } from "../icon"
+import { ActionIcon } from "./controls"
 import {
-  availableCommands,
-  filterCommands,
-  type BlockCommand,
-} from "./commands"
+  createActionContext,
+  type ActionRegistry,
+} from "./core/action-registry"
 import { formatShortcut } from "./shortcuts"
 import { suggestionRenderer } from "./suggestion"
-import type { RichTextActions } from "./types"
+import type { EditorAction, EditorController } from "./types"
 
 const SlashCommandPluginKey = new PluginKey("slashCommand")
 
 export interface SlashCommandOptions {
-  getActions: () => RichTextActions
+  registry: ActionRegistry
+  controller: EditorController
 }
 
-/** Typing `/` opens a filterable menu of blocks to insert or switch to. */
+/** Matches a `/` query against labels and keywords, best matches first. */
+export function filterActions(actions: EditorAction[], query: string) {
+  const q = query.trim().toLowerCase()
+  if (!q) return actions
+  const score = (action: EditorAction) => {
+    const label = action.label.toLowerCase()
+    if (label.startsWith(q)) return 0
+    if (label.split(/\s+/).some((word) => word.startsWith(q))) return 1
+    if (action.keywords?.some((keyword) => keyword.startsWith(q))) return 2
+    if (label.includes(q)) return 3
+    return -1
+  }
+  return actions
+    .map((action) => ({ action, score: score(action) }))
+    .filter(({ score }) => score >= 0)
+    .sort((a, b) => a.score - b.score)
+    .map(({ action }) => action)
+}
+
+/**
+ * Typing `/` opens a filterable menu of every action that offers itself
+ * there (`slashCommand`): the built-in blocks, AI and the app's own.
+ */
 export const SlashCommand = Extension.create<SlashCommandOptions>({
   name: "slashCommand",
 
   addOptions() {
     return {
-      getActions: () => {
-        throw new Error("SlashCommand needs getActions")
-      },
+      registry: null as unknown as ActionRegistry,
+      controller: null as unknown as EditorController,
     }
   },
 
   addProseMirrorPlugins() {
+    const { registry, controller } = this.options
     return [
-      Suggestion<BlockCommand, BlockCommand>({
+      Suggestion<EditorAction, EditorAction>({
         editor: this.editor,
         pluginKey: SlashCommandPluginKey,
         char: "/",
         // Not inside code, where `/` is just a character.
         allow: ({ editor }) =>
           !editor.isActive("codeBlock") && !editor.isActive("code"),
-        items: ({ editor, query }) =>
-          filterCommands(availableCommands(editor), query),
-        command: ({ editor, range, props }) => {
-          editor.chain().focus().deleteRange(range).run()
-          props.run(editor, this.options.getActions())
+        items: ({ query }) => {
+          const context = createActionContext(controller, "slash")
+          const offered = registry.list().filter((action) => {
+            if (!action.slashCommand) return false
+            const state = registry.state(action.id, context)
+            return state.visible && state.enabled
+          })
+          return filterActions(offered, query)
         },
-        render: suggestionRenderer<BlockCommand>({
+        command: ({ editor, range, props: action }) => {
+          editor.chain().focus().deleteRange(range).run()
+          void registry.run(action.id, createActionContext(controller, "slash"))
+        },
+        render: suggestionRenderer<EditorAction>({
           label: "Insert block",
           empty: "No matching blocks",
-          getKey: (command) => command.id,
-          getGroup: (command) => command.group,
-          renderItem: (command) => (
+          getKey: (action) => action.id,
+          getGroup: (action) => action.group,
+          renderItem: (action) => (
             <>
               <span className="grid size-7 place-items-center rounded-(--radius-item) border border-border bg-background text-muted-foreground">
-                <Icon icon={command.icon} size={15} />
+                <ActionIcon icon={action.icon} size={15} />
               </span>
               <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate text-foreground">
-                  {command.label}
-                </span>
-                <span className="truncate text-2xs text-muted-foreground">
-                  {command.description}
-                </span>
+                <span className="truncate text-foreground">{action.label}</span>
+                {action.description && (
+                  <span className="truncate text-2xs text-muted-foreground">
+                    {action.description}
+                  </span>
+                )}
               </span>
-              {command.shortcut && (
-                <Kbd variant="ghost">{formatShortcut(command.shortcut)}</Kbd>
+              {action.shortcut && (
+                <Kbd variant="ghost">{formatShortcut(action.shortcut)}</Kbd>
               )}
             </>
           ),

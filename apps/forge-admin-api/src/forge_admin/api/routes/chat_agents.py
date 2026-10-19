@@ -15,8 +15,16 @@ Reading needs ``organizations:read`` in the organization; anything else needs
   changes one. The runtime (``/runtime``) runs them by ID.
 - ``PUT …/chat-page`` shares a published agent as a full-page chat at a
   link of its own, or stops sharing it (``forge_admin.chat_agents.pages``).
+- Who may use each of its agents is the rule on that agent's node
+  (``config.access``), checked by the runtime as the agent runs
+  (``forge_admin.chat_agents.access``). An agent its record limited before
+  nodes had rules shows that rule on its chat agent node, and is published
+  with it.
+- ``POST …/intake-preview`` shows what an intake agent's design would make of
+  sample answers, for the builder; it saves and runs nothing.
 """
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from typing import Annotated, Any, Literal
@@ -30,13 +38,19 @@ from forge_agent_runtime import (
     build_app,
     parse_document,
 )
+from forge_agent_runtime.intake import preview as intake_preview
 from forge_agent_runtime.starter.options import StarterOptions
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo.errors import PyMongoError
 
-from forge_admin.api.routes.common import NodeId, Session, name_of
+from forge_admin.api.routes.common import (
+    NodeId,
+    Session,
+    name_of,
+)
 from forge_admin.auth.access import CurrentUser, Enforcer, Level, Scope, authorize
-from forge_admin.chat_agents.bundle import FindSkills, bundle
+from forge_admin.chat_agents.access import required_permissions, with_record_rule
+from forge_admin.chat_agents.bundle import FindSkills, FindUiComponents, bundle
 from forge_admin.chat_agents.page_settings import (
     ChatPageSettings,
     ChatPageSettingsChange,
@@ -57,6 +71,7 @@ from forge_admin.chat_agents.store import (
 )
 from forge_admin.db.audit import UtcDateTime
 from forge_admin.skills.vault import bundles_of
+from forge_admin.ui_components.store import UiComponentStore
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +83,23 @@ def skill_finder(request: Request, organization_id: str) -> FindSkills:
     async def find(ids: Sequence[str]) -> dict[str, SkillBundle]:
         async with sessions() as session:
             return await bundles_of(session, organization_id, ids)
+
+    return find
+
+
+def ui_component_finder(
+    request: Request, organization_id: str
+) -> FindUiComponents | None:
+    """
+    Finds the organization's team UI components, for an agent's export to
+    bundle; None when they aren't set up (noted in the export).
+    """
+    store: UiComponentStore | None = getattr(request.app.state, "ui_components", None)
+    if store is None:
+        return None
+
+    async def find(keys: Sequence[str]) -> dict[str, dict[str, Any]]:
+        return await store.find_live(organization_id, keys)
 
     return find
 
@@ -210,6 +242,7 @@ def _read(record: dict[str, Any]) -> ChatAgentRead:
     return ChatAgentRead.model_validate(
         {
             **record,
+            "document": with_record_rule(record["document"], record),
             "id": record["_id"],
             "status": status_of(record),
             "has_draft": bool(record.get("has_draft")),
@@ -232,6 +265,46 @@ async def _found(record: dict[str, Any] | None) -> dict[str, Any]:
     if record is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
     return record
+
+
+class IntakePreviewRequest(BaseModel):
+    """An intake agent's design, and sample answers to preview it with."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: The node's name.
+    name: str = Field(default="Intake", max_length=200)
+    #: The node's settings, as the builder has them.
+    config: dict[str, Any]
+    #: Sample answers by field key: a value, or {"value", "how"}.
+    answers: dict[str, Any] = Field(default_factory=dict)
+    #: The person said yes to the summary.
+    summary_confirmed: bool = False
+
+
+@router.post(BASE + "/intake-preview")
+async def preview_intake(
+    organization_id: NodeId,
+    body: IntakePreviewRequest,
+    user: CurrentUser,
+    session: Session,
+    enforcer: Enforcer,
+) -> dict[str, Any]:
+    """
+    What an intake agent would make of sample answers, for the builder's
+    preview: what it would ask next, what's missing, what its model would be
+    told and what it would hand back (``forge_agent_runtime.intake.preview``).
+    Nothing is saved or run.
+    """
+    await authorize(session, enforcer, user, READ, Scope(Level.ORG, organization_id))
+    # Its conditions are evaluated as they are before every model call: off the event loop.
+    return await asyncio.to_thread(
+        intake_preview,
+        body.name,
+        body.config,
+        body.answers,
+        summary_confirmed=body.summary_confirmed,
+    )
 
 
 @router.get(BASE)
@@ -383,16 +456,38 @@ async def publish_chat_agent(
     except PyMongoError as error:
         raise _unavailable(error) from None
     if current.get("has_draft"):
-        await check_builds(request, current["document"])
+        await check_builds(request, current["document"], publishing=True)
     name = await name_of(session, user)
+    # Limited by its record from before nodes had rules: it's published with
+    # that rule on its chat agent node, as the builder shows it, and the
+    # record's goes.
+    legacy = bool(required_permissions(current)) and current.get("has_draft")
+    revision = body.revision
     try:
+        if legacy and current["revision"] == revision:
+            moved = await store.save_draft(
+                organization_id,
+                agent_id,
+                revision,
+                with_record_rule(current["document"], current),
+                by=user,
+                by_name=name,
+                max_bytes=request.app.state.settings.agents_max_bytes,
+            )
+            revision = (await _found(moved))["revision"]
         record = await store.publish(
-            organization_id, agent_id, body.revision, by=user, by_name=name
+            organization_id, agent_id, revision, by=user, by_name=name
         )
+        if legacy and record is not None:
+            record = await store.set_access(
+                organization_id, agent_id, permission_ids=[], by=user, by_name=name
+            )
     except ChatAgentConflict:
         raise HTTPException(status.HTTP_409_CONFLICT, CONFLICT) from None
     except ChatAgentState as error:
         raise _state(error) from None
+    except ChatAgentError as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from None
     except PyMongoError as error:
         raise _unavailable(error) from None
     record = await _found(record)
@@ -405,9 +500,41 @@ async def publish_chat_agent(
     return _read(record)
 
 
-async def check_builds(request: Request, document: dict[str, Any]) -> None:
-    """:raises HTTPException: 422 with why the document can't run."""
+def workflow_drafts(document: dict[str, Any]) -> list[str]:
+    """
+    :return: Why a document can't be published for the workflows' drafts
+        it runs: a published version runs only what's published, not what
+        whoever edits a workflow changes under it.
+    """
+    return [
+        f"{node.get('name')!r} runs {config.get('workflow')}'s draft: "
+        "pick one of its published versions"
+        for node in document.get("nodes") or []
+        if isinstance(node, dict)
+        and node.get("kind") == "adk_workflow"
+        and isinstance(config := node.get("config"), dict)
+        and config.get("version") == "draft"
+    ]
+
+
+async def check_builds(
+    request: Request, document: dict[str, Any], *, publishing: bool = False
+) -> None:
+    """
+    :param publishing: Check it as the published version it's about to be:
+        one running no workflow's draft.
+    :raises HTTPException: 422 with why the document can't run.
+    """
     executor: AgentExecutor | None = getattr(request.app.state, "agent_executor", None)
+    if publishing:
+        problems = workflow_drafts(document)
+        if problems:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                {"msg": "It can't be published yet", "problems": problems},
+            )
+        # Built as a published version is: any number will do.
+        document = {**document, "version": 1}
     try:
         parsed = parse_document(document)
     except DocumentError as error:
@@ -548,6 +675,7 @@ async def export_version(
             organization_id,
             found["document"],
             skills=skill_finder(request, organization_id),
+            ui_components=ui_component_finder(request, organization_id),
         )
     except PyMongoError as error:
         raise _unavailable(error) from None
@@ -610,6 +738,7 @@ async def _standalone(
             document,
             hosted=False,
             skills=skill_finder(request, organization_id),
+            ui_components=ui_component_finder(request, organization_id),
         )
     except PyMongoError as error:
         raise _unavailable(error) from None
@@ -718,8 +847,8 @@ async def set_chat_page(
 ) -> ChatAgentRead:
     """
     Share the agent as a full-page chat at a link of its own, or stop. The
-    page runs its latest published version, for anyone who has the link,
-    whether or not the runtime is public. Turning it off keeps the link for
+    page runs its latest published version, for anyone who has the link:
+    the one way in without a key or a sign-in. Turning it off keeps the link for
     turning it on again; ``new_link`` stops the old link for good.
     \f
     :raises HTTPException: 403 without agents:manage; 404; 409
@@ -771,9 +900,11 @@ async def duplicate_chat_agent(
         source = await _found(await store.get(organization_id, agent_id))
     except PyMongoError as error:
         raise _unavailable(error) from None
-    document = dict(source["document"])
+    # A copy is limited to the same people: its nodes' rules are copied,
+    # and its record's (from before nodes had rules) moved onto its node.
+    document = with_record_rule(source["document"], source)
     document["name"] = body.name or f"{document.get('name') or 'Agent'} (copy)"
-    return await create_chat_agent(
+    created = await create_chat_agent(
         organization_id,
         ChatAgentCreate(document=document),
         request,
@@ -781,6 +912,7 @@ async def duplicate_chat_agent(
         session,
         enforcer,
     )
+    return created
 
 
 @router.delete(ONE, status_code=status.HTTP_204_NO_CONTENT)

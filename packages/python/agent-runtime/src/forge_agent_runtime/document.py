@@ -1,15 +1,17 @@
 """A chat agent as JSON (``forge.chat_agent/v1``), as the Forge builder writes it.
 
 ``nodes`` are the agent people chat with (kind ``agent``, exactly one: the
-entry point), its sub-agents and its tools, each with its settings
-(``config``); ``edges`` join an agent's way out (``tools`` or ``agents``) to
+entry point), its sub-agents, its intake agents (:mod:`.intake`) and its
+tools, each with its settings (``config``); ``edges`` join an agent's way out (``tools`` or ``agents``) to
 what it calls or hands off to. ``layout`` is the builder's and ignored here.
 
-An exported agent may carry three more fields: ``version`` (the published
+An exported agent may carry four more fields: ``version`` (the published
 version it is, or ``"draft"``), ``dependencies``, the saved agents it uses
-as documents of their own, by ``"<id>@<version>"``, and ``skills``, the
+as documents of their own, by ``"<id>@<version>"``, ``skills``, the
 skills its Skills tools (and its saved agents') use, by ID
-(``forge_agent_runtime.skills.SkillBundle``).
+(``forge_agent_runtime.skills.SkillBundle``), and ``ui_components``, the team
+UI components its Rich answers nodes (and its saved agents') pick, by key
+(``forge_agent_runtime.generative_ui``).
 
 :func:`load_document` reads one, fills in settings older documents lack, and
 checks it against the format's JSON Schema (``chat_agent.schema.json``,
@@ -33,6 +35,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from forge_agent_runtime.catalog import CHAT_NODE_CATALOG
 from forge_agent_runtime.http_templates import upgraded_http_tool
+from forge_agent_runtime.intake import KIND as INTAKE
+from forge_agent_runtime.intake import ON_COMPLETE, design_problems
 from forge_agent_runtime.names import RESERVED_NAMES, adk_name
 
 FORMAT: Literal["forge.chat_agent/v1"] = "forge.chat_agent/v1"
@@ -42,13 +46,25 @@ HANDS_OFF = "agents"
 
 #: Every kind of node, by name.
 KINDS = frozenset(kind.kind for kind in CHAT_NODE_CATALOG.kinds)
-#: The agents: the chat agent and its sub-agents, each with the two ways out.
+#: The agents, each with ways out: the chat agent and its sub-agents (tools, and who
+#: they hand off to) and intake agents (tools, and the workflows they start when they complete).
 AGENT_LIKE = frozenset(kind.kind for kind in CHAT_NODE_CATALOG.kinds if kind.outputs)
+#: Each kind's ways out, by their IDs.
+WAYS: dict[str, tuple[str, ...]] = {
+    kind.kind: tuple(output.id for output in kind.outputs) for kind in CHAT_NODE_CATALOG.kinds
+}
 #: What can be handed off to: an agent.
 HANDED_TO = frozenset(kind.kind for kind in CHAT_NODE_CATALOG.kinds if kind.handed_to)
+#: What an agent can call as a tool: anything but the chat agent (an intake agent, its requests: ``requests``).
+CALLED = frozenset(kind.kind for kind in CHAT_NODE_CATALOG.kinds if kind.tool and kind.kind != "agent")
 
 #: Each kind's settings with nothing set, as the builder makes a new node's.
 DEFAULTS: dict[str, dict[str, Any]] = {kind.kind: kind.defaults for kind in CHAT_NODE_CATALOG.kinds}
+
+#: The most nodes and edges a document may have: each is checked, and built,
+#: as the agent is resolved. The builder's agents have tens.
+MOST_NODES = 500
+MOST_EDGES = 2_000
 
 
 class DocumentError(ValueError):
@@ -110,6 +126,13 @@ class ChatAgentDocument(BaseModel):
     dependencies: dict[str, dict[str, Any]] = Field(default_factory=dict)
     #: The skills its Skills tools use, by ID, each a ``SkillBundle``'s JSON, for running it on its own.
     skills: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    #: The team UI components its Rich answers nodes (and its saved agents')
+    #: pick, by key, each a published ``UiComponentDefinition``'s JSON, for running it on its own.
+    ui_components: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    #: Rules its agents' nodes are held to besides their own, by node ID: what
+    #: the runtime that found it adds (an older version, or the draft, held to
+    #: what the live version guards). Not part of the format, nor of exports.
+    required_rules: dict[str, dict[str, Any]] = Field(default_factory=dict, exclude=True)
 
     def node(self, node_id: str) -> Node:
         return next(node for node in self.nodes if node.id == node_id)
@@ -160,8 +183,18 @@ def with_defaults(raw: Mapping[str, Any]) -> dict[str, Any]:
             config = upgraded_http_tool(config)
         if defaults is not None and isinstance(config, dict):
             node["config"] = {**copy.deepcopy(defaults), **config}
-        node.setdefault("outputs", [TOOLS, HANDS_OFF] if node.get("kind") in AGENT_LIKE else [])
+        node.setdefault("outputs", list(WAYS.get(str(node.get("kind")), ())))
     return doc
+
+
+def size_problems(raw: Mapping[str, Any]) -> list[str]:
+    """:return: Why a document is too big to check: more nodes or edges than a chat agent has."""
+    out = []
+    for what, most in (("nodes", MOST_NODES), ("edges", MOST_EDGES)):
+        items = raw.get(what)
+        if isinstance(items, list) and len(items) > most:
+            out.append(f"It has {len(items):,} {what}; a chat agent has at most {most:,}.")
+    return out
 
 
 def schema_problems(raw: Mapping[str, Any], *, limit: int = 8) -> list[str]:
@@ -178,8 +211,9 @@ def schema_problems(raw: Mapping[str, Any], *, limit: int = 8) -> list[str]:
 def structure_problems(doc: ChatAgentDocument) -> list[str]:
     """
     :return: What stops ADK building the agent: not one entry agent, edges
-        that don't fit, names ADK can't use or uses twice, a sub-agent with
-        two parents, agents that hand off to each other in a circle.
+        that don't fit, names ADK can't use or uses twice, a sub-agent (or an
+        intake agent) with two parents, agents that hand off to each other in
+        a circle, an intake agent whose design doesn't work.
     """
     out: list[str] = []
     entries = [node for node in doc.nodes if node.kind == "agent"]
@@ -195,14 +229,22 @@ def structure_problems(doc: ChatAgentDocument) -> list[str]:
         if source is None or target is None:
             out.append(f"Edge {edge.id} joins a node that isn't there.")
             continue
-        if source.kind not in AGENT_LIKE or edge.source_output not in (TOOLS, HANDS_OFF):
+        if edge.source_output not in WAYS.get(source.kind, ()):
             out.append(f"Edge {edge.id} leaves {source.name!r}, which has no {edge.source_output!r} way out.")
             continue
         if target.kind == "agent":
             out.append(f"Edge {edge.id} leads to the chat agent, which nothing calls or hands off to.")
         elif edge.source_output == HANDS_OFF and target.kind not in HANDED_TO:
             out.append(f"{source.name!r} hands off to {target.name!r}, which isn't an agent.")
-        elif edge.source_output == HANDS_OFF and target.kind == "sub_agent":
+        elif edge.source_output == TOOLS and target.kind not in CALLED:
+            out.append(f"{source.name!r} calls {target.name!r} as a tool; agents only hand off to it.")
+        elif edge.source_output == TOOLS and target.kind == INTAKE and source.kind == INTAKE:
+            out.append(
+                f"{source.name!r} uses {target.name!r}: an intake agent can't file requests to another."
+            )
+        elif edge.source_output == ON_COMPLETE and target.kind != "adk_workflow":
+            out.append(f"{source.name!r} starts {target.name!r} when it completes, which isn't a workflow.")
+        elif edge.source_output == HANDS_OFF and target.kind in ("sub_agent", INTAKE):
             parents.setdefault(target.id, []).append(source.id)
 
     for child, sources in parents.items():
@@ -211,6 +253,8 @@ def structure_problems(doc: ChatAgentDocument) -> list[str]:
 
     names: dict[str, str] = {}
     for node in doc.nodes:
+        if node.kind == INTAKE:
+            out.extend(design_problems(node.name, node.config))
         if node.kind not in AGENT_LIKE and node.kind != "http_tool":
             continue
         name = node.adk_name
@@ -226,18 +270,42 @@ def structure_problems(doc: ChatAgentDocument) -> list[str]:
             out.append(f"{node.name!r} does a task and hands back, so it can't hand off to anyone.")
 
     # Agents handing off to or calling each other in a circle would never end.
-    def visit(node_id: str, path: tuple[str, ...]) -> None:
-        if node_id in path:
-            circle = " → ".join(by_id[n].name for n in (*path[path.index(node_id) :], node_id))
-            out.append(f"{circle} call or hand off to each other in a circle.")
-            return
-        for output in (TOOLS, HANDS_OFF):
-            for target in doc.targets(node_id, output):
-                if target.kind in AGENT_LIKE:
-                    visit(target.id, (*path, node_id))
-
     if len(entries) == 1:
-        visit(entries[0].id, ())
+        out.extend(_circles(doc, by_id, entries[0].id))
+    return out
+
+
+def _circles(doc: ChatAgentDocument, by_id: Mapping[str, Node], entry: str) -> list[str]:
+    """
+    :return: Each circle of agents calling or handing off to each other that
+        the entry agent leads to. Each agent is walked from once, depth first:
+        a circle is a way back to an agent still on the walk's path, so the
+        check takes as long as the agents and edges there are, however many
+        ways there are through them.
+    """
+    leads_to: dict[str, list[str]] = {}
+    for output in (TOOLS, HANDS_OFF):
+        for edge in doc.edges:
+            to = by_id.get(edge.target)
+            if edge.source_output == output and to is not None and to.kind in AGENT_LIKE:
+                leads_to.setdefault(edge.source, []).append(edge.target)
+    out: list[str] = []
+    path, on_path = [entry], {entry}
+    walked: set[str] = set()
+    stack = [iter(leads_to.get(entry, ()))]
+    while stack:
+        target = next(stack[-1], None)
+        if target is None:
+            stack.pop()
+            walked.add(path[-1])
+            on_path.discard(path.pop())
+        elif target in on_path:
+            circle = " → ".join(by_id[n].name for n in (*path[path.index(target) :], target))
+            out.append(f"{circle} call or hand off to each other in a circle.")
+        elif target not in walked:
+            path.append(target)
+            on_path.add(target)
+            stack.append(iter(leads_to.get(target, ())))
     return out
 
 
@@ -251,6 +319,9 @@ def parse_document(raw: Mapping[str, Any]) -> ChatAgentDocument:
         raise DocumentError(["A chat agent is a JSON object."])
     if raw.get("format") != FORMAT:
         raise DocumentError([f'This isn\'t a Forge chat agent: its "format" should be "{FORMAT}".'])
+    problems = size_problems(raw)
+    if problems:
+        raise DocumentError(problems)
     filled = with_defaults(raw)
     problems = schema_problems(filled)
     if problems:

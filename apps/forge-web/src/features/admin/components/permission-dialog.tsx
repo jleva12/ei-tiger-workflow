@@ -4,6 +4,7 @@ import { Key01Icon } from "@hugeicons/core-free-icons"
 import { ErrorCallout } from "@/components/forge/feedback"
 import { Icon } from "@/components/forge/icon"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Field,
   FieldDescription,
@@ -34,17 +35,43 @@ import {
 } from "@/features/builder/components/settings-dialog"
 import { useOpenCount } from "./dialog-state"
 
+/**
+ * Permissions other than the site's, for the dialog: an organization's agent
+ * permissions, which count only there. No roles grant them: the company
+ * groups linked to them do, and the organization's API keys linked to them.
+ */
+export type PermissionScheme = {
+  /** Where its permissions count, for sentences: the organization's name. */
+  where: string
+  /** The company groups linked to its other permissions, to pick from. */
+  knownGroups: string[]
+  /** An example key, e.g. `invoices:approve`. */
+  example: string
+  /** The API keys that can be linked: the organization's. */
+  apiKeys: { id: string; name: string }[]
+}
+
+/** A permission the dialog edits: the site's, or a scheme's with its API keys. */
+type EditedPermission = Permission & {
+  api_keys?: { id: string; name: string }[]
+}
+
+/** What the dialog saves: the scheme's carry the API keys linked, by ID. */
+type SavedPermission = PermissionInput & { api_keys?: string[] }
+
 type PermissionDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** The permission to edit; without one the dialog creates a permission. */
-  permission?: Permission
+  permission?: EditedPermission
+  /** Permissions other than the site's; the site's when absent. */
+  scheme?: PermissionScheme
   /** How many roles grant it, to say what a new key affects. */
   grantedBy?: number
   /** Saves; rejects with the API's error, which the dialog shows. */
   onSubmit: (
-    input: PermissionInput,
-    permission?: Permission
+    input: SavedPermission,
+    permission?: EditedPermission
   ) => Promise<unknown>
 }
 
@@ -63,7 +90,7 @@ export function PermissionDialog({
   const count = useOpenCount(open)
   // While it closes it keeps showing what it showed: a permission, or
   // (null) a new one.
-  const [shown, setShown] = React.useState<Permission | null | undefined>(
+  const [shown, setShown] = React.useState<EditedPermission | null | undefined>(
     open ? (permission ?? null) : undefined
   )
   const target = open ? (permission ?? null) : undefined
@@ -85,11 +112,12 @@ export function PermissionDialog({
 const plural = (n: number, word: string) =>
   `${n} ${n === 1 ? word : `${word}s`}`
 
-const sameGroups = (a: string[], b: string[]) =>
+const sameSet = (a: string[], b: string[]) =>
   a.length === b.length && [...a].sort().join("\n") === [...b].sort().join("\n")
 
 function PermissionForm({
   permission,
+  scheme,
   grantedBy = 0,
   onSubmit,
   onDone,
@@ -101,8 +129,9 @@ function PermissionForm({
   const [description, setDescription] = React.useState(
     permission?.description ?? ""
   )
-  const [groups, setGroups] = React.useState<string[]>(
-    permission?.groups ?? []
+  const [groups, setGroups] = React.useState<string[]>(permission?.groups ?? [])
+  const [keys, setKeys] = React.useState<string[]>(
+    permission?.api_keys?.map((linked) => linked.id) ?? []
   )
   const [submitted, setSubmitted] = React.useState(false)
   const [pending, setPending] = React.useState(false)
@@ -111,7 +140,7 @@ function PermissionForm({
 
   const keyError =
     submitted && !PERMISSION_KEY_PATTERN.test(key.trim())
-      ? "Use lowercase resource:action, like organizations:update."
+      ? `Use lowercase resource:action, like ${scheme?.example ?? "organizations:update"}.`
       : error?.status === 409
         ? error.message
         : undefined
@@ -120,7 +149,9 @@ function PermissionForm({
     !permission ||
     renaming ||
     description.trim() !== permission.description ||
-    !sameGroups(groups, permission.groups)
+    !sameSet(groups, permission.groups) ||
+    (scheme !== undefined &&
+      !sameSet(keys, permission.api_keys?.map((linked) => linked.id) ?? []))
   const unlink = (name: string) =>
     setGroups((current) => current.filter((group) => group !== name))
 
@@ -132,7 +163,12 @@ function PermissionForm({
     setError(undefined)
     try {
       await onSubmit(
-        { key: key.trim(), description: description.trim(), groups },
+        {
+          key: key.trim(),
+          description: description.trim(),
+          groups,
+          ...(scheme && { api_keys: keys }),
+        },
         permission
       )
       onDone()
@@ -149,7 +185,11 @@ function PermissionForm({
       <SettingsHeader
         glyph={<SettingsGlyph icon={Key01Icon} />}
         title={permission ? permission.key : "New permission"}
-        description={`Permission · ${plural(grantedBy, "role")} · ${plural(groups.length, "company group")}`}
+        description={
+          scheme
+            ? `Agent permission · ${plural(groups.length, "company group")} · ${plural(keys.length, "API key")}`
+            : `Permission · ${plural(grantedBy, "role")} · ${plural(groups.length, "company group")}`
+        }
         closeLabel="Close the permission"
       />
       <form
@@ -160,8 +200,9 @@ function PermissionForm({
         <SettingsBody>
           <SettingsSection className="gap-3">
             <p className="text-xs/[1.6] text-muted-foreground">
-              Something people can be let do. Roles grant it (on the Roles
-              page), and so do the company groups linked to it here.
+              {scheme
+                ? `Something ${scheme.where}'s agents and workflows can ask for. Whoever's sign-in names a company group linked here holds it, and so do the API keys linked here.`
+                : "Something people can be let do. Roles grant it (on the Roles page), and so do the company groups linked to it here."}
             </p>
             {error && error.status !== 409 && (
               <ErrorCallout
@@ -182,7 +223,7 @@ function PermissionForm({
                 maxLength={200}
                 autoComplete="off"
                 spellCheck={false}
-                placeholder="organizations:update"
+                placeholder={scheme?.example ?? "organizations:update"}
                 value={key}
                 aria-invalid={Boolean(keyError)}
                 onChange={(event) => {
@@ -194,8 +235,11 @@ function PermissionForm({
                 <FieldError>{keyError}</FieldError>
               ) : (
                 <FieldDescription>
-                  {renaming && (grantedBy > 0 || groups.length > 0)
-                    ? "The roles and company groups that have it will have the new key."
+                  {renaming &&
+                  (grantedBy > 0 || groups.length > 0 || keys.length > 0)
+                    ? scheme
+                      ? "What's linked to it keeps it, and agents and workflows asking for it still do."
+                      : "The roles and company groups that have it will have the new key."
                     : "A resource and an action; either can be * for all of them."}
                 </FieldDescription>
               )}
@@ -227,7 +271,9 @@ function PermissionForm({
               </ul>
             ) : (
               <p className="text-xs/[1.6] text-muted-foreground">
-                No company groups are linked: only roles grant it.
+                {scheme
+                  ? "No company groups are linked: nobody's sign-in gives it."
+                  : "No company groups are linked: only roles grant it."}
               </p>
             )}
             <Button
@@ -241,6 +287,14 @@ function PermissionForm({
               {linking ? "Hide company groups" : "Link to company groups"}
             </Button>
           </SettingsSection>
+
+          {scheme && (
+            <ApiKeyLinks
+              offered={scheme.apiKeys}
+              value={keys}
+              onValueChange={setKeys}
+            />
+          )}
         </SettingsBody>
 
         <SettingsFooter>
@@ -268,6 +322,7 @@ function PermissionForm({
       </form>
 
       <GroupLinker
+        scheme={scheme}
         permissionKey={title}
         groups={groups}
         onLink={(name) => setGroups((current) => [...current, name])}
@@ -278,15 +333,64 @@ function PermissionForm({
   )
 }
 
+/**
+ * The organization's API keys linked to an agent permission: outside apps
+ * calling with one hold it. Those offered are the organization's keys (for
+ * someone who may see them) and those linked already.
+ */
+function ApiKeyLinks({
+  offered,
+  value,
+  onValueChange,
+}: {
+  offered: { id: string; name: string }[]
+  value: string[]
+  onValueChange: (value: string[]) => void
+}) {
+  const id = React.useId()
+  return (
+    <SettingsSection title="API keys">
+      <p className="text-xs/[1.6] text-muted-foreground">
+        Outside apps calling with one of these keys hold it.
+      </p>
+      {offered.length === 0 ? (
+        <p className="text-xs/[1.6] text-muted-foreground">
+          No API keys to link: make one under Settings → API keys.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {offered.map((key) => {
+            const checkboxId = `${id}-${key.id}`
+            return (
+              <Field key={key.id} orientation="horizontal">
+                <Checkbox
+                  id={checkboxId}
+                  checked={value.includes(key.id)}
+                  onCheckedChange={(on) =>
+                    onValueChange(
+                      on
+                        ? [...value, key.id]
+                        : value.filter((other) => other !== key.id)
+                    )
+                  }
+                />
+                <FieldLabel htmlFor={checkboxId} className="font-normal">
+                  {key.name}
+                </FieldLabel>
+              </Field>
+            )
+          })}
+        </div>
+      )}
+    </SettingsSection>
+  )
+}
+
 /** One linked group, with unlinking it. */
 function GroupRow({ name, onUnlink }: { name: string; onUnlink: () => void }) {
   return (
     <li className="flex items-center gap-2 py-1.5 pr-1.5 pl-3">
-      <Icon
-        icon="team"
-        size={14}
-        className="shrink-0 text-muted-foreground"
-      />
+      <Icon icon="team" size={14} className="shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
         {name}
       </span>
@@ -310,12 +414,14 @@ function GroupRow({ name, onUnlink }: { name: string; onUnlink: () => void }) {
  * picked from those linked to other permissions), and unlink them.
  */
 function GroupLinker({
+  scheme,
   permissionKey,
   groups,
   onLink,
   onUnlink,
   onDone,
 }: {
+  scheme?: PermissionScheme
   permissionKey: string
   groups: string[]
   onLink: (name: string) => void
@@ -323,12 +429,12 @@ function GroupLinker({
   onDone: () => void
 }) {
   const id = React.useId()
-  const known = groupLinks.useList()
+  const known = groupLinks.useList(undefined, { enabled: !scheme })
   const [name, setName] = React.useState("")
   const [problem, setProblem] = React.useState<string>()
-  const suggestions = (known.data ?? [])
-    .map((link) => link.group_name)
-    .filter((group) => !groups.includes(group))
+  const suggestions = (
+    scheme?.knownGroups ?? (known.data ?? []).map((link) => link.group_name)
+  ).filter((group) => !groups.includes(group))
 
   const add = (value: string) => {
     const trimmed = value.trim()
@@ -350,10 +456,10 @@ function GroupLinker({
       title="Link to company groups"
       description={
         <>
-          Anyone whose sign-in says they&apos;re in one of these groups, in
-          the company&apos;s directory, gets{" "}
-          <code className="font-mono text-[0.9em]">{permissionKey}</code> on
-          the whole site.
+          Anyone whose sign-in says they&apos;re in one of these groups, in the
+          company&apos;s directory, gets{" "}
+          <code className="font-mono text-[0.9em]">{permissionKey}</code>{" "}
+          {scheme ? `in ${scheme.where}` : "on the whole site"}.
         </>
       }
       footer={
@@ -402,8 +508,8 @@ function GroupLinker({
             <FieldError>{problem}</FieldError>
           ) : (
             <FieldDescription>
-              Exactly as the directory and sign-in tokens name it. Link as
-              many groups as need it.
+              Exactly as the directory and sign-in tokens name it. Link as many
+              groups as need it.
             </FieldDescription>
           )}
         </Field>

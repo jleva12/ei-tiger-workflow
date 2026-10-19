@@ -4,12 +4,17 @@ an organization's overview reads them."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
+import anyio
 import pytest
+import sqlalchemy as sa
+from forge_common.adk.turns import TurnOutcome, turn_scope
 from forge_common.adk.usage import Attribution, UsageCall
-from sqlalchemy.ext.asyncio import create_async_engine
+from google.adk.events import Event
+from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from forge_task_adk_workflows.usage_store import (
@@ -18,6 +23,7 @@ from forge_task_adk_workflows.usage_store import (
     SUCCEEDED,
     UsageStore,
     hour_of,
+    invocations,
     metadata,
 )
 
@@ -112,6 +118,27 @@ async def test_model_calls_sum_by_hour_subject_and_model(store: UsageStore) -> N
     assert {r["subject_id"] for r in rows} == {"ca_support", "wf_refunds"}
 
 
+async def test_a_fenced_call_is_kept_only_when_its_fence_lets_it(store: UsageStore) -> None:
+    class Gone(Exception):
+        pass
+
+    fenced: list[bool] = []
+
+    async def holds(conn: AsyncConnection) -> None:
+        fenced.append(conn.in_transaction())
+
+    async def lost(conn: AsyncConnection) -> None:
+        raise Gone("the worker lost the run")
+
+    await store.record(model_call(REFUNDS, T0), fence=holds)
+    with pytest.raises(Gone):
+        await store.record(model_call(REFUNDS, T0, model="anthropic/claude-opus-5"), fence=lost)
+
+    [kept] = await store.model_hours("org-1", T0 - timedelta(hours=1), T0 + timedelta(hours=1))
+    assert (kept["model"], kept["calls"]) == ("openai/gpt-5.2", 1)
+    assert fenced == [True]  # asked on the connection that keeps it, in its transaction
+
+
 async def test_the_window_is_by_hour(store: UsageStore) -> None:
     await store.record(model_call(SUPPORT, T0))
     assert await store.model_hours("org-1", T0 + timedelta(minutes=30), T0 + timedelta(hours=1))
@@ -164,6 +191,223 @@ async def test_an_invocation_ends_as_its_block_does(store: UsageStore, clock: Cl
     assert by_status[CANCELLED]["count"] == 1
     failures = await store.invocation_failures("org-1", T0 - timedelta(hours=1), T0 + timedelta(hours=1))
     assert [(f["error"], f["count"]) for f in failures] == [("RuntimeError: model down", 1)]
+
+
+async def invocation_rows(store: UsageStore) -> list[dict]:
+    async with store.engine.connect() as connection:
+        rows = await connection.execute(sa.select(invocations))
+        return [dict(row) for row in rows.mappings()]
+
+
+async def test_native_error_event_is_a_failed_invocation_with_the_turns_id(store: UsageStore) -> None:
+    with turn_scope() as turn:
+        async with store.invocation(SUPPORT):
+            turn.observe(Event(author="helper", error_code="SAFETY", error_message="Response blocked"))
+    [row] = await invocation_rows(store)
+    assert row["id"] == turn.run_id
+    assert row["status"] == FAILED
+    assert row["error"] == "SAFETY: Response blocked"
+    assert row["finished_at"] is not None
+
+
+async def test_nested_observers_keep_distinct_audit_rows(store: UsageStore) -> None:
+    with turn_scope() as turn:
+        async with store.invocation(SUPPORT):
+            async with store.invocation(SUPPORT):
+                pass
+    rows = await invocation_rows(store)
+    assert len(rows) == 2
+    assert turn.run_id in {row["id"] for row in rows}
+    assert all(row["status"] == SUCCEEDED for row in rows)
+
+
+async def test_a_turn_cancelled_by_an_event_is_not_recorded_as_success(store: UsageStore) -> None:
+    turn = TurnOutcome()
+    with turn_scope(turn):
+        async with store.invocation(SUPPORT):
+            turn.observe(Event(author="helper", interrupted=True))
+    [row] = await invocation_rows(store)
+    assert row["status"] == CANCELLED
+
+
+@pytest.mark.parametrize("backend", ["asyncio", "anyio"])
+@pytest.mark.parametrize("timed_out", [False, True])
+async def test_cancellation_after_start_commits_still_finishes_the_row(
+    store: UsageStore,
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+    timed_out: bool,
+) -> None:
+    committed = asyncio.Event()
+    scopes: list[anyio.CancelScope] = []
+    turn = TurnOutcome()
+    original_start = store._start
+
+    async def start(*args) -> bool:
+        await original_start(*args)
+        committed.set()
+        await asyncio.Future()
+        return True
+
+    monkeypatch.setattr(store, "_start", start)
+
+    async def run() -> None:
+        with anyio.CancelScope() as scope, turn_scope(turn):
+            scopes.append(scope)
+            async with store.invocation(SUPPORT):
+                pytest.fail("The invocation body cannot run before its audit starts")
+
+    task = asyncio.create_task(run())
+    await committed.wait()
+    if timed_out:
+        turn.fail("TURN_TIMEOUT", "Deadline reached")
+    if backend == "asyncio":
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        scopes[0].cancel()
+        await task
+    [row] = await invocation_rows(store)
+    assert row["status"] == (FAILED if timed_out else CANCELLED)
+    assert row["error"] == ("TURN_TIMEOUT: Deadline reached" if timed_out else None)
+    assert row["finished_at"] is not None
+
+
+@pytest.mark.parametrize("native_failure", [False, True])
+async def test_anyio_disconnect_finishes_the_audit_without_erasing_a_failure(
+    store: UsageStore,
+    native_failure: bool,
+) -> None:
+    with turn_scope() as turn, anyio.CancelScope() as scope:
+        async with store.invocation(SUPPORT):
+            if native_failure:
+                turn.observe(Event(author="helper", error_code="SAFETY", error_message="Blocked"))
+            scope.cancel()
+            await anyio.sleep(0)
+        pytest.fail("The disconnect cancellation must still propagate")
+    [row] = await invocation_rows(store)
+    assert row["status"] == (FAILED if native_failure else CANCELLED)
+    assert row["finished_at"] is not None
+    assert row["error"] == ("SAFETY: Blocked" if native_failure else None)
+
+
+async def test_asyncio_cancellation_during_cleanup_keeps_the_row_and_propagates(
+    store: UsageStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = asyncio.Event()
+    finishing = asyncio.Event()
+    release = asyncio.Event()
+    original_finish = store._finish
+
+    async def finish(*args) -> None:
+        finishing.set()
+        await release.wait()
+        await original_finish(*args)
+
+    monkeypatch.setattr(store, "_finish", finish)
+
+    async def run() -> None:
+        with turn_scope():
+            async with store.invocation(SUPPORT):
+                entered.set()
+                await asyncio.Future()
+
+    task = asyncio.create_task(run())
+    await entered.wait()
+    task.cancel()
+    await finishing.wait()
+    task.cancel()  # A second cancellation while the database is finishing.
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert task.cancelled()
+    [row] = await invocation_rows(store)
+    assert row["status"] == CANCELLED
+    assert row["finished_at"] is not None
+
+
+@pytest.mark.parametrize("backend", ["asyncio", "anyio"])
+@pytest.mark.parametrize("failure", ["none", "body", "cleanup"])
+async def test_cancellation_during_a_success_write_reconciles_the_persisted_outcome(
+    store: UsageStore,
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+    failure: str,
+) -> None:
+    finishing = asyncio.Event()
+    release = asyncio.Event()
+    scopes: list[anyio.CancelScope] = []
+    turn = TurnOutcome()
+    original_finish = store._finish
+
+    async def finish(*args) -> None:
+        finishing.set()
+        await release.wait()
+        await original_finish(*args)
+
+    monkeypatch.setattr(store, "_finish", finish)
+
+    async def run() -> None:
+        with anyio.CancelScope() as scope, turn_scope(turn):
+            scopes.append(scope)
+            try:
+                async with store.invocation(SUPPORT):
+                    if failure == "body":
+                        turn.observe(Event(author="helper", error_code="SAFETY", error_message="Blocked"))
+                await anyio.lowlevel.checkpoint_if_cancelled()
+            except asyncio.CancelledError:
+                turn.cancel()
+                raise
+
+    task = asyncio.create_task(run())
+    await finishing.wait()
+    if failure == "cleanup":
+        turn.fail("TURN_TIMEOUT", "Deadline reached")
+    if backend == "asyncio":
+        task.cancel()
+    else:
+        scopes[0].cancel()
+    release.set()
+    if backend == "asyncio":
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        await task  # The owning AnyIO scope consumes its own cancellation.
+    [row] = await invocation_rows(store)
+    assert row["status"] == turn.status == (CANCELLED if failure == "none" else FAILED)
+    assert (
+        row["error"]
+        == {
+            "none": None,
+            "body": "SAFETY: Blocked",
+            "cleanup": "TURN_TIMEOUT: Deadline reached",
+        }[failure]
+    )
+    assert row["finished_at"] is not None
+
+
+async def test_a_stalled_audit_write_has_a_bounded_cleanup(
+    store: UsageStore,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stopped = asyncio.Event()
+
+    async def never_finishes(*args) -> None:
+        try:
+            await asyncio.Future()
+        finally:
+            stopped.set()
+
+    monkeypatch.setattr(store, "_finish", never_finishes)
+    monkeypatch.setattr("forge_task_adk_workflows.usage_store.FINISH_TIMEOUT", 0.02)
+    async with asyncio.timeout(1):
+        async with store.invocation(SUPPORT):
+            pass
+        await stopped.wait()
+    assert "exceeded" in caplog.text
 
 
 async def test_subjects_take_their_latest_name(store: UsageStore) -> None:

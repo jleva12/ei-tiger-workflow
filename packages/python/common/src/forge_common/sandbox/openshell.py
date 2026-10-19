@@ -218,6 +218,8 @@ class OpenShellCodeExecutor(BaseCodeExecutor):
 
     #: The most seconds one call's code may run before the sandbox stops it.
     timeout_seconds: int = Field(default=60, gt=0)
+    #: Combined stdout/stderr bytes retained before stopping the sandbox.
+    max_output_bytes: int = Field(default=1024 * 1024, gt=0)
 
     #: The gateway, and the sandboxes it makes.
     settings: OpenShellSettings = Field(default_factory=OpenShellSettings)
@@ -310,13 +312,14 @@ class OpenShellCodeExecutor(BaseCodeExecutor):
     def _run(self, client: Any, name: str, code: str) -> CodeExecutionResult:
         """Runs the code as UnsafeLocalCodeExecutor does: its stderr only when
         it failed, and a note when it was stopped."""
-        stdout: list[bytes] = []
-        stderr: list[bytes] = []
+        stdout, stderr = bytearray(), bytearray()
         exit_code: int | None = None
         started = time.monotonic()
         timed_out = False
+        output_limited = False
+        stream = None
         try:
-            for item in client.exec_stream(
+            stream = client.exec_stream(
                 name,
                 [PYTHON, "-"],
                 workspace=self.settings.workspace,
@@ -325,9 +328,18 @@ class OpenShellCodeExecutor(BaseCodeExecutor):
                 stdin=code.encode("utf-8"),
                 timeout_seconds=self.timeout_seconds,
                 no_login_shell=True,
-            ):
+            )
+            for item in stream:
                 if isinstance(item, ExecChunk):
-                    (stdout if item.stream == "stdout" else stderr).append(item.data)
+                    remaining = self.max_output_bytes - len(stdout) - len(stderr)
+                    (stdout if item.stream == "stdout" else stderr).extend(item.data[:remaining])
+                    if len(item.data) > remaining:
+                        output_limited = True
+                        # Stop consuming, not merely retaining: OpenShell's
+                        # iterator also accumulates all output for ExecResult.
+                        # Closing it frees that buffer; execute_code's finally
+                        # deletes the sandbox, stopping the printing process.
+                        break
                 elif isinstance(item, ExecResult):
                     exit_code = item.exit_code
         except grpc.RpcError as error:
@@ -340,14 +352,18 @@ class OpenShellCodeExecutor(BaseCodeExecutor):
             raise SandboxUnavailable(
                 f"OpenShell stopped running the code: {reason(error)}"
             ) from error
+        finally:
+            close = getattr(stream, "close", None)
+            if callable(close):
+                close()
         if (
             self.timeout_seconds
             and exit_code != 0
             and time.monotonic() - started >= self.timeout_seconds
         ):
             timed_out = True
-        output = b"".join(stdout).decode("utf-8", errors="replace")
-        error_output = b"".join(stderr).decode("utf-8", errors="replace")
+        output = stdout.decode("utf-8", errors="replace")
+        error_output = stderr.decode("utf-8", errors="replace")
         # The sandbox's shell couldn't find Python: the image is wrong, not
         # the code, so the model isn't told its program failed.
         if exit_code == 127 and not output and f"{PYTHON}: command not found" in error_output:
@@ -355,7 +371,12 @@ class OpenShellCodeExecutor(BaseCodeExecutor):
                 f"The sandbox's image has no {PYTHON}: give the sandboxes an image "
                 "that has it (FORGE_OPENSHELL_IMAGE, e.g. python:3.13-slim)."
             )
-        if timed_out:
+        if output_limited:
+            note = (
+                f"Code execution stopped: combined output exceeded {self.max_output_bytes} bytes."
+            )
+            error_output = f"{error_output}\n{note}" if error_output else note
+        elif timed_out:
             note = f"Code execution timed out after {self.timeout_seconds} seconds."
             error_output = f"{error_output}\n{note}" if error_output else note
         elif exit_code == 0:

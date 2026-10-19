@@ -41,11 +41,12 @@ the worker's maintenance finds it: the caller isn't refused.
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
+from forge_agent_runtime.access import caller_json
 from forge_common.patterns import schema_errors
 from forge_task_adk_workflows.files import save_run_files
 from forge_task_adk_workflows.graph.uses import (
@@ -55,10 +56,19 @@ from forge_task_adk_workflows.graph.uses import (
     tools_in,
     workflows_in,
 )
-from forge_task_adk_workflows.run_store import Actor, RunStore
+from forge_task_adk_workflows.run_store import (
+    CHILD_RUN,
+    PAUSED,
+    Actor,
+    Provenance,
+    RunStore,
+    RunTaken,
+    open_gates,
+)
 from google.adk.artifacts import BaseArtifactService
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
+from sqlalchemy.exc import SQLAlchemyError
 
 from forge_admin.adk_workflows.build import AgentBuildError, build_agent
 from forge_admin.adk_workflows.files import (
@@ -68,6 +78,7 @@ from forge_admin.adk_workflows.files import (
     checked_files,
 )
 from forge_admin.adk_workflows.queue import Embedding, EmbeddingError
+from forge_admin.chat_agents.access import AgentUseRefused, rules_in
 
 if TYPE_CHECKING:
     from forge_admin.adk_workflows.resources import RunResources
@@ -90,8 +101,32 @@ FindAgent = Callable[[str], Awaitable[dict[str, Any] | None]]
 GOING = frozenset({"queued", "running", "waiting"})
 
 
+def going(run: Mapping[str, Any]) -> bool:
+    """
+    Whether a run that's waited for is still going: in a status of
+    :data:`GOING`, or paused only for runs it started (workflows its LLM
+    agents called: nobody's to decide or answer anything, and those runs'
+    ends carry it on).
+    """
+    if run.get("status") in GOING:
+        return True
+    gates = open_gates(run)
+    return (
+        run.get("status") == PAUSED
+        and bool(gates)
+        and all(gate.get("kind") == CHILD_RUN for gate in gates)
+    )
+
+
 class AdkRunError(ValueError):
     """The run can't start, or the answer doesn't fit: the message says why."""
+
+
+class AdkRunRefused(AdkRunError):
+    """
+    Whoever the run is for may not use an agent from the Agents page it uses
+    (``forge_admin.chat_agents.access``): the message names it, and what it needs.
+    """
 
 
 def start_schema(document: dict[str, Any]) -> dict[str, Any] | None:
@@ -218,6 +253,10 @@ class PreparedRun:
     :ivar files: The files it starts with, held to its start; saved as it starts.
     :ivar skills: The skills their Skills tools use, each whole
         (``forge_agent_runtime.SkillBundle``'s JSON), by ID.
+    :ivar agent_access: What whoever the run is for holds of the agent
+        permissions its agents' rules name (``forge_agent_runtime.access``),
+        as it starts: what the worker checks those rules against. None:
+        nobody holds any.
     """
 
     saved: dict[str, dict[str, Any]]
@@ -225,6 +264,7 @@ class PreparedRun:
     knowledge_bases: dict[str, dict[str, str]] = field(default_factory=dict)
     files: list[CheckedFile] = field(default_factory=list)
     skills: dict[str, dict[str, Any]] = field(default_factory=dict)
+    agent_access: dict[str, Any] | None = None
 
 
 async def prepare_run(
@@ -246,22 +286,73 @@ async def prepare_run(
         servers; None when there are none to use.
     :param files: The files it starts with, as they were sent.
     :return: What the run carries.
+    :raises AdkRunRefused: Whoever the run is for may not run it, a saved
+        ADK workflow it runs, or an agent from the Agents page it uses.
     :raises AdkRunError: The input or a file doesn't fit, the document
         doesn't build, or something it uses isn't there (naming the node).
     :raises PyMongoError: The store isn't answering.
     """
     document = snapshot(record["document"])
+    saved = await saved_documents(document, find)
+    if resources is not None:
+        try:
+            await resources.check_workflows(record, saved)
+        except AgentUseRefused as error:
+            raise AdkRunRefused(str(error)) from None
     check_input(document, input)
     try:
         checked = checked_files(document, files or [])
     except FilesRefused as error:
         raise AdkRunError(str(error)) from None
-    saved = await saved_documents(document, find)
     check_builds(document, saved)
     chat_agents, knowledge_bases, skills = await used_resources(
         [document, *saved.values()], resources
     )
-    return PreparedRun(saved, chat_agents, knowledge_bases, checked, skills)
+    access = None
+    if resources is not None:
+        wanted = wanted_permissions([document, *saved.values()], chat_agents.values())
+        caller = await resources.caller(wanted)
+        access = caller_json(caller) if caller is not None else None
+    return PreparedRun(saved, chat_agents, knowledge_bases, checked, skills, access)
+
+
+def wanted_permissions(
+    documents: Sequence[Mapping[str, Any]], chat_agents: Iterable[Mapping[str, Any]]
+) -> frozenset[int]:
+    """
+    :param documents: A run's ADK workflow and the saved ones it runs.
+    :param chat_agents: The agents from the Agents page they use, as the run
+        carries them.
+    :return: The agent permissions their rules name: on those agents' nodes,
+        and on the LLM agents' Saved agent tools.
+    """
+    return rules_in(chat_agents) | rules_in(
+        [
+            {"nodes": [{"config": tool.config}]}
+            for workflow in documents
+            for tool in tools_in(dict(workflow))
+            if tool.kind == "saved_agent"
+        ]
+    )
+
+
+async def access_now(
+    payload: Mapping[str, Any], resources: "RunResources"
+) -> dict[str, Any] | None:
+    """
+    What whoever a resubmission is for holds now of the agent permissions its
+    agents' rules name (``PreparedRun.agent_access``): the agents the run it's
+    of carries, as they were when that started. What that run held isn't
+    carried forward: it may have been taken away since, or been someone
+    else's.
+
+    :param payload: The run resubmitted's (``RunPayload``).
+    :param resources: The organization's, for whoever the resubmission is for.
+    """
+    documents = [payload.get("document") or {}, *(payload.get("saved") or {}).values()]
+    wanted = wanted_permissions(documents, (payload.get("chat_agents") or {}).values())
+    caller = await resources.caller(wanted)
+    return caller_json(caller) if caller is not None else None
 
 
 async def used_resources(
@@ -276,6 +367,8 @@ async def used_resources(
         bases, by ID, and the skills their Skills tools use, whole, by ID
         (those of the agents from the Agents page are bundled with them).
     :raises AdkRunError: One isn't the organization's, or can't be had (naming the node).
+    :raises AdkRunRefused: Whoever the run is for may not use an agent from
+        the Agents page it uses (naming the node).
     """
     agents: list[AgentUse] = []
     knowledge: dict[str, str] = {}
@@ -313,6 +406,8 @@ async def used_resources(
             chat_agents[use.ref] = await resources.chat_agent(use.agent, use.version)
         except LookupError as error:
             raise AdkRunError(f"{use.where}: {error}") from None
+        except AgentUseRefused as error:
+            raise AdkRunRefused(f"{use.where}: {error}") from None
     found = await resources.knowledge_bases(list(knowledge)) if knowledge else {}
     for kb, where in knowledge.items():
         if kb not in found:
@@ -339,6 +434,37 @@ async def used_resources(
     )
 
 
+#: The header a client sends to make a start safe to retry: the same key
+#: (in the organization, from the same caller) starts one run, however many
+#: times it's sent.
+IDEMPOTENCY_KEY = "Idempotency-Key"
+#: What an idempotency key may be: up to 255 printable ASCII characters.
+IDEMPOTENCY_PATTERN = r"^[\x21-\x7e]{1,255}$"
+
+
+def idempotent_run_id(organization_id: str, key: str) -> str:
+    """
+    :return: The ID of the run a start sent with an idempotency key makes:
+        UUID5 of the key in the organization's namespace, as the run store's
+        hex. A retry of the start finds that run rather than making another.
+    """
+    try:
+        namespace = UUID(organization_id)
+    except ValueError:
+        namespace = uuid5(NAMESPACE_URL, f"forge:organization:{organization_id}")
+    return uuid5(namespace, key).hex
+
+
+def same_input(run: dict[str, Any], input: Any) -> bool:
+    """:return: Whether a run started with ``input``: an idempotent start's
+    retry starts with the same."""
+    payload = run.get("payload")
+    kept = payload.get("input") if isinstance(payload, dict) else None
+    return json.dumps(kept, sort_keys=True, default=str) == json.dumps(
+        input, sort_keys=True, default=str
+    )
+
+
 async def start_adk_run(
     runs: RunStore,
     queue: Embedding,
@@ -352,6 +478,7 @@ async def start_adk_run(
     version: int | str | None = None,
     run_id: str | None = None,
     artifacts: BaseArtifactService | None = None,
+    provenance: Provenance | None = None,
 ) -> dict[str, Any]:
     """
     Start a run of an ADK workflow, as its record is now: the run, queued,
@@ -369,15 +496,111 @@ async def start_adk_run(
     :param run_as_name: Their name, for its record.
     :param trigger: What started it: ``{"type": "manual", "by": <user>}``.
     :param version: Which version runs: ``"draft"`` or a published one's number.
-    :param run_id: Its ID, when the caller has one for it (an A2A task's).
+    :param run_id: Its ID, when the caller has one for it; one already
+        taken fails (:func:`start_adk_run_once` hands back its run instead).
     :param artifacts: Where its files are saved, when it has any (the
         worker's runs' artifacts).
+    :param provenance: How it was started, for its audit
+        (``forge_admin.adk_workflows.provenance``).
     :return: The run, as the store has it.
     :raises SQLAlchemyError: The run store's database isn't answering.
     :raises botocore.exceptions.BotoCoreError: Its files' storage isn't
         answering (an S3 artifact service's; ``OSError`` a folder's).
     """
-    agent_id = record["_id"]
+    session_id, name, payload = await _new_run(
+        record, prepared, input, run_as, run_as_name, trigger, version, artifacts
+    )
+    run = await runs.create(
+        organization_id=record["organization_id"],
+        agent_id=record["_id"],
+        agent_name=name or record["_id"],
+        revision=record["revision"],
+        session_id=session_id,
+        payload=payload,
+        requested_by=Actor(run_as, run_as_name),
+        version=None if version is None else str(version),
+        run_id=run_id,
+        provenance=provenance,
+    )
+    await queue_run(queue, run["id"])
+    return run
+
+
+async def start_adk_run_once(
+    runs: RunStore,
+    queue: Embedding,
+    record: dict[str, Any],
+    *,
+    run_id: str,
+    prepared: PreparedRun,
+    input: Any,
+    run_as: str,
+    run_as_name: str,
+    trigger: dict[str, Any],
+    version: int | str | None = None,
+    artifacts: BaseArtifactService | None = None,
+    provenance: Provenance | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """
+    :func:`start_adk_run`, under an ID its start makes for it (an
+    idempotency key's, an A2A task's, an intake's record's): asked again for
+    that ID, it's the run the first start made, queued once. Its files are
+    saved only for a run that's new; a start that loses a race for the ID
+    takes the files it saved away again.
+
+    :return: The run, and whether this start made it.
+    :raises RunTaken: The ID is a run of another workflow, or someone else's.
+    :raises SQLAlchemyError: The run store's database isn't answering.
+    """
+    requested_by = Actor(run_as, run_as_name)
+    found = await runs.started_as(
+        run_id,
+        organization_id=record["organization_id"],
+        agent_id=record["_id"],
+        requested_by=requested_by,
+    )
+    if found is not None:
+        return found, False
+    session_id, name, payload = await _new_run(
+        record, prepared, input, run_as, run_as_name, trigger, version, artifacts
+    )
+    try:
+        run, created = await runs.create_once(
+            run_id=run_id,
+            organization_id=record["organization_id"],
+            agent_id=record["_id"],
+            agent_name=name or record["_id"],
+            revision=record["revision"],
+            session_id=session_id,
+            payload=payload,
+            requested_by=requested_by,
+            version=None if version is None else str(version),
+            provenance=provenance,
+        )
+    except RunTaken:
+        # Nothing has them. (Failing otherwise, the run may have been made
+        # with them: they stay.)
+        await _drop_files(artifacts, run_as, session_id, payload)
+        raise
+    if created:
+        await queue_run(queue, run["id"])
+    else:
+        # Another start for the ID got there first: its files are the run's.
+        await _drop_files(artifacts, run_as, session_id, payload)
+    return run, created
+
+
+async def _new_run(
+    record: dict[str, Any],
+    prepared: PreparedRun,
+    input: Any,
+    run_as: str,
+    run_as_name: str,
+    trigger: dict[str, Any],
+    version: int | str | None,
+    artifacts: BaseArtifactService | None,
+) -> tuple[str, str, dict[str, Any]]:
+    """:return: A new run's ADK session (its files saved in it), its name, and its payload."""
     session_id = str(uuid4())
     document = snapshot(record["document"])
     name = str(document.get("name") or "")
@@ -394,7 +617,7 @@ async def start_adk_run(
     # What the worker runs (forge_task_adk_workflows.runs.RunPayload).
     payload = {
         "tenant_id": record["organization_id"],
-        "agent_id": agent_id,
+        "agent_id": record["_id"],
         "revision": record["revision"],
         "version": version,
         "name": name,
@@ -403,6 +626,7 @@ async def start_adk_run(
         "chat_agents": prepared.chat_agents,
         "knowledge_bases": prepared.knowledge_bases,
         "skills": prepared.skills,
+        "agent_access": prepared.agent_access,
         "input": input,
         "files": [file.model_dump(mode="json") for file in files],
         "session_id": session_id,
@@ -410,19 +634,72 @@ async def start_adk_run(
         "run_as_name": run_as_name,
         "trigger": trigger,
     }
-    run = await runs.create(
-        organization_id=record["organization_id"],
-        agent_id=agent_id,
-        agent_name=name or agent_id,
-        revision=record["revision"],
-        session_id=session_id,
-        payload=payload,
-        requested_by=Actor(run_as, run_as_name),
-        version=None if version is None else str(version),
-        run_id=run_id,
-    )
-    await queue_run(queue, run["id"])
-    return run
+    return session_id, name, payload
+
+
+async def _drop_files(
+    artifacts: BaseArtifactService | None,
+    run_as: str,
+    session_id: str,
+    payload: dict[str, Any],
+) -> None:
+    """Take away the files a start saved for a run it didn't make: only
+    logged when their storage won't."""
+    if artifacts is None:
+        return
+    for file in payload.get("files") or []:
+        try:
+            await artifacts.delete_artifact(
+                app_name=APP_NAME,
+                user_id=run_as,
+                session_id=session_id,
+                filename=str(file["name"]),
+            )
+        except Exception as error:  # noqa: BLE001 - a leftover file doesn't fail the start
+            logger.warning(
+                "Couldn't remove file %s a duplicate start saved in session %s: %s",
+                file.get("name"),
+                session_id,
+                error,
+            )
+
+
+async def refuse_start(
+    runs: RunStore,
+    *,
+    organization_id: str,
+    agent_id: str,
+    status_code: int,
+    reason: str,
+    requested_by: Actor | None,
+    provenance: Provenance | None,
+    version: int | str | None = None,
+) -> None:
+    """
+    Keep a start that was refused (403: they may not; 422: what it'd run
+    doesn't fit or build) for the organization's audit
+    (``RunStore.refuse``). Its store not answering doesn't change the
+    answer: it's logged instead.
+    """
+    try:
+        await runs.refuse(
+            organization_id=organization_id,
+            agent_id=agent_id,
+            version=None if version is None else str(version),
+            status_code=status_code,
+            reason=reason,
+            requested_by=requested_by,
+            provenance=provenance,
+        )
+    except (SQLAlchemyError, OSError) as error:
+        logger.warning(
+            "Couldn't keep the refused start of %s in organization %s (%d: %s): %s",
+            agent_id,
+            organization_id,
+            status_code,
+            reason,
+            error,
+        )
 
 
 async def settle(
@@ -451,7 +728,7 @@ async def settle(
     while True:
         run = await runs.get(run_id, organization_id=organization_id)
         left = deadline - loop.time()
-        if run is None or run["status"] not in GOING or left <= 0:
+        if run is None or not going(run) or left <= 0:
             return run
         if is_disconnected is not None and await is_disconnected():
             return run

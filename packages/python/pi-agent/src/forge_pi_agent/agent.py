@@ -32,7 +32,10 @@ A prompt is answered once pi has settled (``agent_settled``: no retry,
 compaction or queued message left): its answer is the last assistant
 message's text. A model's error that pi gave up on, an abort, a timeout or
 pi exiting raises :class:`PiError`. Closing ends pi (stdin closed, then
-SIGTERM and SIGKILL to its process group, so its commands go too).
+SIGTERM and SIGKILL to its process group, so its commands go too). Its
+process group is tied to this process (``forge_common.processes``): should
+this process die without closing it (``kill -9``), pi and its commands go
+with it; and :attr:`PiOptions.tag` finds what one that froze left running.
 """
 
 from __future__ import annotations
@@ -56,6 +59,7 @@ from types import TracebackType
 from typing import Any, Literal, Self
 
 from forge_common.model_provider import ResolvedModel
+from forge_common.processes import Tie
 
 from forge_pi_agent.models import model_ref, models_json
 
@@ -123,6 +127,9 @@ class PiOptions:
     :ivar command: How pi is started: ``("pi",)``, or e.g. ``("npx", "pi")``.
     :ivar env: Variables added to pi's environment (and its commands').
     :ivar start_timeout: Seconds pi has to start and answer.
+    :ivar tag: What its process is found by on this machine, should it
+        outlive whatever started it (``forge_common.processes.stop_tagged``):
+        a tie's tag; empty for none.
     """
 
     folder: Path
@@ -134,6 +141,7 @@ class PiOptions:
     command: Sequence[str] = ("pi",)
     env: Mapping[str, str] = field(default_factory=dict)
     start_timeout: float = 30.0
+    tag: str = ""
 
 
 @dataclass(frozen=True)
@@ -230,6 +238,7 @@ class PiAgent:
     def __init__(self, options: PiOptions) -> None:
         self.options = options
         self._process: asyncio.subprocess.Process | None = None
+        self._tie: Tie | None = None
         self._home: Path | None = None
         self._credential_file: Path | None = None
         self._tasks: list[asyncio.Task[None]] = []
@@ -279,22 +288,28 @@ class PiAgent:
             self._write_credential(credential)
             self._write_config(home)
             argv = self._argv(home)
+            env = self._env(home)
+            tie = self._tie = Tie(options.tag)
             try:
                 self._process = await asyncio.create_subprocess_exec(
-                    *argv,
+                    *tie.argv(argv, path=env["PATH"]),
                     cwd=options.folder,
-                    env=self._env(home),
+                    env=env,
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    # Its own process group: closing ends its commands too.
+                    # Its own process group: closing ends its commands too, and
+                    # so does this process dying (its tie's watcher is in it).
                     start_new_session=True,
+                    pass_fds=tie.fds,
                 )
             except FileNotFoundError:
                 raise PiError(
                     f"pi isn't installed here: {argv[0]} wasn't found "
                     "(npm install -g @earendil-works/pi-coding-agent)"
                 ) from None
+            finally:
+                tie.started()
             self._tasks = [
                 asyncio.create_task(self._read(), name="pi-stdout"),
                 asyncio.create_task(self._read_stderr(), name="pi-stderr"),
@@ -540,6 +555,9 @@ class PiAgent:
                 # Commands it started that outlive it.
                 _signal(process, signal.SIGKILL)
         finally:
+            if self._tie is not None:
+                self._tie.close()
+                self._tie = None
             for task in self._tasks:
                 task.cancel()
             for task in self._tasks:

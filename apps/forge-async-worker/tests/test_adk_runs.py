@@ -9,7 +9,7 @@ graph; these, that the worker's control carries a run through it.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -19,12 +19,13 @@ import pytest
 from google.adk.sessions import DatabaseSessionService
 
 from forge_async_worker import saq_worker
+from forge_async_worker.jobs import LEASE_SECONDS
 from forge_async_worker.queue import RunQueue
 from forge_async_worker.watchdog import Watchdog
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
 from forge_task_adk_workflows.graph import RunServices
 from forge_task_adk_workflows.models import NoModels
-from forge_task_adk_workflows.run_store import FAILED, PAUSED, QUEUED, SUCCEEDED, RunStore
+from forge_task_adk_workflows.run_store import FAILED, PAUSED, QUEUED, RUNNING, SUCCEEDED, RunStore
 from forge_task_adk_workflows.task import SERVICES, SESSIONS, AdkWorkflowsTaskFactory
 from forge_tasks.tasks import TaskRegistry
 
@@ -84,16 +85,38 @@ FAILING = agent(
     [node("bad", "transform", {"expression": "$error('boom')"}), end("done", "")],
     [("start", "next", "bad"), ("bad", "next", "done")],
 )
+CHARGING = agent(
+    [
+        node("charge", "http", {"method": "POST", "url": "https://payments.test/charge", "timeout_seconds": 30}),
+        end("done", "steps.charge.output"),
+    ],
+    [("start", "next", "charge"), ("charge", "success", "done")],
+)
+
+
+class Server:
+    """What the runs' HTTP steps reach: nothing there (404), unless a test answers."""
+
+    def __init__(self) -> None:
+        self.answer: Callable[[httpx.Request], Awaitable[httpx.Response]] | None = None
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        return await self.answer(request) if self.answer is not None else httpx.Response(404)
 
 
 @pytest.fixture
-async def adk(tmp_path: Path, store: RunStore, clock: Clock) -> AsyncIterator[Worker]:
+def server() -> Server:
+    return Server()
+
+
+@pytest.fixture
+async def adk(tmp_path: Path, store: RunStore, clock: Clock, server: Server) -> AsyncIterator[Worker]:
     """The worker, with the real ADK workflows task: its sessions in SQLite, the tests' clock."""
     sessions = DatabaseSessionService(db_url=f"sqlite+aiosqlite:///{tmp_path / 'sessions.db'}")
-    settings = AdkWorkflowsSettings()
+    settings = AdkWorkflowsSettings(http_allowed_hosts=["payments.test"])  # the server's, unresolved
     services = RunServices.of(
         settings,
-        http=httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(404))),
+        http=httpx.AsyncClient(transport=httpx.MockTransport(server)),
         clock=clock,
         sleep=clock.sleep,
         model=NoModels(),
@@ -243,3 +266,35 @@ async def test_a_failed_step_fails_the_run_naming_it(adk: Worker) -> None:
     assert failed["status"] == FAILED
     assert failed["error"]["category"] == "failed" and failed["error"]["step"] == "bad"
     assert failed["error"]["message"].startswith("Bad (bad) failed: ") and "boom" in failed["error"]["message"]
+
+
+async def test_an_attempt_that_lost_its_run_mid_step_writes_nothing_more(adk: Worker, server: Server) -> None:
+    run = await started(adk, CHARGING, {})
+    sessions = adk.state.runtime.tasks["adk_workflows"].sessions  # type: ignore[attr-defined]
+
+    async def session_events() -> int:
+        found = await sessions.get_session(app_name="adk_workflows", user_id=ALICE.id, session_id=SESSION)
+        return len(found.events)
+
+    seen: dict[str, Any] = {}
+
+    async def taken_over(request: httpx.Request) -> httpx.Response:
+        # While the step's request is out, its lease runs out on the maintenance's clock (this
+        # worker's says it holds it still), and another worker takes the run.
+        adk.clock.advance(LEASE_SECONDS + 1)
+        error = {"message": "Its worker went while it ran", "category": "interrupted"}
+        taken = await adk.store.get(run["id"])
+        assert await adk.store.requeue(run["id"], owner=None, error=error, lease_epoch=taken["lease_epoch"])
+        assert await adk.store.claim(run["id"], owner="w2", lease_seconds=LEASE_SECONDS) is not None
+        seen.update(notes=await notes(adk, run["id"]), events=await session_events())
+        return httpx.Response(200, json={"charged": True})
+
+    server.answer = taken_over
+    assert await adk.run(run["id"]) == "dropped"
+
+    taken = await adk.get(run["id"])
+    assert (taken["status"], taken["lease_owner"], taken["lease_epoch"]) == (RUNNING, "w2", 2)
+    # Nothing of the old attempt's lands once the run is another's: not the step's end in the
+    # session (which would make the new attempt's next append stale), nor a note.
+    assert await session_events() == seen["events"]
+    assert await notes(adk, run["id"]) == seen["notes"]

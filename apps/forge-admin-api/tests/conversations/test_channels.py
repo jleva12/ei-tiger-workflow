@@ -39,10 +39,14 @@ def test_a_turns_channel_is_where_it_came_in(
     console: bool,
     channel: str | None,
 ) -> None:
-    async def authorized(_request: Any, _organization: Any) -> RuntimeCaller:
-        return RuntimeCaller(caller)
+    # Let in already (admit_agent): who they are is what their credential says.
+    monkeypatch.setattr(runtime, "caller_of", lambda _request: RuntimeCaller(caller))
 
-    monkeypatch.setattr(runtime, "authorize_call", authorized)
+    # Who may use the agent is checked apart (test_agent_gating).
+    async def may_use(*_args: Any) -> None:
+        return None
+
+    monkeypatch.setattr(runtime, "authorize_use", may_use)
     agent = SimpleNamespace(document=SimpleNamespace(organization_id="org-1"))
 
     async def told() -> str | None:

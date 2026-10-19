@@ -13,12 +13,19 @@ sessions.
   a multipart form (or base64 in JSON; ``forge_admin.adk_workflows.files``),
   and they're saved as artifacts of its session for its steps to read.
 - Listing and reading runs, their steps and the files they started with,
-  needs ``organizations:read``.
+  needs ``organizations:read``. Each run says how it was started
+  (``provenance``: what started it, through what, for whom, via which agent,
+  with which API key and credential; ``root_run_id``), its page where from
+  (``origin``), and runs are listed by it. A start the API refused (403, 422)
+  makes no run, but is kept: ``…/adk-run-refusals`` lists them.
 - A run may wait at several approvals and questions at once (``gates``: the
   ways of it at an approval each, a Decision board's choices), each decided
   on its own by its ``id``, while the run is paused, waiting for a time, or
   carrying on with a decision made at another. ``pause`` is the first, while
-  it's paused.
+  it's paused. A workflow its LLM agent called waits at a gate too
+  (``child_run``, its ``details.child_run_id`` the run the call started),
+  which nobody decides: that run's end does (409 to a decision). Abandoning
+  that run is its end too: the run waiting for it is queued to carry on.
 - An approval a run waits at is decided by whom its step names:
   ``agents:approve`` (the organization's admins) when they're its admins,
   ``agents:run`` (every member) when any member may.
@@ -40,19 +47,33 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Header,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from forge_task_adk_workflows.files import RunFile
 from forge_task_adk_workflows.run_store import (
+    ABANDONED,
     CANCELABLE,
+    CHILD_RUN,
     FAILED,
     FINISHED,
     PAUSED,
     RUNNING,
+    TRIGGER_TYPES,
     Actor,
     NoSuchRun,
     NotAllowed,
+    Provenance,
     RunStore,
     open_gates,
 )
@@ -78,15 +99,24 @@ from forge_admin.adk_workflows.files import (
     run_files,
     storage_errors,
 )
+from forge_admin.adk_workflows.provenance import console_start
 from forge_admin.adk_workflows.queue import Embedding
 from forge_admin.adk_workflows.resources import RunResources
 from forge_admin.adk_workflows.runs import (
     APP_NAME,
+    IDEMPOTENCY_KEY,
+    IDEMPOTENCY_PATTERN,
     AdkRunError,
+    AdkRunRefused,
+    access_now,
     checked_answer,
+    idempotent_run_id,
     prepare_run,
     queue_run,
+    refuse_start,
+    same_input,
     start_adk_run,
+    start_adk_run_once,
 )
 from forge_admin.adk_workflows.versions import (
     WorkflowNotFound,
@@ -100,7 +130,15 @@ from forge_admin.api.routes.adk_workflows import (
     agent_store,
 )
 from forge_admin.api.routes.common import NodeId, Session, name_of
-from forge_admin.auth.access import CurrentUser, Enforcer, Level, Scope, authorize
+from forge_admin.auth.access import (
+    CurrentUser,
+    Enforcer,
+    Level,
+    Scope,
+    authorize,
+    groups_of_caller,
+)
+from forge_admin.chat_agents.access import agent_user
 
 logger = logging.getLogger(__name__)
 
@@ -177,12 +215,85 @@ class RunActor(BaseModel):
     name: str
 
 
+#: What started a run (``forge_task_adk_workflows.run_store.TRIGGER_TYPES``).
+TriggerType = Literal[
+    "manual",
+    "builder_test",
+    "assistant",
+    "api_key",
+    "runtime_rest",
+    "a2a",
+    "chat_agent",
+    "intake",
+    "workflow",
+    "resubmit",
+]
+
+
+class RunPerson(BaseModel):
+    """Whom a run is for."""
+
+    #: The person; else the API key (``apikey:<id>``) or caller
+    #: (``anonymous``) that started it.
+    id: str
+    #: Their name, when it's known (only for whom their credential named).
+    name: str
+    #: Whether their own credential said who they are: false for an ID a
+    #: caller passed on (a public runtime's caller, an API key's end user, a
+    #: chat page's visitor); null when unknown (a run from before).
+    verified: bool | None
+
+
+class RunVia(BaseModel):
+    """The agent a run was started through."""
+
+    #: A chat agent (``ca_…``: its Workflow tool, or an intake it completed),
+    #: or the workflow whose run started it (``ag_…``).
+    agent_id: str
+    #: Which version of it: a number, or "draft"; null when unknown.
+    version: str | None
+
+
+class RunProvenance(BaseModel):
+    """How a run was started, for an audit; each part null when unknown (a
+    run from before that couldn't tell)."""
+
+    #: ``manual`` (the console), ``builder_test`` (the builder's test panel),
+    #: ``assistant`` (its tools, for a person), ``api_key`` (an organization's
+    #: key on the admin API), ``runtime_rest`` and ``a2a`` (the runtime),
+    #: ``chat_agent`` (its Workflow tool), ``intake`` (an intake it
+    #: completed), ``workflow`` (another run), ``resubmit``.
+    trigger_type: TriggerType
+    #: ``console``, ``api``, ``a2a``, ``page`` (a chat page), ``assistant``,
+    #: ``worker`` (a run starting another).
+    channel: str | None
+    on_behalf_of: RunPerson | None
+    via: RunVia | None
+    #: The organization's API key it was started with.
+    api_key_id: str | None
+    #: ``jwt``, ``api_key``, ``anonymous`` (a public runtime's caller), or
+    #: ``local`` (the development user).
+    auth_method: str | None
+
+
+class RunOrigin(BaseModel):
+    """Where the request that started a run came from (none for a run
+    another started: its root's)."""
+
+    client_ip: str | None
+    user_agent: str | None
+    #: The request's ID (``X-Request-ID``), as the API's logs have it.
+    request_id: str | None
+
+
 class RunPause(BaseModel):
     """What a run waits for: a person's decision or answer (one of its gates)."""
 
     #: Names it in a decision or answer (``request_id``).
     id: str
-    #: ``approval`` (decided) or ``human_input`` (a question, answered).
+    #: ``approval`` (decided), ``human_input`` (a question, answered), or
+    #: ``child_run`` (a workflow's call waiting for the run it started, its
+    #: ``details.child_run_id``: that run's end decides it).
     kind: str
     reason: str
     #: The step's: ``kind``, ``approvers``, ``expires_at``, ``step``,
@@ -247,6 +358,11 @@ class AdkRun(BaseModel):
     parent_run_id: str | None = None
     #: A run queued again after a hiccup isn't tried again before then (its backoff).
     next_attempt_at: str | None = None
+    #: How it was started: what, through what, for whom, via which agent;
+    #: null for a run from before that couldn't tell.
+    provenance: RunProvenance | None = None
+    #: The top of its parent chain: itself, for a run nothing started.
+    root_run_id: str | None = None
 
 
 class AdkRunPage(BaseModel):
@@ -290,8 +406,13 @@ class AdkRunDetail(AdkRun):
     result: Any = None
     #: The ADK workflow as it ran.
     document: dict[str, Any] | None
-    #: What started it: ``{"type": "manual", "by": <user>}``.
+    #: What started it, as its payload says: ``{"type": "manual", "by":
+    #: <user>}``; a resubmission's ``{"type": "resubmit", "by", "run_id"}``.
     trigger: dict[str, Any] | None
+    #: A resubmission's first run's trigger.
+    original_trigger: dict[str, Any] | None = None
+    #: Where the request that started it came from.
+    origin: RunOrigin | None = None
     #: Oldest first.
     events: list[RunEvent]
     #: Its activity misses notes: the run noted as many as it may, or some
@@ -301,6 +422,32 @@ class AdkRunDetail(AdkRun):
     #: first; abandoning it abandons those still going.
     children: list[AdkRun] = Field(default_factory=list)
     actions: RunActions
+
+
+class AdkRunRefusal(BaseModel):
+    """A start the organization refused: no run was made."""
+
+    id: int
+    organization_id: str
+    #: The workflow it'd have run, and which version (when it was known).
+    agent_id: str
+    version: str | None
+    #: What the start was answered: 403 (they may not), 422 (what it'd run
+    #: doesn't fit or build).
+    status_code: int
+    reason: str
+    #: Who asked, as a run would have it.
+    requested_by: RunActor | None
+    provenance: RunProvenance | None
+    origin: RunOrigin | None
+    at: str
+
+
+class AdkRunRefusalPage(BaseModel):
+    """A page of refused starts, newest first, and how many match."""
+
+    items: list[AdkRunRefusal]
+    total: int
 
 
 class AdkRunStep(BaseModel):
@@ -508,7 +655,42 @@ def _summary(run: dict[str, Any]) -> dict[str, Any]:
         "cancel_requested_at": _iso(run.get("cancel_requested_at")),
         "parent_run_id": run.get("parent_run_id"),
         "next_attempt_at": _iso(run.get("next_attempt_at")),
+        "provenance": provenance_of(run),
+        "root_run_id": run.get("root_run_id"),
     }
+
+
+def provenance_of(run: dict[str, Any]) -> RunProvenance | None:
+    """:return: How a run (or a refused start) was started, as the store has it."""
+    started = Provenance.of(run)
+    if started is None or started.trigger_type not in TRIGGER_TYPES:
+        return None
+    return RunProvenance(
+        trigger_type=started.trigger_type,  # type: ignore[arg-type]
+        channel=started.channel,
+        on_behalf_of=RunPerson(
+            id=started.on_behalf_of,
+            name=started.on_behalf_of_name,
+            verified=started.on_behalf_of_verified,
+        )
+        if started.on_behalf_of
+        else None,
+        via=RunVia(agent_id=started.via_agent_id, version=started.via_agent_version)
+        if started.via_agent_id
+        else None,
+        api_key_id=started.api_key_id,
+        auth_method=started.auth_method,
+    )
+
+
+def origin_of(run: dict[str, Any]) -> RunOrigin | None:
+    """:return: Where the request that started a run came from; None when nobody knows."""
+    origin = RunOrigin(
+        client_ip=run.get("client_ip"),
+        user_agent=run.get("user_agent"),
+        request_id=run.get("request_id"),
+    )
+    return origin if any(origin.model_dump().values()) else None
 
 
 def as_run(run: dict[str, Any]) -> AdkRun:
@@ -548,7 +730,7 @@ def actions_of(run: dict[str, Any]) -> RunActions:
         retry=current == FAILED and not a2a_task(run),
         resubmit=current in FINISHED,
         abandon=current in CANCELABLE and not stopping,
-        decide=any(gate.kind != HUMAN_INPUT for gate in gates),
+        decide=any(gate.kind not in (HUMAN_INPUT, CHILD_RUN) for gate in gates),
         answer=any(gate.kind == HUMAN_INPUT for gate in gates),
     )
 
@@ -563,6 +745,7 @@ def as_detail(
     payload = run.get("payload")
     payload = payload if isinstance(payload, dict) else {}
     document, trigger = payload.get("document"), payload.get("trigger")
+    original = payload.get("original_trigger")
     return AdkRunDetail.model_validate(
         {
             **_summary(run),
@@ -571,6 +754,8 @@ def as_detail(
             "result": run.get("result"),
             "document": document if isinstance(document, dict) else None,
             "trigger": trigger if isinstance(trigger, dict) else None,
+            "original_trigger": original if isinstance(original, dict) else None,
+            "origin": origin_of(run),
             "events": [
                 RunEvent(
                     id=event["id"],
@@ -667,6 +852,12 @@ async def _read(
     return run
 
 
+def _waits_for_run(pause: RunPause) -> str:
+    """:return: Why nobody decides or answers a ``child_run`` gate."""
+    child = str(pause.details.get("child_run_id") or "")[:8]
+    return f"The run waits for run {child} to end, not for people: it carries on once that run ends"
+
+
 def _waits_at(run: dict[str, Any], request_id: str) -> RunPause:
     """
     :return: The gate named, when the run waits at it.
@@ -680,6 +871,33 @@ def _waits_at(run: dict[str, Any], request_id: str) -> RunPause:
 
 async def _actor(session: AsyncSession, user: str) -> Actor:
     return Actor(user, await name_of(session, user))
+
+
+#: An ``Idempotency-Key`` header: what makes a start safe to retry.
+IdempotencyKey = Annotated[
+    str | None,
+    Header(
+        alias=IDEMPOTENCY_KEY,
+        pattern=IDEMPOTENCY_PATTERN,
+        description="Makes the start safe to retry: the same key, from the same "
+        "caller, in the organization, starts one run; sent again, the answer is that run.",
+    ),
+]
+
+
+def _retried(run: dict[str, Any], input: Any) -> AdkRun:
+    """
+    :return: The run a start's retry (its idempotency key) asked for again.
+    :raises HTTPException: 409 when the retry's input isn't the run's: the
+        key was used for another start.
+    """
+    if not same_input(run, input):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "That idempotency key started a run with another input: use a new "
+            "one for another start.",
+        )
+    return as_run(run)
 
 
 # ---------------------------------------------------------------- routes
@@ -701,6 +919,7 @@ async def run_adk_workflow(
     user: CurrentUser,
     session: Session,
     enforcer: Enforcer,
+    idempotency_key: IdempotencyKey = None,
 ) -> AdkRun:
     """
     Run an ADK workflow, at the version named (its draft, by default, when it
@@ -711,20 +930,57 @@ async def run_adk_workflow(
     :param organization_id: The organization.
     :param agent_id: The ADK workflow.
     :return: The run.
-    :raises HTTPException: 403 without agents:run in the organization; 404 when
-        the organization has no such ADK workflow; 413 for a file too big; 422
-        for input or a file that doesn't fit its start, or a document that
-        doesn't build (the reason naming the node); 503 when runs, files or
-        MongoDB aren't set up or answering.
+    :raises HTTPException: 403 without agents:run in the organization, or
+        when it uses an agent from the Agents page the caller may not use
+        (naming the node); 404 when the organization has no such ADK
+        workflow; 413 for a file too big; 422 for input or a file that
+        doesn't fit its start, or a document that doesn't build (the reason
+        naming the node); 503 when runs, files or MongoDB aren't set up or
+        answering. A start refused for 403 or 422 is kept for the
+        organization's audit (``…/adk-run-refusals``).
     """
-    await authorize(session, enforcer, user, RUN, Scope(Level.ORG, organization_id))
+    starter = await _actor(session, user)
+    # Whose start it is and how it came (the builder, the console, the
+    # assistant, a key), for the run's audit, and for a refusal's.
+    started = console_start(request, starter)
+    refused = partial(
+        refuse_start,
+        run_store(request),
+        organization_id=organization_id,
+        agent_id=agent_id,
+        requested_by=starter,
+        provenance=started,
+    )
+    try:
+        await authorize(session, enforcer, user, RUN, Scope(Level.ORG, organization_id))
+    except HTTPException as error:
+        if error.status_code == status.HTTP_403_FORBIDDEN:
+            await refused(status_code=error.status_code, reason=str(error.detail))
+        raise
     body, files = await read_run_body(
         request, AdkRunCreate, Limits.of(request.app.state.settings)
     )
+    run_id = (
+        idempotent_run_id(organization_id, idempotency_key)
+        if idempotency_key is not None
+        else None
+    )
+    if run_id is not None:
+        # A retry: the run it made, whatever's changed since.
+        with store_errors():
+            found = await run_store(request).started_as(
+                run_id,
+                organization_id=organization_id,
+                agent_id=agent_id,
+                requested_by=starter,
+            )
+        if found is not None:
+            return _retried(found, body.input)
     artifacts = artifacts_of(request, files)
     store = agent_store(request)
     queue = run_queue(request)
     find = workflow_finder(store, organization_id)
+    resolved = None
 
     try:
         current = await store.get(organization_id, agent_id)
@@ -748,29 +1004,49 @@ async def run_adk_workflow(
             RunResources(
                 organization_id,
                 chat_agents=getattr(request.app.state, "chat_agents", None),
+                ui_components=getattr(request.app.state, "ui_components", None),
                 sessions=request.app.state.sessionmaker,
+                user=await agent_user(
+                    enforcer, organization_id, user, groups_of_caller(user)
+                ),
+                workflows=store,
             ),
             files,
         )
     except AdkRunError as error:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from None
+        code = (
+            status.HTTP_403_FORBIDDEN
+            if isinstance(error, AdkRunRefused)
+            else status.HTTP_422_UNPROCESSABLE_CONTENT
+        )
+        await refused(
+            status_code=code,
+            reason=str(error),
+            version=resolved.version if resolved is not None else body.version,
+        )
+        raise HTTPException(code, str(error)) from None
     except PyMongoError as error:
         logger.warning("The agents' MongoDB failed: %s", error)
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, UNAVAILABLE) from None
-    run_as_name = await name_of(session, user)
+    starting = {
+        "prepared": prepared,
+        "input": body.input,
+        "run_as": user,
+        "run_as_name": starter.name,
+        "trigger": {"type": "manual", "by": user},
+        "version": resolved.version,
+        "artifacts": artifacts,
+        "provenance": started,
+    }
     with store_errors(), storage_errors():
-        run = await start_adk_run(
-            run_store(request),
-            queue,
-            record,
-            prepared=prepared,
-            input=body.input,
-            run_as=user,
-            run_as_name=run_as_name,
-            trigger={"type": "manual", "by": user},
-            version=resolved.version,
-            artifacts=artifacts,
-        )
+        if run_id is None:
+            run = await start_adk_run(run_store(request), queue, record, **starting)
+        else:
+            run, created = await start_adk_run_once(
+                run_store(request), queue, record, run_id=run_id, **starting
+            )
+            if not created:
+                return _retried(run, body.input)
     logger.info(
         "%s ran ADK workflow %s (version %s) in organization %s with %d files: run %s",
         user,
@@ -794,13 +1070,30 @@ async def list_adk_runs(
     status_filter: Annotated[list[RunStatus] | None, Query(alias="status")] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
+    trigger_type: Annotated[list[TriggerType] | None, Query()] = None,
+    on_behalf_of: Annotated[str | None, Query(min_length=1, max_length=255)] = None,
+    via_agent_id: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
+    api_key_id: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
+    root_run_id: Annotated[str | None, Query(min_length=1, max_length=32)] = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
 ) -> AdkRunPage:
     """
     List the organization's ADK workflow runs, newest first: all of them, or
-    one ADK workflow's, in any status or some.
+    one ADK workflow's, in any status or some, started however or some way,
+    by or for anyone or someone, then.
     \f
     :param agent_id: Only this ADK workflow's runs.
     :param status_filter: Only runs in these statuses (``?status=`` repeated).
+    :param trigger_type: Only runs started so (repeated).
+    :param on_behalf_of: Only runs for this person (or API key, ``apikey:<id>``).
+    :param via_agent_id: Only runs started through this chat agent (or by
+        this workflow's runs).
+    :param api_key_id: Only runs started with this API key.
+    :param root_run_id: Only this run and the runs under it.
+    :param created_from: Only runs created then or later (ISO 8601; UTC
+        without an offset).
+    :param created_to: Only runs created before then.
     :return: ``{"items": [...], "total"}``: the page, and how many match.
     :raises HTTPException: 403 without organizations:read in the organization;
         503 when the run store isn't answering.
@@ -813,8 +1106,80 @@ async def list_adk_runs(
             statuses=status_filter,
             limit=limit,
             offset=offset,
+            trigger_types=trigger_type,
+            on_behalf_of=on_behalf_of,
+            via_agent_id=via_agent_id,
+            api_key_id=api_key_id,
+            root_run_id=root_run_id,
+            created_from=created_from,
+            created_to=created_to,
         )
     return AdkRunPage(items=[as_run(run) for run in items], total=total)
+
+
+@router.get("/organizations/{organization_id}/adk-run-refusals")
+async def list_adk_run_refusals(
+    organization_id: NodeId,
+    request: Request,
+    user: CurrentUser,
+    session: Session,
+    enforcer: Enforcer,
+    agent_id: Annotated[str | None, Query(pattern=ID_PATTERN)] = None,
+    trigger_type: Annotated[list[TriggerType] | None, Query()] = None,
+    on_behalf_of: Annotated[str | None, Query(min_length=1, max_length=255)] = None,
+    via_agent_id: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
+    api_key_id: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdkRunRefusalPage:
+    """
+    List the starts of the organization's ADK workflows it refused, newest
+    first: the caller may not (403: without agents:run, or an agent from
+    the Agents page they may not use), or what it'd run doesn't fit or build
+    (422). Filtered as runs are.
+    \f
+    :return: ``{"items": [...], "total"}``: the page, and how many match.
+    :raises HTTPException: 403 without organizations:read in the organization;
+        503 when the run store isn't answering.
+    """
+    await authorize(session, enforcer, user, READ, Scope(Level.ORG, organization_id))
+    with store_errors():
+        items, total = await run_store(request).refused(
+            organization_id,
+            agent_id=agent_id,
+            trigger_types=trigger_type,
+            on_behalf_of=on_behalf_of,
+            via_agent_id=via_agent_id,
+            api_key_id=api_key_id,
+            created_from=created_from,
+            created_to=created_to,
+            limit=limit,
+            offset=offset,
+        )
+    return AdkRunRefusalPage(
+        items=[
+            AdkRunRefusal(
+                id=item["id"],
+                organization_id=item["organization_id"],
+                agent_id=item["agent_id"],
+                version=item["version"],
+                status_code=item["status_code"],
+                reason=item["reason"],
+                requested_by=RunActor(
+                    id=item["requested_by"], name=item["requested_by_name"] or ""
+                )
+                if item["requested_by"] or item["requested_by_name"]
+                else None,
+                provenance=provenance_of(item),
+                origin=origin_of(item),
+                at=_iso(item["at"]) or "",
+            )
+            for item in items
+        ],
+        total=total,
+    )
 
 
 @router.get("/organizations/{organization_id}/adk-runs/{run_id}")
@@ -1140,6 +1505,8 @@ async def decide_adk_run(
             "The run waits for an answer, not a decision: send it to "
             f"/organizations/{organization_id}/adk-runs/{run_id}/answers",
         )
+    if pause.kind == CHILD_RUN:
+        raise HTTPException(status.HTTP_409_CONFLICT, _waits_for_run(pause))
     permission = APPROVERS.get(str(pause.details.get("approvers")), APPROVE)
     await authorize(
         session, enforcer, user, permission, Scope(Level.ORG, organization_id)
@@ -1190,6 +1557,8 @@ async def answer_adk_run(
     """
     run = await _read(request, session, enforcer, user, organization_id, run_id)
     pause = _waits_at(run, body.request_id)
+    if pause.kind == CHILD_RUN:
+        raise HTTPException(status.HTTP_409_CONFLICT, _waits_for_run(pause))
     if pause.kind != HUMAN_INPUT:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -1268,14 +1637,20 @@ async def resubmit_adk_run(
     user: CurrentUser,
     session: Session,
     enforcer: Enforcer,
+    idempotency_key: IdempotencyKey = None,
 ) -> AdkRun:
     """
     Run a finished ADK workflow run's ADK workflow again, as it ran (the same
-    documents, input and files), as a new run in an ADK session of its own.
+    documents, input and files), as a new run in an ADK session of its own:
+    the caller's resubmission (its trigger, and whom it's for), the run's own
+    trigger kept as its ``original_trigger``. Its agents' rules are checked
+    against what the caller holds now, not what the run was started with.
     \f
-    :return: The new run, queued.
+    :return: The new run, queued; with an ``Idempotency-Key`` sent again,
+        the resubmission it made.
     :raises HTTPException: 403 without agents:manage_runs in the organization;
-        404 for a run that isn't the organization's; 409 unless it's finished.
+        404 for a run that isn't the organization's; 409 unless it's
+        finished, or for a key used for another start.
     """
     await authorize(
         session, enforcer, user, MANAGE_RUNS, Scope(Level.ORG, organization_id)
@@ -1283,9 +1658,38 @@ async def resubmit_adk_run(
     queue = run_queue(request)
     actor = await _actor(session, user)
     with store_errors():
-        again = await run_store(request).resubmit(
-            run_id, actor=actor, organization_id=organization_id
+        store = run_store(request)
+        resubmitted = await store.get(run_id, organization_id=organization_id)
+        if resubmitted is None:
+            raise NoSuchRun(run_id)
+        # The resubmission is the caller's (its provenance says it's for
+        # them): their grants as they are now, which the run's own person's
+        # sign-in (its company groups) isn't here to tell for them.
+        access = await access_now(
+            resubmitted.get("payload") or {},
+            RunResources(
+                organization_id,
+                chat_agents=None,
+                sessions=request.app.state.sessionmaker,
+                user=await agent_user(
+                    enforcer, organization_id, user, groups_of_caller(user)
+                ),
+                workflows=None,
+            ),
         )
+        again, created = await store.resubmit_once(
+            run_id,
+            again_id=idempotent_run_id(organization_id, idempotency_key)
+            if idempotency_key is not None
+            else None,
+            actor=actor,
+            organization_id=organization_id,
+            provenance=console_start(request, actor),
+            agent_access=access,
+        )
+    if not created:
+        # A retry: the resubmission it made.
+        return as_run(again)
     await queue_run(queue, again["id"])
     logger.info("%s resubmitted ADK workflow run %s as %s", user, run_id, again["id"])
     return as_run(again)
@@ -1314,7 +1718,9 @@ async def abandon_adk_run(
     carries on. Running, its worker stops it (at its next step, or within a
     minute) and abandons it: 202, with ``cancel_requested_at`` set. Asking
     again changes nothing. The runs it started that are still going, and
-    theirs, are abandoned with it.
+    theirs, are abandoned with it. A run another waits for (a workflow its
+    LLM agent called) is that run's answer, abandoned: that run is queued to
+    carry on.
     \f
     :return: The run, abandoned; or still running, being stopped (202).
     :raises HTTPException: 403 without agents:manage_runs in the organization;
@@ -1334,4 +1740,9 @@ async def abandon_adk_run(
         logger.info("%s asked ADK workflow run %s to stop", user, run_id)
     else:
         logger.info("%s abandoned ADK workflow run %s", user, run_id)
+    queue: Embedding | None = request.app.state.embedding
+    if abandoned["status"] == ABANDONED and abandoned.get("parent_run_id") and queue:
+        # The run store queued it with this run's end, should it wait for this
+        # run; else its job finds nothing to run.
+        await queue_run(queue, abandoned["parent_run_id"])
     return as_run(abandoned)

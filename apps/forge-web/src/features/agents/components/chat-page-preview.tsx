@@ -7,7 +7,10 @@ import { cn } from "@/lib/utils"
 import { useMe } from "@/lib/users"
 import { ChatPageView } from "@/features/agents/components/chat-page-view"
 import { RUNTIME_URL, type ChatAgentRecord } from "@/features/agents/lib/api"
-import { chatPageLink } from "@/features/agents/lib/chat-page"
+import {
+  chatPageDesktopLink,
+  chatPageLink,
+} from "@/features/agents/lib/chat-page"
 import { agentNamesOf, workflowNamesOf } from "@/features/agents/lib/document"
 import type { ChatPageSettings } from "@/features/agents/lib/page-settings"
 import { useSystemTheme } from "@/features/agents/lib/page-theme"
@@ -180,6 +183,11 @@ export function ChatPagePreview({
                 settings={settings}
                 theme={theme}
                 onThemeChange={pick}
+                desktopLink={
+                  settings.desktop_link && token
+                    ? chatPageDesktopLink(token)
+                    : undefined
+                }
                 className="absolute inset-0"
               />
             ) : (

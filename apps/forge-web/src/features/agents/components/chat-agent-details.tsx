@@ -6,7 +6,7 @@ import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Kbd } from "@/components/ui/kbd"
 import { Textarea } from "@/components/ui/textarea"
-import { isAgentLike } from "@/features/agents/lib/model"
+import { isAgent } from "@/features/agents/lib/model"
 import { formatRelative } from "@/lib/format"
 import { useChatBuilder, useChatBuilderApi } from "./chat-agent-store"
 import { IssueList } from "@/features/builder/components/issue-list"
@@ -62,10 +62,8 @@ export function ChatAgentDetails({ children }: { children?: React.ReactNode }) {
   const meta = useChatBuilder((s) => s.meta)
   const readOnly = useChatBuilder((s) => s.readOnly)
   const nodes = useChatBuilder((s) => s.nodes)
-  // Its agents (the chat agent, its sub-agents, saved agents); the rest are tools.
-  const agents = nodes.filter(
-    (n) => isAgentLike(n.data.kind) || n.data.kind === "saved_agent"
-  ).length
+  // Its agents (the chat agent, its sub-agents, intake and saved agents); the rest are tools.
+  const agents = nodes.filter((n) => isAgent(n.data.kind)).length
   const issues = useChatBuilder((s) => s.issues)
   const api = useChatBuilderApi()
   const openStep = useOpenStep()

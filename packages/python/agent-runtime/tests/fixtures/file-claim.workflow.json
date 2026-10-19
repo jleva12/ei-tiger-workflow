@@ -1,0 +1,150 @@
+{
+  "format": "forge.agent/v1",
+  "id": "ag_fileclaim",
+  "name": "File claim (intake example)",
+  "description": "Started by the Acme front desk's claim intake when it completes: gives the claim a number and the team that handles it.",
+  "nodes": [
+    {
+      "id": "start",
+      "kind": "start",
+      "name": "Start",
+      "outputs": [
+        "next"
+      ],
+      "config": {
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "full_name",
+            "email",
+            "policy_number",
+            "claim_type"
+          ],
+          "properties": {
+            "full_name": {
+              "type": "string",
+              "description": "Who's claiming."
+            },
+            "email": {
+              "type": "string",
+              "description": "Where the claim number and updates go."
+            },
+            "phone": {
+              "type": "string",
+              "description": "A number to call, if they gave one."
+            },
+            "policy_number": {
+              "type": "string",
+              "description": "Their policy, like PN-12345."
+            },
+            "claim_type": {
+              "type": "string",
+              "description": "Auto, Home or Travel."
+            },
+            "date_of_loss": {
+              "type": "string",
+              "description": "The day it happened, YYYY-MM-DD."
+            },
+            "description": {
+              "type": "string",
+              "description": "What happened, in their words."
+            },
+            "injuries": {
+              "type": "boolean",
+              "description": "Whether anyone was hurt."
+            },
+            "vehicle_plate": {
+              "type": "string",
+              "description": "The damaged car's plate (auto claims)."
+            },
+            "police_report": {
+              "type": "boolean",
+              "description": "Whether a police report was filed (auto claims)."
+            },
+            "drivable": {
+              "type": "boolean",
+              "description": "Whether the car still drives (auto claims)."
+            },
+            "property_address": {
+              "type": "string",
+              "description": "The damaged home's address (home claims)."
+            },
+            "damage_kinds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Kinds of damage (home claims)."
+            },
+            "trip_destination": {
+              "type": "string",
+              "description": "Where the trip was (travel claims)."
+            },
+            "amount_claimed": {
+              "type": "number",
+              "description": "What's claimed, in dollars (travel claims)."
+            },
+            "notes": {
+              "type": "string",
+              "description": "Anything else they added."
+            }
+          }
+        },
+        "allow_files": false,
+        "file_types": [],
+        "allow_file_system": false,
+        "start_over": false
+      }
+    },
+    {
+      "id": "assign",
+      "kind": "transform",
+      "name": "Assign a claim number",
+      "outputs": [
+        "next"
+      ],
+      "config": {
+        "expression": "{\"claim_number\": \"CLM-\" & $string($floor($random() * 900000) + 100000), \"team\": input.claim_type = \"Auto\" ? \"Motor claims\" : input.claim_type = \"Home\" ? \"Property claims\" : \"Travel claims\", \"priority\": input.injuries = true ? \"urgent\" : \"normal\"}",
+        "output_schema": {}
+      }
+    },
+    {
+      "id": "filed",
+      "kind": "end",
+      "name": "Filed",
+      "outputs": [],
+      "config": {
+        "outcome": "succeeded",
+        "result": "{\"claim_number\": steps.assign.output.claim_number, \"team\": steps.assign.output.team, \"priority\": steps.assign.output.priority, \"summary\": input.full_name & \": \" & input.claim_type & \" claim\" & (input.date_of_loss ? \" for \" & input.date_of_loss : \"\")}"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "start:next->assign",
+      "source": "start",
+      "source_output": "next",
+      "target": "assign"
+    },
+    {
+      "id": "assign:next->filed",
+      "source": "assign",
+      "source_output": "next",
+      "target": "filed"
+    }
+  ],
+  "layout": {
+    "start": {
+      "x": 0,
+      "y": 0
+    },
+    "assign": {
+      "x": 320,
+      "y": 0
+    },
+    "filed": {
+      "x": 640,
+      "y": 0
+    }
+  }
+}

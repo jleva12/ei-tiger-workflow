@@ -50,6 +50,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { RefusalList } from "@/features/runs/components/refusal-list"
+import { RunFiltersBar } from "@/features/runs/components/run-filters"
 import { RunList, type RunListWords } from "@/features/runs/components/run-list"
 import {
   organizationAgents,
@@ -69,9 +71,12 @@ import {
 import { exampleAgent } from "@/features/adk-workflows/lib/example"
 import { AGENTS_ICON, countAgents } from "@/features/adk-workflows/lib/model"
 import {
+  hasRunFilters,
   isAgentsTab,
+  useAdkRunRefusals,
   useOrganizationAdkRuns,
   type AgentsTab,
+  type RunFilters,
 } from "@/features/runs/lib/runs"
 import {
   validateAgent,
@@ -291,7 +296,13 @@ type OrganizationAgentsProps = {
   organizationId: string
   organizationName: string
   tab: AgentsTab
-  onTabChange: (tab: AgentsTab) => void
+  /** What Runs and Refused starts are narrowed to, as the address says. */
+  filters: RunFilters
+  /** Whether the caller may list the organization's API keys, to pick one. */
+  canListKeys: boolean
+  /** Another tab; Runs and Refused starts carry the filters over. */
+  onTabChange: (tab: AgentsTab, filters: RunFilters) => void
+  onFiltersChange: (filters: RunFilters) => void
   /** Open a run's page (its ID). */
   onOpenRun: (taskId: string) => void
 }
@@ -300,13 +311,23 @@ function AgentsPage({
   organizationId,
   organizationName,
   tab,
+  filters,
+  canListKeys,
   onTabChange,
+  onFiltersChange,
   onOpenRun,
 }: OrganizationAgentsProps) {
   const navigate = useNavigate()
   const list = useOrganizationAgents(organizationId)
   // Also on Overview, for the tab's count.
-  const runs = useOrganizationAdkRuns(organizationId)
+  const runs = useOrganizationAdkRuns(organizationId, filters)
+  const filtered = hasRunFilters(filters)
+  // Other filters start the refused starts again from their first page.
+  const filterKey = JSON.stringify(filters)
+  const [paging, setPaging] = React.useState({ key: filterKey, page: 0 })
+  const refusalPage = paging.key === filterKey ? paging.page : 0
+  // For the tab's count too.
+  const refusals = useAdkRunRefusals(organizationId, filters, refusalPage)
   const { records, agents } = list
   const can = useScopeAccess(`org:${organizationId}`)
   const canManage = can("agents:manage")
@@ -387,18 +408,43 @@ function AgentsPage({
   const [refreshing, setRefreshing] = React.useState(false)
   function refresh() {
     setRefreshing(true)
-    void runs.refetch().then((result) => {
+    const refused = tab === "refused"
+    void (refused ? refusals.refetch() : runs.refetch()).then((result) => {
       setRefreshing(false)
       if (result.isSuccess)
-        toast.add({ title: "Workflow runs refreshed.", type: "info" })
+        toast.add({
+          title: refused
+            ? "Refused starts refreshed."
+            : "Workflow runs refreshed.",
+          type: "info",
+        })
     })
   }
+
+  const workflowOptions = React.useMemo(
+    () => rows.map((row) => ({ value: row.id, label: row.name || row.id })),
+    [rows]
+  )
+  const workflowNames = React.useMemo(
+    () => new Map(rows.map((row) => [row.id, row.name || row.id])),
+    [rows]
+  )
+  const filterBar = (tree: boolean) => (
+    <RunFiltersBar
+      organizationId={organizationId}
+      filters={filters}
+      onChange={onFiltersChange}
+      workflows={workflowOptions}
+      canListKeys={canListKeys}
+      tree={tree}
+    />
+  )
 
   return (
     <Tabs
       value={tab}
       onValueChange={(value) => {
-        if (isAgentsTab(value)) onTabChange(value)
+        if (isAgentsTab(value)) onTabChange(value, filters)
       }}
       className="gap-0"
     >
@@ -429,16 +475,24 @@ function AgentsPage({
               Runs
               <TabCount value={runs.data?.total} />
             </ViewTabsTrigger>
+            <ViewTabsTrigger value="refused" icon="warning">
+              Refused starts
+              <TabCount value={refusals.data?.total} />
+            </ViewTabsTrigger>
           </ViewTabsList>
           <ToolbarFilters>
-            {tab === "runs" && (
+            {tab !== "overview" && (
               <Tooltip>
                 <TooltipTrigger
                   render={
                     <Button
                       variant="outline"
                       size="icon"
-                      aria-label="Refresh workflow runs"
+                      aria-label={
+                        tab === "refused"
+                          ? "Refresh refused starts"
+                          : "Refresh workflow runs"
+                      }
                       disabled={refreshing}
                       onClick={refresh}
                     />
@@ -446,7 +500,11 @@ function AgentsPage({
                 >
                   {refreshing ? <Spinner /> : <Icon icon="refresh" size={15} />}
                 </TooltipTrigger>
-                <TooltipContent>Refresh workflow runs</TooltipContent>
+                <TooltipContent>
+                  {tab === "refused"
+                    ? "Refresh refused starts"
+                    : "Refresh workflow runs"}
+                </TooltipContent>
               </Tooltip>
             )}
           </ToolbarFilters>
@@ -523,7 +581,23 @@ function AgentsPage({
           runs={runs}
           words={RUN_WORDS}
           onOpenRun={onOpenRun}
-          onShowOverview={() => onTabChange("overview")}
+          onShowOverview={() => onTabChange("overview", {})}
+          filters={filterBar(true)}
+          filtered={filtered}
+          onClearFilters={() => onFiltersChange({})}
+        />
+      </TabsContent>
+
+      <TabsContent value="refused">
+        <RefusalList
+          organizationName={organizationName}
+          list={refusals}
+          page={refusalPage}
+          onPage={(page) => setPaging({ key: filterKey, page })}
+          workflowNames={workflowNames}
+          filters={filterBar(false)}
+          filtered={filtered}
+          onClearFilters={() => onFiltersChange({})}
         />
       </TabsContent>
 

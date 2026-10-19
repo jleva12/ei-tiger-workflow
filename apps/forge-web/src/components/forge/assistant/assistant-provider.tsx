@@ -25,13 +25,21 @@ import {
   type AuthRequestHandler,
 } from "./assistant-context"
 import { AssistantCommandMenu, type AssistantCommand } from "./commands"
+import type { ModelWindow } from "./context-window"
 import type { ModelSettings } from "./model-settings"
 import {
   MessageSources,
   SourcedMarkdownText,
   type AssistantSourcesConfig,
 } from "./sources"
+import { isPresentEcho } from "./present-echo"
 import type { AdkArtifactsApi } from "./use-adk-assistant"
+import { AdkTurnStatus } from "./turn-status"
+import { useHistoryBlocked } from "./history-context"
+import {
+  AssistantHistoryProvider,
+  AssistantHistoryStatus,
+} from "./history-status"
 
 type SuggestionList = Parameters<typeof Suggestions>[0]
 type Toolkit = NonNullable<Parameters<typeof Tools>[0]>["toolkit"]
@@ -83,6 +91,13 @@ export type AssistantOptions = {
    * window to measure against. Default true.
    */
   showContext?: boolean
+  /**
+   * The model the agent starts a conversation on: the context meter measures
+   * against its window until the agent server has counted the conversation,
+   * so it shows from the start. Only the meter reads it; unlike the model
+   * section's choice, it changes nothing the agent runs on.
+   */
+  contextModel?: ModelWindow
 } & (
   | { showModels?: false; modelSettings?: ModelSettings }
   | {
@@ -146,6 +161,7 @@ function AssistantProvider({
   sources,
   agents,
   showContext,
+  contextModel,
   showModels,
   modelSettings,
   children,
@@ -177,6 +193,7 @@ function AssistantProvider({
       sources,
       agents,
       showContext,
+      contextModel,
       showModels,
       modelSettings,
     }),
@@ -192,6 +209,7 @@ function AssistantProvider({
       sources,
       agents,
       showContext,
+      contextModel,
       showModels,
       modelSettings,
     ]
@@ -200,8 +218,10 @@ function AssistantProvider({
   return (
     <AssistantSettingsContext.Provider value={settings}>
       <AssistantRuntimeProvider runtime={runtime} config={config}>
-        <AutoTitle />
-        {children}
+        <AssistantHistoryProvider runtime={runtime}>
+          <AutoTitle />
+          {children}
+        </AssistantHistoryProvider>
       </AssistantRuntimeProvider>
     </AssistantSettingsContext.Provider>
   )
@@ -241,11 +261,33 @@ function AssistantComposerNote() {
   )
 }
 
+function AssistantRunStatus() {
+  return (
+    <>
+      <AssistantHistoryStatus />
+      <AdkTurnStatus />
+    </>
+  )
+}
+
+/**
+ * An answer's text, unless it's only present's answer quoted back
+ * (`{"shown": …}`), which some models write as their reply.
+ */
+function AnswerText() {
+  const echo = useAuiState(
+    (s) => s.part.type === "text" && isPresentEcho(s.part.text)
+  )
+  if (echo) return null
+  return <SourcedMarkdownText />
+}
+
 const threadComponents = {
+  RunStatus: AssistantRunStatus,
   Welcome: AssistantWelcomeMessage,
   ToolFallback: AdkToolFallback,
   MessageHeader: AdkMessageAuthor,
-  Text: SourcedMarkdownText,
+  Text: AnswerText,
   MessageFooter: MessageSources,
   // The follow-up questions the agent server wrote for the last reply.
   FollowUps: AdkFollowUps,
@@ -259,6 +301,7 @@ const threadComponents = {
  * read, e.g. an audit's replay of what was said.
  */
 function AssistantThread({ readOnly = false }: { readOnly?: boolean } = {}) {
+  const historyBlocked = useHistoryBlocked()
   const { commands, composerContext, placeholder, composerNote } =
     useAssistantSettings()
   const hasCommands = Boolean(commands?.length)
@@ -275,6 +318,12 @@ function AssistantThread({ readOnly = false }: { readOnly?: boolean } = {}) {
     }),
     [hasContext, hasCommands, hasNote]
   )
+  if (historyBlocked)
+    return (
+      <div className="h-full p-4">
+        <AssistantHistoryStatus />
+      </div>
+    )
   return (
     <Thread
       components={components}

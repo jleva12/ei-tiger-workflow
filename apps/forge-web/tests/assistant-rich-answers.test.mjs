@@ -12,19 +12,13 @@ const server = await createServer({
   server: { middlewareMode: true, watch: null },
   optimizeDeps: { noDiscovery: true, include: [] },
 })
-const {
-  choicesOf,
-  offersChoices,
-  presentCatalog,
-  replyOf,
-  schemaCost,
-  shownOf,
-  withQuietFields,
-  withRequired,
-  DEFAULT_RICH_ANSWER_COMPONENTS,
-} = await server.ssrLoadModule(
-  "/src/components/forge/assistant/rich-answers-schema.ts"
-)
+const load = (name) => server.ssrLoadModule(`/src/components/forge/generative-ui/${name}.ts`)
+const { presentCatalog, schemaCost, withRequired, DEFAULT_RICH_ANSWER_COMPONENTS } = await load("catalog")
+const { choicesOf } = await load("choices-options")
+const { offersChoices, shownOf } = await load("messages")
+const { drawnOf, namesTeamComponents, treeOf, UI_PROTOCOL } = await load("result")
+const { replyOf } = await load("actions")
+const { withCardForms, withQuietFields } = await load("composition")
 await server.close()
 
 /** A reply whose present call is `args`, answered `result`. */
@@ -169,6 +163,66 @@ test("the server's verdict on a call is read however ADK hands it over", () => {
   assert.equal(shownOf({ ok: true }), undefined)
 })
 
+/** A team component's call, and the base tree the server drew it as. */
+const TEAM_CALL = {
+  _type: "Card",
+  children: [
+    { _type: "org.shipment-summary", props: { order_number: "A-1042" } },
+  ],
+}
+const TEAM_TREE = {
+  _type: "Card",
+  children: [
+    {
+      _type: "Card",
+      title: "Order A-1042",
+      children: [{ _type: "Badge", value: "Shipped" }],
+    },
+  ],
+}
+const drawnAnswer = (tree = TEAM_TREE, protocol = UI_PROTOCOL) => ({
+  shown: true,
+  note: "The person sees it now.",
+  ui: {
+    protocol,
+    components: [{ key: "org.shipment-summary", version: 3 }],
+    tree,
+  },
+})
+
+test("a team component's call is drawn from the tree the server drew", () => {
+  assert.equal(treeOf(TEAM_CALL, drawnAnswer()), TEAM_TREE)
+  // However ADK hands the answer over.
+  assert.deepEqual(treeOf(TEAM_CALL, JSON.stringify(drawnAnswer())), TEAM_TREE)
+  assert.deepEqual(treeOf(TEAM_CALL, { result: drawnAnswer() }), TEAM_TREE)
+  assert.deepEqual(drawnOf(drawnAnswer()).components, [
+    { key: "org.shipment-summary", version: 3 },
+  ])
+  // Base components alone: their arguments, as always.
+  const plain = { _type: "Card", children: ["Hi"] }
+  assert.equal(treeOf(plain, { shown: true }), plain)
+  assert.equal(treeOf(plain, undefined), plain)
+  // Team components with no tree this chat reads: nothing drawn, never
+  // their names drawn as base components.
+  assert.equal(treeOf(TEAM_CALL, { shown: true }), undefined)
+  assert.equal(treeOf(TEAM_CALL, drawnAnswer(TEAM_TREE, 2)), undefined)
+  assert.equal(treeOf({ $type: "org.note" }, undefined), undefined)
+  assert.equal(drawnOf({ shown: true, ui: { protocol: 1 } }), undefined)
+  assert.equal(namesTeamComponents(TEAM_CALL), true)
+  assert.equal(namesTeamComponents({ _type: "Card", title: "org.x" }), false)
+})
+
+test("choices a team component drew hide the follow-up chips too", () => {
+  const withChoices = {
+    _type: "Card",
+    children: [{ _type: "Row", children: [NEXT] }],
+  }
+  assert.equal(offersChoices(reply(TEAM_CALL, drawnAnswer(withChoices))), true)
+  assert.equal(offersChoices(reply(TEAM_CALL, drawnAnswer())), false)
+  // The call's own arguments name no Choices: what was drawn is read.
+  assert.equal(offersChoices(reply({ ...TEAM_CALL, children: [NEXT] }, drawnAnswer())), false)
+})
+
 test("a form's fields don't act on their own: its confirm sends them", () => {
   const field = (type, extra = {}) => ({
     _type: type,
@@ -209,4 +263,41 @@ test("a form's fields don't act on their own: its confirm sends them", () => {
   assert.equal(checkbox._action.text, "Checkbox:")
   // Names stay: they're how the form sends the values.
   assert.equal(card.children[0].name, "datepicker")
+})
+
+test("a card's confirm sends the form inside it: the card becomes that form", () => {
+  const reply = { type: "reply", text: "Contact details:" }
+  // As a model sent it: the button on the card, the action on its form.
+  const sent = {
+    _type: "Card",
+    title: "Start a new claim",
+    confirm: { label: "Continue" },
+    children: [
+      { _type: "Text", value: "Your details." },
+      {
+        _type: "Form",
+        _action: reply,
+        children: [
+          { _type: "Input", name: "full_name" },
+          { _type: "Input", name: "email" },
+        ],
+      },
+      { _type: "Caption", value: "Phone is optional." },
+    ],
+  }
+  const card = withCardForms({ _type: "Col", children: [sent] }).children[0]
+  assert.equal(card.asForm, true)
+  assert.deepEqual(card._action, reply)
+  assert.deepEqual(
+    card.children.map((c) => c.name ?? c._type),
+    ["Text", "full_name", "email", "Caption"]
+  )
+  // A confirm that acts, or a card that's a form already, stays as it is.
+  const acting = { ...sent, confirm: { label: "Go", _action: reply } }
+  assert.deepEqual(withCardForms(acting), acting)
+  const own = { ...sent, asForm: true, _action: reply }
+  assert.deepEqual(withCardForms(own), own)
+  // Without a form that acts inside, there's nothing to send.
+  const empty = { ...sent, children: [{ _type: "Text", value: "Hi" }] }
+  assert.deepEqual(withCardForms(empty), empty)
 })

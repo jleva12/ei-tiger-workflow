@@ -1,9 +1,7 @@
 import * as React from "react"
 import type { RemoteThreadListAdapter } from "@assistant-ui/react"
 import {
-  AdkEventAccumulator,
   useAdkRuntime,
-  type AdkEvent,
   type AdkStreamCallback,
   type AdkThreadSnapshot,
 } from "@assistant-ui/react-google-adk"
@@ -12,6 +10,7 @@ import {
   AssistantProvider,
   AssistantThread,
 } from "@/components/forge/assistant/index"
+import { snapshotOfAdkEvents } from "@/components/forge/assistant/history-snapshot"
 import { showConversation } from "@/features/assistant/lib/assistant-window"
 import { useAssistantAgents } from "@/features/assistant/lib/assistant-capabilities"
 import { assistantSources } from "@/features/knowledge/lib/sources"
@@ -33,28 +32,6 @@ import { useMe } from "@/lib/users"
 /** Nothing is sent from a replay: the thread is disabled, and this says why if anything tries. */
 const nothingToSend: AdkStreamCallback = () =>
   Promise.reject(new Error("This conversation is read only."))
-
-/** What ADK's session load makes of the events: the whole thread, and its state. */
-function snapshotOf(
-  events: readonly Record<string, unknown>[]
-): AdkThreadSnapshot {
-  if (!events.length) return { messages: [] }
-  const accumulator = new AdkEventAccumulator()
-  let messages: AdkThreadSnapshot["messages"] = []
-  for (const event of events)
-    messages = accumulator.processEvent(event as AdkEvent)
-  return {
-    messages,
-    longRunningToolIds: accumulator.getLongRunningToolIds(),
-    toolConfirmations: accumulator.getToolConfirmations(),
-    authRequests: accumulator.getAuthRequests(),
-    escalated: accumulator.isEscalated(),
-    messageMetadata: accumulator.getMessageMetadata(),
-    stateDelta: accumulator.getStateDelta(),
-    artifactDelta: accumulator.getArtifactDelta(),
-    agentInfo: accumulator.getAgentInfo(),
-  }
-}
 
 /** A thread list of one: the conversation, which nothing renames, archives or deletes. */
 function readOnlyThreads(
@@ -88,11 +65,13 @@ function readOnlyThreads(
   } as unknown as RemoteThreadListAdapter
 }
 
-function Replay({ detail }: { detail: ConversationDetail }) {
-  const snapshot = React.useMemo(
-    () => snapshotOf(detail.adk_events),
-    [detail.adk_events]
-  )
+function Replay({
+  detail,
+  snapshot,
+}: {
+  detail: ConversationDetail
+  snapshot: AdkThreadSnapshot
+}) {
   const sessionAdapter = React.useMemo(
     () => readOnlyThreads(detail.session_id, detail.agent_name),
     [detail.session_id, detail.agent_name]
@@ -150,12 +129,33 @@ function Replay({ detail }: { detail: ConversationDetail }) {
  * gets a runtime of its own.
  */
 export function ConversationReplay({ detail }: { detail: ConversationDetail }) {
+  const snapshot = React.useMemo(() => {
+    try {
+      return snapshotOfAdkEvents(detail.adk_events)
+    } catch {
+      return undefined
+    }
+  }, [detail.adk_events])
   return (
     <div className="h-[min(78vh,960px)] min-h-[28rem] overflow-hidden rounded-(--radius-card) border">
-      <Replay
-        key={`${detail.app_name}/${detail.user_id}/${detail.session_id}`}
-        detail={detail}
-      />
+      {snapshot ? (
+        <Replay
+          key={`${detail.app_name}/${detail.user_id}/${detail.session_id}`}
+          detail={detail}
+          snapshot={snapshot}
+        />
+      ) : (
+        <div
+          role="alert"
+          className="m-4 rounded-(--radius-card) border border-danger-border bg-danger-surface p-4 text-sm text-danger-foreground"
+        >
+          <p className="font-medium">Conversation couldn't be displayed</p>
+          <p className="mt-1">
+            The saved conversation contains invalid data. Reload this page to
+            try again.
+          </p>
+        </div>
+      )}
     </div>
   )
 }

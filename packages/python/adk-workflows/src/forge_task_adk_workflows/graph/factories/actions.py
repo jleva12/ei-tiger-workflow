@@ -13,7 +13,14 @@ Actions: HTTP requests, Bash commands, transforms, filters and delays.
   retries, takes its Error way, handing on nothing, with its error as
   ``steps.<id>.error``. A 2xx whose body doesn't fit its output schema takes
   it too; a body that fits is handed on as its schema has it. With no Error
-  way, the run fails.
+  way, the run fails. A POST or PATCH carries an ``Idempotency-Key`` header
+  (unless the step sets one): its step's key, the same for every attempt of
+  the request (``base.Attempt``). A request cut off while it waited (the run
+  stopped: its worker died or was stopped, or another way's hiccup stopped
+  the run) is sent again when it's a GET, PUT or DELETE; a POST or PATCH may
+  have taken effect, so it isn't: it takes its Error way, with
+  ``may_have_run`` and its ``idempotency_key`` in its error, and with no
+  Error way, the run fails.
 - ``bash``: runs its command by bash on the worker's machine, starting in its
   folder of the run's folder (``support.commands``), or in a sandbox of its
   own, the run's folder copied in and its changes back
@@ -25,8 +32,13 @@ Actions: HTTP requests, Bash commands, transforms, filters and delays.
   its timeout takes its Error way, handing on nothing, with its error
   (``{message, exit_code?, stdout, stderr}``) as ``steps.<id>.error``. With no
   Error way, the run fails; and so does a run on a worker that doesn't run
-  commands, or without a folder (its start doesn't allow a file system). A
-  run tried again runs its command again: write commands that can.
+  commands, or without a folder (its start doesn't allow a file system). Its
+  ``FORGE_IDEMPOTENCY_KEY`` is its step's key, the same for every attempt. A
+  command cut off (the run stopped while it ran) isn't run again: what it
+  left running is stopped first (on its worker's machine, or its sandbox),
+  then it takes its Error way with ``may_have_run``, and with no Error way,
+  the run fails. A run that failed and is tried again runs its command
+  again: write commands that can.
 - ``transform``: hands on what its JSONata expression makes, held to its
   output schema when it has one (coerced; the run fails when it doesn't fit).
 - ``filter``: goes through its list's items (None: none; one value: a list of
@@ -45,26 +57,33 @@ import json
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from datetime import datetime, timedelta
 from http import HTTPStatus
+from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
 import httpx
+from forge_agent_runtime.http_guard import redirect_headers, send_guarded
+from forge_agent_runtime.tools import http_client
+from forge_common.adk import ToolFailure
 from forge_common.urls import with_query
 from google.adk import Context, Event
 from google.adk.events import RequestInput
 from google.adk.workflow import FunctionNode
 from pydantic import ValidationError
 
-from forge_task_adk_workflows.graph.data import ERROR_KEY
 from forge_task_adk_workflows.graph.errors import AgentBuildError, RunFailed
 from forge_task_adk_workflows.graph.factories.base import (
+    Attempt,
     BuildContext,
     asked,
-    called_with,
+    attempt,
+    error_way,
     failed,
     interrupt_id,
     label_of,
+    may_have_run,
     settings_of,
+    started,
     text,
     where_of,
 )
@@ -72,7 +91,9 @@ from forge_task_adk_workflows.graph.names import adk_name
 from forge_task_adk_workflows.graph.schemas import held_to, problems, to_model
 from forge_task_adk_workflows.graph.services import RunServices
 from forge_task_adk_workflows.support.commands import (
+    KEY_VARIABLE,
     NO_COMMANDS,
+    RESERVED_VARIABLES,
     UNASKED,
     VARIABLE,
     WORKSPACE_VARIABLE,
@@ -80,6 +101,7 @@ from forge_task_adk_workflows.support.commands import (
     folder_in,
     last_line,
     run_command,
+    stop_leftovers,
 )
 from forge_task_adk_workflows.support.errors import StepFailed
 from forge_task_adk_workflows.support.expressions import TEMPLATE, as_text
@@ -99,6 +121,12 @@ from forge_task_adk_workflows.support.step_settings import (
     HttpConfig,
     TransformConfig,
 )
+
+#: The methods whose request, sent twice, does what it did once (RFC 9110's
+#: idempotent ones an HTTP step has): one cut off is sent again.
+REPEATABLE = frozenset({"GET", "PUT", "DELETE"})
+#: The header a request that isn't carries its step's key in.
+IDEMPOTENCY_HEADER = "Idempotency-Key"
 
 
 class CredentialRefused(StepFailed):
@@ -188,9 +216,9 @@ def http(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
     async def request(url: str, headers: dict[str, str], sent: dict[str, Any]) -> tuple[dict[str, Any], str]:
         # Its response, and the way it takes: a status way's, else Success.
         last: StepFailed | None = None
-        for attempt in range(1 + max(0, s.retries)):
-            if attempt:
-                await services.sleep(min(2**attempt, 30))
+        for tried in range(1 + max(0, s.retries)):
+            if tried:
+                await services.sleep(min(2**tried, 30))
             try:
                 response = await send(services, s.method, url, headers, sent, seconds=s.timeout_seconds, sign=sign)
             except CredentialRefused:
@@ -228,25 +256,42 @@ def http(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
         raise last
 
     async def run(adk: Context, node_input: Any) -> AsyncGenerator[Event]:
+        step = attempt(adk)
+        if step.cut_off is not None and s.method not in REPEATABLE:
+            yield error_way(node, _cut_off_request(s.method, step), has_error_way=has_error_way)
+            return
         try:
             url, headers, sent = await prepared(ctx.data(adk, node_input))
+            if s.method not in REPEATABLE and not any(name.lower() == IDEMPOTENCY_HEADER.lower() for name in headers):
+                headers[IDEMPOTENCY_HEADER] = step.key
             # The request, kept before it's sent (its headers by name: their
-            # values may sign it): the run page shows it, though it fail.
+            # values may sign it): the run page shows it, though it fail; and
+            # an attempt that finds it with no answer knows it was cut off.
             shown: dict[str, Any] = {"method": s.method, "url": url}
             if headers:
                 shown["headers"] = sorted(headers)
             if sent:
                 shown["body"] = sent.get("json", sent.get("content"))
-            yield called_with(shown)
+            yield started(step, shown)
             response, way = await request(url, headers, sent)
         except StepFailed as error:
-            if not has_error_way:
-                raise failed(node, error) from None
-            yield Event(route="error", custom_metadata={ERROR_KEY: error.as_error()})  # type: ignore[call-arg]  # ADK's shorthand for actions.route
+            yield error_way(node, error, has_error_way=has_error_way)
             return
         yield Event(output=response, route=way)  # type: ignore[call-arg]  # ADK's shorthand for actions.route
 
-    return FunctionNode(name=adk_name(text(node.get("name"))), func=run)
+    # Run again when the run carries on after it was cut off: sent again, or its Error way.
+    return FunctionNode(name=adk_name(text(node.get("name"))), func=run, rerun_on_resume=True)
+
+
+def _cut_off_request(method: str, step: Attempt) -> StepFailed:
+    """:return: Why a request cut off while it waited isn't sent again."""
+    url = step.called.get("url") if isinstance(step.called, dict) else None
+    sent = f"{method} {url}" if isinstance(url, str) and url else f"Its {method}"
+    return may_have_run(
+        f"{sent} was cut off: the run stopped while it waited for the answer, so it may have taken effect. "
+        f"A {method} isn't sent again on its own: check whether it did",
+        step,
+    )
 
 
 def _status_ways(node: dict[str, Any], s: HttpConfig) -> list[tuple[str, Callable[[int], bool]]]:
@@ -333,7 +378,7 @@ async def send(
     """
     if services.http is not None:
         return await _exchange(services.http, services, method, url, headers, sent, seconds, sign)
-    async with httpx.AsyncClient() as client:
+    async with http_client() as client:
         return await _exchange(client, services, method, url, headers, sent, seconds, sign)
 
 
@@ -355,17 +400,20 @@ async def _exchange(
         )
         signed, params = await sign(url, hop == 0)
         try:
-            async with client.stream(
+            request = client.build_request(
                 method,
                 # Added to the URL's own query (httpx's params would replace it).
                 httpx.URL(url).copy_merge_params(params) if params else url,
                 headers={**headers, **signed},
                 timeout=seconds,
-                follow_redirects=False,
                 **sent,
-            ) as response:
+            )
+            response = await send_guarded(client, request, services)
+            try:
                 if response.is_redirect and "location" in response.headers:
-                    url = urljoin(url, response.headers["location"])
+                    following = urljoin(url, response.headers["location"])
+                    headers = redirect_headers(headers, url, following)
+                    url = following
                     if response.status_code in (301, 302, 303):
                         method, sent = "GET", {}
                     continue
@@ -375,6 +423,10 @@ async def _exchange(
                     "headers": {k.lower(): v for k, v in response.headers.items()},
                     "body": parse_body(raw, response.headers.get("content-type", "")),
                 }
+            finally:
+                await response.aclose()
+        except ToolFailure as error:
+            raise StepFailed(str(error)) from error
         except (
             httpx.TimeoutException,
             httpx.NetworkError,
@@ -400,28 +452,32 @@ def bash(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
                 f"{where_of(node)}: its environment variable {name!r} isn't a name bash reads: "
                 "letters, digits and _, not starting with a digit."
             )
-        if name == WORKSPACE_VARIABLE:
-            raise AgentBuildError(
-                f"{where_of(node)}: {WORKSPACE_VARIABLE} is the run's folder; call its variable something else."
-            )
+        if name in RESERVED_VARIABLES:
+            what = "the run's folder" if name == WORKSPACE_VARIABLE else "its step's key"
+            raise AgentBuildError(f"{where_of(node)}: {name} is {what}; call its variable something else.")
         if name in variables:
             raise AgentBuildError(f"{where_of(node)}: two of its environment variables are called {name}.")
         variables[name] = row.value
 
-    async def command(data: dict[str, Any], workspace: str) -> dict[str, Any]:
+    async def prepare(data: dict[str, Any], workspace: str) -> tuple[Path, dict[str, str]]:
+        # Its folder and its environment, filled in.
         cwd = await evaluator.render(s.cwd, data, what="Its folder")
         folder = await asyncio.to_thread(folder_in, workspace, cwd)
         env = {**services.command_environment, **UNASKED}
         for name, value in variables.items():
             env[name] = await evaluator.render(value, data, what=f"Its {name} variable")
+        return folder, env
+
+    async def command(folder: Path, env: dict[str, str], workspace: str, key: str) -> dict[str, Any]:
+        env = {**env, KEY_VARIABLE: key}
         max_bytes = services.max_command_output_bytes
         if services.command_sandbox is not None:
             finished = await services.command_sandbox.run(
-                s.command, workspace=workspace, folder=folder, env=env, seconds=seconds, max_bytes=max_bytes
+                s.command, workspace=workspace, folder=folder, env=env, seconds=seconds, max_bytes=max_bytes, key=key
             )
         else:
             env[WORKSPACE_VARIABLE] = workspace
-            finished = await run_command(s.command, cwd=folder, env=env, seconds=seconds, max_bytes=max_bytes)
+            finished = await run_command(s.command, cwd=folder, env=env, seconds=seconds, max_bytes=max_bytes, key=key)
         if finished.exit_code != 0:
             raise StepFailed(
                 _exited(finished),
@@ -435,7 +491,7 @@ def bash(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
             "truncated": finished.truncated,
         }
 
-    async def run(adk: Context, node_input: Any) -> Event:
+    async def run(adk: Context, node_input: Any) -> AsyncGenerator[Event]:
         if not services.commands:
             # The run checks this before it starts (runs.AdkRun.run).
             raise RunFailed(
@@ -448,15 +504,45 @@ def bash(node: dict[str, Any], ctx: BuildContext) -> FunctionNode:
                 "turn on Allow file system on the workflow's start",
                 step=node["id"],
             )
+        step = attempt(adk)
+        if step.cut_off is not None:
+            yield error_way(node, await _cut_off_command(services, step), has_error_way=has_error_way)
+            return
         try:
-            output = await command(ctx.data(adk, node_input), workspace)
+            folder, env = await prepare(ctx.data(adk, node_input), workspace)
+            yield started(step)
+            output = await command(folder, env, workspace, step.key)
         except StepFailed as error:
-            if not has_error_way:
-                raise failed(node, error) from None
-            return Event(route="error", custom_metadata={ERROR_KEY: error.as_error()})  # type: ignore[call-arg]  # ADK's shorthand for actions.route
-        return Event(output=output, route="success")  # type: ignore[call-arg]  # ADK's shorthand for actions.route
+            yield error_way(node, error, has_error_way=has_error_way)
+            return
+        yield Event(output=output, route="success")  # type: ignore[call-arg]  # ADK's shorthand for actions.route
 
-    return FunctionNode(name=adk_name(text(node.get("name"))), func=run)
+    # Run again when the run carries on after it was cut off: its Error way.
+    return FunctionNode(name=adk_name(text(node.get("name"))), func=run, rerun_on_resume=True)
+
+
+async def _cut_off_command(services: RunServices, step: Attempt) -> StepFailed:
+    """
+    A command cut off as it ran: what it left running is stopped first, its
+    sandbox (deleted) or its processes on this machine (killed), so nothing
+    of it goes on while the run decides what became of it.
+
+    :return: Why it isn't run again.
+    """
+    where = step.elsewhere()
+    if services.command_sandbox is not None:
+        stopped = await services.command_sandbox.stop(step.key)
+        left = " (its sandbox is deleted now)" if stopped else ""
+    elif where is None:
+        stopped = await stop_leftovers(step.key)
+        left = " (what it left running is stopped now)" if stopped else ""
+    else:
+        left = f" (it ran on {where}, where what it left may still be running)"
+    return may_have_run(
+        f"Its command was cut off: the run stopped while it ran, so it may have run, in whole or in part{left}. "
+        "It isn't run again on its own: check what it did",
+        step,
+    )
 
 
 def _exited(finished: Finished) -> str:

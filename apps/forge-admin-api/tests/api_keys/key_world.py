@@ -57,6 +57,7 @@ ROLES = {
             "agents:manage_runs",
             "api_keys:manage",
             "knowledge_bases:manage",
+            "agent_access:manage",
         ),
     ),
     "org:member": ("Organization member", ("organizations:read", "agents:run")),
@@ -108,6 +109,9 @@ def sqlite_tables() -> MetaData:
         "authz_roles",
         "authz_permissions",
         "api_keys",
+        "agent_casbin_rule",
+        "agent_permissions",
+        "agent_group_links",
     ):
         table = Base.metadata.tables[name].to_metadata(tables)
         for column in table.columns:
@@ -162,9 +166,7 @@ class World:
         return self.client.portal.call(go)
 
 
-def build_world(
-    settings: Settings, tmp_path: Path, *, public: bool = True, **changes: Any
-) -> World:
+def build_world(settings: Settings, tmp_path: Path, **changes: Any) -> World:
     """
     The admin API over SQLite, its policy read by Casbin's real adapter,
     its runtime's agents from a folder. Its client is started: the caller
@@ -174,7 +176,6 @@ def build_world(
         update={
             "jwt_secret": SecretStr("s" * 40),
             "local_user_id": None,
-            "agent_runtime_public": public,
             **changes,
         }
     )
@@ -183,7 +184,7 @@ def build_world(
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     enforcer = new_enforcer(Adapter(engine, db_class=CasbinRule))
 
-    folder = tmp_path / ("public" if public else "private")
+    folder = tmp_path / "agents"
     folder.mkdir(exist_ok=True)
     for agent_id, org, name in (
         (AGENT, ORG, "Acme helper"),

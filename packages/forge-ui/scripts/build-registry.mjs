@@ -224,6 +224,12 @@ const ui = [
   ["skeleton", [], [], "Skeleton primitive."],
   ["spinner", icons, [], "Spinner primitive."],
   [
+    "streaming-text",
+    [version("motion")],
+    [],
+    "Iconiq's word-by-word streaming text: each word fades in wearing a blue gradient, then settles into the foreground.",
+  ],
+  [
     "switch",
     [],
     [],
@@ -668,7 +674,7 @@ const assistantThread = {
   type: "registry:component",
   title: "Assistant thread",
   description:
-    "assistant-ui thread, composer, conversation list, floating modal and trigger popover: streaming markdown, reasoning, tool groups, attachments, dictation, and slots for message headers, composer actions and triggers.",
+    "assistant-ui thread, composer, conversation list, floating modal and trigger popover: streaming markdown (a reply that arrives whole is written in word by word), reasoning, tool groups, attachments, dictation, and slots for message headers, composer actions and triggers.",
   dependencies: [
     ...base,
     ...icons,
@@ -693,11 +699,13 @@ const assistantThread = {
       "input",
       "popover",
       "skeleton",
+      "streaming-text",
       "textarea",
       "tooltip",
     ].map(forge),
     forge("icon"),
     forge("attachments"),
+    forge("toast"),
   ],
   files: [
     ...readdirSync(resolve(root, "src/components/assistant-ui/elements"))
@@ -806,9 +814,41 @@ const hooks = [
   ],
 }))
 
-const tiptap = Object.keys(pkg.dependencies)
-  .filter((name) => name.startsWith("@tiptap/"))
-  .map(version)
+/**
+ * The Tiptap packages the rich text editor imports, plus the Tiptap packages
+ * those need beside them (peer and optional dependencies), as far as this
+ * package lists them.
+ */
+const tiptap = (() => {
+  const folder = resolve(root, "src/components/forge/rich-text-editor")
+  const imported = readdirSync(folder, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && /\.tsx?$/.test(entry.name))
+    .flatMap((entry) =>
+      [
+        ...readFileSync(resolve(entry.parentPath, entry.name), "utf8").matchAll(
+          /from "(@tiptap\/[a-z-]+)/g
+        ),
+      ].map((match) => match[1])
+    )
+  const needs = (name) => {
+    const meta = JSON.parse(
+      readFileSync(resolve(root, "node_modules", name, "package.json"), "utf8")
+    )
+    return Object.keys({
+      ...meta.peerDependencies,
+      ...meta.optionalDependencies,
+    }).filter((dependency) => dependency.startsWith("@tiptap/"))
+  }
+  const found = new Set()
+  const queue = [...imported]
+  while (queue.length) {
+    const name = queue.pop()
+    if (found.has(name) || !pkg.dependencies[name]) continue
+    found.add(name)
+    queue.push(...needs(name))
+  }
+  return [...found].sort().map(version)
+})()
 
 /** Every file under a Forge folder, subfolders included. */
 const forgeFolder = (folder) =>
@@ -832,7 +872,7 @@ const richTextEditor = {
   type: "registry:component",
   title: "Rich text editor",
   description:
-    "Tiptap editor in the workspace look: toolbar, bubble menus, / commands, mentions, tables, code with highlighting, maths, media, find and replace, outline, drag handles and Markdown in and out.",
+    "Markdown rich text editor on Tiptap: Markdown in and out, a configurable toolbar, selection, right-click and / menus on one action registry, a controller ref for inserting content, and optional streamed AI with preview and approval.",
   dependencies: [
     ...base,
     ...icons,
@@ -840,9 +880,11 @@ const richTextEditor = {
     version("highlight.js"),
     version("katex"),
     version("lowlight"),
+    version("marked"),
   ],
   registryDependencies: [
     "button",
+    "context-menu",
     "dialog",
     "dropdown-menu",
     "field",

@@ -13,7 +13,7 @@ import pytest
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from forge_task_adk_workflows.run_store import metadata
+from forge_task_adk_workflows.run_store import PROVENANCE_COLUMNS, metadata
 from sqlalchemy.dialects import mysql
 from sqlalchemy.schema import CreateIndex, CreateTable
 
@@ -54,6 +54,8 @@ def test_on_mysql_it_makes_the_run_stores_tables() -> None:
     dialect = mysql.dialect()
     expected = set()
     for table in metadata.sorted_tables:
+        if table.name in LATER_TABLES:
+            continue
         made_then = str(CreateTable(table).compile(dialect=dialect))
         for column in LATER:
             made_then = re.sub(rf"\n\t{column} [^\n]*", "", made_then)
@@ -69,18 +71,27 @@ def test_on_mysql_it_makes_the_run_stores_tables() -> None:
     assert any("ON DELETE CASCADE" in line for line in made)
 
 
-#: The run store's columns and indexes later migrations added
+#: The run store's columns, indexes and tables later migrations added
 #: (0012adk_run_versions, 0020adk_run_control, 0021adk_run_children,
-#: 0022adk_run_backoff, 0026adk_run_gates).
+#: 0022adk_run_backoff, 0026adk_run_gates, 0031adk_run_provenance,
+#: 0035adk_run_interruptions).
 LATER = (
     "version",
     "lease_epoch",
     "cancel_requested_at",
     "parent_run_id",
     "next_attempt_at",
+    "interruptions",
     "gates",
+    *PROVENANCE_COLUMNS,
+    "root_run_id",
 )
-LATER_INDEXES = ("ix_adk_runs_parent",)
+LATER_INDEXES = (
+    "ix_adk_runs_parent",
+    "ix_adk_runs_trigger",
+    "ix_adk_runs_on_behalf_of",
+)
+LATER_TABLES = ("adk_run_refusals",)
 
 
 # ------------------------------------------------------------------ SQLite
@@ -171,6 +182,8 @@ def test_on_sqlite_it_round_trips(connection: sa.Connection) -> None:
     migrate(connection, "upgrade")
     inspector = sa.inspect(connection)
     for table in metadata.sorted_tables:
+        if table.name in LATER_TABLES:
+            continue
         columns = inspector.get_columns(table.name)
         assert [(c["name"], c["nullable"]) for c in columns] == [
             (c.name, c.nullable) for c in table.columns if c.name not in LATER

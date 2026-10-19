@@ -28,6 +28,8 @@ export type PageEntityKind =
   | "adk_run"
   | "adk_workflow"
   | "workflow_node"
+  | "chat_agent"
+  | "chat_agent_node"
   | "knowledge_base"
   | "knowledge_document"
 

@@ -1,5 +1,6 @@
 """Talking to an MCP server over streamable HTTP: what checking one does."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -10,6 +11,10 @@ from mcp.shared._httpx_utils import create_mcp_http_client
 
 # The most pages of tools read; a server that pages forever stops here.
 MAX_PAGES = 20
+
+#: Makes the client a connection goes through: ``(headers, timeout, auth)``,
+#: as the MCP SDK's ``create_mcp_http_client`` does.
+ClientFactory = Callable[..., httpx.AsyncClient]
 
 
 class McpConnectionError(Exception):
@@ -67,7 +72,13 @@ def _explained(error: BaseException, status: int | None) -> McpConnectionError:
     return McpConnectionError(str(first) or type(first).__name__)
 
 
-async def list_tools(url: str, *, headers: dict[str, str], seconds: float) -> Listing:
+async def list_tools(
+    url: str,
+    *,
+    headers: dict[str, str],
+    seconds: float,
+    client_factory: ClientFactory | None = None,
+) -> Listing:
     """
     Connect to a server, and list its tools.
 
@@ -75,11 +86,13 @@ async def list_tools(url: str, *, headers: dict[str, str], seconds: float) -> Li
     :param headers: What to send with every request: its own headers and
         its auth method's.
     :param seconds: How long it has to answer each request.
+    :param client_factory: Makes the client it connects through (one held to the
+        deployment's network policy); the SDK's own when None.
     :return: Its tools, and what it said it is.
     :raises McpConnectionError: It couldn't be reached, refused, or didn't
         speak MCP.
     """
-    http = create_mcp_http_client(
+    http = (client_factory or create_mcp_http_client)(
         headers=headers, timeout=httpx.Timeout(seconds, read=seconds)
     )
     refused: list[int] = []

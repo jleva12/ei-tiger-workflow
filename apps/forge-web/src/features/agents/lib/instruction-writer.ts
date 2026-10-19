@@ -1,14 +1,19 @@
 import { useMutation } from "@tanstack/react-query"
 
-import { api } from "@/lib/api-instance"
+import type {
+  TemplateAI,
+  TemplateAIRequest,
+} from "@/features/builder/components/fields/markdown-template-editor"
+import { callHelper } from "@/features/helpers/lib/api"
 import type { SpecSummary } from "@/features/credentials/lib/api"
 import type { Scope } from "@/features/steps/lib/scope"
 import { typeLabel, type DataType } from "@/features/steps/lib/types"
 import type { ChatConfigs, ChatKind } from "./model"
 
 /*
- * The instruction writer: an agent of the admin API's that writes an LLM
- * agent's instruction from what the person says it should do. It's sent a
+ * The instruction writer: a helper agent of the admin API's
+ * (`instruction_writer` in helpers.yaml) that writes an LLM agent's
+ * instruction from what the person says it should do. It's sent a
  * brief of the agent being set up, as the builder holds it (saved or not):
  * where it runs, its tools, who it hands off to, and the run's data its
  * instruction can put in with `{{ }}`. The admin API fills in what the
@@ -91,19 +96,52 @@ export type InstructionRequest = {
 
 export function useWriteInstruction(organizationId: string) {
   return useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       request,
       signal,
     }: {
       request: InstructionRequest
       signal?: AbortSignal
-    }) =>
-      api.post<InstructionDraft>(
-        `/organizations/${encodeURIComponent(organizationId)}/instruction-writer`,
-        request,
-        { signal, silent: true }
-      ),
+    }): Promise<InstructionDraft> => {
+      const answer = await callHelper<
+        InstructionRequest,
+        { instruction: string }
+      >(organizationId, "instruction_writer", request, { signal })
+      return {
+        instruction: answer.result.instruction,
+        notes: answer.notes,
+        model: answer.model,
+      }
+    },
   })
+}
+
+/* -------------------------------------------------------------------------- */
+/* The editor's AI                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The AI inside an instruction's rich text editor: the admin API's
+ * `instruction_editor` helper rewrites the selected passage, or writes what
+ * goes in at the caret, as asked, knowing the agent from its brief (when
+ * there is one) so it names the agent's real tools and values.
+ */
+export function instructionEditor(
+  organizationId: string,
+  brief?: () => Promise<InstructionBrief> | InstructionBrief
+): TemplateAI {
+  return async (request, signal) => {
+    const answer = await callHelper<
+      TemplateAIRequest & { brief?: InstructionBrief },
+      { markdown: string }
+    >(
+      organizationId,
+      "instruction_editor",
+      { ...request, ...(brief && { brief: await brief() }) },
+      { signal }
+    )
+    return answer.result.markdown
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -186,6 +224,20 @@ export function briefTool<K extends ChatKind>(
         name,
         config: pick(c as ChatConfigs["sub_agent"], ["description"]),
       }
+    case "intake_agent": {
+      // Used as a tool: the agent asks its fields itself.
+      const intake = c as ChatConfigs["intake_agent"]
+      return {
+        kind,
+        name,
+        config: {
+          description: intake.description,
+          fields: intake.fields.map((f) =>
+            pick(f, ["key", "label", "type", "options", "required"])
+          ),
+        },
+      }
+    }
     default:
       return { kind, name, config: { ...c } }
   }

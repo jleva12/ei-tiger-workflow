@@ -75,6 +75,12 @@ const ERROR = t.object(
     method: t.string("The request's method, when it answered with a status that isn't 2xx."),
     url: t.string("The URL it sent the request to, when it answered with a status that isn't 2xx."),
     expression: t.string("The expression that failed, when one did."),
+    may_have_run: t.boolean(
+      "True when it was cut off as it acted (the run stopped while it ran): what it does may have happened, and it isn't run again on its own."
+    ),
+    idempotency_key: t.string(
+      "Its key, when it was cut off: the same for every attempt of it (its Idempotency-Key, its FORGE_IDEMPOTENCY_KEY)."
+    ),
   },
   "Why the step took its Error way.",
   { required: ["message"] }
@@ -92,6 +98,12 @@ const COMMAND_ERROR = t.object(
     ),
     stdout: t.string("What it wrote to stdout, when it ran."),
     stderr: t.string("What it wrote to stderr, when it ran."),
+    may_have_run: t.boolean(
+      "True when it was cut off as it acted (the run stopped while it ran): what it does may have happened, and it isn't run again on its own."
+    ),
+    idempotency_key: t.string(
+      "Its key, when it was cut off: the same for every attempt of it (its Idempotency-Key, its FORGE_IDEMPOTENCY_KEY)."
+    ),
   },
   "Why the step took its Error way.",
   { required: ["message"] }
@@ -105,6 +117,12 @@ const GIT_ERROR = t.object(
     ),
     exit_code: t.number("git's exit code, when a git command failed.", true),
     stderr: t.string("What git wrote to stderr, when a git command failed."),
+    may_have_run: t.boolean(
+      "True when it was cut off as it acted (the run stopped while it ran): what it does may have happened, and it isn't run again on its own."
+    ),
+    idempotency_key: t.string(
+      "Its key, when it was cut off: the same for every attempt of it (its Idempotency-Key, its FORGE_IDEMPOTENCY_KEY)."
+    ),
   },
   "Why the step took its Error way.",
   { required: ["message"] }

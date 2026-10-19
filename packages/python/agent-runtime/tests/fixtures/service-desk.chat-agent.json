@@ -1,0 +1,606 @@
+{
+  "format": "forge.chat_agent/v1",
+  "id": "ca_servicedesk",
+  "name": "Northwind service desk (tool-mode intake example)",
+  "description": "A service desk that files people's requests to three teams' intakes, used as tools: shared fields (email, department, manager, cost center, needed by) are asked once, requests are kept for the person across conversations, and submitting one opens a ticket (open-ticket.workflow.json).",
+  "nodes": [
+    {
+      "id": "agent",
+      "kind": "agent",
+      "name": "Service desk",
+      "outputs": [
+        "tools",
+        "agents"
+      ],
+      "config": {
+        "description": "Northwind's service desk.",
+        "instruction": "You're Northwind's service desk: one place to ask the company's teams for things. Be friendly and brief.\n\nThe teams' intakes are your tools. When someone needs something, start a request to each team that does it, together when they need several, with what they've already told you. Then ask what the requests still need, a few related questions at a time: what several requests share (their email, department, manager, cost center, when they need it) is asked once.\n\nWhen the requests are ready, read each back as a table (present) and ask if it's right. When they say yes, submit them: each opens a ticket with its team, which the chat shows. Give them the ticket numbers once they're in.\n\nIf they ask about a request from before, list theirs; an open one can be picked up here. Questions about the company you can't answer: say which team to ask.",
+        "model": {
+          "provider": "",
+          "name": ""
+        },
+        "thinking_level": "",
+        "max_output_tokens": null,
+        "ask_person": false,
+        "state_schema": {}
+      }
+    },
+    {
+      "id": "intake_access",
+      "kind": "intake_agent",
+      "name": "Access request",
+      "outputs": [
+        "tools",
+        "on_complete"
+      ],
+      "config": {
+        "description": "Identity & Access: access to a business application (Ledger, Salesforce, Snowflake, GitHub, Workday).",
+        "instruction": "Access is least-privilege: suggest Read unless they need more.",
+        "model": {
+          "provider": "",
+          "name": ""
+        },
+        "thinking_level": "",
+        "max_output_tokens": null,
+        "ask_person": true,
+        "fields": [
+          {
+            "id": "f_requester_email",
+            "key": "requester_email",
+            "label": "Your work email",
+            "type": "email",
+            "options": [],
+            "description": "",
+            "why": "Updates on the request go there.",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_department",
+            "key": "department",
+            "label": "Department",
+            "type": "choice",
+            "options": [
+              "Finance",
+              "Sales",
+              "Engineering",
+              "Operations",
+              "HR"
+            ],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_manager_email",
+            "key": "manager_email",
+            "label": "Manager's email",
+            "type": "email",
+            "options": [],
+            "description": "",
+            "why": "They approve it.",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_application",
+            "key": "application",
+            "label": "Application",
+            "type": "choice",
+            "options": [
+              "Ledger",
+              "Salesforce",
+              "Snowflake",
+              "GitHub",
+              "Workday"
+            ],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_access_level",
+            "key": "access_level",
+            "label": "Access level",
+            "type": "choice",
+            "options": [
+              "Read",
+              "Write",
+              "Admin"
+            ],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": true,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_admin_justification",
+            "key": "admin_justification",
+            "label": "Why admin access",
+            "type": "text",
+            "options": [],
+            "description": "",
+            "why": "Admin access is reviewed by security.",
+            "required": true,
+            "when": "access_level = \"Admin\"",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_access_until",
+            "key": "access_until",
+            "label": "Access until",
+            "type": "date",
+            "options": [],
+            "description": "When it can be removed; leave empty for as long as their role needs it.",
+            "why": "",
+            "required": false,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          }
+        ],
+        "sections": [],
+        "confirm_summary": true,
+        "allow_cancel": true,
+        "allow_escalate": false
+      }
+    },
+    {
+      "id": "intake_laptop",
+      "kind": "intake_agent",
+      "name": "Laptop request",
+      "outputs": [
+        "tools",
+        "on_complete"
+      ],
+      "config": {
+        "description": "IT hardware: a new or replacement laptop, shipped to the office or home.",
+        "instruction": "",
+        "model": {
+          "provider": "",
+          "name": ""
+        },
+        "thinking_level": "",
+        "max_output_tokens": null,
+        "ask_person": true,
+        "fields": [
+          {
+            "id": "f_requester_email",
+            "key": "requester_email",
+            "label": "Your work email",
+            "type": "email",
+            "options": [],
+            "description": "",
+            "why": "Updates on the request go there.",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_department",
+            "key": "department",
+            "label": "Department",
+            "type": "choice",
+            "options": [
+              "Finance",
+              "Sales",
+              "Engineering",
+              "Operations",
+              "HR"
+            ],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_manager_email",
+            "key": "manager_email",
+            "label": "Manager's email",
+            "type": "email",
+            "options": [],
+            "description": "",
+            "why": "They approve it.",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_cost_center",
+            "key": "cost_center",
+            "label": "Cost center",
+            "type": "text",
+            "options": [],
+            "description": "Like CC-1234.",
+            "why": "It's charged there.",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_laptop_model",
+            "key": "laptop_model",
+            "label": "Model",
+            "type": "choice",
+            "options": [
+              "MacBook Pro 14",
+              "MacBook Air 13",
+              "ThinkPad X1"
+            ],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_replacing",
+            "key": "replacing",
+            "label": "Replacing a laptop",
+            "type": "boolean",
+            "options": [],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": true,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_work_location",
+            "key": "work_location",
+            "label": "Works from",
+            "type": "choice",
+            "options": [
+              "Office",
+              "Remote"
+            ],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_shipping_address",
+            "key": "shipping_address",
+            "label": "Shipping address",
+            "type": "text",
+            "options": [],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "work_location = \"Remote\"",
+            "infer": false,
+            "confirm": true,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_needed_by",
+            "key": "needed_by",
+            "label": "Needed by",
+            "type": "date",
+            "options": [],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          }
+        ],
+        "sections": [],
+        "confirm_summary": true,
+        "allow_cancel": true,
+        "allow_escalate": false
+      }
+    },
+    {
+      "id": "intake_report",
+      "kind": "intake_agent",
+      "name": "Report request",
+      "outputs": [
+        "tools",
+        "on_complete"
+      ],
+      "config": {
+        "description": "Analytics: a new report or dashboard built from company data.",
+        "instruction": "",
+        "model": {
+          "provider": "",
+          "name": ""
+        },
+        "thinking_level": "",
+        "max_output_tokens": null,
+        "ask_person": true,
+        "fields": [
+          {
+            "id": "f_requester_email",
+            "key": "requester_email",
+            "label": "Your work email",
+            "type": "email",
+            "options": [],
+            "description": "",
+            "why": "Updates on the request go there.",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_department",
+            "key": "department",
+            "label": "Department",
+            "type": "choice",
+            "options": [
+              "Finance",
+              "Sales",
+              "Engineering",
+              "Operations",
+              "HR"
+            ],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_cost_center",
+            "key": "cost_center",
+            "label": "Cost center",
+            "type": "text",
+            "options": [],
+            "description": "Like CC-1234.",
+            "why": "It's charged there.",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_report_title",
+            "key": "report_title",
+            "label": "Report",
+            "type": "text",
+            "options": [],
+            "description": "What it should be called.",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_data_sources",
+            "key": "data_sources",
+            "label": "Data from",
+            "type": "choices",
+            "options": [
+              "Ledger",
+              "Salesforce",
+              "Snowflake",
+              "Workday"
+            ],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_refresh",
+            "key": "refresh",
+            "label": "Refreshed",
+            "type": "choice",
+            "options": [
+              "One-off",
+              "Daily",
+              "Weekly",
+              "Monthly"
+            ],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_details",
+            "key": "details",
+            "label": "What it should show",
+            "type": "text",
+            "options": [],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": true,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          },
+          {
+            "id": "f_needed_by",
+            "key": "needed_by",
+            "label": "Needed by",
+            "type": "date",
+            "options": [],
+            "description": "",
+            "why": "",
+            "required": true,
+            "when": "",
+            "infer": false,
+            "confirm": false,
+            "prefill": false,
+            "section": ""
+          }
+        ],
+        "sections": [],
+        "confirm_summary": true,
+        "allow_cancel": true,
+        "allow_escalate": false
+      }
+    },
+    {
+      "id": "rich_summary",
+      "kind": "rich_answers",
+      "name": "Request summary",
+      "outputs": [],
+      "config": {
+        "components": [
+          "Card",
+          "Table",
+          "Choices"
+        ]
+      }
+    },
+    {
+      "id": "wf_open_ticket",
+      "kind": "adk_workflow",
+      "name": "Open ticket",
+      "outputs": [],
+      "config": {
+        "workflow": "ag_openticket",
+        "version": "draft",
+        "wait_seconds": 30
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_access",
+      "source": "agent",
+      "source_output": "tools",
+      "target": "intake_access"
+    },
+    {
+      "id": "e_laptop",
+      "source": "agent",
+      "source_output": "tools",
+      "target": "intake_laptop"
+    },
+    {
+      "id": "e_report",
+      "source": "agent",
+      "source_output": "tools",
+      "target": "intake_report"
+    },
+    {
+      "id": "e_summary",
+      "source": "agent",
+      "source_output": "tools",
+      "target": "rich_summary"
+    },
+    {
+      "id": "e_access_ticket",
+      "source": "intake_access",
+      "source_output": "on_complete",
+      "target": "wf_open_ticket"
+    },
+    {
+      "id": "e_laptop_ticket",
+      "source": "intake_laptop",
+      "source_output": "on_complete",
+      "target": "wf_open_ticket"
+    },
+    {
+      "id": "e_report_ticket",
+      "source": "intake_report",
+      "source_output": "on_complete",
+      "target": "wf_open_ticket"
+    }
+  ],
+  "layout": {
+    "agent": {
+      "x": 0,
+      "y": 120
+    },
+    "intake_access": {
+      "x": 440,
+      "y": -60
+    },
+    "intake_laptop": {
+      "x": 440,
+      "y": 120
+    },
+    "intake_report": {
+      "x": 440,
+      "y": 300
+    },
+    "rich_summary": {
+      "x": 440,
+      "y": 480
+    },
+    "wf_open_ticket": {
+      "x": 880,
+      "y": 120
+    }
+  }
+}

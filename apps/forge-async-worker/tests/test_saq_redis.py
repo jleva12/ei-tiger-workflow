@@ -1,9 +1,9 @@
 """The SAQ worker on a real Redis: runs go concurrently up to the limit, a
 hiccup's retry is scheduled with backoff, the maintenance has its cron key on
 the upkeep's queue, whose jobs go on while runs fill every slot, the health
-check sees this host, a stop waits for running runs but not for idle workers,
-and a bare enqueue (as the admin API's) runs under the worker's settings. The
-run store is a SQLite file, on the real clock.
+check sees this host, a stop takes no new runs and waits for running ones but
+not for idle workers, and a bare enqueue (as the admin API's) runs under the
+worker's settings. The run store is a SQLite file, on the real clock.
 
 Needs HYBRID_TEST_REDIS_URL, a Redis database these tests clear (SAQ keys):
 make async-worker-test-redis uses database 15 of shared Redis."""
@@ -219,6 +219,33 @@ async def test_stopping_waits_for_running_runs(stack: Stack) -> None:
     assert (await stack.store.get(run_id))["status"] == SUCCEEDED  # type: ignore[index]
 
 
+async def test_a_worker_that_stops_takes_no_new_runs(stack: Stack) -> None:
+    release = asyncio.Event()
+
+    async def holds(control: JobControl, index: int) -> None:
+        await release.wait()
+
+    stack.task.hook = holds
+    busy = await stack.start({"do": "hook"})
+    await stack.queue.run_adk(busy)
+    await stack.until(busy, RUNNING)
+
+    stack.stop.set()  # SIGTERM: its other dequeue is out, waiting on Redis
+    while not stack.queue.queue.closed:
+        await asyncio.sleep(0.01)
+    new = await stack.start({"do": "step"})
+    await stack.queue.run_adk(new)
+    await asyncio.sleep(saq_worker.TAKE_SECONDS + 0.5)
+    assert (await stack.store.get(new))["status"] == QUEUED  # type: ignore[index]
+
+    release.set()
+    await asyncio.wait_for(stack.running, timeout=8)
+    assert (await stack.store.get(busy))["status"] == SUCCEEDED  # type: ignore[index]
+    # Never taken: its job, put back if the dequeue out took it, waits for the next worker.
+    assert (await stack.store.get(new))["status"] == QUEUED  # type: ignore[index]
+    assert await stack.queue.queue.count("queued") == 1
+
+
 async def test_idle_workers_stop_at_once(stack: Stack) -> None:
     await asyncio.sleep(0.5)  # started, nothing to do
     started = time.monotonic()
@@ -238,5 +265,6 @@ async def test_a_bare_enqueue_runs_under_the_workers_settings(stack: Stack) -> N
     await job.refresh(until_complete=10)
 
     assert job.status == Status.COMPLETE and job.result == {"run_id": run_id, "outcome": "succeeded"}
-    assert (job.timeout, job.heartbeat, job.retries) == (0, HEARTBEAT, 1)
+    assert stack.state.jobs is not None
+    assert (job.timeout, job.heartbeat, job.retries) == (stack.state.jobs.job_seconds, HEARTBEAT, 1)
     assert (await stack.store.get(run_id))["status"] == SUCCEEDED  # type: ignore[index]

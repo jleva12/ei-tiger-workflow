@@ -1,5 +1,6 @@
 import {
   AiBrain01Icon,
+  AiSecurity01Icon,
   BookOpen01Icon,
   FlowSquareIcon,
   Key01Icon,
@@ -11,13 +12,15 @@ import {
 import type { IconProp } from "@/components/forge/icons"
 import type { Channel, Since } from "@/features/conversations/lib/conversations"
 import type { OverviewPeriod } from "@/features/overview/lib/overview"
-import type { AdkRunTab } from "@/features/runs/lib/runs"
+import type { OverviewView } from "@/features/overview/lib/overview-view"
+import type { AdkRunTab, AdkRunTriggerType } from "@/features/runs/lib/runs"
 
 /**
  * The pages of an organization's workspace
  * (`/organizations/$organizationId?view=…`), as its sub nav lists them:
  * Overview (what its workflows, agents and assistant did and used, and
- * what it cost, over 7, 30 or 90 days: `period`), Workflows (its Google ADK graph workflows, each opening its builder
+ * what it cost, over 7, 30 or 90 days, `period`, or days picked, `from` and
+ * `to`; focused on a type, `only`, or a workflow or agent, `focus`), Workflows (its Google ADK graph workflows, each opening its builder
  * at /organizations/$organizationId/agents/$agentId: `agents` in the URL
  * and the API, from before they were called that), Agents (its chat
  * agents, each opening its builder at
@@ -28,8 +31,10 @@ import type { AdkRunTab } from "@/features/runs/lib/runs"
  * skills its agents load when a task calls for one, each opening in a
  * dialog), Knowledge bases (each opening its own page, and, as its second tab, the
  * GitHub repositories it ingests into the code graph, each opening in a side
- * panel), Members (who holds which role in it; its admins change them) and API keys
- * (what outside apps send to call its agents and workflows). Overview is
+ * panel), Members (who holds which role in it; its admins change them), Agent
+ * access (its own agent permissions, linked to company groups and API keys,
+ * for who may use its agents and run its workflows) and API keys (what
+ * outside apps send to call its agents and workflows). Overview is
  * the default, so it has no `view` in the URL.
  */
 export const WORKSPACE_VIEWS = {
@@ -55,6 +60,10 @@ export const WORKSPACE_VIEWS = {
   // the code graph, each opening in a side panel.
   knowledge: { label: "Knowledge bases", icon: BookOpen01Icon },
   config: { label: "Members", icon: "team" },
+  // Its own agent permissions, apart from the site's roles and permissions:
+  // who may use its agents and run its workflows, by company group (and API
+  // key).
+  "agent-access": { label: "Agent access", icon: AiSecurity01Icon },
   "api-keys": { label: "API keys", icon: Key01Icon },
 } as const satisfies Record<string, { label: string; icon: IconProp }>
 
@@ -74,7 +83,7 @@ export const WORKSPACE_SECTIONS: { title: string; views: WorkspaceView[] }[] = [
     title: "Integrations",
     views: ["mcp-servers", "credentials", "skills", "knowledge"],
   },
-  { title: "Settings", views: ["config", "api-keys"] },
+  { title: "Settings", views: ["config", "agent-access", "api-keys"] },
 ]
 
 /** The page the workspace opens on, which its URL leaves out. */
@@ -91,10 +100,24 @@ export const isWorkspaceView = (value: unknown): value is WorkspaceView =>
 export type WorkspaceSearch = {
   /** The page; the overview when absent. */
   view?: WorkspaceView
-  /** The overview's period; 7 days when absent. */
+  /** The overview's period; 7 days when absent and no days are picked. */
   period?: OverviewPeriod
-  /** Workflows' tab: Runs; Overview when absent. */
-  agentsTab?: "runs"
+  /** The overview's days picked instead, and its focus (OverviewView). */
+  from?: string
+  to?: string
+  only?: OverviewView["only"]
+  focus?: string
+  /** Workflows' tab: Runs or Refused starts; Overview when absent. */
+  agentsTab?: "runs" | "refused"
+  /** On Runs and Refused starts, what they're narrowed to (RunFilters). */
+  workflow?: string
+  trigger?: AdkRunTriggerType
+  person?: string
+  via?: string
+  apiKey?: string
+  root?: string
+  startedFrom?: string
+  startedTo?: string
   /** On workflows, a run to open (its ID). */
   agentRun?: string
   /** The run's page's tab; Overview when absent. */

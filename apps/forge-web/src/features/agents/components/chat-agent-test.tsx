@@ -11,38 +11,77 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { consoleHeaders } from "@/features/agents/lib/runtime-headers"
 import { useMe } from "@/lib/users"
-import { RUNTIME_URL, type ChatAgentRecord } from "@/features/agents/lib/api"
-import { agentNamesOf, workflowNamesOf } from "@/features/agents/lib/document"
+import {
+  RUNTIME_URL,
+  useOrganizationChatAgents,
+  type ChatAgentRecord,
+} from "@/features/agents/lib/api"
+import {
+  agentNamesOf,
+  usesOf,
+  workflowNamesOf,
+} from "@/features/agents/lib/document"
+import type { ModelWindow } from "@/components/forge/assistant/context-window"
 import { declaredState } from "@/features/agents/lib/input"
+import { useTestPanelSize } from "@/features/agents/lib/test-panel-size"
+import {
+  testGraphOf,
+  useTestProgress,
+  type TestGraph,
+} from "@/features/agents/lib/test-progress"
 import { WorkflowRunsContext } from "@/features/agents/lib/workflow-run-context"
 import { workflowRunToolkit } from "@/features/agents/lib/workflow-run-toolkit"
 import { workflowRunFollower } from "@/features/agents/lib/workflow-runs"
+import type { RunOverlay } from "@/features/builder/components/run-overlay"
 import { knowledgeDocumentHref } from "@/features/knowledge/lib/sources"
+import { useOrganizationMcpServers } from "@/features/mcp-servers/lib/api"
+import { findModel, useAgentStepModels } from "@/features/steps/lib/models"
 import type { DataType } from "@/features/steps/lib/types"
+
+import { TestPanelResizer } from "./test-panel-resizer"
 
 /**
  * Talking to the agent as a chat would: the runtime's run API, the version
  * the builder shows (`ca_x@draft`, `ca_x@3`, or `ca_x`), as the signed-in
  * person. The state the agent declares is filled in here and sent with
- * every message, as the chat's `stateDelta`.
+ * every message, as the chat's `stateDelta`. Each turn is drawn over the
+ * canvas as it goes (`onProgress`): the agent answering and the tools it
+ * calls, from the runtime's events.
  */
 export function ChatAgentTestPanel({
   record,
   appName,
   onClose,
+  onProgress,
 }: {
   record: ChatAgentRecord
   appName: string
   onClose: () => void
+  /** What the canvas draws of the chat: null for nothing. */
+  onProgress: (overlay: RunOverlay | null) => void
 }) {
   const me = useMe()
-  const userId = me.data?.subject ?? "tester"
+  // The runtime keeps a person's conversations under their own ID only.
+  const userId = me.data?.subject
   const { fields } = React.useMemo(() => {
     const entry = record.document.nodes.find((n) => n.kind === "agent")
     return declaredState(
       entry?.kind === "agent" ? entry.config.state_schema : {}
     )
   }, [record.document])
+  // The model its agent starts on (the runtime's default for one it doesn't
+  // offer): the context meter shows its window from the start.
+  const stepModels = useAgentStepModels()
+  const contextModel = React.useMemo((): ModelWindow | undefined => {
+    const entry = record.document.nodes.find((n) => n.kind === "agent")
+    const choice = entry?.kind === "agent" ? entry.config.model : undefined
+    const listed = stepModels.models
+    return (
+      (choice && findModel(listed, choice)) ??
+      listed.find((model) => model.id === stepModels.defaultModel) ??
+      listed[0]
+    )
+  }, [record.document, stepModels.models, stepModels.defaultModel])
   // Its agents' names, so a hand-off to one shows as asking it.
   const agents = React.useMemo(
     () => agentNamesOf(record.document),
@@ -53,25 +92,40 @@ export function ChatAgentTestPanel({
     () => workflowNamesOf(record.document),
     [record.document]
   )
+  const graph = useTestGraph(record)
   const [values, setValues] = React.useState<Record<string, string>>({})
   // What the next message sends, read as it's sent.
   const latest = React.useRef(values)
   React.useEffect(() => {
     latest.current = values
   })
+  // Full height beside the canvas until its corner is dragged.
+  const panel = React.useRef<HTMLElement>(null)
+  const [size, setSize] = useTestPanelSize("forge.chat-agents.testSize")
 
   return (
     <aside
+      ref={panel}
       aria-label={`Test ${record.document.name}`}
-      className="fixed top-16 right-4 bottom-4 z-30 flex w-[min(28rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-(--radius-card) border bg-background shadow-(--shadow-float)"
+      style={
+        size
+          ? {
+              top: "auto",
+              width: `${size.width}rem`,
+              height: `${size.height}rem`,
+            }
+          : undefined
+      }
+      className="group/test-panel fixed top-16 right-4 bottom-4 z-30 flex max-h-[calc(100vh-5rem)] w-[min(28rem,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-(--radius-card) border bg-background shadow-(--shadow-float)"
     >
+      <TestPanelResizer panel={panel} onSizeChange={setSize} />
       <header className="flex items-start gap-3 border-b px-4 pt-3 pb-2.5">
         <div className="flex min-w-0 flex-1 flex-col">
           <h2 className="truncate text-sm font-medium text-foreground">
             Test {record.document.name || "the agent"}
           </h2>
           <p className="truncate text-2xs text-muted-foreground">
-            As {userId}, through the runtime:{" "}
+            As {userId ?? "you"}, through the runtime:{" "}
             <code className="font-mono">appName {appName}</code>
           </p>
         </div>
@@ -105,7 +159,7 @@ export function ChatAgentTestPanel({
         </section>
       )}
       <div className="min-h-0 flex-1">
-        {RUNTIME_URL ? (
+        {RUNTIME_URL && userId ? (
           <TestChat
             key={`${appName}:${userId}`}
             appName={appName}
@@ -115,10 +169,17 @@ export function ChatAgentTestPanel({
             agents={agents}
             workflows={workflows}
             state={() => stateDelta(fields, latest.current)}
+            graph={graph}
+            onProgress={onProgress}
+            contextModel={contextModel}
           />
         ) : (
           <p className="p-4 text-xs text-muted-foreground">
-            Set VITE_API_URL to talk to agents through the runtime.
+            {RUNTIME_URL
+              ? me.error
+                ? "Couldn't tell who you are, which your conversations are kept under."
+                : "Finding who you are…"
+              : "Set VITE_API_URL to talk to agents through the runtime."}
           </p>
         )}
       </div>
@@ -134,6 +195,9 @@ function TestChat({
   agents,
   workflows,
   state,
+  graph,
+  onProgress,
+  contextModel,
 }: {
   appName: string
   userId: string
@@ -144,7 +208,14 @@ function TestChat({
   /** Its workflow tools by ADK name, as the canvas names them. */
   workflows: Record<string, string>
   state: () => Record<string, unknown>
+  /** Its canvas, as the runtime's events name its agents and tools. */
+  graph: TestGraph
+  onProgress: (overlay: RunOverlay | null) => void
+  /** The model its agent starts on, for the context meter. */
+  contextModel: ModelWindow | undefined
 }) {
+  // Each turn, followed over the canvas.
+  const progress = useTestProgress(graph, onProgress)
   // Its knowledge base tools' passages, cited in its answers; each opens in
   // its knowledge base's document viewer, in the agent's organization.
   const sources = React.useMemo(
@@ -156,6 +227,7 @@ function TestChat({
     [organizationId]
   )
   const { runtime, artifacts } = useAdkAssistant({
+    requireTurnOutcome: true,
     adk: { url: RUNTIME_URL!, appName, userId },
     // Who's testing: needed when the runtime isn't public, and their turns
     // are theirs when it is. The console header has the audit list them as
@@ -164,7 +236,10 @@ function TestChat({
     runState: state,
     // As a chat would show them: a few questions to ask next, after each reply.
     suggestFollowUps: true,
+    onEvent: progress.onEvent,
   })
+  const { follow } = progress
+  React.useEffect(() => follow(runtime), [follow, runtime])
   // Its workflow tools' calls, each drawn as the run it starts; the run's
   // page opens from the card.
   const follower = React.useMemo(
@@ -193,6 +268,7 @@ function TestChat({
         sources={sources}
         title={name || "Agent"}
         agents={agents}
+        contextModel={contextModel}
         welcome={{
           title: `Talk to ${name || "the agent"}`,
           description:
@@ -202,6 +278,29 @@ function TestChat({
         <AssistantThread />
       </AssistantProvider>
     </WorkflowRunsContext.Provider>
+  )
+}
+
+/**
+ * Its canvas as a test chat's events name it: its saved agents' own agents
+ * and its MCP servers' tools come from the organization's, once they load.
+ */
+function useTestGraph(record: ChatAgentRecord): TestGraph {
+  const saves = usesOf(record.document).length > 0
+  const others = useOrganizationChatAgents(record.organization_id, {
+    enabled: saves,
+  })
+  const servers = useOrganizationMcpServers(record.organization_id)
+  return React.useMemo(
+    () =>
+      testGraphOf(record.document, {
+        savedAgent: (id) => others.records.find((r) => r.id === id)?.document,
+        mcpTools: (id) => {
+          const server = servers.data?.find((s) => s.id === id)
+          return server?.checked_at ? server.tools.map((t) => t.name) : null
+        },
+      }),
+    [record.document, others.records, servers.data]
   )
 }
 

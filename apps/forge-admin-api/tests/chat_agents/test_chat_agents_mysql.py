@@ -13,10 +13,12 @@ import json
 import zipfile
 from collections.abc import AsyncGenerator, Iterator
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 from forge_agent_runtime import AgentExecutor
@@ -32,6 +34,7 @@ from pymongo import MongoClient
 
 from forge_admin.api.app import PUBLIC_ROUTERS, ROUTERS
 from forge_admin.api.server import ApiServer
+from forge_admin.auth.tokens import mint_subject_token
 from forge_admin.chat_agents.source import MongoAgentSource
 from forge_admin.config import Settings
 
@@ -87,6 +90,11 @@ class Org:
     viewer: TestClient
     outsider: TestClient
     llm: ScriptedLlm
+    #: A site administrator, who sets up the organization's agent access.
+    admin: TestClient
+    member_id: str
+    viewer_id: str
+    settings: Settings
 
     @property
     def agents(self) -> str:
@@ -143,6 +151,10 @@ def org(site_admin: str, mysql_settings: Settings, client_as: Any) -> Iterator[O
         client_for(viewer),
         client_for(f"outsider-{tag}"),
         llm,
+        admin,
+        member,
+        viewer,
+        mysql_settings,
     )
     admin.delete(f"{API}/organizations/{organization_id}")
     for client in clients:
@@ -150,6 +162,21 @@ def org(site_admin: str, mysql_settings: Settings, client_as: Any) -> Iterator[O
     mongo: MongoClient = MongoClient(mysql_settings.mongo_uri.get_secret_value())
     mongo.drop_database(database)
     mongo.close()
+
+
+def token_for(settings: Settings, user: str, groups: list[str] | None = None) -> str:
+    """A sign-in token for someone, as the runtime takes it, naming their company groups."""
+    if settings.jwt_secret is None:
+        pytest.skip("needs FORGE_ADMIN_JWT_SECRET (make env)")
+    token = mint_subject_token(settings, user, lifetime=timedelta(minutes=5))
+    if not groups:
+        return token
+    claims = jwt.decode(token, options={"verify_signature": False})
+    return jwt.encode(
+        {**claims, settings.jwt_groups_claim: groups},
+        settings.jwt_secret.get_secret_value(),
+        algorithm="HS256",
+    )
 
 
 def create(org: Org, doc: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -160,16 +187,19 @@ def create(org: Org, doc: dict[str, Any] | None = None) -> dict[str, Any]:
 
 def events(response: Any) -> list[dict[str, Any]]:
     assert response.status_code == 200, response.text
-    return [
+    got = [
         json.loads(m.removeprefix("data: "))
         for m in response.text.split("\n\n")
         if m.startswith("data: ")
     ]
+    return [
+        event for event in got if "forge:turn" not in event.get("customMetadata", {})
+    ]
 
 
-def talk(org: Org, app: str, text: str, user: str = "ada") -> str:
-    """One turn with an agent, as any caller of the public runtime would: the reply."""
-    client = org.outsider  # The runtime is public: anyone can talk to an agent.
+def talk(org: Org, app: str, text: str) -> str:
+    """One turn with an agent, as one of its organization's members: the reply."""
+    client, user = org.member, org.member_id
     session = client.post(f"{RUNTIME}/apps/{app}/users/{user}/sessions", json={})
     assert session.status_code == 201, session.text
     got = events(
@@ -187,8 +217,8 @@ def talk(org: Org, app: str, text: str, user: str = "ada") -> str:
 
 
 def a2a(org: Org, app: str, method: str, params: dict[str, Any]) -> dict[str, Any]:
-    """One A2A JSON-RPC call to an agent, as any caller of the public runtime would."""
-    response = org.outsider.post(
+    """One A2A JSON-RPC call to an agent, as one of its organization's members."""
+    response = org.member.post(
         f"{RUNTIME}/a2a/{app}",
         json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
         headers={"A2A-Version": "1.0"} if method[0].isupper() else {},
@@ -201,7 +231,7 @@ def test_a_published_agent_answers_over_a2a_too(org: Org) -> None:
     agent = create(org)["id"]
     org.member.post(f"{org.agents}/{agent}/publish", json={"revision": 1})
 
-    card = org.outsider.get(f"{RUNTIME}/a2a/{agent}/.well-known/agent-card.json")
+    card = org.member.get(f"{RUNTIME}/a2a/{agent}/.well-known/agent-card.json")
     assert card.status_code == 200, card.text
     assert card.json()["name"] == "Support assistant"
     assert card.json()["url"].endswith(f"{RUNTIME}/a2a/{agent}")
@@ -246,8 +276,9 @@ def test_a_published_agent_answers_over_a2a_too(org: Org) -> None:
         },
     )
     assert old["result"]["status"]["state"] == "completed"
-    session = org.outsider.get(
-        f"{RUNTIME}/apps/{agent}/users/A2A_USER_{context}/sessions/{context}"
+    # Their A2A conversation is theirs, as their chats are.
+    session = org.member.get(
+        f"{RUNTIME}/apps/{agent}/users/{org.member_id}/sessions/{context}"
     ).json()
     said = [
         part["text"]
@@ -257,8 +288,11 @@ def test_a_published_agent_answers_over_a2a_too(org: Org) -> None:
     ]
     assert said == ["Hi", "Hello over A2A.", "Again", "Still here."]
 
-    missing = org.outsider.get(f"{RUNTIME}/a2a/ca_nobody/.well-known/agent-card.json")
+    missing = org.member.get(f"{RUNTIME}/a2a/ca_nobody/.well-known/agent-card.json")
     assert missing.status_code == 404
+    # Someone outside the organization is told the same of its agent.
+    outside = org.outsider.get(f"{RUNTIME}/a2a/{agent}/.well-known/agent-card.json")
+    assert outside.status_code == 404
 
 
 def test_a_published_agent_is_shared_as_a_chat_page(org: Org) -> None:
@@ -289,9 +323,10 @@ def test_a_published_agent_is_shared_as_a_chat_page(org: Org) -> None:
     assert shown.status_code == 200, shown.text
     assert (shown.json()["app_name"], shown.json()["version"]) == (agent, 1)
     assert shown.json()["name"] == "Support assistant"
-    visitor = "visitor_" + uuid4().hex
+    visited = org.outsider.post(f"{page}/visitors").json()
+    visitor, signed = visited["visitor_id"], {"X-Forge-Visitor": visited["token"]}
     session = org.outsider.post(
-        f"{page}/apps/{agent}/users/{visitor}/sessions", json={}
+        f"{page}/apps/{agent}/users/{visitor}/sessions", json={}, headers=signed
     )
     assert session.status_code == 201, session.text
     org.llm.turns = [[types.Part(text="Hello from the page.")]]
@@ -304,6 +339,7 @@ def test_a_published_agent_is_shared_as_a_chat_page(org: Org) -> None:
                 "sessionId": session.json()["id"],
                 "newMessage": {"role": "user", "parts": [{"text": "Hi"}]},
             },
+            headers=signed,
         )
     )
     assert got[-1]["content"]["parts"][0]["text"] == "Hello from the page."
@@ -368,6 +404,11 @@ def test_a_published_agent_is_shared_as_a_chat_page(org: Org) -> None:
     ]
     assert (quiet["follow_ups"], quiet["hide_history"]) == (False, True)
     assert org.outsider.get(page).json()["follow_ups"] is False
+    # The desktop app's button: off until turned on.
+    assert shown["desktop_link"] is False
+    offered = org.member.put(setting, json={"enabled": True, "desktop_link": True})
+    assert offered.json()["chat_page"]["desktop_link"] is True
+    assert org.outsider.get(page).json()["desktop_link"] is True
     # Its words and look: each on its own, the rest kept.
     look = {
         "title": " Acme help ",
@@ -556,6 +597,59 @@ def test_viewers_read_outsiders_dont_and_discarding_returns_to_published(
     assert org.outsider.get(f"{RUNTIME}/apps/{agent}").status_code == 404
 
 
+def test_who_may_use_an_agent_is_some_of_its_organizations_agent_permissions(
+    org: Org,
+) -> None:
+    made = create(org)
+    agent = made["id"]
+    org.member.post(f"{org.agents}/{agent}/publish", json={"revision": 1})
+    access = f"{API}/organizations/{org.id}/agent-access"
+    helper = org.admin.post(f"{access}/permissions", json={"key": "helper:use"})
+    assert helper.status_code == 201, helper.text
+    helper_id = helper.json()["id"]
+
+    limited = org.member.put(
+        f"{org.agents}/{agent}/access", json={"permission_ids": [helper_id]}
+    )
+    assert limited.status_code == 200, limited.text
+    assert limited.json()["access"]["permission_ids"] == [helper_id]
+    # It isn't a change to the agent.
+    assert limited.json()["revision"] == 2
+    assert (
+        org.viewer.put(
+            f"{org.agents}/{agent}/access", json={"permission_ids": []}
+        ).status_code
+        == 403
+    )
+
+    # The runtime knows callers by what they send.
+    def use(user: str | None, groups: list[str] | None = None) -> int:
+        headers = (
+            {"Authorization": f"Bearer {token_for(org.settings, user, groups)}"}
+            if user
+            else {}
+        )
+        return org.outsider.get(f"{RUNTIME}/apps/{agent}", headers=headers).status_code
+
+    # Its members build the organization's agents, so may use them all.
+    assert use(org.member_id) == 200
+    assert use(org.viewer_id) == 403
+    # Someone outside the organization: there's no such agent.
+    assert use(None) == 404
+    # Whoever's sign-in names a group linked to the permission may.
+    linked = org.admin.patch(
+        f"{access}/permissions/{helper_id}", json={"groups": ["Helpers"]}
+    )
+    assert linked.status_code == 200, linked.text
+    assert use(org.viewer_id, ["Helpers"]) == 200
+    assert use(org.viewer_id, ["Others"]) == 403
+
+    # A copy is limited to the same people.
+    copied = org.member.post(f"{org.agents}/{agent}/duplicate", json={})
+    assert copied.status_code == 201, copied.text
+    assert copied.json()["access"]["permission_ids"] == [helper_id]
+
+
 def test_an_export_bundles_the_saved_agents_it_uses(org: Org) -> None:
     helper = create(org, example("I'm the helper."))["id"]
     org.member.post(f"{org.agents}/{helper}/publish", json={"revision": 1})
@@ -656,3 +750,134 @@ def test_a_version_and_the_draft_become_standalone_projects(org: Org) -> None:
         json={"version": 1, "options": {"api_key": True}},
     )
     assert refused.status_code == 422
+
+
+#: An intake's fields, as the builder writes them.
+SIGN_UP = [
+    {
+        "id": "f_name",
+        "key": "full_name",
+        "label": "Full name",
+        "type": "text",
+        "options": [],
+        "description": "",
+        "why": "",
+        "required": True,
+        "when": "",
+        "infer": False,
+        "confirm": False,
+        "prefill": True,
+        "section": "",
+    },
+    {
+        "id": "f_email",
+        "key": "email",
+        "label": "Email",
+        "type": "email",
+        "options": [],
+        "description": "",
+        "why": "We send the confirmation there.",
+        "required": True,
+        "when": "",
+        "infer": False,
+        "confirm": False,
+        "prefill": False,
+        "section": "",
+    },
+]
+
+
+def part(name: str, **args: Any) -> types.Part:
+    return types.Part(function_call=types.FunctionCall(name=name, args=args))
+
+
+def test_an_intake_agent_is_previewed_and_hands_back_its_record(org: Org) -> None:
+    preview = org.viewer.post(
+        f"{org.agents}/intake-preview",
+        json={
+            "name": "Sign up",
+            "config": {"fields": SIGN_UP},
+            "answers": {"full_name": "Ada"},
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    assert (preview.json()["ask_next"], preview.json()["done"]) == (["email"], False)
+    assert "Why we ask: We send the confirmation there." in preview.json()["brief"]
+    refused = org.outsider.post(
+        f"{org.agents}/intake-preview", json={"config": {"fields": SIGN_UP}}
+    )
+    assert refused.status_code in (403, 404)
+
+    doc = example("Help.")
+    doc["nodes"].append(
+        {
+            "id": "intake_a",
+            "kind": "intake_agent",
+            "name": "Sign up",
+            "outputs": [],
+            "config": {
+                "description": "Signs a person up.",
+                "fields": SIGN_UP,
+                "confirm_summary": False,
+            },
+        }
+    )
+    doc["edges"].append(
+        {
+            "id": "e_intake",
+            "source": "agent",
+            "source_output": "agents",
+            "target": "intake_a",
+        }
+    )
+    agent = create(org, doc)["id"]
+    published = org.member.post(f"{org.agents}/{agent}/publish", json={"revision": 1})
+    assert published.status_code == 200, published.text
+
+    org.llm.turns = [
+        [part("sign_up", full_name="Ada")],
+        [types.Part(text="What's your email?")],
+        [part("record_answers", answers={"email": "ada@x.co"})],
+        [part("finish_task", status="completed")],
+        [types.Part(text="You're signed up, Ada.")],
+    ]
+    client = org.outsider
+    session = client.post(f"{RUNTIME}/apps/{agent}/users/ada/sessions", json={}).json()[
+        "id"
+    ]
+
+    def say(text: str) -> list[dict[str, Any]]:
+        return events(
+            client.post(
+                f"{RUNTIME}/run_sse",
+                json={
+                    "appName": agent,
+                    "userId": "ada",
+                    "sessionId": session,
+                    "newMessage": {"role": "user", "parts": [{"text": text}]},
+                },
+            )
+        )
+
+    asked = say("Sign me up")
+    assert (asked[-1]["author"], asked[-1]["content"]["parts"][0]["text"]) == (
+        "sign_up",
+        "What's your email?",
+    )
+    done = say("ada@x.co")
+    assert done[-1]["content"]["parts"][0]["text"] == "You're signed up, Ada."
+    handed_back = [
+        p["functionResponse"]["response"]
+        for e in done
+        for p in (e.get("content") or {}).get("parts") or []
+        if p.get("functionResponse", {}).get("name") == "sign_up"
+    ]
+    assert handed_back == [
+        {
+            "status": "completed",
+            "note": "",
+            "record": {"full_name": "Ada", "email": "ada@x.co"},
+            "missing": [],
+            "workflows": [],
+        }
+    ]

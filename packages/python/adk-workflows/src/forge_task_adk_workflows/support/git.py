@@ -137,6 +137,9 @@ class Git:
     settings: tuple[tuple[str, str], ...] = ()
     #: Who commits: a name and an email.
     author: tuple[str, str] = AUTHOR
+    #: Its step's key: what its commands are found by should they outlive
+    #: their attempt (``support.commands.stop_leftovers``); empty for none.
+    key: str = ""
 
     def but(self, **changes: Any) -> Git:
         return replace(self, **changes)
@@ -166,7 +169,7 @@ class Git:
     async def run(self, *args: str, cwd: Path) -> Finished:
         """:return: How ``git <args>`` ended, whatever its exit code."""
         return await run_program(
-            ("git", *args), cwd=cwd, env=self.env(), seconds=self.seconds, max_bytes=self.max_bytes
+            ("git", *args), cwd=cwd, env=self.env(), seconds=self.seconds, max_bytes=self.max_bytes, key=self.key
         )
 
     async def __call__(self, *args: str, cwd: Path) -> str:

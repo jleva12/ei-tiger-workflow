@@ -19,6 +19,11 @@ Schema is checked on save: a draft that can't run yet is saved all the same.
 Publishing checks that it builds. The workflows are versioned the same way
 (``forge_admin.adk_workflows.versioned_store``).
 
+Who may use an agent can be limited to some of its organization's agent
+permissions (``access`` on the record, holding for every version:
+``VersionedDocumentStore.set_access``; see ``forge_admin.chat_agents.access``);
+like the chat page, setting it isn't a change to the agent.
+
 A published agent can also be shared as a **chat page**: a full-page chat at
 a link of its own (``chat_page`` on the record, beside its versions; see
 ``forge_admin.chat_agents.pages``). Turning it on or off, or making a new
@@ -28,7 +33,7 @@ link, isn't a change to the agent: its revision and times stay as they are.
 import json
 import secrets
 import string
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -96,8 +101,9 @@ def checked_document(
     """
     The document to keep: the builder's, its settings filled in, with its ID,
     organization and times set here, checked against the format. Exports'
-    ``version`` and ``dependencies`` aren't kept: the store knows the one, and
-    the other is made when exporting.
+    ``version``, ``dependencies`` and ``ui_components`` aren't kept: the store
+    knows the first, the second is made when exporting, and the team UI
+    components a hosted agent picks are always its organization's.
 
     :raises ChatAgentError: It's too large, or isn't a chat agent.
     """
@@ -108,7 +114,7 @@ def checked_document(
     kept = {
         key: value
         for key, value in document.items()
-        if key not in ("version", "dependencies")
+        if key not in ("version", "dependencies", "ui_components")
     }
     stored = {
         **with_defaults(kept),
@@ -132,6 +138,18 @@ def checked_document(
             + (f"; and {more} more." if more else ".")
         )
     return stored
+
+
+def _picks(document: Mapping[str, Any], keys: Sequence[str]) -> set[str]:
+    """:return: Which of these components a document's Rich answers nodes pick."""
+    picked: set[str] = set()
+    for node in document.get("nodes") or []:
+        if not isinstance(node, Mapping) or node.get("kind") != "rich_answers":
+            continue
+        config = node.get("config")
+        components = config.get("components") if isinstance(config, Mapping) else None
+        picked.update(key for key in components or [] if key in keys)
+    return picked
 
 
 __all__ = [
@@ -243,6 +261,98 @@ class ChatAgentStore(VersionedDocumentStore):
                 {"$set": {"chat_page": page}},
                 return_document=ReturnDocument.AFTER,
             )
+        )
+
+    async def using_components(
+        self, organization_id: str, keys: Sequence[str]
+    ) -> list[dict[str, Any]]:
+        """
+        Which of the organization's agents pick any of these team UI
+        components in their Rich answers nodes, in their draft or their
+        latest published version (what runs): ``forge_admin.ui_components``.
+
+        :return: Each such agent, by name: ``{"id", "name", "draft": [keys],
+            "published": [keys]}``, the keys each of the two picks.
+        """
+        wanted = list(dict.fromkeys(keys))
+        if not wanted:
+            return []
+        picking = {
+            "$elemMatch": {"kind": "rich_answers", "config.components": {"$in": wanted}}
+        }
+        shown = {
+            "document.name": 1,
+            "document.nodes.kind": 1,
+            "document.nodes.config.components": 1,
+        }
+        uses: dict[str, dict[str, Any]] = {}
+
+        def use(agent_id: str, document: Mapping[str, Any]) -> dict[str, Any]:
+            return uses.setdefault(
+                agent_id,
+                {
+                    "id": agent_id,
+                    "name": document.get("name"),
+                    "draft": set(),
+                    "published": set(),
+                },
+            )
+
+        collection = await self._ready()
+        records = collection.find(
+            {
+                "organization_id": organization_id,
+                "deleted_at": None,
+                "document.nodes": picking,
+            },
+            {**shown, "has_draft": 1},
+        )
+        for found in await records.to_list():
+            record = versioned(found)
+            assert record is not None
+            # Its document is its draft, or its latest published version without one.
+            side = "draft" if record.get("has_draft") else "published"
+            use(record["_id"], record["document"])[side] |= _picks(
+                record["document"], wanted
+            )
+        versions = await self._versions_ready()
+        published = await versions.find(
+            {"organization_id": organization_id, "document.nodes": picking},
+            {**shown, "agent_id": 1, "version": 1},
+        ).to_list()
+        if published:
+            # Only what runs: each agent's latest version, when it has a draft beside it.
+            drafting = {
+                record["_id"]: record
+                for record in await collection.find(
+                    {
+                        "_id": {
+                            "$in": sorted({each["agent_id"] for each in published})
+                        },
+                        "organization_id": organization_id,
+                        "deleted_at": None,
+                        "has_draft": True,
+                    },
+                    {"published_version": 1, "document.name": 1},
+                ).to_list()
+            }
+            for each in published:
+                record = drafting.get(each["agent_id"])
+                if record is None or record.get("published_version") != each["version"]:
+                    continue
+                use(each["agent_id"], record["document"])["published"] |= _picks(
+                    each["document"], wanted
+                )
+        return sorted(
+            (
+                {
+                    **each,
+                    "draft": sorted(each["draft"]),
+                    "published": sorted(each["published"]),
+                }
+                for each in uses.values()
+            ),
+            key=lambda each: (str(each["name"] or "").lower(), each["id"]),
         )
 
     async def find_chat_page(self, token: str) -> dict[str, Any] | None:

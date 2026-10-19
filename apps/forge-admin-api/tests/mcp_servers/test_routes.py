@@ -17,6 +17,9 @@ import pytest
 from casbin.persist.adapter import load_policy_line
 from casbin.persist.adapters.asyncio import AsyncAdapter
 from fastapi.testclient import TestClient
+from forge_agent_runtime import AgentRef
+from forge_agent_runtime.http_guard import NetworkPolicy
+from forge_agent_runtime.mcp_guard import mcp_client_factory
 from forge_mcp_servers.client import Listing, McpConnectionError
 from forge_mcp_servers.secrets import SecretBox
 from forge_mcp_servers.service import McpServers
@@ -35,10 +38,11 @@ from forge_admin.api.app import ROUTERS
 from forge_admin.api.server import ApiServer
 from forge_admin.auth.authorization import get_enforcer, new_enforcer
 from forge_admin.auth.tokens import mint_subject_token
+from forge_admin.chat_agents.source import MongoAgentSource
 from forge_admin.config import Settings
 from forge_admin.db.base import Base
 from forge_admin.db.session import get_session
-from forge_admin.mcp_servers.toolset import McpServerGone, mcp_toolset
+from forge_admin.mcp_servers.toolset import McpServerGone, McpServerStamps, mcp_toolset
 from forge_admin.models import McpOAuthFlow, McpServer, Organization, User
 
 API = "/api/v1"
@@ -352,6 +356,61 @@ def test_a_url_that_isnt_http_is_refused(workspace: Workspace) -> None:
     assert refused.status_code == 422
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://169.254.169.254/latest/meta-data",
+        "http://100.100.100.200/latest/meta-data",
+        "http://127.0.0.1:3306/",
+        "http://[::ffff:10.0.0.5]/mcp",
+    ],
+)
+def test_a_server_on_this_apis_own_network_is_refused_unless_allowed(
+    workspace: Workspace, settings: Settings, url: str
+) -> None:
+    refused = workspace.call("POST", SERVERS, MEMBER, {"name": "Inside", "url": url})
+    assert refused.status_code == 422
+    assert "private network" in refused.json()["detail"]
+    made = workspace.add()
+    moved = workspace.call("PATCH", f"{SERVERS}/{made['id']}", body={"url": url})
+    assert moved.status_code == 422
+    assert workspace.row(made["id"]).url == MCP
+
+    # A deployment that allows private networks (local development) may.
+    app = workspace.client.app
+    app.state.settings = app.state.settings.model_copy(  # type: ignore[attr-defined]
+        update={"agent_tools_allow_private": True}
+    )
+    allowed = workspace.call("POST", SERVERS, MEMBER, {"name": "Inside", "url": url})
+    assert allowed.status_code == 201, allowed.json()
+
+
+def test_checking_a_server_connects_only_where_its_agents_may() -> None:
+    # A server kept before its URL was checked, or a name that rebinds: the
+    # check's own connection refuses it, before any socket.
+    servers = McpServers(
+        SecretBox("k" * 40), client_factory=mcp_client_factory(NetworkPolicy())
+    )
+    row = McpServer(
+        id="s1",
+        organization_id=ORG,
+        name="Inside",
+        url="http://169.254.169.254/mcp",
+        transport="streamable_http",
+        headers=[],
+        timeout_seconds=5.0,
+        auth_kind="none",
+        auth_settings={},
+        auth_secrets=None,
+        auth_grant=None,
+        tools=[],
+        status="unchecked",
+    )
+    asyncio.run(servers.check(row))
+    assert row.status == "error"
+    assert "private network" in str(row.last_error)
+
+
 # ------------------------------------------------------------- changing
 
 
@@ -559,6 +618,72 @@ def test_without_a_secrets_key_mcp_servers_arent_set_up(workspace: Workspace) ->
 
 
 # ---------------------------------------------------------------- agents
+
+
+def test_an_agents_cache_key_tracks_mcp_connection_settings(
+    workspace: Workspace,
+) -> None:
+    made = workspace.add()
+    raw = {
+        "format": "forge.chat_agent/v1",
+        "id": "ca_help",
+        "name": "Help",
+        "organization_id": ORG,
+        "nodes": [
+            {"id": "agent", "kind": "agent", "name": "Help", "config": {}},
+            {
+                "id": "server",
+                "kind": "mcp",
+                "name": "Server",
+                "config": {"server": made["id"]},
+            },
+        ],
+        "edges": [
+            {
+                "id": "tools",
+                "source": "agent",
+                "source_output": "tools",
+                "target": "server",
+            }
+        ],
+    }
+
+    class Store:
+        async def find(self, agent_id: str) -> dict[str, Any]:
+            return {"organization_id": ORG, "published_version": 1}
+
+        async def find_version(self, agent_id: str, version: int) -> dict[str, Any]:
+            return {"document": raw}
+
+    source = MongoAgentSource(Store(), mcp_stamps=McpServerStamps(workspace.sessions))  # type: ignore[arg-type]
+
+    async def key() -> str:
+        return (await source.get(AgentRef("ca_help"))).cache_key
+
+    before = asyncio.run(key())
+    assert "#mcp:" in before
+    changed = workspace.call(
+        "PATCH",
+        f"{SERVERS}/{made['id']}",
+        body={
+            "url": "https://replacement.example/mcp",
+            "timeout_seconds": 45,
+            "auth": {"kind": "api_key", "secrets": {"key": "replacement"}},
+        },
+    )
+    assert changed.status_code == 200, changed.json()
+    assert asyncio.run(key()) != before
+    after = asyncio.run(key())
+    # Fresh credentials for the same endpoint are read dynamically.
+    changed = workspace.call(
+        "PATCH",
+        f"{SERVERS}/{made['id']}",
+        body={"auth": {"kind": "api_key", "secrets": {"key": "rotated"}}},
+    )
+    assert changed.status_code == 200, changed.json()
+    assert asyncio.run(key()) == after
+    assert workspace.call("DELETE", f"{SERVERS}/{made['id']}").status_code == 204
+    assert asyncio.run(key()) != after
 
 
 def test_an_agent_gets_a_server_as_a_toolset_with_fresh_headers(

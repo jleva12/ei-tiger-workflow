@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from forge_mcp_servers import (
+    McpServerChanged,
     McpServerGone,
     McpServers,
     SecretBox,
@@ -125,3 +126,54 @@ async def test_a_toolset_is_the_organizations_server_with_its_headers_each_time(
         await mcp_toolset(
             servers, store, organization_id="org_2", config={"server": "srv_1"}
         )
+
+
+@pytest.mark.parametrize(
+    "changed", [{"url": "https://replacement.example/mcp"}, {"timeout_seconds": 40}]
+)
+async def test_changed_connection_settings_require_a_new_toolset(engine, changed):
+    box = SecretBox(KEY)
+    servers = McpServers(box, methods=AuthMethods([RotatingAuth()]))
+    store = SqlServerStore(engine)
+    await add(engine, box)
+    old = await mcp_toolset(
+        servers, store, organization_id="org_1", config={"server": "srv_1"}
+    )
+    async with engine.begin() as conn:
+        await conn.execute(
+            sa.update(SERVERS).values(
+                **changed, auth_secrets=box.seal({"token": "replacement"})
+            )
+        )
+    assert old._header_provider is not None
+    with pytest.raises(McpServerChanged, match="rebuild its toolset"):
+        await old._header_provider(None)  # type: ignore[arg-type]
+    # Refusing the old toolset must not refresh/spend the replacement grant.
+    async with engine.connect() as conn:
+        assert (
+            await conn.execute(sa.select(SERVERS.c.auth_grant))
+        ).scalar_one() is None
+    rebuilt = await mcp_toolset(
+        servers, store, organization_id="org_1", config={"server": "srv_1"}
+    )
+    assert rebuilt._header_provider is not None
+    assert (await rebuilt._header_provider(None))[
+        "Authorization"
+    ] == "Bearer replacement-1"  # type: ignore[arg-type]
+
+
+async def test_a_toolset_checks_organization_ownership_before_reading_credentials(
+    engine,
+):
+    box = SecretBox(KEY)
+    servers = McpServers(box, methods=AuthMethods([RotatingAuth()]))
+    store = SqlServerStore(engine)
+    await add(engine, box)
+    toolset = await mcp_toolset(
+        servers, store, organization_id="org_1", config={"server": "srv_1"}
+    )
+    async with engine.begin() as conn:
+        await conn.execute(sa.update(SERVERS).values(organization_id="org_2"))
+    assert toolset._header_provider is not None
+    with pytest.raises(McpServerGone):
+        await toolset._header_provider(None)  # type: ignore[arg-type]

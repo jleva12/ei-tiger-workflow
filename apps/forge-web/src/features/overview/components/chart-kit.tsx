@@ -1,6 +1,5 @@
-import { cn } from "cn"
-
 import type { ChartConfig } from "@/components/ui/chart"
+import { SeriesMark } from "@/features/overview/components/series-mark"
 
 /*
  * What the overview's charts share: their axes, the fixed colour slots of
@@ -82,11 +81,7 @@ export const tooltipRow =
   (config: ChartConfig, format: (value: number) => string) =>
   (value: unknown, name: unknown, item: { color?: string }) => (
     <>
-      <span
-        aria-hidden="true"
-        className="size-2.5 shrink-0 rounded-[2px]"
-        style={{ background: item.color }}
-      />
+      <SeriesMark color={item.color} size="tooltip" />
       <span className="flex flex-1 items-center justify-between gap-4 leading-none">
         <span className="text-muted-foreground">
           {config[String(name)]?.label ?? String(name)}
@@ -98,10 +93,7 @@ export const tooltipRow =
     </>
   )
 
-/** A legend's square mark for a bar or area series. */
+/** A legend's mark for a series: a square, or a line key when it's drawn as a line. */
 export const swatch = (className: string) => (
-  <span
-    aria-hidden="true"
-    className={cn("size-2 shrink-0 rounded-[2px]", className)}
-  />
+  <SeriesMark className={className} />
 )

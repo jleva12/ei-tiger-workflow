@@ -8,11 +8,13 @@ RRF formula Atlas uses. Fine for thousands of chunks; not for production.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Collection, Sequence
 from typing import Any
 
 from forge_embeddings.fusion import rrf_fuse
 from forge_embeddings.lexical import analyze, cosine, fielded_bm25
+from forge_task_documents.errors import StaleRunError
 from forge_task_documents.models import (
     Chunk,
     DocumentRecord,
@@ -30,6 +32,7 @@ IDENTIFIER_BOOST = 5.0
 
 # identity of the file a run is working on (set by begin_run / complete_run)
 IDENTITY_FIELDS = ("filename", "media_type", "source_uri", "sha256", "size_bytes", "metadata")
+log = logging.getLogger(__name__)
 
 
 class InMemoryDocumentStore:
@@ -46,20 +49,27 @@ class InMemoryDocumentStore:
     def _merge(self, record: DocumentRecord, **update: Any) -> DocumentRecord:
         existing = self._docs.get((record.tenant_id, record.doc_id))
         if existing is None:
-            base = record.model_copy(update={"chunk_count": 0, "run_seq": 0})
+            base = record.model_copy(update={"chunk_count": 0, "run_seq": 0, "published_run_seq": 0})
         elif existing.status is IngestStatus.DELETED:  # re-created: keep only the fence
-            base = record.model_copy(update={"chunk_count": 0, "run_seq": existing.run_seq})
+            base = record.model_copy(update={"chunk_count": 0, "run_seq": existing.run_seq, "published_run_seq": 0})
         else:
             base = existing.model_copy(update={f: getattr(record, f) for f in IDENTITY_FIELDS})
         return base.model_copy(update={"error": None, "updated_at": utcnow(), **update})
 
     async def register(self, record: DocumentRecord) -> None:
         async with self._lock:
-            self._docs[(record.tenant_id, record.doc_id)] = self._merge(record, status=IngestStatus.PENDING)
+            old = self._docs.get((record.tenant_id, record.doc_id))
+            self._docs[(record.tenant_id, record.doc_id)] = self._merge(
+                record, status=IngestStatus.PENDING, run_seq=old.run_seq + 1 if old else 0
+            )
 
-    async def begin_run(self, record: DocumentRecord) -> int:
+    async def begin_run(self, record: DocumentRecord, *, expected_run_seq: int | None = None) -> int:
         async with self._lock:
             existing = self._docs.get((record.tenant_id, record.doc_id))
+            if existing is not None and existing.status is IngestStatus.DELETED:
+                raise StaleRunError("document was deleted; register it again before ingestion")
+            if expected_run_seq is not None and expected_run_seq != (existing.run_seq if existing else 0):
+                raise StaleRunError("document changed before ingestion began")
             seq = (existing.run_seq if existing else 0) + 1
             self._docs[(record.tenant_id, record.doc_id)] = self._merge(
                 record, status=IngestStatus.PROCESSING, run_seq=seq
@@ -77,17 +87,28 @@ class InMemoryDocumentStore:
             rec = self._docs[(tenant_id, doc_id)]
             now = utcnow()
             self._docs[(tenant_id, doc_id)] = rec.model_copy(
-                update={**fields, "status": IngestStatus.READY, "error": None, "updated_at": now, "ingested_at": now}
+                update={
+                    **fields,
+                    "published_run_seq": run_seq,
+                    "status": IngestStatus.READY,
+                    "error": None,
+                    "updated_at": now,
+                    "ingested_at": now,
+                }
             )
             return True
 
-    async def fail_run(self, tenant_id: str, doc_id: str, run_seq: int | None, *, error: str) -> bool:
+    async def fail_run(
+        self, tenant_id: str, doc_id: str, run_seq: int | None, *, error: str, expected_run_seq: int | None = None
+    ) -> bool:
         async with self._lock:
             rec = self._docs.get((tenant_id, doc_id))
             if rec is None:
                 return False
             if run_seq is None:
-                if rec.status is not IngestStatus.PENDING:
+                if rec.status is not IngestStatus.PENDING or (
+                    expected_run_seq is not None and rec.run_seq != expected_run_seq
+                ):
                     return False
             elif not await self.is_current_run(tenant_id, doc_id, run_seq):
                 return False
@@ -110,21 +131,31 @@ class InMemoryDocumentStore:
     async def delete(self, tenant_id: str, doc_id: str) -> bool:
         async with self._lock:
             rec = self._docs.get((tenant_id, doc_id))
-            if rec is None or rec.status is IngestStatus.DELETED:
+            if rec is not None and rec.status is IngestStatus.DELETED:
                 return False
+            existed = rec is not None
+            rec = rec or DocumentRecord(tenant_id=tenant_id, doc_id=doc_id, filename=doc_id, sha256="", size_bytes=0)
             self._docs[(tenant_id, doc_id)] = rec.model_copy(
-                update={"status": IngestStatus.DELETED, "run_seq": rec.run_seq + 1, "updated_at": utcnow()}
+                update={
+                    "status": IngestStatus.DELETED,
+                    "run_seq": rec.run_seq + 1,
+                    "published_run_seq": 0,
+                    "chunk_count": 0,
+                    "updated_at": utcnow(),
+                }
             )
-            return True
+            return existed
 
 
 class InMemoryChunkStore:
-    def __init__(self) -> None:
-        self.rows: dict[str, tuple[Chunk, int]] = {}  # chunk id -> (chunk, run_seq)
-        self.unpublished: set[str] = set()  # chunk ids search doesn't see yet
+    def __init__(self, documents: InMemoryDocumentStore) -> None:
+        self.documents = documents
+        self.rows: dict[tuple[str, int], tuple[Chunk, int]] = {}
 
-    def searchable(self, chunk_id: str) -> bool:
-        return chunk_id not in self.unpublished
+    def searchable(self, key: tuple[str, int]) -> bool:
+        chunk, seq = self.rows[key]
+        record = self.documents._docs.get((chunk.tenant_id, chunk.doc_id))
+        return record is not None and record.status is not IngestStatus.DELETED and record.published_run_seq == seq
 
     async def get_embeddings_by_hash(self, tenant_id: str, content_hashes: Collection[str]) -> dict[str, list[float]]:
         wanted = set(content_hashes)
@@ -137,64 +168,74 @@ class InMemoryChunkStore:
     async def replace_document_chunks(
         self, tenant_id: str, doc_id: str, run_seq: int, chunks: Sequence[Chunk]
     ) -> ReplaceStats:
-        written = 0
-        for c in chunks:
-            current = self.rows.get(c.id)
-            if current is not None and current[1] > run_seq:
-                continue  # a newer run owns this chunk
-            if current is None:
-                self.unpublished.add(c.id)  # new: hidden until the run is published
-            self.rows[c.id] = (c.model_copy(deep=True), run_seq)
-            written += 1
-        return ReplaceStats(upserted=written, deleted=0)
+        if any(c.tenant_id != tenant_id or c.doc_id != doc_id for c in chunks):
+            raise ValueError("chunks must belong to the requested tenant and document")
+        for chunk in chunks:
+            # Once written, even a retried write cannot mutate a generation.
+            self.rows.setdefault((chunk.id, run_seq), (chunk.model_copy(deep=True), run_seq))
+        return ReplaceStats(upserted=len(chunks), deleted=0)
 
     async def publish_run(self, tenant_id: str, doc_id: str, run_seq: int) -> int:
-        stale = []
-        for cid, (c, seq) in self.rows.items():
-            if c.tenant_id != tenant_id or c.doc_id != doc_id:
-                continue
-            if seq == run_seq:
-                self.unpublished.discard(cid)
-            elif seq < run_seq:
-                stale.append(cid)
-        self._remove(stale)
+        record = self.documents._docs.get((tenant_id, doc_id))
+        if record is None or record.status is IngestStatus.DELETED or record.published_run_seq is None:
+            return 0
+        stale = [
+            key
+            for key, (c, seq) in self.rows.items()
+            if c.tenant_id == tenant_id and c.doc_id == doc_id and seq < record.published_run_seq
+        ]
+        try:
+            self._remove(stale)
+        except Exception:
+            log.warning("document generation cleanup failed", exc_info=True)
+            return 0
         return len(stale)
 
     async def delete_run_chunks(self, tenant_id: str, doc_id: str, run_seq: int) -> int:
         ids = [
-            cid
-            for cid, (c, seq) in self.rows.items()
-            if c.tenant_id == tenant_id and c.doc_id == doc_id and seq == run_seq and cid in self.unpublished
+            key
+            for key, (c, seq) in self.rows.items()
+            if c.tenant_id == tenant_id and c.doc_id == doc_id and seq == run_seq and not self.searchable(key)
         ]
         self._remove(ids)
         return len(ids)
 
     async def delete_document_chunks(self, tenant_id: str, doc_id: str) -> int:
-        ids = [cid for cid, (c, _) in self.rows.items() if c.tenant_id == tenant_id and c.doc_id == doc_id]
+        record = self.documents._docs.get((tenant_id, doc_id))
+        if record is None or record.status is not IngestStatus.DELETED:
+            return 0
+        ids = [
+            key
+            for key, (c, seq) in self.rows.items()
+            if c.tenant_id == tenant_id and c.doc_id == doc_id and seq <= record.run_seq
+        ]
         self._remove(ids)
         return len(ids)
 
-    def _remove(self, ids: Collection[str]) -> None:
-        for cid in ids:
-            del self.rows[cid]
-            self.unpublished.discard(cid)
+    def _remove(self, ids: Collection[tuple[str, int]]) -> None:
+        for key in ids:
+            del self.rows[key]
 
     async def get_chunks(self, tenant_id: str, chunk_ids: Sequence[str]) -> list[Chunk]:
-        out = []
-        for cid in chunk_ids:
-            row = self.rows.get(cid)
-            if row and row[0].tenant_id == tenant_id:
-                out.append(row[0].model_copy(update={"embedding": None}))
-        return out
+        wanted = set(chunk_ids)
+        found = {
+            c.id: c.model_copy(update={"embedding": None})
+            for key, (c, _) in self.rows.items()
+            if c.tenant_id == tenant_id and c.id in wanted and self.searchable(key)
+        }
+        return [found[cid] for cid in chunk_ids if cid in found]
 
-    async def get_section(self, tenant_id: str, doc_id: str, section_key: str) -> list[Chunk]:
+    async def get_section(
+        self, tenant_id: str, doc_id: str, section_key: str, *, generation: int | None = None
+    ) -> list[Chunk]:
         rows = [
             c.model_copy(update={"embedding": None})
-            for c, _ in self.rows.values()
+            for key, (c, seq) in self.rows.items()
             if c.tenant_id == tenant_id
             and c.doc_id == doc_id
             and c.section_key == section_key
-            and self.searchable(c.id)
+            and self.searchable(key)
+            and (generation is None or seq == generation)
         ]
         return sorted(rows, key=lambda c: c.ordinal)
 
@@ -207,8 +248,8 @@ class InMemorySearchBackend:
     def _candidates(self, req: HybridSearchRequest) -> list[Chunk]:
         f = req.filters
         out = []
-        for c, _ in self._chunks.rows.values():
-            if c.tenant_id not in req.tenant_ids or not self._chunks.searchable(c.id):
+        for key, (c, _) in self._chunks.rows.items():
+            if c.tenant_id not in req.tenant_ids or not self._chunks.searchable(key):
                 continue
             if f.doc_ids and c.doc_id not in f.doc_ids:
                 continue
@@ -221,9 +262,14 @@ class InMemorySearchBackend:
             out.append(c)
         return out
 
-    @staticmethod
-    def _hit(chunk: Chunk, score: float, ranks: dict[str, int] | None = None) -> SearchHit:
-        return SearchHit(chunk=chunk.model_copy(update={"embedding": None}), score=score, ranks=ranks or {})
+    def _hit(self, chunk: Chunk, score: float, ranks: dict[str, int] | None = None) -> SearchHit:
+        record = self._chunks.documents._docs[(chunk.tenant_id, chunk.doc_id)]
+        return SearchHit(
+            chunk=chunk.model_copy(update={"embedding": None}),
+            score=score,
+            ranks=ranks or {},
+            generation=record.published_run_seq,
+        )
 
     def _bm25(self, docs: list[Chunk], req: HybridSearchRequest) -> list[tuple[Chunk, float]]:
         idents = {i.lower() for i in req.identifiers}
@@ -270,7 +316,7 @@ class InMemorySearchBackend:
 class InMemoryStorage:
     def __init__(self) -> None:
         self.documents = InMemoryDocumentStore()
-        self.chunks = InMemoryChunkStore()
+        self.chunks = InMemoryChunkStore(self.documents)
         self.search = InMemorySearchBackend(self.chunks)
 
     async def ensure_schema(self, *, embedding_dimensions: int) -> None:

@@ -216,3 +216,65 @@ def test_minting_for_an_organization_names_it_by_id_or_name(
         verify_identity(keyed, capsys.readouterr().out.strip()).organization_id is None
     )
     assert asked == ["Acme", "Globex", ""]
+
+
+# ------------------------------------------------------------ company groups
+
+FINANCE = "CN=Finance,OU=Groups"
+
+
+def test_minted_tokens_name_the_company_groups(signed: Settings) -> None:
+    named = signed.model_copy(update={"jwt_groups_claim": "memberOf"})
+    for token in (
+        mint_token(named, USER, lifetime=DAY, groups=["Auditors", FINANCE, "Auditors"]),
+        mint_subject_token(
+            named, USER.id, lifetime=DAY, groups=["Auditors", FINANCE, "Auditors"]
+        ),
+    ):
+        # In the claim the deployment reads, each once.
+        claims = jwt.decode(token, options={"verify_signature": False})
+        assert claims["memberOf"] == ["Auditors", FINANCE]
+        assert verify_identity(named, token).groups == ("Auditors", FINANCE)
+    # Without groups, no claim at all.
+    bare = mint_subject_token(named, USER.id, lifetime=DAY)
+    assert "memberOf" not in jwt.decode(bare, options={"verify_signature": False})
+    assert verify_identity(named, bare).groups == ()
+
+
+def test_a_minted_token_names_only_groups_a_directory_could_have(
+    signed: Settings,
+) -> None:
+    with pytest.raises(TokenError, match="company group"):
+        mint_subject_token(signed, USER.id, lifetime=DAY, groups=[" Leading"])
+    with pytest.raises(TokenError, match="at most"):
+        mint_token(signed, USER, lifetime=DAY, groups=[f"g{i}" for i in range(501)])
+
+
+def test_the_token_cli_names_the_local_users_groups_unless_told(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    keyed = settings.model_copy(
+        update={"jwt_secret": SecretStr(SECRET), "local_user_groups": [FINANCE]}
+    )
+    monkeypatch.setattr(token_cli, "get_settings", lambda: keyed)
+
+    async def find(
+        _settings: Settings, *, msid: str, email: str, organization: str
+    ) -> tuple[User, Organization | None]:
+        return USER, None
+
+    monkeypatch.setattr(token_cli, "_find", find)
+
+    def minted(*args: str) -> tuple[str, ...]:
+        token_cli.main(["--msid", "alovelace", *args])
+        return verify_identity(keyed, capsys.readouterr().out.strip()).groups
+
+    assert minted() == (FINANCE,)
+    assert minted("--group", "Auditors", "--group", "Ops") == ("Auditors", "Ops")
+    assert minted("--no-groups") == ()
+    with pytest.raises(SystemExit, match="not both"):
+        token_cli.main(["--msid", "alovelace", "--group", "x", "--no-groups"])
+    with pytest.raises(SystemExit, match="company group"):
+        token_cli.main(["--msid", "alovelace", "--group", " bad"])

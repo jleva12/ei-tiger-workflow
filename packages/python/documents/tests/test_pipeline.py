@@ -188,30 +188,28 @@ async def test_search_sees_whole_versions(pipeline, storage, search_service, mon
     # The next run completes and publishes it: the new version, none of the old.
     monkeypatch.setattr(storage.documents, "complete_run", complete)
     result = await pipeline.ingest(source("refunds.md", REFUNDS_V2))
-    assert result.deleted_stale == 1
+    assert result.deleted_stale == 2
     text = await found(search_service, "who approves refunds")
     assert "finance director" in text and "support lead" not in text
 
 
-async def test_a_run_that_stopped_before_publishing_is_published_next_time(
+async def test_cleanup_failure_after_atomic_publication_keeps_success_and_new_version(
     pipeline, storage, search_service, monkeypatch
 ):
-    publish = storage.chunks.publish_run
+    await pipeline.ingest(source("refunds.md", REFUNDS_V1))
 
     async def crash(*args, **kwargs):
-        raise RuntimeError("the worker stopped")
+        raise RuntimeError("cleanup unavailable")
 
     monkeypatch.setattr(storage.chunks, "publish_run", crash)
-    with pytest.raises(RuntimeError):
-        await pipeline.ingest(source("refunds.md", REFUNDS_V1))
-    assert (await storage.documents.get("t1", "refunds.md")).status is IngestStatus.READY
-    assert await found(search_service, "who approves refunds") == ""  # complete, but unpublished
-
-    # Its retry finds it unchanged, and publishes it.
-    monkeypatch.setattr(storage.chunks, "publish_run", publish)
-    again = await pipeline.ingest(source("refunds.md", REFUNDS_V1))
+    result = await pipeline.ingest(source("refunds.md", REFUNDS_V2))
+    assert result.status is IngestStatus.READY
+    record = await storage.documents.get("t1", "refunds.md")
+    assert record.published_run_seq == record.run_seq
+    text = await found(search_service, "who approves refunds")
+    assert "finance director" in text and "support lead" not in text
+    again = await pipeline.ingest(source("refunds.md", REFUNDS_V2))
     assert again.skipped
-    assert "support lead" in await found(search_service, "who approves refunds")
 
 
 async def test_a_new_parser_version_reads_it_again(pipeline, files):

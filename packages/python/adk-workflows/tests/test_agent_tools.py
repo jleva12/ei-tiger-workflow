@@ -12,11 +12,14 @@ import json
 import time
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from forge_agent_runtime import RuntimeServices, code_executor
+from forge_agent_runtime.access import Caller, caller_json
 from forge_common.adk.models import ProviderModels
 from google.adk.artifacts import InMemoryArtifactService
 from google.adk.models.llm_response import LlmResponse
@@ -37,7 +40,7 @@ from forge_task_adk_workflows.graph.agent_tools import (
 )
 from forge_task_adk_workflows.graph.errors import AgentBuildError
 from forge_task_adk_workflows.graph.graph import build_agent
-from forge_task_adk_workflows.runs import APP_NAME, CUT_OFF, CUT_OFF_KEY, NO_ANSWER, STATE_KEY
+from forge_task_adk_workflows.runs import APP_NAME, CUT_OFF, CUT_OFF_KEY, NO_ANSWER, STATE_KEY, RunPayload
 from forge_task_adk_workflows.steps import run_steps
 from forge_tasks.control import AwaitingDecision, Decision
 from forge_tasks.errors import TransientError
@@ -495,6 +498,35 @@ async def test_an_organizations_mcp_server_is_used_then_closed(sessions: Databas
     assert [toolset.closed for toolset in servers.made] == [True]
 
 
+class Down(Docs):
+    """An MCP server's toolset whose server won't connect."""
+
+    async def get_tools(self, readonly_context: Any = None) -> list[Any]:
+        raise ConnectionError("Failed to get tools from MCP server")
+
+
+class DownServers(Servers):
+    async def __call__(self, config: Any, *, organization_id: str | None) -> BaseToolset:
+        self.made.append(Down())
+        return self.made[-1]
+
+
+async def test_an_mcp_server_that_wont_connect_fails_its_step(sessions: DatabaseSessionService) -> None:
+    llm = ScriptedLlm(turns=[[text("I answered without the docs.")]])
+    servers = DownServers()
+    w = with_tools(sessions, llm, servers=servers)
+    docs = tool("tool_docs", "mcp", "Docs", server="srv_docs", tools="")
+    document = line(node("helper", "llm", llm_config(tools=[docs])), end("done", "steps.helper.output"))
+
+    result = await w.run(payload(document, {}))
+
+    # The step doesn't go on without a tool it was given, as a chat agent would.
+    assert result.status is JobStatus.FAILED
+    assert "tool 'Docs': ConnectionError: Failed to get tools from MCP server" in str(result.error)
+    assert llm.requests == []
+    assert [toolset.closed for toolset in servers.made] == [True]
+
+
 class NeverCloses(Docs):
     """An MCP server's toolset whose session never finishes closing."""
 
@@ -583,6 +615,100 @@ async def test_an_agent_from_the_agents_page_works_with_the_runs_files(sessions:
     assert {"load_artifacts", "save_file"} <= set(llm.requests[0].tools_dict)
 
 
+class KeptDocs(Docs):
+    """Docs, noting whether it was still open as each search ran."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.open_as_searched: list[bool] = []
+
+        def search_docs(q: str) -> dict[str, Any]:
+            """Searches the docs."""
+            self.open_as_searched.append(not self.closed)
+            return {"found": f"Docs about {q}"}
+
+        self.tool = FunctionTool(search_docs)
+
+
+class KeptServers(Servers):
+    async def __call__(self, config: Any, *, organization_id: str | None) -> BaseToolset:
+        self.made.append(KeptDocs())
+        return self.made[-1]
+
+
+async def test_an_agent_called_as_a_tool_keeps_its_toolsets_until_the_run_stops(
+    sessions: DatabaseSessionService,
+) -> None:
+    researcher = [call("researcher", request="Refunds?")], [call("search_docs", q="refunds")], [text("5 days.")]
+    llm = ScriptedLlm(turns=[*researcher, *researcher, [text("Refunds take 5 days.")]])
+    servers = KeptServers()
+    w = with_tools(sessions, llm, servers=servers)
+    agent = chat_agent()
+    agent["nodes"] += [
+        {"id": "res", "kind": "sub_agent", "name": "Researcher", "config": {"instruction": "Research."}},
+        {"id": "docs", "kind": "mcp", "name": "Docs", "config": {"server": "srv_docs", "tools": ""}},
+    ]
+    agent["edges"] += [
+        {"id": "e1", "source": "agent", "source_output": "tools", "target": "res"},
+        {"id": "e2", "source": "res", "source_output": "tools", "target": "docs"},
+    ]
+    config = llm_config(source="agent", agent="ca_support", version=None, message="Hi", inputs={"tier": "'pro'"})
+    document = line(node("support", "llm", config), end("done", "steps.support.output"))
+
+    result = await w.run(payload(document, {}, chat_agents={"ca_support": agent}))
+
+    assert result.status is JobStatus.OK, result.error
+    assert result.detail["result"] == "Refunds take 5 days."
+    # Each call's own runner left the researcher's MCP session open; the run closed it as it stopped.
+    [docs] = servers.made
+    assert docs.open_as_searched == [True, True]
+    assert docs.closed
+
+
+def with_docs(agent: dict[str, Any], *, called: bool) -> dict[str, Any]:
+    """An Agents-page agent searching the docs server: itself, or through a researcher it calls as a tool."""
+    docs = {"id": "docs", "kind": "mcp", "name": "Docs", "config": {"server": "srv_docs", "tools": ""}}
+    if not called:
+        agent["nodes"].append(docs)
+        agent["edges"].append({"id": "e1", "source": "agent", "source_output": "tools", "target": "docs"})
+        return agent
+    agent["nodes"] += [
+        {"id": "res", "kind": "sub_agent", "name": "Researcher", "config": {"instruction": "Research."}},
+        docs,
+    ]
+    agent["edges"] += [
+        {"id": "e1", "source": "agent", "source_output": "tools", "target": "res"},
+        {"id": "e2", "source": "res", "source_output": "tools", "target": "docs"},
+    ]
+    return agent
+
+
+@pytest.mark.parametrize("called", [False, True])
+async def test_an_agent_from_the_agents_page_whose_mcp_server_wont_connect_fails_its_step(
+    sessions: DatabaseSessionService, called: bool
+) -> None:
+    turns = [[call("researcher", request="Refunds?")]] if called else []
+    llm = ScriptedLlm(turns=[*turns, [text("I answered without the docs.")]])
+    servers = DownServers()
+    w = with_tools(sessions, llm, servers=servers)
+    config = llm_config(source="agent", agent="ca_support", version=None, message="Hi", inputs={"tier": "'pro'"})
+    document = line(node("support", "llm", config), end("done", "steps.support.output"))
+
+    run = payload(document, {}, chat_agents={"ca_support": with_docs(chat_agent(), called=called)})
+    result = await w.run(run)
+
+    # The step doesn't go on without a tool its agent was given, as a chat would.
+    assert result.status is JobStatus.FAILED
+    agent = "researcher" if called else "support"
+    assert str(result.error) == (
+        f"Support (support) failed: tools of {agent} can't be used: "
+        "ConnectionError: Failed to get tools from MCP server"
+    )
+    # Its own model was never asked; a researcher it called, never answered.
+    assert len(llm.requests) == (1 if called else 0)
+    assert [toolset.closed for toolset in servers.made] == [True]
+
+
 async def test_an_agent_from_the_agents_page_whose_model_answers_with_an_error_fails_its_step(
     sessions: DatabaseSessionService,
 ) -> None:
@@ -594,6 +720,63 @@ async def test_an_agent_from_the_agents_page_whose_model_answers_with_an_error_f
 
     assert result.status is JobStatus.FAILED
     assert result.error == "Support (support) failed: its model answered with an error (SAFETY): Blocked for safety"
+
+
+@pytest.mark.parametrize("source", ["model", "agent"])
+async def test_a_native_gemini_truncation_fails_before_downstream_steps(
+    sessions: DatabaseSessionService, source: str,
+) -> None:
+    response = LlmResponse.create(types.GenerateContentResponse(candidates=[types.Candidate(
+        content=types.Content(role="model", parts=[text("Partial answer cut off")]),
+        finish_reason=types.FinishReason.MAX_TOKENS,
+    )]))
+    assert response.error_code is None
+    w = with_tools(sessions, ScriptedLlm(turns=[response]))
+    config = llm_config()
+    agents = {}
+    if source == "agent":
+        config = llm_config(source="agent", agent="ca_support", version=None, message="Hi", inputs={"tier": "'pro'"})
+        agents = {"ca_support": chat_agent()}
+    document = line(node("support", "llm", config), end("done", "steps.support.output"))
+
+    run = payload(document, {}, chat_agents=agents)
+    result = await w.run(run)
+
+    assert result.status is JobStatus.FAILED
+    assert "MAX_TOKENS" in str(result.error)
+    steps = await w.steps(run)
+    assert next(step for step in steps if step["id"] == "support")["status"] == "failed"
+    assert next(step for step in steps if step["id"] == "done")["status"] == "not_reached"
+
+
+@pytest.mark.parametrize("source", ["model", "agent"])
+@pytest.mark.parametrize("failure", ["partial_error", "partial_message", "interrupted", "partial_interrupted"])
+async def test_an_unfinished_model_response_fails_before_downstream_steps(
+    sessions: DatabaseSessionService, source: str, failure: str,
+) -> None:
+    response = LlmResponse(
+        content=types.Content(role="model", parts=[text("Incomplete answer")]),
+        partial=failure.startswith("partial"),
+        error_code="PROVIDER_UNAVAILABLE" if failure == "partial_error" else None,
+        error_message="The model's service became unavailable. Please retry." if "interrupted" not in failure else None,
+        interrupted="interrupted" in failure,
+    )
+    w = with_tools(sessions, ScriptedLlm(turns=[response]))
+    config = llm_config()
+    agents = {}
+    if source == "agent":
+        config = llm_config(source="agent", agent="ca_support", version=None, message="Hi", inputs={"tier": "'pro'"})
+        agents = {"ca_support": chat_agent()}
+    run = payload(line(node("support", "llm", config), end("done", "steps.support.output")), {}, chat_agents=agents)
+
+    result = await w.run(run)
+
+    assert result.status is JobStatus.FAILED
+    explanation = "stopped before finishing its response" if "interrupted" in failure else response.error_message
+    assert explanation in str(result.error)
+    steps = await w.steps(run)
+    assert next(step for step in steps if step["id"] == "support")["status"] == "failed"
+    assert next(step for step in steps if step["id"] == "done")["status"] == "not_reached"
 
 
 async def test_a_tool_a_person_confirms_pauses_the_run_until_they_do(sessions: DatabaseSessionService) -> None:
@@ -939,22 +1122,38 @@ async def test_a_call_a_person_is_still_to_confirm_isnt_answered_as_cut_off(sess
 
 @dataclass
 class Children:
-    """The runs a run starts, standing in for the worker's (``ChildRuns``)."""
+    """The runs a run starts, standing in for the worker's (``ChildRuns``):
+    each queued when it's started, at ``clock``'s time; ``hold`` keeps a start
+    from returning (its worker stops meanwhile)."""
 
     runs: dict[str, dict[str, Any]] = field(default_factory=dict)
     started: list[str] = field(default_factory=list)
     asked: asyncio.Event = field(default_factory=asyncio.Event)
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC)
+    hold: asyncio.Event | None = None
 
     async def start(self, payload: dict[str, Any], *, run_id: str | None = None) -> str:
         assert run_id is not None
         if run_id not in self.runs:
-            self.runs[run_id] = {"id": run_id, "status": "running", "payload": payload}
+            self.runs[run_id] = {
+                "id": run_id,
+                "status": "running",
+                "agent_id": payload["agent_id"],
+                "agent_name": payload["name"],
+                "payload": payload,
+                "created_at": self.clock(),
+            }
             self.started.append(run_id)
         self.asked.set()
+        if self.hold is not None:
+            await self.hold.wait()
         return run_id
 
     async def get(self, run_id: str) -> dict[str, Any] | None:
         return self.runs.get(run_id)
+
+    def end(self, run_id: str, status: str = "succeeded", **values: Any) -> None:
+        self.runs[run_id].update(status=status, **values)
 
 
 @dataclass
@@ -974,43 +1173,175 @@ REFUNDS = {
 }
 
 
-async def test_a_workflow_called_as_a_tool_and_cut_off_is_answered_with_the_run_it_started(
+def calling_refunds(
+    sessions: DatabaseSessionService, llm: ScriptedLlm, *, wait: float = 30, **config: Any
+) -> tuple[Worker, Children, RunPayload]:
+    """A run whose Helper step calls the Refunds workflow (``config``: its
+    tool's), on a worker whose runs start runs on the children returned."""
+    w = with_tools(sessions, llm)
+    children = Children(clock=w.clock)
+    w.control = Starting(instance="task-1", children=children)
+    workflow = tool("w", "adk_workflow", "Refunds", workflow="ag_refunds", version=1, wait_seconds=wait, **config)
+    document = line(node("helper", "llm", llm_config(tools=[workflow])), end("done", "steps.helper.output"))
+    return w, children, payload(document, {}, saved={"ag_refunds@1": REFUNDS})
+
+
+def answered(child: str, status: str, **more: Any) -> dict[str, Any]:
+    """What a workflow's call is answered, as its guarded tool answers: the run it started, as it is."""
+    return {"status": "success", "payload": {"run_id": child, "status": status, **more}}
+
+
+async def test_a_workflow_called_as_a_tool_pauses_its_run_until_the_run_it_started_ends(
     sessions: DatabaseSessionService,
 ) -> None:
     llm = ScriptedLlm(turns=[[call("refunds", order="A1")], [text("Refunded.")]])
-    w = with_tools(sessions, llm, workflow_wait=5)
-    children = Children()
-    w.control = Starting(instance="task-1", children=children)
-    workflow = tool("w", "adk_workflow", "Refunds", workflow="ag_refunds", version=1)
-    document = line(node("helper", "llm", llm_config(tools=[workflow])), end("done", "steps.helper.output"))
-    run = payload(document, {}, saved={"ag_refunds@1": REFUNDS})
+    w, children, run = calling_refunds(sessions, llm, wait=30)
 
-    await stopped_while(children.asked, w.run(run))
+    # The call starts its run and gives the worker back: the run waits for it at a gate.
+    with pytest.raises(AwaitingDecision) as waiting:
+        await w.run(run)
     [child] = children.started
     session = await sessions.get_session(app_name=APP_NAME, user_id=run.run_as, session_id=run.session_id)
     [asked] = [called for event in session.events for called in event.get_function_calls()]
     assert child == child_run_id("task-1", str(asked.id))  # its call's run
-    assert children.runs[child]["payload"]["trigger"]["call_id"] == asked.id
-    children.runs[child].update(status="succeeded", result={"refunded": "A1"})  # it ended meanwhile
+    assert children.runs[child]["payload"]["trigger"]["wait_seconds"] == 30
+    [gate] = w.control.gates
+    assert gate["key"] == waiting.value.key == asked.id
+    assert gate["reason"] == f"Waits for Refunds (run {child[:8]}) to end"
+    details = gate["details"]
+    assert (details["kind"], details["child_run_id"], details["tool"]) == ("child_run", child, "refunds")
+    assert (details["step"], details["step_name"], details["child_workflow_id"]) == ("helper", "Helper", "ag_refunds")
+    assert gate["timeout_seconds"] == 31  # the call's wait, and a second's margin
+    assert len(llm.requests) == 1  # the model hasn't been asked again
+    helper = next(step for step in await w.steps(run) if step["id"] == "helper")
+    assert helper["status"] == "waiting"
+    assert [(made["name"], made["status"]) for made in helper["calls"]] == [("refunds", "waiting")]
+
+    # Its job again before the run it started ended (a stray one): it still waits.
+    with pytest.raises(AwaitingDecision):
+        await w.run(run)
+    assert len(llm.requests) == 1
+
+    # The run ended: its end decided the gate (the run store, as it ended).
+    children.end(child, result={"refunded": "A1"})
+    w.control.decide(waiting.value.key, Decision(approved=True, comment="succeeded"))
+    result = await w.run(run)
+
+    assert result.status is JobStatus.OK, result.detail
+    assert result.detail["result"] == "Refunded."
+    assert children.started == [child]  # no other run for that call
+    assert responses(llm.requests[1]) == [answered(child, "succeeded", result={"refunded": "A1"})]
+    assert f"Helper (helper): its call to refunds is answered: run {child[:8]} succeeded" in w.control.said()
+    helper = next(step for step in await w.steps(run) if step["id"] == "helper")
+    assert [(made["name"], made["status"]) for made in helper["calls"]] == [("refunds", "done")]
+
+
+@pytest.mark.parametrize("status", ["failed", "abandoned"])
+async def test_a_workflow_call_is_answered_with_how_its_run_ended(
+    sessions: DatabaseSessionService, status: str
+) -> None:
+    llm = ScriptedLlm(turns=[[call("refunds", order="A1")], [text("It didn't go through.")]])
+    w, children, run = calling_refunds(sessions, llm)
+    with pytest.raises(AwaitingDecision) as waiting:
+        await w.run(run)
+    [child] = children.started
+    error = {"message": "The refund was declined", "category": "failed"} if status == "failed" else None
+    children.end(child, status, error=error)
+    w.control.decide(waiting.value.key, Decision(approved=True, comment=status))
 
     result = await w.run(run)
 
     assert result.status is JobStatus.OK, result.detail
-    assert children.started == [child]  # no other run for that call
-    assert responses(llm.requests[1]) == [
-        {"status": "success", "payload": {"run_id": child, "status": "succeeded", "result": {"refunded": "A1"}}}
-    ]
-    assert f"Helper (helper): its call to refunds was cut off; it's answered with the run it started ({child[:8]})" in (
-        w.control.said()
-    )
+    assert responses(llm.requests[1]) == [answered(child, status, **({"error": error} if error else {}))]
 
 
-async def test_a_workflow_call_an_agent_seeing_only_its_turn_makes_again_gets_the_run_it_started(
+async def test_a_workflow_call_whose_run_ended_before_its_run_paused_is_answered_at_once(
     sessions: DatabaseSessionService,
 ) -> None:
-    llm = ScriptedLlm(turns=[[call("refunds", order="A1")], [call("refunds", order="A1")], [text("Refunded.")]])
-    w = with_tools(sessions, llm, workflow_wait=5)
-    children = Children()
+    llm = ScriptedLlm(turns=[[call("refunds", order="A1")], [text("Refunded.")]])
+    w, children, run = calling_refunds(sessions, llm)
+    children.hold = asyncio.Event()
+
+    # The worker stops as the call starts its run; the run ends before the next attempt.
+    await stopped_while(children.asked, w.run(run))
+    [child] = children.started
+    children.end(child, result={"refunded": "A1"})
+    children.hold = None
+
+    result = await w.run(run)
+
+    assert result.status is JobStatus.OK, result.detail
+    assert w.control.gates == []  # never waited
+    assert children.started == [child]
+    assert responses(llm.requests[1]) == [answered(child, "succeeded", result={"refunded": "A1"})]
+    assert await answered_by_the_run(sessions, run) == []  # its answer isn't a cut-off call's
+
+
+async def test_a_workflow_call_whose_wait_is_up_is_answered_with_where_its_run_got_to(
+    sessions: DatabaseSessionService,
+) -> None:
+    llm = ScriptedLlm(turns=[[call("refunds", order="A1")], [text("It's still going.")]])
+    w, children, run = calling_refunds(sessions, llm, wait=5)
+    with pytest.raises(AwaitingDecision) as waiting:
+        await w.run(run)
+    [child] = children.started
+    assert w.control.gates[0]["timeout_seconds"] == 6
+    # Its deadline: the run store times the gate out, a rejection by nobody.
+    w.control.decide(waiting.value.key, Decision(approved=False, comment="Nobody decided by its deadline"))
+    result = await w.run(run)
+
+    assert result.status is JobStatus.OK, result.detail
+    assert result.detail["result"] == "It's still going."
+    assert responses(llm.requests[1]) == [answered(child, "running")]
+    assert f"Helper (helper): its call to refunds is answered: run {child[:8]} is running still" in w.control.said()
+
+
+async def test_a_workflow_call_cut_off_before_it_started_its_run_is_answered_unanswered(
+    sessions: DatabaseSessionService,
+) -> None:
+    llm = ScriptedLlm(turns=[[call("refunds", order="A1")], [text("I'll try again later.")]])
+    w, children, run = calling_refunds(sessions, llm)
+    children.hold = asyncio.Event()
+    await stopped_while(children.asked, w.run(run))
+    children.runs.clear()  # as though the worker stopped before the run was started
+    children.started.clear()
+    children.hold = None
+
+    result = await w.run(run)
+
+    assert result.status is JobStatus.OK, result.detail
+    assert children.started == []  # the call isn't made again: the model decides
+    assert responses(llm.requests[1]) == [
+        {"status": "failed", "reason": NO_ANSWER, "suggested_fixes": ["Call it again if it's still needed."]}
+    ]
+    assert "Helper (helper): its call to refunds got no answer: its worker stopped" in w.control.said()
+
+
+async def test_a_workflow_call_that_fails_is_answered_with_why_and_its_agent_goes_on(
+    sessions: DatabaseSessionService,
+) -> None:
+    # Its input doesn't fit the workflow's start: no run is started, and the model is told why.
+    llm = ScriptedLlm(turns=[[call("refunds", order=7)], [text("The order must be text.")]])
+    w, children, run = calling_refunds(sessions, llm)
+    start = {"type": "object", "properties": {"order": {"type": "string"}}}
+    refunds = {**REFUNDS, "nodes": [{**REFUNDS["nodes"][0], "config": {"input_schema": start}}]}
+    run = run.model_copy(update={"saved": {"ag_refunds@1": refunds}})
+
+    result = await w.run(run)
+
+    assert result.status is JobStatus.OK, result.detail
+    assert result.detail["result"] == "The order must be text."
+    assert children.started == [] and w.control.gates == []
+    [answer] = responses(llm.requests[1])
+    assert answer["status"] == "failed"
+    assert "doesn't fit the workflow's start" in answer["reason"]
+
+
+def agents_page_refunds(sessions: DatabaseSessionService, llm: ScriptedLlm) -> tuple[Worker, Children, RunPayload]:
+    """A run whose Support step is an agent from the Agents page that sees
+    only its own turn, and calls the Refunds workflow."""
+    w = with_tools(sessions, llm, workflow_wait=30)
+    children = Children(clock=w.clock)
     w.control = Starting(instance="task-1", children=children)
     agent = chat_agent()
     agent["nodes"].append(
@@ -1019,19 +1350,189 @@ async def test_a_workflow_call_an_agent_seeing_only_its_turn_makes_again_gets_th
     agent["edges"].append({"id": "t", "source": "agent", "source_output": "tools", "target": "refunds"})
     config = llm_config(source="agent", agent="ca_support", version=None, message="Refund A1", inputs={})
     document = line(node("support", "llm", config), end("done", "steps.support.output"))
-    run = payload(document, {}, chat_agents={"ca_support": agent}, saved={"ag_refunds@1": REFUNDS})
+    return w, children, payload(document, {}, chat_agents={"ca_support": agent}, saved={"ag_refunds@1": REFUNDS})
 
-    await stopped_while(children.asked, w.run(run))
+
+async def test_an_agent_from_the_agents_page_calling_a_workflow_waits_for_its_run_too(
+    sessions: DatabaseSessionService,
+) -> None:
+    llm = ScriptedLlm(turns=[[call("refunds", order="A1")], [text("Refunded.")]])
+    w, children, run = agents_page_refunds(sessions, llm)
+
+    with pytest.raises(AwaitingDecision) as waiting:
+        await w.run(run)
     [child] = children.started
-    children.runs[child].update(status="succeeded", result={"refunded": "A1"})
+    [gate] = w.control.gates
+    assert (gate["details"]["kind"], gate["details"]["step"]) == ("child_run", "support")
+    children.end(child, result={"refunded": "A1"})
+    w.control.decide(waiting.value.key, Decision(approved=True, comment="succeeded"))
+    result = await w.run(run)
+
+    assert result.status is JobStatus.OK, result.detail
+    assert result.detail["result"] == "Refunded."
+    assert responses(llm.requests[1]) == [answered(child, "succeeded", result={"refunded": "A1"})]
+
+
+async def test_a_workflow_call_an_agent_seeing_only_its_turn_makes_again_is_answered_with_the_run_that_ended(
+    sessions: DatabaseSessionService,
+) -> None:
+    # Its call was answered with how its run ended; its step then runs again,
+    # and the agent, which doesn't see that answer, calls again: it's
+    # answered with the same run, at once, and starts none.
+    llm = ScriptedLlm(
+        turns=[[call("refunds", order="A1")], overloaded(), [call("refunds", order="A1")], [text("Refunded.")]]
+    )
+    w, children, run = agents_page_refunds(sessions, llm)
+    with pytest.raises(AwaitingDecision) as waiting:
+        await w.run(run)
+    [child] = children.started
+    children.end(child, result={"refunded": "A1"})
+    w.control.decide(waiting.value.key, Decision(approved=True, comment="succeeded"))
+    with pytest.raises(TransientError):  # the model's hiccup: its step runs again
+        await w.run(run)
 
     result = await w.run(run)
 
     assert result.status is JobStatus.OK, result.detail
-    assert children.started == [child]  # its call again is answered with that run, not another
-    assert responses(llm.requests[2]) == [
-        {"status": "success", "payload": {"run_id": child, "status": "succeeded", "result": {"refunded": "A1"}}}
-    ]
+    assert result.detail["result"] == "Refunded."
+    assert children.started == [child]
+    assert len(w.control.gates) == 1  # the call again didn't wait: its run had ended
+    assert responses(llm.requests[-1])[-1] == answered(child, "succeeded", result={"refunded": "A1"})
+
+
+async def test_a_workflow_call_an_agent_seeing_only_its_turn_makes_again_waits_for_the_run_it_started(
+    sessions: DatabaseSessionService,
+) -> None:
+    # Its call was answered (its wait was up); its step then runs again, and
+    # the agent, which doesn't see that answer, calls again: it waits for the
+    # same run, which still goes, and starts none.
+    llm = ScriptedLlm(
+        turns=[[call("refunds", order="A1")], overloaded(), [call("refunds", order="A1")], [text("Refunded.")]]
+    )
+    w, children, run = agents_page_refunds(sessions, llm)
+    with pytest.raises(AwaitingDecision) as waiting:
+        await w.run(run)
+    [child] = children.started
+    [first] = w.control.gates
+    w.clock.advance(seconds=first["timeout_seconds"])  # its wait is up
+    w.control.decide(waiting.value.key, Decision(approved=False, comment="Nobody decided by its deadline"))
+    with pytest.raises(TransientError):  # the model's hiccup: its step runs again
+        await w.run(run)
+
+    with pytest.raises(AwaitingDecision) as again:
+        await w.run(run)
+
+    assert children.started == [child]  # its call again waits for that run, not another
+    gate = next(gate for gate in w.control.gates if gate["key"] == again.value.key)
+    assert gate["details"]["child_run_id"] == child
+    assert gate["timeout_seconds"] == first["timeout_seconds"]  # as long as its own wait
+    assert any("waits for the run its first call started" in said for said in w.control.said())
+    children.end(child, result={"refunded": "A1"})
+    w.control.decide(again.value.key, Decision(approved=True, comment="succeeded"))
+    result = await w.run(run)
+    assert result.status is JobStatus.OK, result.detail
+    assert responses(llm.requests[-1])[-1] == answered(child, "succeeded", result={"refunded": "A1"})
+    assert children.started == [child]
+
+
+async def test_a_child_workflow_inherits_skills_and_executes_its_inline_skills_tool(
+    sessions: DatabaseSessionService,
+) -> None:
+    skills = tool("tool_skills", "skills", "Skills", skills=["sk_refunds"])
+    document = line(node("helper", "llm", llm_config(tools=[skills])), end("done", "steps.helper.output"))
+    parent = payload(document, {}, saved={"ag_refunds@1": document}, skills={"sk_refunds": PLAYBOOK})
+    children = Children()
+    workflows = RunWorkflows(parent.model_dump(), run_id="parent", children=children, wait=0)
+    context = SimpleNamespace(function_call_id="call_1", agent_name="helper")
+
+    await workflows.run("ag_refunds@1", {}, organization_id=ORGANIZATION, context=context)
+    [child] = children.started
+    inherited = RunPayload.model_validate(children.runs[child]["payload"])
+    assert inherited.skills == parent.skills
+
+    llm = ScriptedLlm(turns=[[call("load_skill", skill_name="refund-playbook")], [text("Refunds within 30 days.")]])
+    result = await with_tools(sessions, llm).run(inherited)
+    assert result.status is JobStatus.OK, result.detail
+    assert result.detail["result"] == "Refunds within 30 days."
+    loaded = llm.requests[1].contents[-1].parts[0].function_response.response  # type: ignore[index, union-attr]
+    assert "Check the order is under 30 days old" in json.dumps(loaded)
+
+
+async def grandchild_of(held: frozenset[int]) -> RunPayload:
+    """
+    The run a run's run starts, for someone holding ``held`` of permission 7:
+    Refunds, whose Support step is an agent from the Agents page only those
+    holding it may use. The first run's call waits apart (made in its own
+    invocation); its child's, made in a sub-agent's runner, in place.
+    """
+    support = chat_agent(access={"permission": 7})
+    config = llm_config(source="agent", agent="ca_support", version=None, message="Refund A1", inputs={})
+    refunds = line(node("support", "llm", config), end("done", "steps.support.output"))
+    access = caller_json(Caller(held=held, names={7: "refunds:approve"}))
+    first = payload(
+        refunds, {}, saved={"ag_refunds@1": refunds}, chat_agents={"ca_support": support}, agent_access=access
+    )
+    children = Children()
+
+    apart = SimpleNamespace(function_call_id="call_1", agent_name="helper", invocation_id="inv-first")
+    workflows = RunWorkflows(
+        first.model_dump(mode="json"), run_id="first", children=children, wait=0, invocation_id="inv-first"
+    )
+    assert await workflows.run("ag_refunds@1", {}, organization_id=ORGANIZATION, context=apart) is None
+    [child_id] = children.started
+    child = RunPayload.model_validate(children.runs[child_id]["payload"])
+    assert child.agent_access == access
+
+    in_place = SimpleNamespace(function_call_id="call_2", agent_name="support", invocation_id="inv-sub-agent")
+    workflows = RunWorkflows(
+        child.model_dump(mode="json"), run_id=child_id, children=children, wait=0, invocation_id="inv-child"
+    )
+    answer = await workflows.run("ag_refunds@1", {}, organization_id=ORGANIZATION, context=in_place)
+    assert answer["status"] == "running"
+    grandchild = RunPayload.model_validate(children.runs[children.started[1]]["payload"])
+    assert grandchild.agent_access == access
+    return grandchild
+
+
+async def test_a_called_workflows_runs_use_the_agents_their_first_runs_person_may_use(
+    sessions: DatabaseSessionService,
+) -> None:
+    grandchild = await grandchild_of(frozenset({7}))
+    llm = ScriptedLlm(turns=[[text("Refunded.")]])
+
+    result = await with_tools(sessions, llm).run(grandchild)
+
+    assert result.status is JobStatus.OK, result.detail
+    assert result.detail["result"] == "Refunded."
+
+
+async def test_a_called_workflows_runs_refuse_the_agents_their_first_runs_person_may_not_use(
+    sessions: DatabaseSessionService,
+) -> None:
+    grandchild = await grandchild_of(frozenset())
+    llm = ScriptedLlm(turns=[[text("Refunded.")]])
+
+    result = await with_tools(sessions, llm).run(grandchild)
+
+    assert result.status is JobStatus.OK, result.detail
+    assert result.detail["result"] == (
+        "You can't use Support desk: it needs refunds:approve. Ask your organization's admins for access."
+    )
+    assert llm.requests == []
+
+
+@pytest.mark.timeout(10)
+async def test_a_called_workflow_is_waited_for_as_long_as_its_tool_says() -> None:
+    children = Children()
+    # The worker's default would wait a minute; the tool says a moment.
+    workflows = RunWorkflows({"saved": {"ag_refunds@1": REFUNDS}}, run_id="r1", children=children, wait=60)
+    context = SimpleNamespace(function_call_id="call_1", agent_name="helper")
+
+    began = time.perf_counter()
+    answer = await workflows.run("ag_refunds@1", {}, organization_id=None, context=context, wait=0.2)
+
+    assert time.perf_counter() - began < 5
+    assert answer == {"run_id": children.started[0], "status": "running"}
 
 
 @pytest.mark.timeout(10)

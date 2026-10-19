@@ -7,13 +7,13 @@ export type ServiceInfo = {
   name: string
   version: string
   /**
-   * Whether anyone may call the runtime (agents and workflows) without an
-   * API key or a sign-in.
+   * The most seconds an agent waits for a workflow it called: a Workflow
+   * tool's "Wait up to" at most. An older API leaves it out.
    */
-  agent_runtime_public: boolean
+  agent_workflow_wait_max?: number
 }
 
-/** The admin API's name, version and runtime access: read once. */
+/** The admin API's name, version and workflow wait cap: read once. */
 export function useServiceInfo() {
   return useQuery({
     queryKey: ["admin-api", "info"],

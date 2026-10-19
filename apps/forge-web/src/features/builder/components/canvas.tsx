@@ -17,6 +17,7 @@ import {
 import { FitToScreenIcon, MinusSignIcon } from "@hugeicons/core-free-icons"
 
 import { Icon } from "@/components/forge/icon"
+import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -67,6 +68,7 @@ export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
   const adapter = useBuilder((s) => s.adapter)
   const readOnly = useBuilder((s) => s.readOnly)
   const ui = useBuilderUi()
+  const { theme } = useTheme()
   const nodes = useBuilder((s) => s.nodes)
   const edges = useBuilder((s) => s.edges)
   const onNodesChange = useBuilder((s) => s.onNodesChange)
@@ -274,6 +276,10 @@ export function BuilderCanvas({ needsLayout }: { needsLayout: boolean }) {
       <EdgeLooksContext.Provider value={looks}>
         <ReactFlow<FlowNode, FlowEdge>
           className={connecting ? "forge-flow connecting" : "forge-flow"}
+          // React Flow puts its colour mode on the canvas as a class, and a
+          // `.light` region takes the light theme (index.css): left at its
+          // "light" default, the canvas stayed light on a dark page.
+          colorMode={theme}
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}

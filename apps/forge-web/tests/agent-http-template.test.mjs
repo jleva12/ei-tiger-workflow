@@ -233,3 +233,26 @@ test("query parameters are read from a document, and each needs a name", () => {
     /Every query parameter needs a name/
   )
 })
+
+test("where a tool calls is its author's to say, never the model's", () => {
+  const ok = [
+    ["https://api.example.com/orders/{id}", true],
+    ["https://api.example.com?q={q}", true],
+    ["https://api.example.com", true],
+    ["https://${HOST}/orders/{id}", true],
+    ["{{ state.base }}/orders/{id}", false],
+  ]
+  for (const [url, headers] of ok)
+    assert.equal(http.originProblem(url, headers), undefined, url)
+  for (const url of [
+    "https://{host}/orders",
+    "https://api.example.com{suffix}/x",
+    "{scheme}://api.example.com/",
+    "https://{user}@api.example.com/",
+  ])
+    assert.match(http.originProblem(url, false), /would let the model pick/, url)
+  assert.match(
+    http.originProblem("{{ state.base }}/orders/{id}", true),
+    /headers go only to a host written in its URL/
+  )
+})

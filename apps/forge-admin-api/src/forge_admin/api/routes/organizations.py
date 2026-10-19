@@ -7,6 +7,7 @@ from pymongo.errors import PyMongoError
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
+from forge_admin.agent_access.policy import remove_team_rules
 from forge_admin.api.routes.common import (
     Audited,
     NodeCreate,
@@ -168,7 +169,8 @@ async def delete_organization(
     enforcer: Enforcer,
 ) -> None:
     """
-    Delete an organization and every role assigned in it. Its ADK workflow
+    Delete an organization, every role assigned in it and its agent access
+    (its agent permissions and their links). Its ADK workflow
     runs are forgotten, and its agents (its ADK workflows) leave MongoDB; an
     organization that's gone can't have them read or replaced, so failing to
     remove them is only logged.
@@ -182,6 +184,9 @@ async def delete_organization(
     scope = Scope(Level.ORG, organization_id)
     domain = await authorize(session, enforcer, user, "organizations:delete", scope)
     await remove_assignments_in(session, assignment_pattern(domain))
+    # Its agent permissions and group links go with it (their foreign
+    # keys); their policy lines don't have one.
+    await remove_team_rules(session, organization_id)
     await session.delete(await session.get(Organization, organization_id))
     await session.commit()
     try:
@@ -205,6 +210,7 @@ async def delete_organization(
     for store in (
         request.app.state.organization_agents,
         getattr(request.app.state, "chat_agents", None),
+        getattr(request.app.state, "ui_components", None),
     ):
         if store is None:
             continue

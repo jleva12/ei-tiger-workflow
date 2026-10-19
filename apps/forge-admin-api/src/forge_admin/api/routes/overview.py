@@ -11,6 +11,7 @@ are ISO 8601 in UTC, with their offset (``+00:00``).
 
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from datetime import date
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
@@ -22,7 +23,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from forge_admin.api.routes.adk_workflow_runs import run_store
 from forge_admin.api.routes.common import NodeId, Session, name_of
 from forge_admin.auth.access import CurrentUser, Enforcer, Level, Scope, authorize
-from forge_admin.overview.report import Sources, build_overview, window, zone_of
+from forge_admin.overview.report import (
+    MAX_DAYS,
+    Sources,
+    build_overview,
+    window,
+    zone_of,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +159,11 @@ class OpenRuns(BaseModel):
 class OverviewOut(BaseModel):
     """The organization's overview of a period."""
 
-    period: Literal["7d", "30d", "90d"]
+    #: ``custom`` for days the reader picked.
+    period: Literal["7d", "30d", "90d", "custom"]
+    #: The period's first and last days, in the reader's time zone.
+    first_day: str
+    last_day: str
     unit: Literal["day", "week"]
     time_zone: str
     as_of: str
@@ -199,6 +210,36 @@ async def _current(store: Any, organization_id: str) -> list[tuple[str, str]]:
     return found
 
 
+def _days(
+    start: date | None, end: date | None, today: date
+) -> tuple[date, date] | None:
+    """
+    :return: The first and last day of a period of the caller's own; None
+        for none picked.
+    :raises HTTPException: 422 for days that aren't one.
+    """
+    if start is None and end is None:
+        return None
+    if start is None or end is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Give both start and end, or neither"
+        )
+    if end < start:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "end is before start"
+        )
+    if start > today:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "start is after today"
+        )
+    if (min(end, today) - start).days + 1 > MAX_DAYS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"A period is at most {MAX_DAYS} days",
+        )
+    return start, end
+
+
 def _names(
     session: AsyncSession,
 ) -> Callable[[Sequence[str]], Awaitable[dict[str, str]]]:
@@ -219,18 +260,26 @@ async def organization_overview(
     enforcer: Enforcer,
     period: Annotated[Literal["7d", "30d", "90d"], Query()] = "7d",
     time_zone: Annotated[str | None, Query(max_length=64)] = None,
+    start: Annotated[date | None, Query()] = None,
+    end: Annotated[date | None, Query()] = None,
 ) -> OverviewOut:
     """
-    The organization's overview of the last 7, 30 or 90 days: its workflow
-    runs and its agents' and assistant's invocations, by how they ended; its
-    model calls, their tokens (input, cached, output, thinking) and cost, by
-    workflow or agent and model, bucketed by the caller's day (by week for
-    90 days), with the period before for comparison; its steps, tools and
-    people; and the runs waiting on people now.
+    The organization's overview of the last 7, 30 or 90 days, or of days the
+    caller picks: its workflow runs and its agents' and assistant's
+    invocations, by how they ended; its model calls, their tokens (input,
+    cached, output, thinking) and cost, by workflow or agent and model,
+    bucketed by the caller's day (by week for 90 days, and for picked days
+    over two months), with the period before, as long, for comparison; its
+    steps, tools and people; and the runs waiting on people now.
     \f
-    :param period: ``7d``, ``30d`` or ``90d``.
+    :param period: ``7d``, ``30d`` or ``90d``; left aside when ``start`` and
+        ``end`` are given.
     :param time_zone: The caller's IANA time zone, whose days the buckets are.
+    :param start: The first day of a period of the caller's own.
+    :param end: Its last day, inclusive; after today, today.
     :raises HTTPException: 403 without organizations:read in the organization;
+        422 for days that aren't a period: one without the other, the last
+        before the first, the first after today, or more than a year;
         503 when its runs or usage aren't answering.
     """
     await authorize(session, enforcer, user, READ, Scope(Level.ORG, organization_id))
@@ -247,7 +296,10 @@ async def organization_overview(
         ),
     )
     # Now, as the runs' times are stamped (a test's clock, in tests).
-    win = window(period, zone_of(time_zone), runs.clock())
+    now = runs.clock()
+    zone = zone_of(time_zone)
+    days = _days(start, end, now.astimezone(zone).date())
+    win = window("custom" if days else period, zone, now, days)
     try:
         overview = await build_overview(organization_id, sources, win, _names(session))
     except (SQLAlchemyError, OSError) as error:

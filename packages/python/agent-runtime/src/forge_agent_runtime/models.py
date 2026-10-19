@@ -40,6 +40,25 @@ def model_id(config: Mapping[str, Any]) -> str:
     return f"{provider}/{name}" if provider else name
 
 
+def model_window(models: ProviderModels, config: Mapping[str, Any]) -> dict[str, Any]:
+    """
+    :param models: The models agents run on.
+    :param config: An LLM agent's settings.
+    :return: The model it starts a conversation on (its own, or the default
+        for one the runtime doesn't offer) and how much that model reads:
+        ``{id, name, context_window, max_tokens}``. Chats measure their
+        context meter against it until the agent server has counted the
+        conversation (``forge_common.adk.context_window``).
+    """
+    found = models.resolve(model_id(config))
+    return {
+        "id": found.ref,
+        "name": found.model.name or found.model.id,
+        "context_window": found.model.context_window,
+        "max_tokens": found.model.max_tokens,
+    }
+
+
 def _text(value: Any) -> str | None:
     return value.strip() or None if isinstance(value, str) else None
 

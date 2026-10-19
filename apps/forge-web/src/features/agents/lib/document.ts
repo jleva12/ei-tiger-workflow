@@ -18,6 +18,7 @@ import {
   type ChatKind,
   type ChatStep,
 } from "./model"
+import { MAX_RULE_DEPTH, readAccessRule } from "./access"
 import { chatKindInfo } from "./catalog"
 
 /*
@@ -187,14 +188,18 @@ export const usesOf = (doc: Pick<ChatAgentDocument, "nodes">) =>
   )
 
 /**
- * Its agents (the chat agent and its sub-agents) by the names ADK calls
- * them, with the names the canvas gives them: what a chat shows over their
- * replies, and calls that hand a request to one show as asking it.
+ * Its agents (the chat agent, its sub-agents and intake agents) by the names
+ * ADK calls them, with the names the canvas gives them: what a chat shows
+ * over their replies, and calls that hand a request (or a task) to one show
+ * as asking it.
  */
 export const agentNamesOf = (doc: Pick<ChatAgentDocument, "nodes">) =>
   Object.fromEntries(
     doc.nodes.flatMap((n) =>
-      (n.kind === "agent" || n.kind === "sub_agent") && adkName(n.name)
+      (n.kind === "agent" ||
+        n.kind === "sub_agent" ||
+        n.kind === "intake_agent") &&
+      adkName(n.name)
         ? [[adkName(n.name), n.name]]
         : []
     )
@@ -269,6 +274,13 @@ export function readSettings(
         )
     } else if (key === "headers" || key === "query") {
       config[key] = readList(key, value, path, notes) ?? fallback
+    } else if (key === "access") {
+      const rule = readAccessRule(value)
+      if (rule !== undefined) config[key] = rule
+      else
+        notes.push(
+          `${path} should be null, {"permission": <id>}, or {"all"|"any": [rules]} nested at most ${MAX_RULE_DEPTH} deep.`
+        )
     } else if (key === "parameters" || key === "state_schema") {
       if (isRecord(value)) config[key] = value
       else notes.push(`${path} should be a JSON Schema object.`)

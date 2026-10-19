@@ -37,9 +37,13 @@ x-async-worker: &async-worker
     - /tmp:rw,noexec,nosuid,size=256m
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
-  # Running runs get 30 seconds to finish, then go back to their queue, and
-  # carry on where they were on the next worker.
-  stop_grace_period: ${ASYNC_WORKER_STOP_GRACE_PERIOD:-1m}
+  # On SIGTERM a worker takes no more runs, and running ones get 30 seconds
+  # (--grace-period) to finish; one still running is stopped, which takes up
+  # to 70 seconds more (its step has jobs.STOP_SECONDS, 30, to stop, and
+  # writing it back WRITE_TRIES x WRITE_SECONDS, 40), and goes back to its
+  # queue, to carry on where it was on the next worker. Past this, Docker
+  # kills the worker mid-write, and the run waits for its lease to run out.
+  stop_grace_period: ${ASYNC_WORKER_STOP_GRACE_PERIOD:-2m}
 
 services:
   # The adk_workflows queue: runs of organizations' ADK workflows, on Google

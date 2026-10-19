@@ -18,6 +18,10 @@ starting the next version from a published one, discarding a draft, and
 reading a published version. One saved before versions existed is a draft
 of version 1 until it's first published.
 
+``PUT …/access`` says which of the organization's agent permissions let
+someone run it (``forge_admin.chat_agents.access``), for every version at
+once, as for chat agents.
+
 These are the organization's agents, not the assistant's (``assistant.py``).
 """
 
@@ -39,7 +43,14 @@ from forge_admin.adk_workflows.resources import RunResources
 from forge_admin.adk_workflows.runs import check_publishable, check_runnable
 from forge_admin.adk_workflows.versioned_store import VersionState, status_of
 from forge_admin.adk_workflows.versions import workflow_finder
-from forge_admin.api.routes.common import NodeId, Session, name_of
+from forge_admin.api.routes.common import (
+    AccessChange,
+    AccessRead,
+    NodeId,
+    Session,
+    checked_permission_ids,
+    name_of,
+)
 from forge_admin.auth.access import CurrentUser, Enforcer, Level, Scope, authorize
 from forge_admin.db.audit import UtcDateTime
 
@@ -88,6 +99,9 @@ class AgentRead(BaseModel):
     updated_by: str
     #: Who saved it last, by name as they were then.
     updated_by_name: str | None
+    #: Who may run it; null when that was never set (anyone who may run the
+    #: organization's workflows).
+    access: AccessRead | None = None
 
 
 class VersionRead(BaseModel):
@@ -400,7 +414,11 @@ async def check_agent(
     resources = RunResources(
         organization_id,
         chat_agents=getattr(request.app.state, "chat_agents", None),
+        ui_components=getattr(request.app.state, "ui_components", None),
         sessions=request.app.state.sessionmaker,
+        # A check runs nothing, so nobody's use of what it runs is checked.
+        user=None,
+        workflows=None,
     )
     try:
         record = _found(await store.get(organization_id, agent_id))
@@ -450,7 +468,10 @@ async def publish_agent(
                 RunResources(
                     organization_id,
                     chat_agents=getattr(request.app.state, "chat_agents", None),
+                    ui_components=getattr(request.app.state, "ui_components", None),
                     sessions=request.app.state.sessionmaker,
+                    user=None,
+                    workflows=None,
                 ),
             )
             if problems:
@@ -565,6 +586,44 @@ async def get_version(
     if found is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "The agent has no such version")
     return VersionDetail.model_validate(found)
+
+
+@router.put("/organizations/{organization_id}/agents/{agent_id}/access")
+async def set_agent_access(
+    organization_id: NodeId,
+    agent_id: AgentId,
+    body: AccessChange,
+    request: Request,
+    user: CurrentUser,
+    session: Session,
+    enforcer: Enforcer,
+) -> AgentRead:
+    """
+    Say which of the organization's agent permissions let someone run the
+    workflow, any one of them; none for anyone who may run its workflows.
+    Those who manage the organization's agents may run it either way. It
+    holds for every version at once, and isn't a change to the workflow.
+    \f
+    :raises HTTPException: 403 without agents:manage; 404; 422 for an ID
+        that isn't one of the organization's agent permissions.
+    """
+    await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
+    wanted = await checked_permission_ids(session, organization_id, body.permission_ids)
+    name = await name_of(session, user)
+    try:
+        record = await agent_store(request).set_access(
+            organization_id, agent_id, permission_ids=wanted, by=user, by_name=name
+        )
+    except PyMongoError as error:
+        raise _unavailable(error) from None
+    found = _found(record)
+    logger.info(
+        "%s limited workflow %s to agent permissions %s",
+        user,
+        agent_id,
+        wanted or "none (anyone)",
+    )
+    return _read(found)
 
 
 @router.delete(

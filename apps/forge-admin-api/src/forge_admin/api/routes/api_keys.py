@@ -21,6 +21,7 @@ from pydantic import AwareDatetime, BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from forge_admin.agent_access.policy import remove_subject
 from forge_admin.api.routes.common import (
     Audited,
     Name,
@@ -345,6 +346,8 @@ async def delete_api_key(
             CasbinRule.ptype == "g", CasbinRule.v0 == key_subject(key.id)
         )
     )
+    # So do its links to the organization's agent permissions.
+    await remove_subject(session, key_subject(key.id))
     await session.delete(key)
     await session.commit()
     logger.info(

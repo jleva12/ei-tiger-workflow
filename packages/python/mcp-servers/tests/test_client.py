@@ -2,19 +2,24 @@
 streamable HTTP on a local port) that wants an API key."""
 
 import asyncio
+import functools
 import socket
 import threading
 import time
 from collections.abc import Iterator
 
+import httpx2 as httpx
 import pytest
 import uvicorn
 from mcp.server.mcpserver import MCPServer
+from mcp.shared._httpx_utils import create_mcp_http_client
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from forge_mcp_servers.client import Listing, McpConnectionError, list_tools
+from forge_mcp_servers.secrets import SecretBox
+from forge_mcp_servers.service import McpServers
 
 
 class RequireKey(BaseHTTPMiddleware):
@@ -95,3 +100,33 @@ def test_a_url_without_mcp_is_a_404(server: str) -> None:
 def test_a_server_that_isnt_there_cant_be_reached() -> None:
     with pytest.raises(McpConnectionError, match="can't be reached"):
         listed("http://127.0.0.1:1/mcp")
+
+
+def test_a_listing_connects_through_the_client_its_given(server: str) -> None:
+    made: list[dict[str, object]] = []
+
+    def client(**options: object) -> httpx.AsyncClient:
+        made.append(options)
+        return create_mcp_http_client(**options)  # type: ignore[arg-type]
+
+    listing = asyncio.run(
+        list_tools(
+            server, headers={"X-API-Key": "sk-123"}, seconds=5, client_factory=client
+        )
+    )
+    assert {tool["name"] for tool in listing.tools} == {"alerts", "forecast"}
+    assert [options["headers"] for options in made] == [{"X-API-Key": "sk-123"}]
+
+
+def test_the_service_checks_and_signs_in_through_its_client() -> None:
+    made: list[dict[str, object]] = []
+
+    def client(**options: object) -> httpx.AsyncClient:
+        made.append(options)
+        return httpx.AsyncClient(**options)  # type: ignore[arg-type]
+
+    servers = McpServers(SecretBox("k" * 40), client_factory=client)
+    assert isinstance(servers.lister, functools.partial)
+    assert servers.lister.keywords == {"client_factory": client}
+    asyncio.run(servers.http().aclose())
+    assert made == [{"timeout": httpx.Timeout(servers.timeout)}]

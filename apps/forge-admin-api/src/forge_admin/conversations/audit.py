@@ -22,8 +22,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 import sqlalchemy as sa
+from forge_common.adk.turns import TURN_KEY
 from forge_task_adk_workflows.trace import MAX_EVENTS, session_trace
 from forge_task_adk_workflows.usage_store import calls, invocations
+from google.adk.events import Event
 from google.adk.sessions import BaseSessionService
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -358,14 +360,43 @@ async def conversation(
     trace = session_trace(session, invocations=allowed)
     # The same events as ADK's own session API serves them, for the chat
     # window to replay as the person saw it.
-    shown = [
-        event
-        for event in session.events
-        if allowed is None or event.invocation_id in allowed
-    ]
-    if partial:
-        # The session's state now may hold what other turns made.
-        trace["state"] = trace["state_after"]
+    shown = []
+    allowed_runs = {row.id for row in turn_rows}
+    for event in session.events:
+        if allowed is None or event.invocation_id in allowed:
+            shown.append(event)
+            continue
+        # A failure before the first model/tool call has no usage_call linking
+        # its ADK invocation to this organization. Its server-owned run ID still
+        # links the terminal outcome to an authorized audit row. Project only
+        # that outcome; unrelated content, state and metadata stay private.
+        terminal = (event.custom_metadata or {}).get(TURN_KEY)
+        if (
+            isinstance(terminal, dict)
+            and terminal.get("version") == 1
+            and terminal.get("status") in ("failed", "cancelled")
+            and isinstance(terminal.get("runId"), str)
+            and terminal["runId"] in allowed_runs
+        ):
+            shown.append(
+                Event(
+                    id=event.id,
+                    author="assistant",
+                    timestamp=event.timestamp,
+                    invocation_id=event.invocation_id,
+                    custom_metadata={
+                        TURN_KEY: {
+                            key: value
+                            for key, value in terminal.items()
+                            if key in ("version", "runId", "status")
+                            or (
+                                key in ("errorCode", "errorMessage")
+                                and isinstance(value, str)
+                            )
+                        }
+                    },
+                )
+            )
     return {
         **trace,
         "app_name": app_name,

@@ -1,9 +1,10 @@
 import type { SymbolKind, TaskStatus } from "@/components/forge/variants"
 import { formatRelative } from "@/lib/format"
-import type {
-  AdkRun,
-  AdkRunDetail,
-  AdkRunStatus,
+import {
+  waitsOnlyForRuns,
+  type AdkRun,
+  type AdkRunDetail,
+  type AdkRunStatus,
 } from "@/features/runs/lib/runs"
 
 /*
@@ -24,12 +25,17 @@ const STATUS: Record<AdkRunStatus, { status: TaskStatus; label: string }> = {
   abandoned: { status: "cancelled", label: "Abandoned" },
 }
 
-/** A run's badge and label; a run waiting for an answer, or being stopped, says so. */
+/**
+ * A run's badge and label; a run waiting for an answer, for a run it started
+ * (nobody's to decide: it's waiting, not for review), or being stopped, says so.
+ */
 export function runStatusDisplay(
   run: Pick<AdkRun, "status" | "pause"> &
-    Partial<Pick<AdkRun, "cancel_requested_at">>
+    Partial<Pick<AdkRun, "cancel_requested_at" | "gates">>
 ) {
   const shown = STATUS[run.status] ?? { status: "pending", label: "Unknown" }
+  if (waitsOnlyForRuns(run))
+    return { status: "pending" as TaskStatus, label: "Waiting for a run" }
   if (run.status === "paused" && run.pause?.kind === "human_input")
     return { ...shown, label: "Awaiting an answer" }
   if (run.status === "running" && run.cancel_requested_at)
@@ -65,10 +71,16 @@ export const isOpenRun = (run: Pick<AdkRun, "status">) =>
  */
 export function runNote(
   run: Pick<AdkRun, "status" | "pause" | "waiting_until" | "error"> &
-    Partial<Pick<AdkRun, "cancel_requested_at">>
+    Partial<Pick<AdkRun, "cancel_requested_at" | "gates">>
 ) {
   if (run.status === "running" && run.cancel_requested_at)
     return "Abandoned: its worker stops it"
+  if (waitsOnlyForRuns(run)) {
+    const child = run.pause?.details.child_run_id
+    return child
+      ? `Waiting for run ${child.slice(0, 8)} to end`
+      : "Waiting for a run it started"
+  }
   if (run.status === "paused")
     return run.pause?.kind === "human_input"
       ? "Waiting for an answer"
@@ -86,7 +98,7 @@ export const runLine = (
     AdkRun,
     "status" | "pause" | "waiting_until" | "error" | "started_at" | "created_at"
   > &
-    Partial<Pick<AdkRun, "cancel_requested_at">>
+    Partial<Pick<AdkRun, "cancel_requested_at" | "gates">>
 ) =>
   runNote(run) ?? `Started ${formatRelative(run.started_at ?? run.created_at)}`
 

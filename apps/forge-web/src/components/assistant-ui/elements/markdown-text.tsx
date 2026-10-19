@@ -9,13 +9,27 @@ import {
 import remarkGfm from "remark-gfm"
 import type * as React from "react"
 import { type FC, memo, useMemo, useRef } from "react"
-import type { TextMessagePartProps } from "@assistant-ui/react"
+import {
+  type TextMessagePartProps,
+  useMessagePartText,
+} from "@assistant-ui/react"
 import {
   CheckIcon,
   CopyIcon,
 } from "@/components/assistant-ui/elements/aui-icons"
 
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
+import {
+  SETTLE_DELAY,
+  WRITING_IN_ATTRIBUTE,
+  rehypeStreamedWords,
+  useWrittenIn,
+} from "@/components/assistant-ui/elements/whole-replies"
+import {
+  StreamCursor,
+  StreamedWord,
+  settledAfter,
+} from "@/components/ui/streaming-text"
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard"
 import { cn } from "cn"
 
@@ -28,6 +42,10 @@ type MarkdownTextProps = Partial<TextMessagePartProps> & {
   /** Run after GFM; pass a stable array. */
   remarkPlugins?: RemarkPlugins
 }
+
+type RehypePlugins = NonNullable<
+  React.ComponentProps<typeof MarkdownTextPrimitive>["rehypePlugins"]
+>
 
 const gfmOnly: RemarkPlugins = [remarkGfm]
 
@@ -52,22 +70,47 @@ const MarkdownTextImpl: FC<MarkdownTextProps> = ({
   remarkPlugins,
 }) => {
   const stableComponents = useShallowStable(components)
+  // A reply that arrived whole (its agent server doesn't stream) is written
+  // in word by word, as if it streamed: see whole-replies.ts.
+  const writingIn = useWrittenIn(
+    useMessagePartText().text,
+    settledAfter(SETTLE_DELAY)
+  )
+  const isWritingIn = writingIn !== null
+  const end = writingIn?.end
+  const cursor = writingIn?.writing ?? false
   const markdownComponents = useMemo(() => {
-    if (!stableComponents) return defaultComponents
-    return {
-      ...defaultComponents,
-      ...memoizeMarkdownComponents(stableComponents),
-    }
-  }, [stableComponents])
+    const base = stableComponents
+      ? {
+          ...defaultComponents,
+          ...memoizeMarkdownComponents(stableComponents),
+        }
+      : defaultComponents
+    return isWritingIn ? { ...base, ...streamedComponents } : base
+  }, [stableComponents, isWritingIn])
   const plugins = useMemo(
     () => (remarkPlugins ? [remarkGfm, ...remarkPlugins] : gfmOnly),
     [remarkPlugins]
+  )
+  const preprocess = useMemo(
+    () =>
+      end === undefined ? undefined : (text: string) => text.slice(0, end),
+    [end]
+  )
+  const rehype = useMemo<RehypePlugins | undefined>(
+    () => (isWritingIn ? [[rehypeStreamedWords, { cursor }]] : undefined),
+    [isWritingIn, cursor]
   )
 
   return (
     <MarkdownTextPrimitive
       remarkPlugins={plugins}
+      rehypePlugins={rehype}
+      preprocess={preprocess}
       className="aui-md"
+      containerProps={isWritingIn ? writingInProps : undefined}
+      // Written in here, not typed out by assistant-ui as well.
+      smooth={!isWritingIn}
       components={markdownComponents}
       defer
     />
@@ -99,6 +142,28 @@ const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
     </div>
   )
 }
+
+// Marks the root while a reply is written in, so the thread keeps following it.
+const writingInProps: Record<string, string> = { [WRITING_IN_ATTRIBUTE]: "" }
+
+// While a reply is written in: its words and the cursor after the last one,
+// from `rehypeStreamedWords`, as StreamingText draws them.
+const streamedComponents = memoizeMarkdownComponents({
+  span: ({ children, ...props }) => {
+    const index = (props as Record<string, unknown>)["data-streamed-word"]
+    if (index === undefined || typeof children !== "string")
+      return <span {...props}>{children}</span>
+    return (
+      <StreamedWord
+        word={children}
+        index={Number(index)}
+        settleDelay={SETTLE_DELAY}
+      />
+    )
+  },
+  i: (props) =>
+    "data-stream-cursor" in props ? <StreamCursor /> : <i {...props} />,
+})
 
 const defaultComponents = memoizeMarkdownComponents({
   h1: ({ className, ...props }) => (

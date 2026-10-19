@@ -28,6 +28,14 @@ person's answer, the timer), and every retry.
     or not JSON, the run fails.
   - A delay whose time has come (or is close enough to sleep in place) is
     woken; before that, the run lets the worker go until then.
+  - A workflow an LLM agent calls (its call long-running: ``RunWorkflows``)
+    waits for the run the call started, at a gate of its own (``child_run``):
+    that run's end decides it (the run store, as it ends), and its deadline
+    is the call's wait. The call is answered as its tool answers, ``{status:
+    "success", payload: {run_id, status, result | error}}``: once the run
+    ended, with how it ended; once the wait is up, with where it got to
+    (queued, running, paused, waiting); a run that never started (the worker
+    stopped first) answers it as unanswered (``NO_ANSWER``), to be called again.
 
   Gates that aren't decided yet end the attempt by raising the control's
   signal, and a decision starts the job again.
@@ -41,6 +49,11 @@ person's answer, the timer), and every retry.
   checkpoint. A run notes MAX_NOTES lines at most, then one that says what
   it does next isn't noted; a note that can't be written is counted
   (``notes_lost``). Either way, its activity isn't all there.
+- **Its lease.** On the worker, the session's events and the notes land
+  only while the attempt has the run (its worker's lease on it, which the
+  control holds as they do: ``holding``, fenced_sessions.py). An attempt
+  that lost the run (another worker's now) stops at its next write, writing
+  nothing (``LostLease``, which is no failure of the run's).
 - **End.** The graph's finish (``{outcome, result}``) is the job's result,
   once its invocation has ended, every way of it: every ending's, when more
   than one way ended. A finish recorded while another way was still going
@@ -48,16 +61,27 @@ person's answer, the timer), and every retry.
   naming each failed End. A :class:`RunFailed` (input that doesn't fit, a
   step that failed with no way to take) fails it at once. A model's or the
   database's hiccup is a :class:`TransientError`: the worker tries again, and
-  the run carries on.
-- **Interrupted** (the worker died, a hiccup, or a failed run retried: its
-  invocation has events, but no pending pause): the invocation carries on
-  where it stopped; a step that was running, or failed, runs again, and the
-  ways that ended stay ended. An invocation that had ended carries on to its
-  end again, running nothing. If ADK can't carry it on (it refuses before
-  anything runs), the run fails, to be resubmitted; or, when its workflow
-  says so (its start's ``start_over``), it starts over in a new session
-  (``<session ID>-r<n>``, kept with the job and noted), and its steps run
-  again. A step that fails once the invocation carried on fails the run.
+  the run carries on. It never ends as a success it can't show
+  (:meth:`AdkRun._ended`): a step that began acting with nothing after it
+  saying how it ended fails it, finish or not; and without a finish it
+  succeeded (with no result) only where a way ended at a way out that leads
+  nowhere, else it fails.
+- **Interrupted** (the worker died or was stopped, a hiccup, or a failed run
+  retried: its invocation has events, but no pending pause): the invocation
+  carries on where it stopped, and the ways that ended stay ended. A step
+  that failed runs again. One that was running when it stopped is run again
+  when that's safe (a GET, a logic step, an agent, whose tool calls are
+  answered as cut off); one whose effect may not be (a POST or PATCH, Bash,
+  Pi with tools that change things, Clone repository, Commit and push, Open
+  pull request) recorded that it began (``factories.base.started``), and
+  isn't: what it left running is stopped, and it takes its Error way with
+  ``may_have_run`` in its error, or with none, the run fails. An invocation
+  that had ended carries on to its end again, running nothing. If ADK can't
+  carry it on (it refuses before anything runs), the run fails, to be
+  resubmitted; or, when its workflow says so (its start's ``start_over``),
+  it starts over in a new session (``<session ID>-r<n>``, kept with the job
+  and noted), and its steps run again. A step that fails once the invocation
+  carried on fails the run.
 - **Tool calls.** Each call an LLM agent's tool takes is noted with the job,
   durably, before it runs (unless the tool only reads: ``reads_only``), until
   its answer is in the session. ADK runs a step its worker stopped mid-call
@@ -65,16 +89,17 @@ person's answer, the timer), and every retry.
   a new ID. Each attempt answers first the calls an earlier one left
   unanswered, so the model sees what became of them: a workflow's call is
   answered with the run it started (``child_run_id``: a run's call starts one
-  run, whatever becomes of the call), waited for as the tool waits; any
-  other, as cut off (noted: it may have taken effect) or unanswered (it
-  wasn't, or only read). Questions, and calls a person is still to confirm,
-  wait. An agent that sees only its own turn (``include_contents`` none, as
+  run, whatever becomes of the call), as that run is; any other, as cut off
+  (noted: it may have taken effect) or unanswered (it wasn't, or only read).
+  Questions, calls a person is still to confirm, and workflows' calls waiting
+  for their runs, wait. An agent that sees only its own turn (``include_contents`` none, as
   agents from the Agents page) doesn't see any answer an earlier attempt's
   call got, cut off or not, when its step runs again (after a model's
   hiccup, a stop, a failed retry): each such call that took effect, or may
   have, is journaled with the job (``replays``), durably, until its step
   ends, and the same call again (the same tool, arguments and agent, at the
-  same step) is answered as it was, once each attempt, instead of running.
+  same step) is answered as it was, once each attempt, instead of running; a
+  workflow's whose run still goes waits for that run, as the first did.
 - **Files.** The files a run starts with are artifacts of the session the
   admin API saved them in (``files``): its own, or its original's for a
   resubmitted run. The runner keeps artifacts where the run's session is,
@@ -100,7 +125,7 @@ import sqlite3
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -117,6 +142,7 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 from forge_task_adk_workflows.config import AdkWorkflowsSettings
+from forge_task_adk_workflows.fenced_sessions import FencedSessions
 from forge_task_adk_workflows.files import RunFile, copy_run_files
 from forge_task_adk_workflows.graph import (
     AgentBuildError,
@@ -136,12 +162,13 @@ from forge_task_adk_workflows.graph.agent_tools import (
     reads_only,
     starts_runs,
 )
-from forge_task_adk_workflows.graph.data import ERROR_KEY
+from forge_task_adk_workflows.graph.data import ERROR_KEY, STARTED_KEY
 from forge_task_adk_workflows.graph.factories.base import config_of, items, label_of, text
 from forge_task_adk_workflows.graph.names import BODY_KINDS, FINISH_NODE, adk_name, body_name, choice_name
 from forge_task_adk_workflows.graph.pauses import REQUEST_CONFIRMATION, REQUEST_INPUT, TOOL_CONFIRMATION
 from forge_task_adk_workflows.graph.uses import agent_ref
 from forge_task_adk_workflows.models import RETRYABLE, UNANSWERED
+from forge_task_adk_workflows.run_store import CHILD_RUN, LostLease
 from forge_task_adk_workflows.support.commands import NO_COMMANDS
 from forge_task_adk_workflows.workspaces import WorkspaceError, make_workspace, runs_commands, uses_file_system
 from forge_tasks.control import ControlSignal, Gate, JobControl
@@ -208,6 +235,12 @@ class RunPayload(BaseModel):
     knowledge_bases: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
         description="The organization's knowledge bases its LLM agents search, by ID: each one's name and description",
+    )
+    agent_access: dict[str, Any] | None = Field(
+        default=None,
+        description="What whoever the run is for held of the agent permissions its agents' access rules "
+        "name, as it started (forge_agent_runtime.access.caller_json): what those rules are checked "
+        "against; null: nobody holds any",
     )
     skills: dict[str, dict[str, Any]] = Field(
         default_factory=dict,
@@ -280,7 +313,9 @@ class AdkRun:
         self.payload = payload
         self.control = control
         self.services = services
-        self.sessions = sessions
+        # On the worker, each event lands while the attempt has the run (its lease held): fenced_sessions.py.
+        holding = getattr(control, "holding", None)
+        self.sessions = FencedSessions(sessions, holding) if holding is not None else sessions
         self.settings = settings
         self.artifacts = artifacts
         self.artifacts_unavailable = artifacts_unavailable
@@ -307,6 +342,9 @@ class AdkRun:
             # The calls of agents that see only their own turn that took effect, or may have, in
             # steps still going ({key, call, child}): answered again, should the agent call again.
             "replays": list(stored.get("replays") or []),
+            # The workflows' calls that wait for a run an earlier call started (made again), by
+            # call ID: {run, since, wait}.
+            "adopted": dict(stored.get("adopted") or {}),
         }
         self.runner: Runner | None = None
         #: The invocation that asked each question last, across the session (``_open``).
@@ -421,11 +459,15 @@ class AdkRun:
             chat_agents=self.payload.chat_agents,
             knowledge_bases=self.payload.knowledge_bases,
             skills=self.payload.skills,
+            access=self.payload.agent_access,
             workflows=RunWorkflows(
                 self.payload.model_dump(mode="json"),
                 run_id=self.control.instance_id,
                 children=children,
                 wait=agents.workflow_wait,
+                # Its calls wait for their runs at gates, its worker given back meanwhile.
+                invocation_id=self.invocation_id,
+                adopted=self.state["adopted"],
             )
             if children is not None
             else None,
@@ -490,8 +532,7 @@ class AdkRun:
             pauses = pending_pauses(session)
             if not pauses:
                 # Its invocation ended, every way of it (_begin carried on one that hadn't).
-                # Without a finish, it ended without reaching an ending that hands one on.
-                return _finish_of(session) or {"outcome": "succeeded", "result": None}
+                return await self._ended(session)
             # Each answered on its own, oldest first: the first with an answer
             # carries its way on, then the session is read again.
             gates: list[Gate] = []
@@ -528,6 +569,81 @@ class AdkRun:
                     reason = f"{self._label(wake[0])} waits until {until.isoformat(timespec='seconds')}"
                     await self._note(reason)
                 await self.control.wait_for(gates, until=until, reason=reason)
+
+    async def _ended(self, session: Session) -> dict[str, Any]:
+        """
+        The run's finish, once its invocation has ended, every way of it: never
+        a success the session can't show.
+
+        - A step that recorded it began acting (``STARTED_KEY``) with nothing
+          after it saying how it ended was cut off, and the invocation went on
+          without it: the run fails, naming it, finish or not. (Each such step
+          decides its own fate when the run carries on; this is the backstop.)
+        - Without a finish, the run's ways ended without reaching an ending
+          that hands one on. That's a success, with no result, only where a
+          way ended at a way out that leads nowhere (an If's False way that
+          isn't connected, say: ADK's graph has no edge for the way the step
+          took), noted as such; anything else fails the run.
+
+        :raises RunFailed: When the run can't be shown to have ended.
+        """
+        cut_off = _cut_off_steps(session.events)
+        if cut_off:
+            labels = list(dict.fromkeys(self._around(path) for path in cut_off))
+            said = (
+                f"{labels[0]} was cut off as it ran, and the run went on without it, so it may have taken effect"
+                if len(labels) == 1
+                else f"{', '.join(labels)} were cut off as they ran, and the run went on without them, "
+                "so they may have taken effect"
+            )
+            raise RunFailed(
+                f"{said}: the run fails rather than end as if {'it' if len(labels) == 1 else 'they'} had finished",
+                step=self._step_at(cut_off[0]),
+            )
+        finish = _finish_of(session)
+        if finish is not None:
+            return finish
+        ends = self._dead_ends(session)
+        if not ends:
+            raise RunFailed(
+                "The run ended without reaching an End, and none of its ways ended where its workflow ends one "
+                "(a way out that leads nowhere): it can't be shown to have finished"
+            )
+        await self._note(f"The run ended without reaching an End: {'; '.join(ends)}")
+        return {"outcome": "succeeded", "result": None}
+
+    def _dead_ends(self, session: Session) -> list[str]:
+        """:return: How each of the run's own steps that ended its way at a way
+        out that leads nowhere did (``If (if) took its false way, which leads
+        nowhere``), in the order they did, by the run's graph's edges."""
+        assert self.runner is not None
+        graph = getattr(self.runner.app.root_agent, "graph", None)
+        if graph is None:
+            return []
+        last: dict[str, Event] = {}
+        for event in session.events:
+            path = event.node_info.path or ""
+            if len(path.split("/")) == 2 and not event.partial and _hands_on(event):
+                last[path] = event
+        found = []
+        for path, event in last.items():
+            name = path.split("/")[1].partition("@")[0]
+            route = event.actions.route if event.actions is not None else None
+            label = self.steps.label(path)
+            if label is None or route is None or _leads_on(graph, name, route):
+                continue
+            ways = route if isinstance(route, list) else [route]
+            said = ", ".join(str(way) for way in ways)
+            found.append(f"{label} took its {said} way, which leads nowhere")
+        return found
+
+    def _around(self, path: str) -> str:
+        found = self.steps.around(path)
+        return found[0] if found else path
+
+    def _step_at(self, path: str) -> str | None:
+        found = self.steps.around(path)
+        return (text(found[1].get("id")) or None) if found else None
 
     async def _begin(self, session: Session) -> None:
         """The run starts, if it hasn't; if it stopped mid-way (its invocation
@@ -649,11 +765,11 @@ class AdkRun:
                     except RunFailed as failure:
                         raise self._placed(failure, failed_at) from None
                     except Exception as error:
-                        failure = _classified(error)
-                        if isinstance(failure, _Refused):
-                            failure.began = began
-                            failure = self._placed_refused(failure, failed_at)
-                        raise failure from error
+                        stopped = _classified(error)
+                        if isinstance(stopped, _Refused):
+                            stopped.began = began
+                            stopped = self._placed_refused(stopped, failed_at)
+                        raise stopped from error
                     began = True
                     if event.error_code or event.error_message:
                         failed_at = event.node_info.path or failed_at
@@ -781,15 +897,31 @@ class AdkRun:
             return None
         replay = waiting.pop(0)
         found = self.steps.around(key[0])
+        call_id = getattr(tool_context, "function_call_id", None)
+        workflows: RunWorkflows | None = getattr(getattr(self.services, "agents", None), "workflows", None)
+        if workflows and replay.child and call_id and workflows.waits_apart(tool_context):
+            # A workflow's: this call waits for the run the first started, as the first did,
+            # as long as its own wait (the tool runs, starting none). ADK pauses at the call,
+            # so it's answered as the pause is, never here: at once, should that run have ended.
+            workflows.adopted[str(call_id)] = {
+                "run": replay.child,
+                "since": self.services.clock().isoformat(),
+                "wait": getattr(tool, "wait", None) or workflows.wait,
+            }
+            await self._note(
+                f"{found[0] if found else 'A step'}: its call to {tool.name} again, as it carried on, waits for "
+                f"the run its first call started ({replay.child[:8]})",
+                call=call_id,
+            )
+            return None
         how = "as the one its worker's stop cut off" if replay.cut_off else "as it was before: it isn't made twice"
         await self._note(
             f"{found[0] if found else 'A step'}: its call to {tool.name} again, as it carried on, is answered {how}",
-            call=getattr(tool_context, "function_call_id", None),
+            call=call_id,
         )
-        if replay.child is not None:
-            workflows: RunWorkflows | None = getattr(getattr(self.services, "agents", None), "workflows", None)
-            if workflows is not None:
-                return {"status": "success", "payload": await workflows.attach(replay.child)}
+        if workflows is not None and replay.child is not None:
+            current = await workflows.children.get(replay.child)
+            return {"status": "success", "payload": RunWorkflows.answer_of(replay.child, current)}
         return replay.answer
 
     async def _answer_cut_off(self, session: Session) -> bool:
@@ -811,6 +943,7 @@ class AdkRun:
         waiting = _confirming(own, answered)
         noted: dict[str, dict[str, Any]] = self.state["calls"]
         changed, any_answered = bool(noted), False
+        still: set[str] = set()
         for event in list(own):
             long_running = set(event.long_running_tool_ids or ())
             for call in event.get_function_calls():
@@ -823,7 +956,10 @@ class AdkRun:
                         # Its answer reached the session, the attempt's end didn't reach the journal.
                         self._journal(call.id, noted[call.id], key=key)
                     continue
-                if call.id in long_running or call.id in waiting:
+                if call.id in long_running:
+                    still.add(call.id)  # a workflow's, waiting for its run: journaled once it's answered
+                    continue
+                if call.id in waiting:
                     continue
                 answer, said, child = await self._cut_off(call)
                 try:
@@ -836,8 +972,9 @@ class AdkRun:
                     self._journal(call.id, noted.get(call.id, {}), key=key, starts_run=child is not None)
                 found = self.steps.around(path)
                 await self._note(f"{found[0] if found else 'A step'}: {said}", call=call.id)
-        # Every call noted before this attempt is answered now, one way or the other.
-        self.state["calls"] = {}
+        # Every call noted before this attempt is answered now, one way or the
+        # other, but a workflow's waiting for its run.
+        self.state["calls"] = {call_id: noted[call_id] for call_id in still if call_id in noted}
         if changed:
             await self._save("Its calls an earlier attempt left unanswered are answered")
         return any_answered
@@ -908,11 +1045,11 @@ class AdkRun:
         workflows: RunWorkflows | None = getattr(getattr(self.services, "agents", None), "workflows", None)
         if workflows is not None:
             child = child_run_id(self.control.instance_id, call_id)
-            if await workflows.children.get(child) is not None:
-                # The run that call started: never another for it.
-                answer = await workflows.attach(child)
+            current = await workflows.children.get(child)
+            if current is not None:
+                # The run that call started, as it is: never another for it.
                 said = f"its call to {name} was cut off; it's answered with the run it started ({child[:8]})"
-                return {"status": "success", "payload": answer}, said, child
+                return {"status": "success", "payload": RunWorkflows.answer_of(child, current)}, said, child
         if noted is not None and not noted.get("starts_run"):
             # Noted before it ran, it may have taken effect. (A workflow's call
             # whose run isn't there didn't: what it does is start that run.)
@@ -955,6 +1092,8 @@ class AdkRun:
         key = self._gate(pause)
         if pause.kind == TOOL_CONFIRMATION:
             return await self._confirm(pause, key, details)
+        if pause.kind == CHILD_RUN:
+            return await self._waited_for(pause, key, details)
         if pause.kind == "approval":
             board = pause.payload.get("board")
             gate = Gate(
@@ -1047,8 +1186,74 @@ class AdkRun:
         )
         return {"confirmed": decision.approved}
 
+    async def _waited_for(self, pause: Pause, key: str, details: dict[str, Any]) -> dict[str, Any] | Gate:
+        """
+        A workflow's call, waiting for the run it started (or was answered
+        by): answered as its tool answers once that run ended, or once the
+        call's wait is up (its gate timed out), with the run as it is then;
+        until then, the gate that run's end decides, due when the call's wait
+        is up (from when the run was started). A call that failed before it
+        started a run is answered with its failure; one whose run never
+        started (its worker stopped first), as unanswered.
+        """
+        found = self.steps.around(pause.path)
+        label, node = found if found else (str(pause.payload.get("agent") or "An agent"), None)
+        tool = str(pause.payload.get("tool") or "a workflow")
+        workflows: RunWorkflows | None = getattr(getattr(self.services, "agents", None), "workflows", None)
+        failure = workflows.failures.pop(pause.interrupt_id, None) if workflows is not None else None
+        if failure is not None:
+            # It failed before it started a run (its input, say): it's answered with why, at once.
+            await self._note(f"{label}: its call to {tool} failed: {failure.get('reason') or 'it failed'}")
+            return failure
+        child = workflows.child_of(pause.interrupt_id) if workflows is not None else ""
+        current = await workflows.children.get(child) if workflows is not None else None
+        if current is None:
+            await self._note(f"{label}: its call to {tool} got no answer: its worker stopped")
+            return {"status": "failed", "reason": NO_ANSWER, "suggested_fixes": list(CALL_AGAIN)}
+        answer = {"status": "success", "payload": RunWorkflows.answer_of(child, current)}
+        status = str(current.get("status"))
+        if not RunWorkflows.going(current):
+            await self._note(f"{label}: its call to {tool} is answered: run {child[:8]} {status}", run_id=child)
+            return answer
+        if self.control.decided(key) is not None:
+            await self._note(
+                f"{label}: its call to {tool} is answered: run {child[:8]} is {status} still", run_id=child
+            )
+            return answer
+        name = str(current.get("agent_name") or tool)
+        # Its wait is up that long after the run was started; or, for a call
+        # waiting for a run an earlier call started, after it was made.
+        adopted = self.state["adopted"].get(pause.interrupt_id)
+        trigger = (current.get("payload") or {}).get("trigger") or {}
+        wait, started = trigger.get("wait_seconds"), current.get("created_at")
+        if adopted:
+            wait, started = adopted.get("wait"), _when(adopted.get("since"))
+        due = (
+            _utc(started) + timedelta(seconds=float(wait))
+            if isinstance(started, datetime) and isinstance(wait, int | float) and not isinstance(wait, bool)
+            else None
+        )
+        return Gate(
+            key=key,
+            reason=f"Waits for {name} (run {child[:8]}) to end",
+            details={
+                "kind": CHILD_RUN,
+                **details,
+                "step": node.get("id") if node else details.get("step"),
+                "step_name": text(node.get("name")) if node else details.get("step_name"),
+                "tool": tool,
+                "child_run_id": child,
+                "child_workflow_id": current.get("agent_id"),
+                "child_workflow_name": name,
+                "expires_at": due.isoformat() if due is not None else None,
+            },
+            timeout_seconds=_seconds_until(due, self.services.clock()),
+        )
+
     def _label(self, pause: Pause) -> str:
         """How the run's activity names the step a pause is at (and a board's choice)."""
+        if pause.kind in (TOOL_CONFIRMATION, CHILD_RUN) and (found := self.steps.around(pause.path)):
+            return found[0]  # an LLM agent's call: at the step its agent is
         step = pause.payload.get("step")
         node = self.steps.node(step)
         # A step asks under its ID and its node's path (graph.factories.base.interrupt_id).
@@ -1083,7 +1288,7 @@ class AdkRun:
         except (RunFailed, ControlSignal):
             raise
         except Exception as error:
-            raise _classified(error) from error
+            raise _classified(error, opening=True) from error
         own = [event for event in session.events if event.invocation_id == self.invocation_id]
         self.askers = {
             call.id: event.invocation_id for event in session.events for call in event.get_function_calls() if call.id
@@ -1105,8 +1310,8 @@ class AdkRun:
             message, attributes = f"{MAX_NOTES} notes so far: what the run does next isn't noted", {}
         try:
             await self.control.note(message[:500], **attributes)
-        except ControlSignal:
-            raise
+        except (ControlSignal, LostLease):
+            raise  # the run is another attempt's now: this one goes no further
         except Exception:
             self.state["notes_lost"] = int(self.state["notes_lost"]) + 1
             # Kept at once: the run's next write has it, its last one too.
@@ -1290,6 +1495,43 @@ def _hands_on(event: Event) -> bool:
     )
 
 
+def _cut_off_steps(events: list[Event]) -> list[str]:
+    """:return: The node paths of the steps that recorded they began acting
+    (``STARTED_KEY``) with nothing after saying how they ended (an output, a
+    way, an error), in the order they began."""
+    began: dict[str, None] = {}
+    for event in events:
+        path = event.node_info.path or ""
+        if STARTED_KEY in (event.custom_metadata or {}):
+            began[path] = None
+        elif (
+            event.output is not None
+            or (event.actions is not None and event.actions.route is not None)
+            or ERROR_KEY in (event.custom_metadata or {})
+            or event.error_code is not None
+        ):
+            for ended in {path, *_paths(event)}:
+                began.pop(ended, None)
+    return list(began)
+
+
+def _leads_on(graph: Any, name: str, route: Any) -> bool:
+    """:return: Whether a node of the run's graph that took ``route`` leads on
+    anywhere: an edge with no route, or one whose route is among the ways it
+    took (ADK's own matching, ``Graph.get_next_pending_nodes``, without its
+    warning)."""
+    taken = set(route) if isinstance(route, list) else {route}
+    for edge in graph.edges:
+        if edge.from_node.name != name:
+            continue
+        if edge.route is None:
+            return True
+        routes = set(edge.route) if isinstance(edge.route, list) else {edge.route}
+        if routes & taken:
+            return True
+    return False
+
+
 def _finish_of(session: Session) -> dict[str, Any] | None:
     """:return: The run's finish, ``{outcome, result}``, once a way of its graph
     ended: the finish's last, which has every ending so far."""
@@ -1334,6 +1576,14 @@ async def _closed(what: str, closing: Awaitable[None]) -> None:
         log.warning("adk_workflows: closing %s took more than %gs; the run goes on without it", what, CLOSE_SECONDS)
 
 
+def _when(value: Any) -> datetime | None:
+    """:return: A time a run kept (ISO 8601); None when it isn't one."""
+    try:
+        return datetime.fromisoformat(value) if isinstance(value, str) and value else None
+    except ValueError:
+        return None
+
+
 def _utc(when: datetime) -> datetime:
     """A time in UTC; a naive one is UTC already."""
     return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
@@ -1345,16 +1595,23 @@ def _seconds_until(due: datetime | None, now: datetime) -> int | None:
     return max(0, math.ceil((due - now).total_seconds())) + DEADLINE_MARGIN
 
 
-def _classified(error: Exception) -> Exception:
+def _classified(error: Exception, *, opening: bool = False) -> Exception:
     """What an error that stopped a run means for it: try again later
     (:class:`TransientError`), or the run can't go on (:class:`_Refused`).
     It's named by its root: what an error ADK wraps a step's in
-    (``DynamicNodeFailError``) wraps, with its HTTP status when it has one."""
+    (``DynamicNodeFailError``) wraps, with its HTTP status when it has one.
+    ``opening``: the run's session was being opened, where a row's
+    IntegrityError is another session's taking a row both make (the member's
+    state, task.SESSION_ISOLATION) first: tried again, it's there.
+    A lost lease (a write the attempt made once its run was another's: its
+    session's events) is no failure of the run's: it's passed on as it is."""
     error = _root(error)
+    if isinstance(error, LostLease):
+        return LostLease(str(error))
     message = str(getattr(error, "message", "") or error)[:MAX_ERROR] or type(error).__name__
     status = _status_of(error)
     kind = f"{type(error).__name__} (HTTP {status})" if status is not None else type(error).__name__
-    if _transient(error):
+    if _transient(error) or (opening and _integrity(error)):
         return TransientError(f"The run can't go on for now ({kind}): {message}")
     log.warning("adk_workflows: a run stopped: %s", message, exc_info=error)
     return _Refused(f"{kind}: {message}")
@@ -1380,6 +1637,14 @@ def _status_of(error: BaseException) -> int | None:
         if isinstance(found, int) and not isinstance(found, bool) and 100 <= found <= 599:
             return found
     return None
+
+
+def _integrity(error: BaseException) -> bool:
+    try:
+        from sqlalchemy import exc as db
+    except ImportError:  # pragma: no cover - a dependency
+        return False
+    return isinstance(error, db.IntegrityError)
 
 
 def _transient(error: BaseException) -> bool:

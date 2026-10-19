@@ -21,17 +21,21 @@ are UTC: stored naive, read back aware.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
+import anyio
 import sqlalchemy as sa
+from forge_common.adk.turns import current_turn
 from forge_common.adk.usage import Attribution, UsageCall
 from sqlalchemy.dialects import mysql
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +47,11 @@ SUCCEEDED = "succeeded"
 FAILED = "failed"
 #: The caller went before it finished (a closed stream).
 CANCELLED = "cancelled"
+
+# Nested observers may share a turn. Only its outer invocation owns the
+# correlated ID; nested entries still get their own rows.
+_recording_turns: ContextVar[frozenset[str]] = ContextVar("usage_recording_turns", default=frozenset())
+FINISH_TIMEOUT = 5.0
 
 metadata = sa.MetaData()
 
@@ -135,6 +144,15 @@ def _float(value: Any) -> float:
     return float(value or 0)
 
 
+def _finished_write(task: asyncio.Task[None]) -> None:
+    """Consume cleanup errors without replacing the invocation's own outcome."""
+    if not task.cancelled():
+        try:
+            task.result()
+        except Exception:
+            log.warning("usage: finishing an invocation failed", exc_info=True)
+
+
 class UsageStore:
     """Model and tool calls and agent invocations, over the admin MySQL's engine."""
 
@@ -144,8 +162,17 @@ class UsageStore:
 
     # ------------------------------------------------------------------ writing
 
-    async def record(self, call: UsageCall) -> None:
-        """Keeps a model or tool call (a ``UsagePlugin``'s sink)."""
+    async def record(
+        self, call: UsageCall, *, fence: Callable[[AsyncConnection], Awaitable[None]] | None = None
+    ) -> None:
+        """
+        Keeps a model or tool call (a ``UsagePlugin``'s sink).
+
+        :param fence: Says, in the transaction that keeps it, whether the call
+            may be kept, raising when it mayn't: a run's, while the worker
+            whose attempt made it still has the run (``RunStore.hold``), so an
+            attempt that lost its run to another records nothing more.
+        """
         who = call.attribution
         values = {
             "organization_id": who.organization_id,
@@ -169,6 +196,8 @@ class UsageStore:
             "failed": call.failed,
         }
         async with self.engine.begin() as conn:
+            if fence is not None:
+                await fence(conn)
             await conn.execute(sa.insert(calls).values(values))
 
     @contextlib.asynccontextmanager
@@ -186,22 +215,99 @@ class UsageStore:
         succeeds when the block ends, fails when it raises, and is cancelled
         when its caller goes. Keeping it never fails the invocation.
         """
-        invocation_id = uuid.uuid4().hex
+        turn = current_turn()
+        active = _recording_turns.get()
+        invocation_id = turn.run_id if turn is not None and turn.run_id not in active else uuid.uuid4().hex
+        token = _recording_turns.set(active | {invocation_id})
         started = self.clock()
-        kept = await self._start(invocation_id, attribution, started, version, session_id, user_id, channel)
-        status, error = SUCCEEDED, None
         try:
-            yield
-        except Exception as raised:
-            status, error = FAILED, f"{type(raised).__name__}: {raised}"
-            raise
-        except BaseException:
-            # A closed stream (GeneratorExit) or a cancelled task: the caller went.
-            status = CANCELLED
-            raise
+            try:
+                kept = await self._start(invocation_id, attribution, started, version, session_id, user_id, channel)
+            except asyncio.CancelledError:
+                # The INSERT may have committed before cancellation reached
+                # _start's caller. An UPDATE by the known ID is harmless if
+                # it rolled back, and prevents a committed row staying running.
+                start_status = FAILED if turn is not None and turn.status == FAILED else CANCELLED
+                start_error = (
+                    ": ".join(filter(None, (turn.error_code, turn.error_message)))
+                    if turn is not None and start_status == FAILED
+                    else None
+                )
+                await self._finish_safely(invocation_id, started, start_status, start_error)
+                raise
+            status, error = SUCCEEDED, None
+            try:
+                yield
+            except Exception as raised:
+                status, error = FAILED, f"{type(raised).__name__}: {raised}"
+                raise
+            except BaseException:
+                # A closed stream (GeneratorExit) or a cancelled task: the caller went.
+                status = CANCELLED
+                raise
+            finally:
+                # A model can report a native error event without raising. The
+                # turn observes it before the client does; keep that failure
+                # even if the client then disconnects while reading the error.
+                if turn is not None and turn.status == FAILED:
+                    status = FAILED
+                    error = ": ".join(filter(None, (turn.error_code, turn.error_message))) or error
+                elif turn is not None and turn.status == CANCELLED and status == SUCCEEDED:
+                    status = CANCELLED
+                if kept:
+                    await self._finish_safely(invocation_id, started, status, error)
         finally:
-            if kept:
-                await self._finish(invocation_id, started, status, error)
+            _recording_turns.reset(token)
+
+    async def _finish_safely(self, invocation_id: str, started: datetime, status: str, error: str | None) -> None:
+        """Finish under disconnect cancellation, without delaying shutdown indefinitely."""
+        cancelled: asyncio.CancelledError | None = None
+        deadline = asyncio.get_running_loop().time() + FINISH_TIMEOUT
+        # Starlette cancels a stream through AnyIO; direct asyncio callers can
+        # cancel it too, including again while the first cancellation unwinds.
+        while True:
+            with anyio.CancelScope(shield=True):
+                writing = asyncio.create_task(self._finish(invocation_id, started, status, error))
+                while not writing.done():
+                    try:
+                        done, _ = await asyncio.wait(
+                            {writing}, timeout=max(0.0, deadline - asyncio.get_running_loop().time())
+                        )
+                    except asyncio.CancelledError as raised:
+                        cancelled = raised
+                        continue
+                    if not done:
+                        writing.cancel()
+                        # A driver may still need to release its connection after
+                        # cancellation. Retrieve its eventual exception, but do
+                        # not let that cleanup keep the HTTP response alive.
+                        writing.add_done_callback(_finished_write)
+                        log.warning("usage: finishing invocation %s exceeded %.1fs", invocation_id, FINISH_TIMEOUT)
+                        break
+                else:
+                    _finished_write(writing)
+            if cancelled is None:
+                try:
+                    # An AnyIO disconnect arriving while shielded is delivered
+                    # only after the shield exits. Observe it before accepting
+                    # a successful audit write as the final outcome.
+                    await anyio.lowlevel.checkpoint_if_cancelled()
+                except asyncio.CancelledError as raised:
+                    cancelled = raised
+            if cancelled is not None and status == SUCCEEDED:
+                # Cancellation may have arrived after the body returned, while
+                # its success UPDATE was pending. Reconcile that row before
+                # propagating cancellation, within the original cleanup budget.
+                turn = current_turn()
+                status = FAILED if turn is not None and turn.status == FAILED else CANCELLED
+                if status == FAILED and turn is not None:
+                    error = ": ".join(filter(None, (turn.error_code, turn.error_message))) or error
+                if asyncio.get_running_loop().time() < deadline:
+                    continue
+                log.warning("usage: invocation %s was cancelled before its audit could be reconciled", invocation_id)
+            break
+        if cancelled is not None:
+            raise cancelled
 
     async def _start(
         self,

@@ -1,7 +1,7 @@
 """ADK's models as the JSON the web console's assistant reads.
 
 The same camelCase JSON as ADK's own API server (``adk api_server``), which
-``@assistant-ui/react-google-adk`` is written against, with two differences:
+``@assistant-ui/react-google-adk`` is written against, with three differences:
 
 - Binary data (``inlineData``: images, files) is standard base64, which the
   browser's ``atob`` and data URLs read. genai writes the URL-safe alphabet,
@@ -10,12 +10,19 @@ The same camelCase JSON as ADK's own API server (``adk api_server``), which
   out. ADK keeps them in the session, because the model needs them back on
   the next turn; the browser would show each as an empty paragraph after the
   reply.
+- A call handing off a task (tagged by ``tasks.TaskCallsPlugin``) is listed in
+  its event's ``longRunningToolIds``: the chat leaves it open while the task
+  talks with the person, rather than offering to approve it and cancelling it
+  with their next message. The session keeps ADK's own list, which its
+  resuming reads.
 """
 
 import json
 from typing import Any
 
 from pydantic import BaseModel
+
+from forge_agent_runtime.tasks import TASK_CALLS_KEY
 
 _URL_SAFE_TO_STANDARD = str.maketrans("-_", "+/")
 
@@ -77,6 +84,28 @@ def _drop_bare_signatures(node: Any) -> Any:
     return node
 
 
+def _task_calls_long_running(node: Any) -> Any:
+    """
+    Lists the calls handing off a task (``customMetadata`` under
+    ``tasks.TASK_CALLS_KEY``) in their event's ``longRunningToolIds``, in
+    every event of a nested data structure.
+
+    :param node: The nested data structure to be processed.
+    :return: The same structure, those events' lists extended.
+    """
+    if isinstance(node, dict):
+        metadata = node.get("customMetadata")
+        calls = metadata.get(TASK_CALLS_KEY) if isinstance(metadata, dict) else None
+        if isinstance(calls, list) and calls:
+            node["longRunningToolIds"] = sorted({*(node.get("longRunningToolIds") or ()), *calls})
+        for value in node.values():
+            _task_calls_long_running(value)
+    elif isinstance(node, list):
+        for item in node:
+            _task_calls_long_running(item)
+    return node
+
+
 def to_wire(model: BaseModel) -> Any:
     """
     Converts a given Pydantic model into its serialized and encoded wire format.
@@ -90,8 +119,10 @@ def to_wire(model: BaseModel) -> Any:
     :return: The serialized and Base64-encoded representation of the model.
     :rtype: Any
     """
-    return _drop_bare_signatures(
-        _standard_base64(model.model_dump(mode="json", by_alias=True, exclude_none=True))
+    return _task_calls_long_running(
+        _drop_bare_signatures(
+            _standard_base64(model.model_dump(mode="json", by_alias=True, exclude_none=True))
+        )
     )
 
 

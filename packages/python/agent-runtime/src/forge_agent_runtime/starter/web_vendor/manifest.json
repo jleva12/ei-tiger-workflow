@@ -26,7 +26,9 @@
     "skeleton",
     "spinner",
     "status",
+    "streaming-text",
     "textarea",
+    "toast",
     "tooltip",
     "workspace-sidebar"
   ],
@@ -44,6 +46,7 @@
     "cn": "^0.4.0",
     "katex": "^0.18.10",
     "mermaid": "^11.17.2",
+    "motion": "^13.5.1",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",

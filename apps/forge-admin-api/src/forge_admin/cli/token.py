@@ -1,10 +1,14 @@
 """``forge-admin-token``: print a bearer token for a user, for local development.
 
 ``make web-token`` runs it for the site administrator and sets the result as
-the web console's ``VITE_API_TOKEN``. With ``--organization`` the token acts
-in one organization (its ``org_id`` claim): what the code graph's MCP server
-needs, which serves only that organization's repositories. See
-``auth/tokens.py`` for the token.
+the web console's ``VITE_API_TOKEN``. The token names the company groups
+they're in (its groups claim), as the identity provider's would: those
+``--group`` names, else ``FORGE_ADMIN_LOCAL_USER_GROUPS`` (the local user's),
+so permissions linked to them (the site's, and organizations' agent
+permissions) are theirs; ``--no-groups`` names none. With ``--organization``
+the token acts in one organization (its ``org_id`` claim): what the code
+graph's MCP server needs, which serves only that organization's
+repositories. See ``auth/tokens.py`` for the token.
 """
 
 import argparse
@@ -13,7 +17,7 @@ from datetime import timedelta
 
 from sqlalchemy import or_, select
 
-from forge_admin.auth.tokens import mint_token
+from forge_admin.auth.tokens import TokenError, mint_token
 from forge_admin.config import Settings, get_settings
 from forge_admin.db.session import create_engine, create_sessionmaker
 from forge_admin.models import Organization, User
@@ -65,8 +69,13 @@ def main(argv: list[str] | None = None) -> None:
         default=[],
         help=(
             "a company group the token says they're in (repeatable): to try "
-            "permissions linked to it"
+            "permissions linked to it (default: FORGE_ADMIN_LOCAL_USER_GROUPS)"
         ),
+    )
+    parser.add_argument(
+        "--no-groups",
+        action="store_true",
+        help="name no company groups, not even FORGE_ADMIN_LOCAL_USER_GROUPS",
     )
     parser.add_argument(
         "--organization",
@@ -100,15 +109,20 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"No user with {who_text}; add them first (forge-admin-seed)")
     if named and organization is None:
         raise SystemExit(f"No organization with ID or name {named}")
-    print(
-        mint_token(
+    if args.no_groups and args.group:
+        raise SystemExit("Pass --group or --no-groups, not both")
+    groups = [] if args.no_groups else (args.group or settings.local_user_groups)
+    try:
+        token = mint_token(
             settings,
             user,
             lifetime=timedelta(days=args.days),
-            groups=args.group,
+            groups=groups,
             organization_id=organization.id if organization else None,
         )
-    )
+    except TokenError as error:
+        raise SystemExit(str(error)) from None
+    print(token)
 
 
 if __name__ == "__main__":

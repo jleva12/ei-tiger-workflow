@@ -38,12 +38,12 @@ class EnvSettings(BaseSettings):
 
     @classmethod
     def settings_customise_sources(
-            cls,
-            settings_cls: type[BaseSettings],
-            init_settings: PydanticBaseSettingsSource,
-            env_settings: PydanticBaseSettingsSource,
-            dotenv_settings: PydanticBaseSettingsSource,
-            file_secret_settings: PydanticBaseSettingsSource,
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         return (init_settings, env_settings, EnvFileSettingsSource.replacing(dotenv_settings), file_secret_settings)
 
@@ -74,6 +74,7 @@ class CoreSettings(EnvSettings):
         connectivity and management.
     :type mongo: MongoSettings
     """
+
     enabled_tasks: list[str] = Field(default_factory=lambda: ["adk_workflows"])
     redis_url: str = "redis://localhost:6379/0"
     mongo: MongoSettings = MongoSettings()

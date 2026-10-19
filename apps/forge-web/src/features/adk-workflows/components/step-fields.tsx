@@ -646,8 +646,10 @@ function BashFields({ id, config }: Props<"bash">) {
         <code className={mono}>stdout</code>,{" "}
         <code className={mono}>stderr</code> and{" "}
         <code className={mono}>exit_code</code>; any other, or running past its
-        timeout, takes Error. A run tried again runs it again, so write commands
-        that can run twice.
+        timeout, takes Error. A command cut off as it ran (its worker stopped)
+        isn&apos;t run again: it takes Error, with{" "}
+        <code className={mono}>may_have_run</code>. A run that failed and is
+        tried again runs it again, so write commands that can run twice.
       </p>
     </>
   )

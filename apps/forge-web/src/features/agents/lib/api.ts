@@ -10,6 +10,7 @@ import { api } from "@/lib/api-instance"
 import { ApiError } from "@/lib/api/index"
 import { useMe } from "@/lib/users"
 import type { ChatAgentDocument } from "./document"
+import type { IntakePreview, SampleAnswer } from "./intake"
 import type { ChatPageSettings } from "./page-settings"
 
 /*
@@ -269,6 +270,27 @@ export function previewStandalone(
 ) {
   return api.post<StandalonePreview, StandaloneRequest>(
     `${one(organizationId, id)}/standalone/preview`,
+    body,
+    { silent: true }
+  )
+}
+
+/**
+ * What an intake agent's design would make of sample answers: what it would
+ * ask next, what's missing, what its model would be told and what it would
+ * hand back. Nothing is saved or run.
+ */
+export function previewIntake(
+  organizationId: string,
+  body: {
+    name: string
+    config: Record<string, unknown>
+    answers: Record<string, SampleAnswer>
+    summary_confirmed: boolean
+  }
+) {
+  return api.post<IntakePreview, typeof body>(
+    `${base(organizationId)}/intake-preview`,
     body,
     { silent: true }
   )

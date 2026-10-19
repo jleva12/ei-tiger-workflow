@@ -37,6 +37,7 @@ from forge_task_adk_workflows.support import sandbox_commands
 from forge_task_adk_workflows.support.sandbox_commands import (
     ALLOWED_HOSTS_RULE,
     CHUNK_BYTES,
+    KEY_LABEL,
     LABELS,
     SANDBOX_WORKSPACE,
     OpenShellCommands,
@@ -122,6 +123,15 @@ class LocalGateway:
 
     def get(self, name: str, *, workspace: str) -> Sandbox:
         return self.phases.pop(0) if len(self.phases) > 1 else self.phases[0]
+
+    def list_all(self, *, workspace: str, label_selector: str) -> list[Any]:
+        # The sandboxes not deleted yet whose labels have the selector's one label.
+        key, _, value = label_selector.partition("=")
+        return [
+            type("Ref", (), {"name": made["name"]})()
+            for made in self.created
+            if made["labels"].get(key) == value and made["name"] not in self.deleted
+        ]
 
     def delete(self, name: str, *, workspace: str, allow_missing: bool) -> DeletionResult:
         assert allow_missing
@@ -258,6 +268,12 @@ def commands_ran(gateway: LocalGateway) -> list[Exec]:
     return [each for each in gateway.execs if each.script == sandbox_commands._RUN]
 
 
+def command_key(gateway: LocalGateway) -> str:
+    """:return: The step's key its one command ran with."""
+    [command] = commands_ran(gateway)
+    return str(command.env["FORGE_IDEMPOTENCY_KEY"])
+
+
 # ------------------------------------------------------------------ running
 
 
@@ -287,7 +303,8 @@ def test_a_command_runs_in_a_sandbox_of_its_own_and_its_changes_come_back(folder
     [created] = gateway.created
     name = created["name"]
     assert name.startswith("forge-bash-") and len(name) <= 19
-    assert created["labels"] == LABELS and created["workspace"] == "default"
+    # Its step's key too, which the run's next attempt finds a leftover by.
+    assert created["labels"] == {**LABELS, KEY_LABEL: command_key(gateway)} and created["workspace"] == "default"
     assert created["spec"].template.image == "python:3.13-slim"
     assert gateway.deleted == [name]
     # In the sandbox the run's folder is /sandbox/workspace, its variables say so.
@@ -314,6 +331,7 @@ def test_it_gets_the_tools_variables_but_none_of_the_worker_s_machine(folder: Pa
         "GIT_TERMINAL_PROMPT": "0",
         "GH_PROMPT_DISABLED": "1",
         "ONE": "1",
+        "FORGE_IDEMPOTENCY_KEY": command_key(gateway),
         "WORKSPACE": SANDBOX_WORKSPACE,
     }
 
@@ -494,6 +512,102 @@ async def test_a_command_stops_when_its_run_does(folder: Path, gateway: LocalGat
     # Its sandbox is deleted at once (which stops the command), and nothing comes back.
     assert gateway.deleted
     assert not (folder / "child.pid").exists()
+    commands.close()
+
+
+@dataclass
+class Holding(LocalGateway):
+    """A gateway that logs every call, in order, and holds the first call of
+    one of its methods (``at``) until ``release``."""
+
+    at: str = "create"
+    calls: list[tuple[str, str]] = field(default_factory=list)
+    entered: threading.Event = field(default_factory=threading.Event)
+    release: threading.Event = field(default_factory=threading.Event)
+
+    def _called(self, method: str, name: str) -> None:
+        self.calls.append((method, name))
+        if method == self.at and not self.entered.is_set():
+            self.entered.set()
+            assert self.release.wait(10)
+
+    def create(self, *, workspace: str, spec: Any, name: str, labels: dict[str, str]) -> None:
+        self._called("create", name)
+        super().create(workspace=workspace, spec=spec, name=name, labels=labels)
+
+    def get(self, name: str, *, workspace: str) -> Sandbox:
+        # A deletion the gateway accepted takes a while: it may still say the sandbox starts, or is ready.
+        self._called("get", name)
+        return super().get(name, workspace=workspace)
+
+    def delete(self, name: str, *, workspace: str, allow_missing: bool) -> DeletionResult:
+        self.calls.append(("delete", name))
+        return super().delete(name, workspace=workspace, allow_missing=allow_missing)
+
+    def exec(self, name: str, command: list[str], **options: Any) -> ExecResult:
+        self._called("exec", name)
+        return super().exec(name, command, **options)
+
+    def exec_stream(self, name: str, command: list[str], **options: Any) -> Any:
+        self._called("exec", name)
+        yield from super().exec_stream(name, command, **options)
+
+
+def writing(commands: OpenShellCommands, folder: Path, name: str) -> asyncio.Task[Any]:
+    """A command writing ``<name>.txt`` in the run's folder, running."""
+    return asyncio.create_task(
+        commands.run(
+            f"echo {name} > {name}.txt", workspace=str(folder), folder=folder, env={}, seconds=60, max_bytes=1024
+        )
+    )
+
+
+@pytest.mark.parametrize("at", ["create", "get"])
+async def test_a_run_stopped_as_its_sandbox_starts_runs_nothing_in_it(folder: Path, tmp_path: Path, at: str) -> None:
+    # Stopped while the gateway makes its sandbox, or while it starts.
+    gateway = Holding(tmp_path / "sandboxes", at=at)
+    commands = sandbox(gateway)
+    task = writing(commands, folder, "ran")
+    assert await asyncio.to_thread(gateway.entered.wait, 10)
+
+    task.cancel()
+    await asyncio.sleep(0.2)  # a sandbox being made: the stop waits for it to exist
+    gateway.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # By the time the stop returned, the sandbox was deleted...
+    [made] = gateway.created
+    assert made["name"] in gateway.deleted
+    commands._threads.shutdown(wait=True)
+    # ...and nothing was ever run in it: not the folder's copy, not the command.
+    assert [method for method, _ in gateway.calls if method == "exec"] == []
+    assert set(gateway.deleted) == {made["name"]}
+    assert not (folder / "ran.txt").exists()
+    commands.close()
+
+
+async def test_a_command_waiting_for_a_thread_never_starts_when_its_run_stops(
+    folder: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sandbox_commands, "THREADS", 1)
+    gateway = Holding(tmp_path / "sandboxes", at="create")
+    commands = sandbox(gateway)
+    first = writing(commands, folder, "first")
+    assert await asyncio.to_thread(gateway.entered.wait, 10)
+    second = writing(commands, folder, "second")  # waits for the one thread
+    await asyncio.sleep(0.1)
+
+    second.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await second
+    gateway.release.set()
+    assert (await first).exit_code == 0
+    commands._threads.shutdown(wait=True)
+
+    # The second never got a sandbox, or ran.
+    assert len(gateway.created) == 1 and len(commands_ran(gateway)) == 1
+    assert (folder / "first.txt").exists() and not (folder / "second.txt").exists()
     commands.close()
 
 

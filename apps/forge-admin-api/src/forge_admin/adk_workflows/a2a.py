@@ -83,7 +83,7 @@ from forge_task_adk_workflows.run_store import CANCELABLE, PAUSED
 from google.protobuf.struct_pb2 import Struct
 
 from forge_admin.adk_workflows.files import Limits, SentFile
-from forge_admin.adk_workflows.runs import GOING, start_schema
+from forge_admin.adk_workflows.runs import going, start_schema
 from forge_admin.adk_workflows.runtime import (
     MANAGE_RUNS,
     answer_run,
@@ -389,14 +389,16 @@ class WorkflowA2aExecutor(AgentExecutor):
             )
             if not started:
                 return
+            # A first message sent again (or to a process that doesn't know
+            # the task yet) follows the run the first made: it's never another.
         else:
             run = await run_store(request).get(run_id)
             if run is None:
                 await updater.failed(agent_message("The task's run is gone"))
                 return
-            if run["status"] == PAUSED and not await self._answer(
-                request, updater, run, message
-            ):
+            # Paused for someone (not only for runs it started): the message answers.
+            asks = run["status"] == PAUSED and runtime_pause(run) is not None
+            if asks and not await self._answer(request, updater, run, message):
                 return
         await self._follow(request, updater, event_queue, run_id)
 
@@ -412,7 +414,7 @@ class WorkflowA2aExecutor(AgentExecutor):
         caller = caller_of(request)
         resolved: ResolvedWorkflow = request.state.forge_workflow
         try:
-            run = await start_runtime_run(
+            run, created = await start_runtime_run(
                 request,
                 caller,
                 resolved,
@@ -421,6 +423,7 @@ class WorkflowA2aExecutor(AgentExecutor):
                 run_id=run_id,
                 trigger={"task_id": updater.task_id, "context_id": context_id},
                 files=files_of(message, Limits.of(request.app.state.settings)),
+                retry_input=False,
             )
         except HTTPException as error:
             text = str(error.detail)
@@ -429,6 +432,8 @@ class WorkflowA2aExecutor(AgentExecutor):
             else:
                 await updater.failed(agent_message(text))
             return False
+        if not created:
+            return True
         await updater.update_status(
             TaskState.TASK_STATE_WORKING,
             message=agent_message("Queued"),
@@ -513,7 +518,7 @@ class WorkflowA2aExecutor(AgentExecutor):
             if run is None:
                 await updater.failed(agent_message("The task's run is gone"))
                 return
-            if run["status"] not in GOING:
+            if not going(run):
                 await report(updater, event_queue, run)
                 return
             if loop.time() >= deadline:

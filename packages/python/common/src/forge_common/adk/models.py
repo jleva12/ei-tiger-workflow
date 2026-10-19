@@ -29,6 +29,7 @@ each reply on the OpenAI and Anthropic APIs; Gemini's replies keep the model's
 own limit.
 """
 
+import logging
 import weakref
 from collections import defaultdict
 from collections.abc import AsyncGenerator, Callable, Iterable
@@ -42,7 +43,7 @@ from google.adk.models import BaseLlm, Gemini
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
-from google.genai import Client, types
+from google.genai import Client, errors, types
 from pydantic import PrivateAttr
 
 from forge_common.adk.usage import MODEL_KEY
@@ -66,6 +67,8 @@ __all__ = [
     "gemini_thinking_config",
     "litellm_model",
 ]
+
+log = logging.getLogger(__name__)
 
 # Gemini 3's thinking levels for each level; "off" is the least it allows.
 _GEMINI_LEVELS = {
@@ -91,6 +94,98 @@ _LITELLM_PREFIXES = {
     "openai-completions": "openai/",
     "anthropic-messages": "anthropic/",
 }
+
+
+def _has_output(reply: LlmResponse) -> bool:
+    """Whether a completed response answers or asks for a tool, beyond reasoning."""
+    if not reply.content:
+        return False
+    return any(
+        (part.text and part.text.strip() and not part.thought)
+        or part.function_call is not None
+        or part.function_response is not None
+        or part.inline_data is not None
+        or part.file_data is not None
+        or part.executable_code is not None
+        or part.code_execution_result is not None
+        for part in reply.content.parts or ()
+    )
+
+
+def _completion_error(reply: LlmResponse) -> None:
+    """Normalize provider failures even when ADK keeps content alongside them."""
+    if reply.error_message and not reply.error_code:
+        reply.error_code = "MODEL_ERROR"
+    if reply.partial:
+        return
+    reason = reply.finish_reason
+    if not reply.error_code and reason not in (
+        None,
+        types.FinishReason.STOP,
+        types.FinishReason.FINISH_REASON_UNSPECIFIED,
+    ):
+        reply.error_code = str(reason.value)
+    if not reply.error_code and not reply.interrupted:
+        return
+    if reply.content:
+        # ADK otherwise executes nonpartial calls even on an error response.
+        # A truncated, blocked or interrupted request must never cause side effects.
+        reply.content = reply.content.model_copy(
+            update={
+                "parts": [
+                    part.model_copy(update={"function_call": None, "executable_code": None})
+                    if part.function_call is not None or part.executable_code is not None
+                    else part
+                    for part in reply.content.parts or ()
+                ]
+            }
+        )
+    if not reply.error_code or reply.error_message:
+        return
+    if reply.error_code == "MAX_TOKENS":
+        reply.error_message = (
+            "The model reached its response limit before finishing. "
+            "The answer may be incomplete; ask it to continue or try a smaller request."
+        )
+    elif reply.error_code in {
+        "SAFETY",
+        "BLOCKLIST",
+        "PROHIBITED_CONTENT",
+        "SPII",
+        "IMAGE_SAFETY",
+        "IMAGE_PROHIBITED_CONTENT",
+        "RECITATION",
+        "IMAGE_RECITATION",
+    }:
+        reply.error_message = "The model blocked this response. Try rephrasing your request."
+    else:
+        reply.error_message = "The model stopped before completing its response. Try again."
+
+
+def _stream_error(error: Exception) -> tuple[str, str]:
+    """A provider failure safe to save with the text the person already saw."""
+    if isinstance(error, (TimeoutError, httpx.TimeoutException)):
+        return "MODEL_TIMEOUT", "The model timed out before completing its response. Try again."
+    status = None
+    code = "INTERNAL_ERROR"
+    if isinstance(error, errors.APIError):
+        status = error.code
+        code = error.status or str(status)
+    elif type(error).__module__.startswith("litellm"):
+        status = getattr(error, "status_code", None)
+        if isinstance(status, int):
+            code = f"MODEL_ERROR_{status}"
+    if status == 429:
+        message = "The model's provider is rate limiting requests. Wait a moment and try again."
+    elif status in (401, 403):
+        message = (
+            "The agent couldn't sign in to the model's provider. Check its model configuration."
+        )
+    elif isinstance(status, int) and status >= 500:
+        message = "The model's provider is unavailable. Wait a moment and try again."
+    else:
+        message = "The model response could not be completed. Try again."
+    return code, message
 
 
 @dataclass(frozen=True)
@@ -252,6 +347,7 @@ class ProviderModels(BaseLlm):
             authentication. If not provided, the default transport will be used.
         :type token_transport: httpx.AsyncBaseTransport | None
         """
+
         def find(name: str, setting: str) -> ResolvedModel:
             found = config.find(name)
             if found is None:
@@ -376,24 +472,97 @@ class ProviderModels(BaseLlm):
         call = ModelCall(target, level, await self.credential(target))
         llm = self._build(call)
         self._prepare(llm_request, call)
-        async with aclosing(llm.generate_content_async(llm_request, stream=stream)) as replies:
-            async for reply in replies:
-                # Which configured model answered, for what's recorded of it
-                # (forge_common.adk.usage) and priced by its ``cost``.
-                reply.custom_metadata = {**(reply.custom_metadata or {}), MODEL_KEY: target.ref}
-                yield reply
+        completed = False
+        saw_partial = False
+        partial_text: list[types.Part] = []
+        empty_reply: LlmResponse | None = None
+        stream_error: tuple[str, str] | None = None
+        try:
+            async with aclosing(llm.generate_content_async(llm_request, stream=stream)) as replies:
+                async for reply in replies:
+                    terminal_partial = bool(
+                        reply.partial
+                        and (reply.error_code or reply.error_message or reply.interrupted)
+                    )
+                    if terminal_partial:
+                        # Explicit failures/cancellations must reach saved
+                        # history too; ADK never saves partial events.
+                        reply.partial = False
+                    _completion_error(reply)
+                    if (
+                        partial_text
+                        and not reply.partial
+                        and (reply.error_code or reply.interrupted)
+                    ):
+                        parts = list(reply.content.parts or ()) if reply.content else []
+                        if terminal_partial or not any(part.text for part in parts):
+                            reply.content = types.Content(role="model", parts=partial_text + parts)
+                    # Which configured model answered, for what's recorded of it
+                    # (forge_common.adk.usage) and priced by its ``cost``.
+                    reply.custom_metadata = {**(reply.custom_metadata or {}), MODEL_KEY: target.ref}
+                    if not (
+                        reply.partial or reply.error_code or reply.interrupted or _has_output(reply)
+                    ):
+                        # An empty completion can still carry billable usage. If
+                        # the provider ends here, mark that same response failed
+                        # rather than recording a success plus a second model call.
+                        empty_reply = reply
+                        continue
+                    if empty_reply is not None:
+                        yield empty_reply
+                        empty_reply = None
+                    if reply.partial:
+                        saw_partial = True
+                        # A failed final response keeps text already shown to the
+                        # person. Incomplete tool arguments must never become an
+                        # executable, nonpartial function call.
+                        if reply.content:
+                            partial_text.extend(
+                                types.Part(text=part.text, thought=part.thought)
+                                for part in reply.content.parts or ()
+                                if part.text
+                            )
+                    if (
+                        reply.error_code
+                        or reply.interrupted
+                        or (not reply.partial and _has_output(reply))
+                    ):
+                        completed = True
+                    yield reply
+        except Exception as error:
+            if not saw_partial or completed:
+                raise
+            # ADK only saves nonpartial events. Finish the partial text with an
+            # explicit error so a reload keeps the same answer and failure.
+            # Cancellation still propagates without yielding during teardown.
+            log.exception("Model stream failed after partial output: %s", target.ref)
+            stream_error = _stream_error(error)
+        if not completed:
+            failed = empty_reply or LlmResponse(custom_metadata={MODEL_KEY: target.ref})
+            if partial_text:
+                failed.content = types.Content(role="model", parts=partial_text)
+            failed.partial = False
+            failed.error_code, failed.error_message = stream_error or (
+                "INCOMPLETE_MODEL_RESPONSE" if saw_partial else "EMPTY_MODEL_RESPONSE",
+                "The model stopped before completing its response. Try again."
+                if saw_partial
+                else "The model returned no answer. Try again.",
+            )
+            yield failed
+        elif empty_reply is not None:
+            yield empty_reply
 
     def _prepare(self, request: LlmRequest, call: ModelCall) -> None:
         """
-        Prepares and configures the request object based on the model information and call parameters.
+        Prepares the request object using the model information and call parameters.
 
-        Depending on the selected API and its requirements, this method adjusts the request object to
+        Depending on the selected API and its requirements, this adjusts the request object to
         ensure compatibility with the model's configurations and constraints. It handles specific
         cases for "google-generative-ai" API, reasoning configurations, and token limits
         for different target models.
 
-        :param request: The request object to be prepared and configured. It contains details about the input,
-            output configurations, and model-specific adjustments.
+        :param request: The request to prepare, including its input, output configurations,
+            and model-specific adjustments.
         :type request: LlmRequest
         :param call: The model call that contains the target model and its relevant settings such as
             API type, model ID, and reasoning level.
@@ -443,7 +612,7 @@ class ProviderModels(BaseLlm):
 
     def _default_build(self, call: ModelCall) -> BaseLlm:
         """
-        Builds and returns an appropriate BaseLlm instance based on the provided model call configuration.
+        Builds a BaseLlm instance from the model call configuration.
         This method is responsible for determining the specific implementation of BaseLlm
         to initialize, depending on the `api` and model settings in the `call` parameter.
 

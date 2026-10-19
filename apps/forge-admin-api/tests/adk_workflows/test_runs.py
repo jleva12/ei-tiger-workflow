@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from forge_task_adk_workflows.run_store import RunStore, metadata
 from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from forge_admin.adk_workflows.queue import EmbeddingError
 from forge_admin.adk_workflows.runs import (
@@ -24,6 +24,7 @@ from forge_admin.adk_workflows.runs import (
     prepare_run,
     saved_documents,
     start_adk_run,
+    start_adk_run_once,
 )
 
 EXAMPLE = (
@@ -215,6 +216,7 @@ def test_a_run_is_kept_with_its_documents_session_and_member_and_queued() -> Non
         "chat_agents": {},
         "knowledge_bases": {},
         "skills": {},
+        "agent_access": None,
         "input": {"n": 1},
         "files": [],
         "session_id": session_id,
@@ -351,6 +353,9 @@ class FakeResources:
     def __init__(self) -> None:
         self.asked: list[tuple[str, Any]] = []
 
+    async def check_workflows(self, record: Any, saved: Any) -> None:
+        """Nobody's limited here (test_agent_gating checks who may run what)."""
+
     async def chat_agent(self, agent_id: str, version: Any) -> dict[str, Any]:
         self.asked.append((agent_id, version))
         if agent_id != "ca_support":
@@ -365,6 +370,9 @@ class FakeResources:
 
     async def mcp_servers(self, ids: list[str]) -> set[str]:
         return {server for server in ids if server == "srv_docs"}
+
+    async def caller(self, wanted: frozenset[int]) -> None:
+        """Its agents have no rules (test_agent_gating checks what runs carry)."""
 
 
 def test_a_run_carries_the_agents_and_knowledge_bases_its_llm_agents_use() -> None:
@@ -445,3 +453,66 @@ def test_a_run_carries_the_agents_and_knowledge_bases_its_llm_agents_use() -> No
     # Without the organization's resources, a run that uses them can't start.
     with pytest.raises(AdkRunError, match="isn't set up here"):
         asyncio.run(prepare_run(record(top), None, finder(called, top)))
+
+
+def test_starts_racing_under_one_id_make_one_run_and_keep_its_files_only(
+    tmp_path: Path,
+) -> None:
+    from forge_task_adk_workflows.run_store import RunTaken
+    from google.adk.artifacts import InMemoryArtifactService
+
+    from forge_admin.adk_workflows.files import CheckedFile
+    from forge_admin.adk_workflows.runs import APP_NAME
+
+    top = agent(
+        "ag_top0000001", node("done", "end", {"outcome": "succeeded", "result": ""})
+    )
+    artifacts = InMemoryArtifactService()
+    queue = FakeQueue()
+    prepared = PreparedRun({}, files=[CheckedFile("a.txt", "", "text/plain", b"hi")])
+
+    async def main() -> None:
+        # A connection each, as two processes would have.
+        engine = create_async_engine(
+            f"sqlite+aiosqlite:///{tmp_path / 'runs.db'}", poolclass=NullPool
+        )
+        async with engine.begin() as conn:
+            await conn.run_sync(metadata.create_all)
+        store = RunStore(engine)
+
+        def start(by: str = "member-1") -> Any:
+            return start_adk_run_once(
+                store,
+                queue,  # type: ignore[arg-type]
+                record(top),
+                run_id="f" * 32,
+                prepared=prepared,
+                input={"n": 1},
+                run_as=by,
+                run_as_name="Ada",
+                trigger={"type": "manual", "by": by},
+                artifacts=artifacts,
+            )
+
+        try:
+            made = await asyncio.gather(*(start() for _ in range(4)))
+            assert sum(created for _, created in made) == 1
+            [run] = {run["id"]: run for run, _ in made}.values()
+            # One job, and the files of the run's session only: the others' are gone.
+            assert queue.queued == [run["id"]]
+            kept = artifacts.artifacts
+            assert {path.split("/")[2] for path, v in kept.items() if v} == {
+                run["session_id"]
+            }
+            # Someone else asking for the ID: refused, and their files gone too.
+            with pytest.raises(RunTaken):
+                await start("member-2")
+            kept = artifacts.artifacts
+            assert {path.split("/")[2] for path, v in kept.items() if v} == {
+                run["session_id"]
+            }
+            assert all(path.startswith(f"{APP_NAME}/") for path in kept)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(main())

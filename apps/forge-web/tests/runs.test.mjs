@@ -105,6 +105,16 @@ test("a run's line says what it waits for, why it failed, or when it started", (
   assert.match(runs.runLine(run({ error })), /^Started /)
 })
 
+test("a run waiting only for a run it started waits, not for a person", () => {
+  const child = { ...pause("child_run"), details: { kind: "child_run", child_run_id: "c0ffee12345678" } }
+  const waiting = run({ status: "paused", pause: child, gates: [child] })
+  assert.deepEqual(runs.runStatusDisplay(waiting), { status: "pending", label: "Waiting for a run" })
+  assert.equal(runs.runLine(waiting), "Waiting for run c0ffee12 to end")
+  // Waiting for a person too, it's theirs to decide.
+  const both = run({ status: "paused", pause: child, gates: [child, pause("approval")] })
+  assert.deepEqual(runs.runStatusDisplay(both), { status: "review", label: "Awaiting approval" })
+})
+
 test("a list of runs refreshes quickly while one is open, slowly otherwise, not after it failed", () => {
   const page = (...items) => ({ status: "success", data: { items, total: items.length } })
   assert.equal(runs.runsPollMs(page(run(), run({ status: "running" }))), runs.OPEN_POLL_MS)

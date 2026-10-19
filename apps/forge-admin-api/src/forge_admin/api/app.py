@@ -10,6 +10,7 @@ from forge_common.logging import configure_logging
 from forge_admin.api.routes import (
     adk_workflow_runs,
     adk_workflows,
+    agent_access,
     api_credentials,
     api_keys,
     assistant,
@@ -19,7 +20,8 @@ from forge_admin.api.routes import (
     code_repositories,
     code_repository_graph,
     conversations,
-    instruction_writer,
+    dashboards,
+    helpers,
     knowledge_bases,
     knowledge_collections,
     knowledge_connections,
@@ -36,7 +38,9 @@ from forge_admin.api.routes import (
     permission_groups,
     permissions,
     roles,
+    shared_widgets,
     skills,
+    ui_components,
     users,
 )
 from forge_admin.api.server import ApiServer
@@ -60,12 +64,14 @@ ROUTERS = [
     mcp_servers.router,
     api_credentials.router,
     skills.router,
+    ui_components.router,
     openapi_specs.router,
-    instruction_writer.router,
+    helpers.router,
     code_graph.router,
     code_repositories.router,
     code_repository_graph.router,
     api_keys.router,
+    agent_access.router,
     members.router,
     roles.router,
     permissions.router,
@@ -73,6 +79,8 @@ ROUTERS = [
     users.router,
     assistant.router,
     me.router,
+    dashboards.router,
+    shared_widgets.router,
     authz.router,
 ]
 

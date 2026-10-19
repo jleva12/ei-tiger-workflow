@@ -8,9 +8,9 @@ import {
   useAdkAgentInfo,
   useAdkArtifacts,
   useAdkAuthRequests,
-  useAdkConfirmTool,
   useAdkEscalation,
   useAdkLongRunningToolIds,
+  useAdkSend,
   useAdkSessionState,
   useAdkSubmitAuth,
   useAdkSubmitInput,
@@ -62,8 +62,15 @@ import type { IconProp } from "@/components/forge/icons"
 import { CountBadge } from "@/components/forge/status"
 
 import { useAssistantSettings, type ApprovalView } from "./assistant-context"
+import { createArtifactFeedback } from "./artifact-feedback"
 import { SearchLabel, type AssistantSearch } from "./sources"
 import { answerFrom, askForm, describeAnswer } from "./ask-person"
+import {
+  approvalBatch,
+  approvalWords,
+  pendingApprovals,
+  shownArguments,
+} from "./approvals"
 import { followUpsOf } from "./follow-ups"
 import {
   compactTokens,
@@ -318,8 +325,14 @@ export const AdkInputRequestUI: ToolCallMessagePartComponent<
       icon="message"
       title="The agent has a question"
       plain
-      // One question is its own title; a form's questions are its fields.
-      description={form.fields ? <InlineText text={message} /> : undefined}
+      // One question is its own title, unless its schema names it (then
+      // the message, say a summary to confirm, goes above it); a form's
+      // questions are its fields.
+      description={
+        form.fields || form.questions[0]?.title !== message ? (
+          <InlineText text={message} />
+        ) : undefined
+      }
       done={
         answered !== undefined ? (
           <>Answered: {describeAnswer(answered, form)}</>
@@ -404,13 +417,6 @@ type ConfirmationArgs = {
   tool_confirmation?: { hint?: string }
 }
 
-const formatArg = (value: unknown) =>
-  typeof value === "string" ? value : JSON.stringify(value)
-
-// ADK's own hint, from `require_confirmation`, is written for the client
-// that answers it, not for the person; the card says it in its own words.
-const ADK_PROTOCOL_HINT = /^Please approve or reject the tool call /
-
 /** A small pulsing dot: this is waiting on the person. */
 function WaitingDot() {
   return (
@@ -421,17 +427,85 @@ function WaitingDot() {
   )
 }
 
-/** The call's arguments, when the tool has no preview of its own. */
+/**
+ * This card's part in its turn's approvals (`approvals.ts`): the person's
+ * decision is held until every approval of the turn is decided and no run
+ * is going, then one card sends them all at once.
+ */
+function useTurnApproval(toolCallId: string) {
+  const send = useAdkSend()
+  const version = React.useSyncExternalStore(
+    approvalBatch.subscribe,
+    approvalBatch.version
+  )
+  const pendingKey = useAuiState((s) =>
+    pendingApprovals(s.message.parts).join(" ")
+  )
+  const running = useAuiState((s) => s.thread.isRunning)
+  const [error, setError] = React.useState<string>()
+  const pending = React.useMemo(
+    () => (pendingKey ? pendingKey.split(" ") : []),
+    [pendingKey]
+  )
+
+  React.useEffect(() => {
+    if (running) return
+    // Only the first card to ask gets them, so they go once.
+    const replies = approvalBatch.take(pending)
+    if (!replies) return
+    send(replies, {}).catch((reason: unknown) => {
+      approvalBatch.release(pending)
+      setError(reason instanceof Error ? reason.message : String(reason))
+    })
+  }, [pending, running, send, version])
+
+  return {
+    decision: approvalBatch.decisionOf(toolCallId),
+    sent: approvalBatch.isSent(toolCallId),
+    /** The turn's other approvals still to decide. */
+    others: pending.filter(
+      (id) => id !== toolCallId && approvalBatch.decisionOf(id) === undefined
+    ).length,
+    running,
+    error,
+    decide: (confirmed: boolean) => {
+      setError(undefined)
+      approvalBatch.decide(toolCallId, confirmed)
+    },
+    undo: () => approvalBatch.undo(toolCallId),
+  }
+}
+
+/** Why a decision hasn't gone yet. */
+const waitingFor = (others: number, running: boolean) =>
+  others > 0
+    ? `It's sent once you've answered the other ${others === 1 ? "request" : `${others} requests`}.`
+    : running
+      ? "It's sent once the assistant has finished."
+      : "Sending…"
+
+/**
+ * The call's arguments, when the tool has no preview of its own: by name
+ * and without IDs (`shownArguments`).
+ */
 function ArgumentList({ args }: { args: Record<string, unknown> }) {
-  const entries = Object.entries(args)
-  if (entries.length === 0) return null
+  const shown = shownArguments(args)
+  if (shown.length === 0) return null
   return (
-    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-(--radius-soft) border border-border/60 bg-muted/60 px-3 py-2 font-mono text-2xs">
-      {entries.map(([key, value]) => (
+    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-(--radius-soft) border border-border/60 bg-muted/60 px-3 py-2 text-xs">
+      {shown.map(({ key, label, value }) => (
         <React.Fragment key={key}>
-          <dt className="text-muted-foreground">{key}</dt>
-          <dd className="min-w-0 break-all text-foreground">
-            {formatArg(value)}
+          <dt className="text-muted-foreground">{label}</dt>
+          <dd className="min-w-0 break-words whitespace-pre-line text-foreground">
+            {typeof value === "string" ? (
+              value
+            ) : (
+              <ul className="flex list-disc flex-col gap-0.5 ps-4">
+                {value.map((item, index) => (
+                  <li key={index}>{item}</li>
+                ))}
+              </ul>
+            )}
           </dd>
         </React.Fragment>
       ))}
@@ -442,11 +516,12 @@ function ArgumentList({ args }: { args: Record<string, unknown> }) {
 /** Once decided, the card folds to one line saying what the person chose. */
 function ApprovalOutcome({
   approved,
-  toolName,
+  question,
   view,
 }: {
   approved: boolean
-  toolName: string
+  /** What the card asked. */
+  question: string
   view: ApprovalView | undefined
 }) {
   return (
@@ -465,16 +540,8 @@ function ApprovalOutcome({
         <Icon icon={approved ? Tick02Icon : Cancel01Icon} size={10} />
       </span>
       {approved
-        ? (view?.approvedLabel ?? (
-            <>
-              You approved <code className="font-mono">{toolName}</code>
-            </>
-          ))
-        : (view?.deniedLabel ?? (
-            <>
-              You denied <code className="font-mono">{toolName}</code>
-            </>
-          ))}
+        ? (view?.approvedLabel ?? `Approved: ${question}`)
+        : (view?.deniedLabel ?? `Denied: ${question}`)}
     </p>
   )
 }
@@ -482,46 +549,38 @@ function ApprovalOutcome({
 /**
  * Renders ADK's `adk_request_confirmation` call, which a tool with
  * `require_confirmation` makes before it runs: a card saying what the agent
- * wants to do (the tool's `ApprovalView` in `approvals`, else its name and
- * arguments), with Approve / Deny. The run waits until the person decides;
- * the card then folds to the outcome. The gated call itself renders without
+ * wants to do (the tool's `ApprovalView` in `approvals`, else the tool's own
+ * question in its hint, else in general terms) over the call's arguments
+ * without IDs, with Approve / Deny. The run waits until the person decides;
+ * several approvals of one turn are answered together (`useTurnApproval`).
+ * The card then folds to the outcome. The gated call itself renders without
  * controls (see `AdkToolFallback`), so the decision is made in one place.
  */
 export const AdkConfirmationUI: ToolCallMessagePartComponent<
   ConfirmationArgs,
   unknown
 > = ({ toolCallId, args, approval }) => {
-  const confirmTool = useAdkConfirmTool()
+  const turn = useTurnApproval(toolCallId)
   const { approvals } = useAssistantSettings()
-  const [pending, setPending] = React.useState<boolean>()
-  const [error, setError] = React.useState<string>()
   const original = args.originalFunctionCall ?? args.original_function_call
   const toolName = original?.name ?? "tool"
   const callArgs = original?.args ?? {}
   const view = approvals?.[toolName]
-  const hint = (args.toolConfirmation ?? args.tool_confirmation)?.hint
+  const words = approvalWords(
+    original?.name ?? "",
+    (args.toolConfirmation ?? args.tool_confirmation)?.hint
+  )
   const Preview = view?.preview
+  const answered = approval?.approved ?? (turn.sent ? turn.decision : undefined)
 
-  if (approval?.approved !== undefined)
+  if (answered !== undefined)
     return (
       <ApprovalOutcome
-        approved={approval.approved}
-        toolName={toolName}
+        approved={answered}
+        question={words.question}
         view={view}
       />
     )
-
-  const decide = async (confirmed: boolean) => {
-    setPending(confirmed)
-    setError(undefined)
-    try {
-      await confirmTool(toolCallId, confirmed)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason))
-    } finally {
-      setPending(undefined)
-    }
-  }
 
   return (
     <section
@@ -540,18 +599,14 @@ export const AdkConfirmationUI: ToolCallMessagePartComponent<
       <div className="flex flex-col gap-3 p-3.5">
         <div className="flex flex-col gap-1">
           <p className="text-sm font-medium text-foreground">
-            {view?.title ?? (
-              <>
-                Run <code className="font-mono">{toolName}</code>?
-              </>
-            )}
+            {view?.title ?? words.question}
           </p>
           <p className="text-xs leading-relaxed text-muted-foreground">
             {view?.description ??
-              (hint && !ADK_PROTOCOL_HINT.test(hint) ? (
-                <InlineText text={hint} />
+              (words.detail ? (
+                <InlineText text={words.detail} />
               ) : (
-                "The assistant wants to run this tool. Nothing happens until you approve it."
+                "The assistant wants to do this. Nothing happens until you approve it."
               ))}
           </p>
         </div>
@@ -560,30 +615,48 @@ export const AdkConfirmationUI: ToolCallMessagePartComponent<
         ) : (
           <ArgumentList args={callArgs} />
         )}
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            size="sm"
-            disabled={pending !== undefined}
-            onClick={() => decide(true)}
-          >
-            {pending === true ? (
-              <Spinner data-icon="inline-start" />
-            ) : (
+        {turn.decision === undefined ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" onClick={() => turn.decide(true)}>
               <Icon icon={Tick02Icon} data-icon="inline-start" />
+              {view?.approveLabel ?? "Approve"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => turn.decide(false)}
+            >
+              Deny
+            </Button>
+            {turn.error && (
+              <span className="text-xs text-destructive">{turn.error}</span>
             )}
-            {view?.approveLabel ?? "Approve"}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={pending !== undefined}
-            onClick={() => decide(false)}
-          >
-            {pending === false && <Spinner data-icon="inline-start" />}
-            Deny
-          </Button>
-          {error && <span className="text-xs text-destructive">{error}</span>}
-        </div>
+          </div>
+        ) : (
+          <div className="flex items-start gap-2 text-xs text-muted-foreground">
+            {turn.others === 0 && !turn.running ? (
+              <Spinner className="mt-px shrink-0" />
+            ) : (
+              <Icon
+                icon={turn.decision ? Tick02Icon : Cancel01Icon}
+                size={12}
+                className="mt-0.5 shrink-0"
+              />
+            )}
+            <p className="min-w-0 flex-1 leading-relaxed">
+              {turn.decision ? "Approved." : "Denied."}{" "}
+              {waitingFor(turn.others, turn.running)}
+            </p>
+            <Button
+              size="xs"
+              variant="ghost"
+              className="-my-0.5 shrink-0"
+              onClick={turn.undo}
+            >
+              Change
+            </Button>
+          </div>
+        )}
       </div>
     </section>
   )
@@ -612,7 +685,7 @@ export const AdkDelegation: ToolCallMessagePartComponent = ({
   status,
 }) => {
   const agentName = useAgentName()
-  const request = textOf(args, "request")
+  const request = textOf(args, "request") ?? textOf(args, "background")
   const report = textOf(result, "result")
   return (
     <ToolFallback.Root data-slot="adk-delegation">
@@ -814,16 +887,38 @@ const downloadArtifact = (
 function AdkArtifactsMenu({ compact = false }: { compact?: boolean }) {
   const artifacts = useAdkArtifacts()
   const { artifacts: api, onOpenArtifact } = useAssistantSettings()
-  const sessionId = useAuiState(
-    (s) =>
-      s.threads.threadItems.find((t) => t.id === s.threads.mainThreadId)
-        ?.remoteId
+  const sessionId = useAuiState((s) => {
+    const current = s.threads.threadItems.find(
+      (t) => t.id === s.threads.mainThreadId
+    )
+    return current?.externalId ?? current?.remoteId
+  })
+  const feedback = React.useMemo(
+    () =>
+      createArtifactFeedback({
+        api,
+        sessionId,
+        onOpenArtifact,
+        download: downloadArtifact,
+      }),
+    [api, sessionId, onOpenArtifact]
   )
-  const names = Object.keys(artifacts)
-  if (names.length === 0) return null
+  React.useEffect(() => () => feedback.cancelPending(), [feedback])
+  const state = React.useSyncExternalStore(
+    feedback.subscribe,
+    feedback.getSnapshot,
+    feedback.getSnapshot
+  )
+  const names = [...new Set([...Object.keys(artifacts), ...state.names])]
+  const busy = state.loading || Boolean(state.pending)
+  if (names.length === 0 && (!api || !sessionId)) return null
 
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      onOpenChange={(open) => {
+        if (open) void feedback.refresh()
+      }}
+    >
       <DropdownMenuTrigger
         render={
           compact ? (
@@ -845,23 +940,60 @@ function AdkArtifactsMenu({ compact = false }: { compact?: boolean }) {
       <DropdownMenuContent align="end" className="min-w-56">
         <DropdownMenuGroup>
           <DropdownMenuLabel>Saved by the agent</DropdownMenuLabel>
+          {state.loading && (
+            <div
+              role="status"
+              className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground"
+            >
+              <Spinner className="size-3" /> Loading saved files…
+            </div>
+          )}
+          {!state.loading && !state.error && names.length === 0 && (
+            <p className="px-2 py-2 text-xs text-muted-foreground">
+              No saved files yet.
+            </p>
+          )}
           {names.map((name) => (
             <DropdownMenuItem
               key={name}
-              disabled={!onOpenArtifact && (!api || !sessionId)}
-              onClick={async () => {
-                if (onOpenArtifact) return onOpenArtifact(name)
-                if (!api || !sessionId) return
-                downloadArtifact(name, await api.load(sessionId, name))
+              closeOnClick={false}
+              disabled={busy || (!onOpenArtifact && (!api || !sessionId))}
+              onClick={() => {
+                void feedback.open(name)
               }}
             >
-              <Icon icon="file" />
+              {state.pending === name ? (
+                <Spinner className="size-4" />
+              ) : (
+                <Icon icon="file" />
+              )}
               <span className="min-w-0 flex-1 truncate">{name}</span>
-              <span className="text-2xs text-muted-foreground">
-                v{artifacts[name]}
-              </span>
+              {artifacts[name] !== undefined && (
+                <span className="text-2xs text-muted-foreground">
+                  v{artifacts[name]}
+                </span>
+              )}
             </DropdownMenuItem>
           ))}
+          {state.error && (
+            <div
+              role="alert"
+              className="max-w-72 px-2 py-2 text-xs text-danger-foreground"
+            >
+              <p>{state.error.message}</p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="mt-2"
+                disabled={busy}
+                onClick={() => {
+                  void feedback.retry()
+                }}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
         </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>

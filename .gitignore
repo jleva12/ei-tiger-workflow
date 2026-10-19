@@ -17,6 +17,7 @@ logs/
 # JavaScript and TypeScript workspaces
 node_modules/
 dist/
+dist-desktop/
 dist-ssr/
 *.tsbuildinfo
 .tanstack/

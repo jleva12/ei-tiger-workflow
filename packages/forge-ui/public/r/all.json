@@ -33,6 +33,7 @@
     "@forge-ui/sheet",
     "@forge-ui/skeleton",
     "@forge-ui/spinner",
+    "@forge-ui/streaming-text",
     "@forge-ui/switch",
     "@forge-ui/table",
     "@forge-ui/tabs",

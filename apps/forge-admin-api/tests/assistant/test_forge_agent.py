@@ -267,7 +267,7 @@ def test_with_a_key_gemini_uses_it(settings: Settings) -> None:
 
     assert runtime.unavailable is None
     assert models.default.ref == "google/gemini-3.5-flash"
-    key = asyncio.run(models._credential(models.default))
+    key = asyncio.run(models.credential(models.default))
     gemini = models._default_build(ModelCall(models.default, None, key))
     assert isinstance(gemini, Gemini) and gemini.model == "gemini-3.5-flash"
     assert gemini.api_client._api_client.api_key == "test-key"

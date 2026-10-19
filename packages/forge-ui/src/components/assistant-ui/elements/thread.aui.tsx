@@ -90,6 +90,8 @@ export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart
  * tool group; without it they render like any other tool call.
  */
 export type ThreadComponents = {
+  /** Invocation-level status, independent of an individual message. */
+  RunStatus?: ComponentType | undefined
   AssistantMessage?: ComponentType | undefined
   Welcome?: ComponentType | undefined
   ToolFallback?: ToolCallMessagePartComponent | undefined
@@ -240,6 +242,7 @@ const ThreadRoot: FC<{
 }> = ({ isEmpty, autoFocus, placeholder }) => {
   const {
     Welcome = ThreadWelcome,
+    RunStatus,
     FollowUps,
     ComposerLead,
   } = useContext(ThreadComponentsContext)
@@ -278,13 +281,18 @@ const ThreadRoot: FC<{
             <ThreadHistorySkeleton />
           </AuiIf>
 
+          {/* The space a new message's reply fills (turnAnchor="top") is
+              put after the reply's last message: it goes last, so Working…
+              and the run's status stay under the reply. */}
           <div
             data-slot="aui_message-group"
-            className="mb-14 flex flex-col gap-y-6 empty:hidden"
+            className="mb-14 flex flex-col gap-y-6 empty:hidden [&>[data-aui-top-anchor-reserve]]:order-last"
           >
             <ThreadPrimitive.Messages>
               {() => <ThreadMessage />}
             </ThreadPrimitive.Messages>
+            <ThreadWorkingIndicator />
+            {RunStatus && <RunStatus />}
           </div>
 
           <ThreadPrimitive.ViewportFooter
@@ -308,6 +316,25 @@ const ThreadRoot: FC<{
       </ThreadPrimitive.Viewport>
       <QuoteToolbar />
     </ThreadPrimitive.Root>
+  )
+}
+
+/** A message can finish before the invocation (another agent or follow-ups). */
+const ThreadWorkingIndicator: FC = () => {
+  const running = useAuiState((s) => s.thread.isRunning)
+  if (!running) return null
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-slot="aui_thread-working"
+      className="flex items-center gap-2 px-2 text-xs text-muted-foreground"
+    >
+      <span aria-hidden className="animate-pulse motion-reduce:animate-none">
+        ●
+      </span>
+      <span>Working…</span>
+    </div>
   )
 }
 
@@ -355,7 +382,7 @@ const SpokenMessage: FC = () => {
       data-role={role}
       data-voice-run={position}
       className={cn(
-        "aui-spoken-message mx-2 bg-muted/40 px-3 py-1.5 [contain-intrinsic-size:auto_48px] [content-visibility:auto]",
+        "aui-spoken-message mx-2 bg-muted/40 px-3 py-1.5",
         position === "single" && "rounded-xl py-2",
         position === "start" && "rounded-t-xl pt-2",
         position === "middle" && "-mt-6",
@@ -645,6 +672,26 @@ const ComposerAction: FC = () => {
 }
 
 const MessageError: FC = () => {
+  const status = useAuiState((s) => s.message.status)
+  // Stored history may contain these native ADK outcomes without a local
+  // invocation envelope. MessagePrimitive.Error only handles reason="error".
+  const incomplete =
+    status?.type === "incomplete"
+      ? status.reason === "length"
+        ? "The reply reached the model's output limit before it finished. Try asking for a shorter answer or continue the reply."
+        : status.reason === "content-filter"
+          ? "The model's safety filters stopped this reply. Try rephrasing your request."
+          : undefined
+      : undefined
+  if (incomplete)
+    return (
+      <div
+        role="alert"
+        className="aui-message-error-root mt-2 rounded-(--radius-card) border border-danger-border bg-danger-surface p-3 text-xs text-danger-foreground"
+      >
+        {incomplete}
+      </div>
+    )
   return (
     <MessagePrimitive.Error>
       <ErrorPrimitive.Root className="aui-message-error-root mt-2 rounded-(--radius-card) border border-danger-border bg-danger-surface p-3 text-xs text-danger-foreground">
@@ -671,11 +718,17 @@ const AssistantMessage: FC = () => {
   // Keep the action bar inside the contained root's paint box, then cancel its reserved space in flow.
   const ACTION_BAR_HEIGHT = `min-h-7.5 ${ACTION_BAR_PT}`
 
+  // Neither content-visibility nor an entrance animation: the reply being
+  // written is replaced by a new element when its first event arrives (its
+  // local ID gives way to the server's), and a new element with
+  // content-visibility:auto is its placeholder height (200px) for a frame,
+  // which collapsed the space reserved under the question and jerked the
+  // thread up and back; the animation replayed with it.
   return (
     <MessagePrimitive.Root
       data-slot="aui_assistant-message-root"
       data-role="assistant"
-      className="relative -mb-7.5 animate-in pb-7.5 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] fade-in slide-in-from-bottom-1"
+      className="relative -mb-7.5 pb-7.5"
     >
       <div
         data-slot="aui_assistant-message-content"
@@ -687,7 +740,7 @@ const AssistantMessage: FC = () => {
         )}
       >
         {MessageHeader && <MessageHeader />}
-        <MessagePrimitive.GroupedParts groupBy={groupBy}>
+        <MessagePrimitive.GroupedParts groupBy={groupBy} indicator="never">
           {({ part, children }) => {
             switch (part.type) {
               case "group-chainOfThought":
@@ -961,7 +1014,9 @@ const UserMessage: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_user-message-root"
-      className="-mt-4 grid animate-in auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 pt-4 duration-150 [contain-intrinsic-size:auto_200px] [content-visibility:auto] fade-in slide-in-from-bottom-1 not-first:mt-6 [&:where(>*)]:col-start-2"
+      // No content-visibility, as the reply (AssistantMessage): a message
+      // replaced while it's on screen would flash its placeholder height.
+      className="-mt-4 grid animate-in auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 pt-4 duration-150 fade-in slide-in-from-bottom-1 not-first:mt-6 [&:where(>*)]:col-start-2"
       data-role="user"
     >
       <UserMessageAttachments />

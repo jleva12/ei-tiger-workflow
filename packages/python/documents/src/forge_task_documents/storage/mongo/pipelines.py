@@ -12,14 +12,13 @@ from typing import Any
 
 from forge_task_documents.models import HybridSearchRequest
 
-# A chunk a run wrote that search doesn't see until the run is published
-# (ChunkStore.publish_run) has live: false; every other chunk, those written
-# before there was publishing too, has no such field.
+# Modern generation rows keep live:false; their document's pointer selects
+# visibility. PUBLISHED is the compatibility rule for pre-generation rows only.
 LIVE = "live"
 UNPUBLISHED = {LIVE: False}
 PUBLISHED = {LIVE: {"$ne": False}}
 
-HIDDEN_FIELDS = ["embedding", "embed_text", "run_seq", LIVE]
+HIDDEN_FIELDS = ["embedding", "embed_text", LIVE]
 MAX_NUM_CANDIDATES = 10_000  # Atlas limit
 
 
@@ -61,7 +60,9 @@ def search_filters(req: HybridSearchRequest) -> list[dict[str, Any]]:
     return out
 
 
-def vector_stage(req: HybridSearchRequest, *, index: str, path: str = "embedding") -> dict[str, Any]:
+def vector_stage(
+    req: HybridSearchRequest, *, index: str, path: str = "embedding", visibility: dict[str, Any] | None = None
+) -> dict[str, Any]:
     return {
         "$vectorSearch": {
             "index": index,
@@ -69,27 +70,33 @@ def vector_stage(req: HybridSearchRequest, *, index: str, path: str = "embedding
             "queryVector": req.vector,
             "numCandidates": min(max(req.num_candidates, req.per_leg_limit), MAX_NUM_CANDIDATES),
             "limit": req.per_leg_limit,
-            "filter": vector_filter(req),
+            "filter": {"$and": [vector_filter(req), visibility]} if visibility is not None else vector_filter(req),
         }
     }
 
 
-def vector_leg(req: HybridSearchRequest, *, index: str) -> list[dict[str, Any]]:
+def vector_leg(
+    req: HybridSearchRequest, *, index: str, visibility: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
     """The vector leg: nearest neighbours, then only published ones embedded
     with the query's model. Vectors of another model (a knowledge base not
     re-indexed since the model changed) aren't comparable, and the same
     dimensions would otherwise rank them as if they were. A $match after
     $vectorSearch needs no index change (a pre-filter would need the fields in
     the vector index) and is allowed in $rankFusion's input pipelines."""
-    match: dict[str, Any] = dict(PUBLISHED)
+    match: dict[str, Any] = dict(visibility if visibility is not None else PUBLISHED)
     if req.embedding_model:
         match["embedding_model"] = req.embedding_model
-    return [vector_stage(req, index=index), {"$match": match}]
+    return [vector_stage(req, index=index, visibility=visibility), {"$match": match}]
 
 
-def text_leg(req: HybridSearchRequest, *, index: str) -> list[dict[str, Any]]:
+def text_leg(req: HybridSearchRequest, *, index: str, visibility: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """The text leg: BM25 matches, only published ones, as many as fuse."""
-    return [text_stage(req, index=index), {"$match": PUBLISHED}, {"$limit": req.per_leg_limit}]
+    return [
+        text_stage(req, index=index),
+        {"$match": visibility if visibility is not None else PUBLISHED},
+        {"$limit": req.per_leg_limit},
+    ]
 
 
 def text_stage(
@@ -132,14 +139,16 @@ def text_stage(
     }
 
 
-def rank_fusion_pipeline(req: HybridSearchRequest, *, text_index: str, vector_index: str) -> list[dict[str, Any]]:
+def rank_fusion_pipeline(
+    req: HybridSearchRequest, *, text_index: str, vector_index: str, visibility: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
     pipeline: list[dict[str, Any]] = [
         {
             "$rankFusion": {
                 "input": {
                     "pipelines": {
-                        "vector": vector_leg(req, index=vector_index),
-                        "text": text_leg(req, index=text_index),
+                        "vector": vector_leg(req, index=vector_index, visibility=visibility),
+                        "text": text_leg(req, index=text_index, visibility=visibility),
                     }
                 },
                 "combination": {"weights": {"vector": req.vector_weight, "text": req.text_weight}},
@@ -156,13 +165,18 @@ def rank_fusion_pipeline(req: HybridSearchRequest, *, text_index: str, vector_in
 
 
 def single_leg_pipeline(
-    req: HybridSearchRequest, *, leg: str, text_index: str, vector_index: str
+    req: HybridSearchRequest,
+    *,
+    leg: str,
+    text_index: str,
+    vector_index: str,
+    visibility: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if leg == "vector":
-        head: list[dict[str, Any]] = vector_leg(req, index=vector_index)
+        head: list[dict[str, Any]] = vector_leg(req, index=vector_index, visibility=visibility)
         meta = "vectorSearchScore"
     elif leg == "text":
-        head = text_leg(req, index=text_index)
+        head = text_leg(req, index=text_index, visibility=visibility)
         meta = "searchScore"
     else:
         raise ValueError(f"unknown leg {leg!r}")

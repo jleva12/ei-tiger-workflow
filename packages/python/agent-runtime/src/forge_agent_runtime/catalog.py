@@ -2,11 +2,11 @@
 The kinds of node a chat agent (``forge.chat_agent/v1``) can have, as the
 Agents canvas offers them (``node_kinds.json``): each kind's words and icon,
 the library group it's in, its ways out, whether it can be handed off to,
-whether a workflow's LLM agent may have it as a tool, and what a new one
-starts with. It's the one place they're kept: the admin API serves it to the
-web console, the document's checks and defaults read it (``document``), and
-so do the tools built for a workflow's LLM agents (``build.TOOL_KINDS``, and
-the ADK workflows task's).
+whether an agent can call it as a tool, whether a workflow's LLM agent may
+have it as a tool, and what a new one starts with. It's the one place
+they're kept: the admin API serves it to the web console, the document's
+checks and defaults read it (``document``), and so do the tools built for a
+workflow's LLM agents (``build.TOOL_KINDS``, and the ADK workflows task's).
 
 The groups and ways out have the same shape as the workflow node catalog's
 (``forge_task_adk_workflows.graph.catalog``), which uses these models.
@@ -65,6 +65,8 @@ class ChatNodeKind(_Entry):
     outputs: list[NodeOutput]
     #: Whether an agent can hand off to it.
     handed_to: bool = False
+    #: Whether an agent can call it as a tool (an intake agent: file requests to it); one that's only handed off to isn't.
+    tool: bool = True
     #: Whether a workflow's LLM agent may have it as a tool.
     workflow_tool: bool = False
     #: The settings a new one starts with, and what an older document's lack.
@@ -93,6 +95,8 @@ class ChatNodeCatalog(_Entry):
             ways = [output.id for output in kind.outputs]
             if len(set(ways)) != len(ways):
                 raise ValueError(f"{kind.kind} has a way out twice")
+            if not kind.tool and not kind.handed_to and kind.kind != "agent":
+                raise ValueError(f"{kind.kind} is neither called nor handed off to: nothing could reach it")
         return self
 
     def find(self, kind: Any) -> ChatNodeKind | None:

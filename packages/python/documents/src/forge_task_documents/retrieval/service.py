@@ -160,11 +160,17 @@ class HybridSearchService:
 
     async def _expand(self, hits: list[SearchHit]) -> None:
         """Small-to-big: attach the full text of each hit's section (read in
-        the hit's own tenant, as a search may span several)."""
-        cache: dict[tuple[str, str, str], str] = {}
+        the hit's own tenant and immutable generation). A publication between
+        search and expansion must not attach a different version's section.
+        If the old generation was collected, keep the original unexpanded hit.
+        Backends that do not identify generations also keep their original hit.
+        """
+        cache: dict[tuple[str, str, str, int], str | None] = {}
         for hit in hits:
-            key = (hit.chunk.tenant_id, hit.chunk.doc_id, hit.chunk.section_key)
+            if hit.generation is None:
+                continue
+            key = (hit.chunk.tenant_id, hit.chunk.doc_id, hit.chunk.section_key, hit.generation)
             if key not in cache:
-                section = await self._chunks.get_section(*key)
-                cache[key] = "\n\n".join(c.text for c in section)
+                section = await self._chunks.get_section(*key[:3], generation=hit.generation)
+                cache[key] = "\n\n".join(c.text for c in section) if section else None
             hit.expanded_text = cache[key]

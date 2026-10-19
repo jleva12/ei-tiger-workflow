@@ -2,6 +2,12 @@ import { useCallback, useEffect, useRef, type RefObject } from "react"
 
 /** Set on the scrolling ancestor while a disclosure animates in it. */
 export const DISCLOSURE_HOLD_ATTRIBUTE = "data-disclosure-hold"
+/**
+ * Set on the scroller's content while the thread keeps a minimum height on
+ * it (`useFollowReply`). A disclosure's hold takes over from it: that height
+ * isn't the content's own, to put back afterwards.
+ */
+export const THREAD_FLOOR_ATTRIBUTE = "data-thread-floor"
 // How long held height the thread no longer fills takes to go.
 const SETTLE_MS = 180
 
@@ -46,10 +52,12 @@ function holdScroller(scroller: HTMLElement) {
   }
   if (!hold) {
     const content = scroller.firstElementChild as HTMLElement | null
+    const floored = content?.hasAttribute(THREAD_FLOOR_ATTRIBUTE) ?? false
+    content?.removeAttribute(THREAD_FLOOR_ATTRIBUTE)
     hold = {
       count: 0,
       content,
-      minHeight: content?.style.minHeight ?? "",
+      minHeight: floored ? "" : (content?.style.minHeight ?? ""),
       overflowAnchor: scroller.style.overflowAnchor,
     }
     holds.set(scroller, hold)

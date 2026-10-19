@@ -49,7 +49,7 @@ from forge_admin.config import Settings
 from forge_admin.db.base import Base
 from forge_admin.db.session import get_session
 from forge_admin.instruction_writer.brief import Brief, render, resolve
-from forge_admin.models import McpServer, Organization, Skill, SkillCreatorJob
+from forge_admin.models import HelperJob, McpServer, Organization, Skill
 from forge_admin.skills.vault import OrganizationSkills, SkillStamps, bundles_of
 
 API = "/api/v1"
@@ -57,7 +57,8 @@ ORG = "3f6c0000-0000-4000-8000-000000000001"
 OTHER_ORG = "3f6c0000-0000-4000-8000-000000000002"
 ADMIN, MEMBER, VIEWER, NEIGHBOUR = "admin-1", "member-1", "viewer-1", "neighbour-1"
 SKILLS = f"/organizations/{ORG}/skills"
-JOBS = f"/organizations/{ORG}/skill-creator/jobs"
+CREATOR = f"/organizations/{ORG}/helpers/skill_creator"
+JOBS = f"{CREATOR}/jobs"
 
 GRANTS = {
     "org:admin": ("organizations:read", "skills:manage"),
@@ -273,7 +274,7 @@ class Workspace:
 
         async def wait() -> None:
             app: Any = self.client.app
-            tasks = list(getattr(app.state, "skill_creator_tasks", set()))
+            tasks = list(getattr(app.state, "helper_tasks", set()))
             if tasks:
                 await asyncio.gather(*tasks)
 
@@ -286,7 +287,7 @@ def sqlite_tables() -> MetaData:
         "organizations",
         "users",
         "skills",
-        "skill_creator_jobs",
+        "helper_jobs",
         "mcp_servers",
     ):
         table = Base.metadata.tables[name].to_metadata(tables)
@@ -629,7 +630,7 @@ def test_the_creator_writes_a_skill_in_the_background_from_what_the_org_has(
         [text("Made open-bug-reports.")],
     ]
     started = workspace.call(
-        "POST", JOBS, body={"brief": "A skill to open bug reports"}
+        "POST", CREATOR, body={"brief": "A skill to open bug reports"}
     )
     assert started.status_code == 202, started.json()
     assert started.json()["status"] == "running"
@@ -638,7 +639,8 @@ def test_the_creator_writes_a_skill_in_the_background_from_what_the_org_has(
     [job] = workspace.call("GET", JOBS, VIEWER).json()
     assert job["status"] == "done", job["error"]
     assert job["notes"] == ["Give the agent the GitHub MCP server."]
-    made = workspace.call("GET", f"{SKILLS}/{job['skill_id']}").json()
+    assert job["input"] == {"brief": "A skill to open bug reports", "revises": None}
+    made = workspace.call("GET", f"{SKILLS}/{job['result']['skill_id']}").json()
     assert made["name"] == "open-bug-reports"
     assert made["source"] == {"kind": "creator", "job": job["id"]}
     assert made["skill"]["files"][0]["path"] == "references/template.md"
@@ -676,12 +678,12 @@ def test_the_creator_reworks_a_skill_and_keeps_its_name_free(
         [text("Done.")],
     ]
     started = workspace.call(
-        "POST", JOBS, body={"brief": "Sort by urgency", "revises": first["id"]}
+        "POST", CREATOR, body={"brief": "Sort by urgency", "revises": first["id"]}
     )
     assert started.status_code == 202
     workspace.settle()
     [job] = workspace.call("GET", JOBS).json()
-    assert job["skill_id"] == first["id"]
+    assert job["result"] == {"skill_id": first["id"], "name": "sorting-2"}
     reworked = workspace.call("GET", f"{SKILLS}/{first['id']}").json()
     # "sorting" is another skill's: it's given a name of its own.
     assert reworked["name"] == "sorting-2"
@@ -697,12 +699,14 @@ def test_the_creator_reworks_a_skill_and_keeps_its_name_free(
 
 def test_a_creator_that_saves_nothing_fails_saying_so(workspace: Workspace) -> None:
     workspace.model.turns = [[text("I can't.")]]
-    workspace.call("POST", JOBS, body={"brief": "Anything"})
+    workspace.call("POST", CREATOR, body={"brief": "Anything"})
     workspace.settle()
     [job] = workspace.call("GET", JOBS).json()
     assert job["status"] == "failed"
-    assert "without saving a skill" in job["error"]
-    assert workspace.call("POST", JOBS, VIEWER, body={"brief": "x"}).status_code == 403
+    assert "without handing anything in" in job["error"]
+    assert (
+        workspace.call("POST", CREATOR, VIEWER, body={"brief": "x"}).status_code == 403
+    )
 
 
 def test_a_job_left_running_by_a_restart_is_said_to_have_stopped(
@@ -710,8 +714,12 @@ def test_a_job_left_running_by_a_restart_is_said_to_have_stopped(
 ) -> None:
     async def old_job() -> None:
         async with workspace.sessions() as session:
-            job = SkillCreatorJob(
-                organization_id=ORG, brief="x", status="running", notes=[]
+            job = HelperJob(
+                organization_id=ORG,
+                helper="skill_creator",
+                input={"brief": "x"},
+                status="running",
+                notes=[],
             )
             session.add(job)
             await session.flush()
@@ -813,7 +821,9 @@ def test_an_exported_agent_carries_its_skills_and_its_cache_key_their_changes(
 
 def test_a_workflow_run_carries_the_skills_its_agents_use(workspace: Workspace) -> None:
     made = workspace.add()
-    resources = RunResources(ORG, chat_agents=None, sessions=workspace.sessions)
+    resources = RunResources(
+        ORG, chat_agents=None, sessions=workspace.sessions, user=None, workflows=None
+    )
 
     def workflow(*ids: str) -> dict[str, Any]:
         return {

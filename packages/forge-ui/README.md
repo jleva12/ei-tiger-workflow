@@ -259,11 +259,11 @@ copies `public/r` into `dist/r`.
 | `@forge-ui/assistant`                        | `AssistantScreen`, `AssistantModal`, `useAdkAssistant` — the Google ADK assistant, full screen or floating (not in `@forge-ui/all`)              |
 | `@forge-ui/assistant-thread`                 | assistant-ui's thread, composer, conversation list, floating modal and `/` or `@` trigger popover, restyled (installed by `@forge-ui/assistant`) |
 | `@forge-ui/agent-workspace`                  | Progress dock, plan / notes / canvas panels, stats, history palette, tools menu, tool cards (not in `@forge-ui/all`)                             |
-| `@forge-ui/rich-text-editor`                 | `RichTextEditor`, `RichTextView` — Tiptap rich text in the workspace look (not in `@forge-ui/all`)                                               |
+| `@forge-ui/rich-text-editor`                 | `RichTextEditor`, `RichTextView` — Markdown rich text on Tiptap: action registry, menus, controller, optional AI (not in `@forge-ui/all`)        |
 | `@forge-ui/attachments`                      | `ChatAttachmentAdapter` — images, PDFs and text files on messages                                                                                |
 | `@forge-ui/timestamps`                       | `parseTimestamp`, `localDay` — API times as UTC, bare dates as local days                                                                        |
 | `@forge-ui/use-now`, `…/use-debounced-value` | A shared one-second clock; a value that settles after it stops changing                                                                          |
-| `@forge-ui/button`, `@forge-ui/tabs`, …      | The 35 shadcn primitives, tuned to the workspace (incl. `@forge-ui/command`, the cmdk palette, `chart`, `switch`, `questionnaire`)               |
+| `@forge-ui/button`, `@forge-ui/tabs`, …      | The 36 primitives, tuned to the workspace (incl. `@forge-ui/command`, the cmdk palette, `chart`, `switch`, `questionnaire`, `streaming-text`)    |
 
 ## Project layout
 
@@ -1040,6 +1040,15 @@ function Assistant({ userId }: { userId: string }) {
 | Proxy      | `api: "/api/chat"`              | Your route, e.g. `createAdkApiRoute` from `@assistant-ui/react-google-adk/server`.                                                  |
 | Custom     | `stream`                        | Any `AdkStreamCallback`; the demo's simulated agent is one.                                                                         |
 
+Conversation loading is part of the shared assistant UI, including layouts
+with `sidebar={false}`. List, open, and history failures show an explanation
+and Retry. A failed first history load blocks sending until it succeeds or
+the person starts a new conversation; a failed refresh preserves messages
+already loaded. Session responses are validated before replay so malformed
+history never silently becomes an empty conversation. Failed model replies
+retain their partial text and error status when reopened or viewed in the
+audit replay. Artifact listing and downloads also show retryable errors.
+
 Every other `useAdkRuntime` option passes through: `getCheckpointId` (needed
 for edit and regenerate), `adapters` (`attachments` makes the composer's
 attach button accept files), `eventHandlers`.
@@ -1366,6 +1375,41 @@ Without follow-ups the thread shows the runtime's own suggestions there, as
 before; `followUps` replaces both with your own component. A server that
 checks the state it's sent must allow the key.
 
+### Replies that arrive whole
+
+An agent server that doesn't stream (forge-agent-runtime's
+`with_streaming(False)`, or any ADK server running with `StreamingMode.NONE`)
+sends each reply once the model is done. The thread still writes it in word
+by word, with [`StreamingText`](#streaming-text)'s look: each word fades in
+wearing a blue gradient and settles into the foreground, a pulsing dot rides
+the end, and the Markdown takes shape as it would while streaming. There's
+nothing to set: `useAdkAssistant` notes the replies of a run that sent no
+partial events, and `MarkdownText` writes each in once (about 35 words a
+second, none longer than 6 seconds), then shows it as plain Markdown. Replies
+loaded with a conversation's history are shown as they are, and so is
+everything under reduced motion.
+
+### Streaming text
+
+`@forge-ui/streaming-text` is Iconiq UI's
+[Streaming Text](https://iconiqui.com/blocks/streaming-text): plain text
+written in word by word, each word fading in wearing a blue gradient before
+settling into the foreground, with a pulsing gradient dot at the stream head.
+Changing `text` restarts it; reduced motion shows the text at once.
+
+```tsx
+import { StreamingText } from "@/components/ui/streaming-text"
+
+<StreamingText
+  text="Deployed main to staging in 4m 12s."
+  speed={120} // ms between words
+  delay={0} // ms before the first
+  settleDelay={300} // how long a word stays blue
+  showCursor
+  onComplete={() => setDone(true)}
+/>
+```
+
 ### Context meter
 
 After the model picker the composer shows how much of the model's context
@@ -1527,11 +1571,14 @@ them):
 
 ## Rich text editor
 
-`@forge-ui/rich-text-editor` is a complete rich text field on
-[Tiptap](https://tiptap.dev) in the workspace look: a fixed toolbar,
-selection and table menus, `/` commands, `@` mentions, block handles, find
-and replace (⌘F), an outline, full screen, uploads, YouTube / Twitch /
-audio embeds and KaTeX formulas. Its value is HTML, Markdown or Tiptap JSON.
+`@forge-ui/rich-text-editor` is a Markdown rich text editor on
+[Tiptap](https://tiptap.dev) in the workspace look. Markdown goes in
+(`value` or `defaultValue`) and comes out (`onChange`); Tiptap stays inside.
+The toolbar, the selection menu, the right-click menu, the `/` menu and
+keyboard shortcuts all run commands from one action registry, which the app
+extends with its own actions. A controller (`ref` or `onReady`) inserts and
+replaces content from outside, and optional AI runs through a callback the
+app supplies, streamed into a preview and written in only once accepted.
 It loads lazily: importing it doesn't pull Tiptap into a page's bundle until
 an editor renders.
 
@@ -1540,23 +1587,194 @@ npx shadcn@latest add @forge-ui/rich-text-editor
 ```
 
 ```tsx
-import { RichTextEditor, RichTextView } from "@/components/forge/rich-text-editor"
+import {
+  RichTextEditor,
+  RichTextView,
+  type RichTextEditorRef,
+} from "@/components/forge/rich-text-editor"
 
-<RichTextEditor
-  format="markdown"
-  value={body}
-  onChange={setBody}
-  mentions={(query) => people.filter((p) => p.label.includes(query))}
-  onUpload={async (file) => (await api.upload(file)).url}
-/>
+const [markdown, setMarkdown] = useState("")
+const editorRef = useRef<RichTextEditorRef>(null)
 
-<RichTextEditor preset="standard" placeholder="Add a comment…" />  // lighter fields
-<RichTextView value={html} />                                     // saved content, read-only
+<RichTextEditor value={markdown} onChange={setMarkdown} placeholder="Start writing…" />
+<RichTextEditor ref={editorRef} defaultValue="# New document" preset="full" />
+<RichTextView value={markdown} />                 // saved Markdown, read-only
+
+editorRef.current?.insertMarkdown("**Generated** content")
 ```
 
-`preset` is `full` (everything), `standard` (no styling, tables or media) or
-`minimal` (inline formatting); `features` switches single groups on or off
-over a preset. Without `onUpload`, added files are embedded as data URLs.
+`value` makes it controlled, `defaultValue` uncontrolled (not both). The
+parent handing back what `onChange` gave it changes nothing; a different
+`value` replaces the document without moving the caret more than it must
+and without firing `onChange`. `onChange` fires for edits and successful
+programmatic changes, never for no-ops; `onChangeDebounce` (ms) delays it
+while typing and still flushes on blur and unmount.
+
+**Features.** `preset` is `standard` (default: basic formatting, headings,
+lists, links, quotes, code and history), `full` (everything) or `minimal` (a
+comment box); `features` turns single ones on or off over it. A disabled
+feature is gone from every menu, and Markdown that uses it stays as literal
+text (shown in monospace) rather than being dropped, so it round-trips.
+
+| Feature                                                                                                                                                      | Markdown                                               | Notes                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `bold`, `italic`, `strike`, `inlineCode`, `links`                                                                                                            | `**b**`, `*i*`, `~~s~~`, `` `c` ``, `[t](url "title")` | CommonMark / GFM                                                                                             |
+| `underline`, `highlight`                                                                                                                                     | `++u++`, `==h==`                                       | Tiptap's syntax; other renderers show the markers                                                            |
+| `subscript`, `superscript`                                                                                                                                   | `<sub>`, `<sup>`                                       | inline HTML                                                                                                  |
+| `headings`, `blockquote`, `bulletList`, `orderedList`, `horizontalRule`                                                                                      | `#`…`######`, `>`, `-`, `1.`, `---`                    |                                                                                                              |
+| `taskList`                                                                                                                                                   | `- [ ]`, `- [x]`                                       | GFM                                                                                                          |
+| `codeBlock` (+ `codeHighlighting`)                                                                                                                           | fenced, with the language                              |                                                                                                              |
+| `tables`                                                                                                                                                     | GFM tables                                             | one header row, no merged cells or column widths; paragraphs in a cell join with `<br>`                      |
+| `images`                                                                                                                                                     | `![alt](url "title")`                                  | no stored size                                                                                               |
+| `math`                                                                                                                                                       | `$inline$`, `$$` blocks                                | `$` amounts in text can read as formulas; off in `standard`                                                  |
+| `emoji`                                                                                                                                                      | the emoji character                                    | `:shortcode:` suggestions while typing                                                                       |
+| `mentions` prop                                                                                                                                              | `[@ id="…" label="…"]`                                 | Tiptap's shortcode                                                                                           |
+| `history`, `markdownShortcuts`, `slashCommands`, `characterCount`, `typography`, `dragHandle`, `findReplace`, `outline`, `invisibleCharacters`, `fullscreen` | —                                                      | editing behaviour and tools; `findReplace` (⌘F) is off unless asked for, as it takes over the browser's find |
+
+Empty paragraphs aren't kept (Markdown has none), and custom Tiptap
+extensions need their own `renderMarkdown` / `parseMarkdown` to round-trip.
+The tests import, check, export and re-import a fixture for every row above.
+
+**Toolbar and menus.** `toolbar`, `contextMenu` and `bubbleMenu` take
+`false` or a config whose `items` are action ids plus `"separator"`,
+`"spacer"`, `"heading"` (block type), `"insert"`, `"ai"` and `"more"`, or
+`{ type: "group" | "menu" | "submenu", label, items }`:
+
+```tsx
+<RichTextEditor
+  toolbar={{
+    position: "top",
+    items: [
+      "undo",
+      "redo",
+      "separator",
+      "heading",
+      "bold",
+      "italic",
+      "link",
+      "codeBlock",
+    ],
+  }}
+  contextMenu={{
+    items: [
+      "copy",
+      "paste",
+      "separator",
+      "bold",
+      "italic",
+      "separator",
+      "ai.rewrite",
+      "ai.summarize",
+    ],
+  }}
+/>
+```
+
+Built-in ids: `undo` `redo` `bold` `italic` `underline` `strike` `inlineCode`
+`highlight` `subscript` `superscript` `link` `unlink` `clearFormatting`
+`paragraph` `heading1`–`heading6` `blockquote` `codeBlock` `bulletList`
+`orderedList` `taskList` `indent` `outdent` `horizontalRule` `table` `image`
+`blockMath` `inlineMath` `emoji` `cut` `copy` `paste` `selectAll` `find`
+`outline` `fullscreen` `focusMode` `invisibleCharacters` `copyMarkdown`
+`downloadMarkdown`, and `ai.<id>` for each AI action.
+
+**Actions.** An action is `{ id, label, icon?, group?, shortcut?,
+slashCommand?, allowReadOnly?, isVisible?, isEnabled?, isActive?, execute }`;
+`execute` gets a frozen snapshot of the selection (taken as a menu opens),
+the selected text, the document's Markdown and the controller. Pass them in
+`actions`, or add them later with `controller.registerAction`; one with a
+built-in's id replaces it. An action can't start twice at once, async ones
+are awaited, read-only mode refuses them unless `allowReadOnly`, and
+failures reach `onError` instead of throwing.
+
+```tsx
+const uppercase: EditorAction = {
+  id: "custom.uppercase",
+  label: "Convert to uppercase",
+  shortcut: "Mod-Shift-u",
+  isEnabled: (ctx) => ctx.selection.from !== ctx.selection.to,
+  execute: (ctx) => ctx.editor.replaceSelection(ctx.selectedText.toUpperCase()),
+}
+<RichTextEditor actions={[uppercase]} />   // in the right-click menu by default
+```
+
+**Controller.** `getMarkdown`, `setMarkdown`, `clear`, `insertMarkdown` (at
+the caret, replacing a selection), `appendMarkdown`, `replaceSelection`,
+`replaceRange({ from, to }, md)`, `getSelection`, `getSelectedText`,
+`getSelectedMarkdown`, `setSelection`, `bookmark(range)` (a range that
+follows later edits), `focus`, `blur`, `undo`, `redo`, `executeAction(id)`,
+`registerAction`, `runAI(id)`, `cancelAI` and `getTiptapEditor()`. Ranges are
+document positions, not Markdown offsets. Inserted Markdown goes through the
+same parser and URL policy as everything else, joins undo history (or not,
+with `{ skipHistory: true }`) and fires `onChange`; in read-only mode the
+editing methods return `false` unless passed `{ ignoreReadOnly: true }`.
+
+**AI.** The editor calls no model. `ai.execute(request, { signal })`
+receives `{ actionId, instruction, selectedText, selectedMarkdown,
+selection, documentMarkdown, context }` and returns
+`{ markdown, mode? }`, or an async iterable of `delta` / `complete` /
+`error` events; the app handles authentication, prompts, providers and
+rate limits on its server.
+
+```tsx
+<RichTextEditor
+  ai={{
+    enabled: true,
+    requireApproval: true, // default
+    actions: [
+      {
+        id: "rewrite",
+        label: "Rewrite",
+        requiresSelection: true,
+        resultMode: "replace",
+      },
+      { id: "expand", label: "Expand", resultMode: "insert" },
+    ], // default: rewrite, fix, summarize, expand, continue
+    execute: async (request, { signal }) => {
+      const response = await fetch("/api/ai/editor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+        signal,
+      })
+      if (!response.ok) throw new Error("AI request failed")
+      return response.json()
+    },
+  }}
+/>
+```
+
+Answers stream into a panel under the text (never into the document) with
+Stop, then Accept, Try again, Copy and Discard; ⌘Enter accepts and Escape
+cancels or discards. `resultMode` is `replace` (the selection), `insert`
+(after it, or at the caret), `append` or `preview` (the person chooses).
+The target is bookmarked: edits elsewhere move it, and if its own text
+changed meanwhile the answer isn't written over it — the panel offers the
+caret instead. "Ask AI…" (`allowCustomPrompts`, default on) sends a typed
+instruction, and so does any action with `askInstruction: true` (say
+"Rewrite with AI…" on a selection, "Insert with AI…" at the caret): what's
+typed follows the action's own `prompt`, and `placeholder` fills the box.
+Status changes are announced to screen readers.
+
+**Customising.** `components` replaces the `Toolbar`, `ContextMenu`,
+`AIPreview` or `StatusBar`; `headless` shows only the text. For a fully
+custom interface, `@/components/forge/rich-text-editor/headless` has
+`useRichTextEditor`, `RichTextEditorProvider`, `RichTextEditorContent`, each
+default piece, and `useEditorActions(ids)` for building toolbars from the
+registry. `extensions` adds Tiptap extensions (keep the array stable).
+
+**Safety.** Links may be web, mail, phone or relative URLs and images web,
+blob or raster data URLs; `javascript:`, `data:` links and the like are
+removed on the way in (with an `unsafe-content` error), whether the
+Markdown is typed, pasted, inserted, AI-written or the initial value.
+`urlPolicy` replaces the rule. Markdown is still untrusted wherever else
+it's rendered as HTML, so sanitize it there too; uploads (`onUpload`) need
+server-side validation.
+
+The editor was HTML, Markdown or JSON before; it's Markdown only now, and
+`format`, `showCount`, the `RichTextEditorHandle` ref and the text colour,
+font, alignment, YouTube / Twitch / audio, toggle-section and unique-id
+features are gone, since Markdown can't hold them.
 
 ## Conventions
 

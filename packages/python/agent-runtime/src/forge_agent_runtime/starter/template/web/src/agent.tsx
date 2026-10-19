@@ -58,6 +58,7 @@ function Assistant({ agent }: { agent: Agent }) {
   const [userId] = React.useState(personId)
   const { runtime, artifacts } = useAdkAssistant({
     adk: { url: API, appName: agent.id, userId },
+    requireTurnOutcome: true,
     runState: () => ({ ...agentState }),
     // A few questions to ask next, above the composer after each reply.
     suggestFollowUps: true,

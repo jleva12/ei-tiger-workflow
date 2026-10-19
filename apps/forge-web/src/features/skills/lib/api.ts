@@ -1,5 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
+import {
+  dismissHelperJob,
+  helperJobs,
+  startHelper,
+  type HelperJob,
+} from "@/features/helpers/lib/api"
 import { createNestedResource } from "@/lib/api/resource"
 import { api } from "@/lib/api-instance"
 
@@ -106,24 +112,20 @@ export type ImportItem = {
   replace: string | null
 }
 
-/** A skill the skill creator was asked to write. */
-export type CreatorJob = {
-  id: string
-  organization_id: string
+/** What the skill creator is asked. */
+export type CreatorInput = {
   brief: string
   /** The skill it reworks; null for a new one. */
   revises: string | null
-  status: "running" | "done" | "failed"
-  /** The skill it saved, once done. */
-  skill_id: string | null
-  /** For the person: what to check, connect or decide. */
-  notes: string[]
-  error: string | null
-  model: string | null
-  created_at: string
-  created_by: string
-  updated_at: string
 }
+
+/** What the skill creator made: the skill it saved. */
+export type CreatorResult = { skill_id: string; name: string }
+
+/** A skill the skill creator (the `skill_creator` helper) was asked to write. */
+export type CreatorJob = HelperJob<CreatorInput, CreatorResult>
+
+const CREATOR = "skill_creator"
 
 export const organizationSkills = createNestedResource<
   SkillRecord,
@@ -140,8 +142,6 @@ export const organizationSkills = createNestedResource<
 
 const skillsPath = (organizationId: string) =>
   `/organizations/${encodeURIComponent(organizationId)}/skills`
-const jobsPath = (organizationId: string) =>
-  `/organizations/${encodeURIComponent(organizationId)}/skill-creator/jobs`
 
 /** The organization's skills, by name (without their bodies). */
 export function useOrganizationSkills(
@@ -243,9 +243,11 @@ export function useCreatorJobs(organizationId: string) {
   return useQuery({
     queryKey: jobsKey(organizationId),
     queryFn: async ({ signal }) => {
-      const jobs = await api.get<CreatorJob[]>(jobsPath(organizationId), {
-        signal,
-      })
+      const jobs = await helperJobs<CreatorInput, CreatorResult>(
+        organizationId,
+        CREATOR,
+        { signal }
+      )
       const before = client.getQueryData<CreatorJob[]>(jobsKey(organizationId))
       const finished = jobs.some(
         (job) =>
@@ -267,10 +269,8 @@ export function useCreatorJobs(organizationId: string) {
 export function useStartCreator(organizationId: string) {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (body: { brief: string; revises: string | null }) =>
-      api.post<CreatorJob, typeof body>(jobsPath(organizationId), body, {
-        silent: true,
-      }),
+    mutationFn: (body: CreatorInput) =>
+      startHelper<CreatorInput, CreatorResult>(organizationId, CREATOR, body),
     onSuccess: (job) => {
       client.setQueryData<CreatorJob[]>(jobsKey(organizationId), (jobs) => [
         job,
@@ -284,8 +284,7 @@ export function useStartCreator(organizationId: string) {
 export function useDismissJob(organizationId: string) {
   const client = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) =>
-      api.delete<void>(`${jobsPath(organizationId)}/${encodeURIComponent(id)}`),
+    mutationFn: (id: string) => dismissHelperJob(organizationId, CREATOR, id),
     meta: { errorTitle: "Couldn't dismiss it" },
     onSuccess: (_done, id) =>
       client.setQueryData<CreatorJob[]>(jobsKey(organizationId), (jobs) =>

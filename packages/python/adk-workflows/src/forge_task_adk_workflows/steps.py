@@ -13,7 +13,8 @@ One entry per node of the document, in the document's order::
   - ``failed``: it failed the run (ADK's error event, e.g. ``RunFailed``, at it
     or inside it), or it's a failed End (the run fails once every way ends);
   - ``waiting``: it asked a person, or the timer, and waits for the answer (a
-    pending pause: an approval, human input, a long delay);
+    pending pause: an approval, human input, a long delay), or waits for the
+    run a workflow its LLM agent called started;
   - ``running``: it started (an event at it or inside it) and hasn't finished;
   - ``not_reached``: nothing of it is in the session.
 - ``output`` / ``error``: what it handed on, as ``steps.<id>`` reads it
@@ -27,7 +28,8 @@ One entry per node of the document, in the document's order::
   from the Agents page it is): ``{"id", "agent", "name", "args", "status",
   "response", "error", "at"}``, ``status`` ``done``, ``failed`` (the tool
   answered an error, or a person refused it), ``waiting`` (for a person to
-  confirm it) or ``running``; a long response cut short. ``error`` is what a
+  confirm it, or a workflow's for the run it started) or ``running``; a long
+  response cut short. ``error`` is what a
   failed call's answer says went wrong (a tool's reason, a workflow run's
   error), else None.
 - ``input`` / ``input_from``: what it was handed (its ``previous``) and the
@@ -67,6 +69,7 @@ from typing import Any
 
 from google.adk.events import Event
 from google.adk.sessions import Session
+from google.genai import types
 
 from forge_task_adk_workflows.graph.data import CALLED_WITH_KEY, INPUT_NODE, LOGIC, StepInfo, _record, as_data
 from forge_task_adk_workflows.graph.factories.agents import answer_parser
@@ -195,7 +198,10 @@ def run_progress(
         if recorded is not None and at and at[-1][1]:
             seen[at[-1][0]].called_with = as_data(recorded)
         for call in event.get_function_calls():
-            if call.name in (REQUEST_INPUT, REQUEST_CONFIRMATION) and call.id in asked:
+            # A question, a confirmation, or a workflow's call waiting for its run.
+            if call.id in asked and (
+                call.name in (REQUEST_INPUT, REQUEST_CONFIRMATION) or call.id in (event.long_running_tool_ids or ())
+            ):
                 for step, _ in at:
                     seen[step].waiting = True
         _calls(event, at, seen, asked)
@@ -345,6 +351,12 @@ def _calls(event: Event, chain: list[tuple[str, bool]], seen: Mapping[str, _Seen
     # The tools an LLM agent called in a step, and what each answered: ADK's
     # own calls (hand-offs, questions) aren't tools.
     if not chain:
+        # The run's own answer to a workflow's call (its run ended, or its wait
+        # is up) is at no step: it answers the call wherever it was made.
+        for response in event.get_function_responses():
+            for step in seen.values():
+                if (response.id or "") in step.calls:
+                    _answered(step, response)
         return
     step = seen[chain[-1][0]]
     calls = step.calls
@@ -358,24 +370,31 @@ def _calls(event: Event, chain: list[tuple[str, bool]], seen: Mapping[str, _Seen
             continue
         if not call.id or not call.name or call.name.startswith("adk_") or call.name == "transfer_to_agent":
             continue
+        waits = call.id in asked and call.id in (event.long_running_tool_ids or ())
         calls[call.id] = {
             "id": call.id,
             "agent": event.author,
             "name": call.name,
             "args": as_data(call.args or {}),
-            "status": RUNNING,
+            "status": WAITING if waits else RUNNING,
             "response": None,
             "error": None,
             "at": _iso(event.timestamp),
         }
     for response in event.get_function_responses():
-        called = calls.get(response.id or "")
-        if called is None or called["id"] in step.confirming:
-            continue
-        answered = as_data(response.response)
-        called["status"] = FAILED if _is_error(answered) else DONE
-        called["error"] = _call_error(answered) if called["status"] == FAILED else None
-        called["response"] = _shortened(answered)
+        _answered(step, response)
+
+
+def _answered(step: _Seen, response: types.FunctionResponse) -> None:
+    # A step's call, answered: done, or failed when its answer says so (a
+    # call a person is still to confirm is answered "it needs confirming").
+    called = step.calls.get(response.id or "")
+    if called is None or called["id"] in step.confirming:
+        return
+    answered = as_data(response.response)
+    called["status"] = FAILED if _is_error(answered) else DONE
+    called["error"] = _call_error(answered) if called["status"] == FAILED else None
+    called["response"] = _shortened(answered)
 
 
 def _is_error(response: Any) -> bool:

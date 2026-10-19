@@ -1,10 +1,14 @@
 import * as React from "react"
+import type { AssistantRuntime } from "@assistant-ui/react"
+
+import type { ModelWindow } from "@/components/forge/assistant/context-window"
 
 import {
   AssistantScreen,
   knowledgeBaseSources,
   useAdkAssistant,
 } from "@/components/forge/assistant/index"
+import { ChatPageDesktopLink } from "@/features/agents/components/chat-page-desktop-link"
 import { ChatPageLook } from "@/features/agents/components/chat-page-look"
 import { ChatPageThemeToggle } from "@/features/agents/components/chat-page-theme-toggle"
 import {
@@ -51,6 +55,9 @@ export function ChatPageView({
   settings,
   theme,
   onThemeChange,
+  desktopLink,
+  onRuntime,
+  contextModel,
   className = "h-dvh",
 }: {
   connection: ChatPageConnection
@@ -60,16 +67,29 @@ export function ChatPageView({
   theme: "light" | "dark"
   /** Switches it, from the page's theme button (when the page has one). */
   onThemeChange?: (theme: "light" | "dark") => void
+  /** The link that opens its agent in the desktop app, when the page offers it. */
+  desktopLink?: string
+  /** Hands over its chat's runtime, for whatever lists and opens its conversations. */
+  onRuntime?: (runtime: AssistantRuntime) => void
+  /** The model its agent starts on: the context meter shows from the start. */
+  contextModel?: ModelWindow
   className?: string
 }) {
   const { url, appName, userId, headers } = connection
   const { runtime, artifacts } = useAdkAssistant({
+    requireTurnOutcome: true,
     adk: { url, appName, userId },
     headers,
     // As the builder's chat does, unless the page turned them off: a few
     // questions to ask next, after each reply.
     suggestFollowUps: settings.follow_ups,
+    // The page's own turns stream as it's set to; the builder's preview runs
+    // in the console's runtime, which streams, and shows replies whole the same way.
+    streaming: settings.streaming,
   })
+  React.useEffect(() => {
+    onRuntime?.(runtime)
+  }, [runtime, onRuntime])
   // Its workflow tools' calls, each drawn as the run it starts, followed
   // through the same runtime.
   const workflows = agent.workflows ?? NO_NAMES
@@ -98,21 +118,34 @@ export function ChatPageView({
     }),
     [settings.welcome_title, settings.welcome_message, title, agent.description]
   )
-  // The theme button: in the top bar, or over the page's corner without one.
-  const toggle =
-    settings.theme_toggle && onThemeChange
+  // Its buttons (the desktop app's, the theme's): in the top bar, or over
+  // the page's corner without one.
+  const themed = settings.theme_toggle && onThemeChange
+  const controls =
+    themed || desktopLink
       ? (floating: boolean) => (
-          <ChatPageThemeToggle
-            theme={theme}
-            onChange={onThemeChange}
-            floating={floating}
-          />
+          <>
+            {desktopLink && (
+              <ChatPageDesktopLink href={desktopLink} floating={floating} />
+            )}
+            {themed && (
+              <ChatPageThemeToggle
+                theme={theme}
+                onChange={themed}
+                floating={floating}
+              />
+            )}
+          </>
         )
       : undefined
   return (
     <WorkflowRunsContext.Provider value={follower}>
       <ChatPageLook settings={settings} theme={theme} className={className}>
-        {settings.hide_top_bar && toggle?.(true)}
+        {settings.hide_top_bar && controls && (
+          <div className="absolute top-3 right-3 z-10 flex gap-1.5">
+            {controls(true)}
+          </div>
+        )}
         <AssistantScreen
           className="h-full min-w-0"
           runtime={runtime}
@@ -128,9 +161,10 @@ export function ChatPageView({
           // What the page leaves out: its visitor's conversations, its top bar.
           sidebar={settings.hide_history ? false : undefined}
           topbar={!settings.hide_top_bar}
-          actions={settings.hide_top_bar ? undefined : toggle?.(false)}
+          actions={settings.hide_top_bar ? undefined : controls?.(false)}
           // Its agents' names: over their replies, and on hand-offs to them.
           agents={agent.agents}
+          contextModel={contextModel}
         />
       </ChatPageLook>
     </WorkflowRunsContext.Provider>

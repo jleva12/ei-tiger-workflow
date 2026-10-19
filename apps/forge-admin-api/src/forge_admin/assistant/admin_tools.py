@@ -22,7 +22,7 @@ go on, and large results are cut down.
 
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import quote
 
@@ -31,7 +31,7 @@ from forge_common.adk import ToolFailure
 from google.adk.tools.tool_context import ToolContext
 
 from forge_admin.assistant.person_api import PersonApi
-from forge_admin.assistant.route_tools import RouteToolset, given, pick
+from forge_admin.assistant.route_tools import RouteToolset, given, pick, quoted
 from forge_admin.auth.access import UUID_PATTERN
 from forge_admin.auth.authorization import ROLE_KEY_PATTERN, SUBJECT_PATTERN
 
@@ -132,6 +132,79 @@ class AdministrationToolset(RouteToolset):
             "the user IDs and list_permission_definitions the permission IDs."
         ],
     }
+
+    async def confirmation_hint(
+        self, name: str, args: Mapping[str, Any], tool_context: ToolContext
+    ) -> str | None:
+        arg = args.get
+        if name == "create_organization":
+            return (
+                f"Create the organization {quoted(arg('name'), 'with this name')}?\n"
+                "It's added to Forge at once, with nobody in it yet."
+            )
+        if name == "update_organization":
+            found = await self._read_quietly(
+                tool_context,
+                lambda: (
+                    f"/organizations/{_node(arg('organization_id'), 'organization_id')}"
+                ),
+            )
+            return (
+                f"Change the details of {_named(found, 'this organization')}?\n"
+                "Everyone in it sees the change at once."
+            )
+        if name == "create_role_definition":
+            return (
+                f"Create the role {quoted(arg('name'), 'with this name')}?\n"
+                "Nobody holds it until someone is given it."
+            )
+        if name == "update_role_definition":
+            found = await self._read_quietly(
+                tool_context, lambda: f"/roles/{_role_key(arg('role_key'))}"
+            )
+            role = _named(found, quoted(arg("role_key"), ""))
+            return (
+                f"Change {f'the role {role}' if role else 'this role'}?\n"
+                "The change applies at once to everyone who holds it, everywhere."
+            )
+        if name == "create_permission_definition":
+            return (
+                f"Create the permission {quoted(arg('key'), 'with this key')}?\n"
+                "No role grants it until one is changed to."
+            )
+        if name == "update_permission_definition":
+            found = await self._read_quietly(
+                tool_context,
+                lambda: f"/permissions/{_permission_id(arg('permission_id'))}",
+            )
+            key = quoted((found or {}).get("key"), "")
+            return (
+                f"Change {f'the permission {key}' if key else 'this permission'}?\n"
+                "Every role that grants it, and so everyone who holds one, gets the "
+                "change."
+            )
+        if name == "create_user":
+            person = " ".join(
+                str(part) for part in (arg("first_name"), arg("last_name")) if part
+            )
+            return (
+                f"Add {person or 'this person'} as a Forge user?\n"
+                "They hold no roles until someone gives them one."
+            )
+        if name == "update_user":
+            found = await self._read_quietly(
+                tool_context, lambda: f"/users/{_user_id(arg('user_id'))}"
+            )
+            person = " ".join(
+                str(found[part])
+                for part in ("first_name", "last_name")
+                if isinstance(found, dict) and found.get(part)
+            )
+            return (
+                f"Change the details of {person or 'this user'}?\n"
+                "Forge shows the new details everywhere at once."
+            )
+        return None
 
     # -- The hierarchy -------------------------------------------------------
 
@@ -504,6 +577,11 @@ def toolset(app: FastAPI, **kwargs: Any) -> AdministrationToolset | None:
 # -- Checking arguments ------------------------------------------------------
 
 _NOTHING_TO_CHANGE = "Nothing to change: give at least one of the fields to change."
+
+
+def _named(record: Any, otherwise: str) -> str:
+    """A record's name, quoted for a question; ``otherwise`` without one."""
+    return quoted(record.get("name") if isinstance(record, dict) else None, otherwise)
 
 
 def _node(value: Any, name: str) -> str:

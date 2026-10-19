@@ -375,3 +375,25 @@ def test_building_blocks_say_what_the_person_may_not_read(signing: Settings) -> 
         {"provider": "openai", "name": "gpt-5", "label": "GPT-5"}
     ]
     assert found["workflows"] == [] and found["skills"] == []
+
+
+def test_a_test_run_asks_the_person_in_words_naming_the_workflow(
+    signing: Settings,
+) -> None:
+    def ask(handler: Handler, **args: Any) -> str | None:
+        toolset, _ = tools(signing, handler)
+        where = {"organization_id": ORG, "workflow_id": WORKFLOW}
+        return asyncio.run(
+            toolset.confirmation_hint("test_workflow", where | args, context("ada"))
+        )
+
+    real = (
+        "Every step runs for real, so anything a step does, like sending a "
+        "message or changing a record, really happens."
+    )
+    assert ask(Workflows(), input={"order": "A-1"}) == (
+        f"Test-run “Refunds”?\nIts draft runs once with the input below. {real}"
+    )
+    assert ask(lambda request: httpx.Response(403, json={"detail": "No"})) == (
+        f"Test-run this workflow?\nIts draft runs once with no input. {real}"
+    )

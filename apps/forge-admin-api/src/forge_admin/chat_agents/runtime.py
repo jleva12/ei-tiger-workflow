@@ -11,11 +11,17 @@ Mounted at ``{api_prefix}/runtime``:
   A2A conversations are the run API's sessions; tasks are kept in the admin
   MySQL (``a2a_tasks``, 0010a2a).
 
-Public unless ``agent_runtime_public`` is false (``api.server``): then both
-ask for an organization's API key or a Forge sign-in, holding agents:run in
-the organization the agent is theirs (``forge_admin.auth.runtime_access``),
-and a person's conversations are their own. A2A tasks are each caller's own
-whenever the caller is known.
+Callers send an organization's API key or a Forge sign-in, holding agents:run
+in the organization the agent is theirs (``forge_admin.auth.runtime_access``),
+and are let in by the agent's ID and organization before anything of it is
+read: another organization's agent is one there isn't. A draft
+(``ca_x@draft``) is for those who edit the organization's agents
+(agents:manage). A person's conversations are their own, and a key's are its
+end users', apart from every other key's (``conversation_owner``); A2A tasks
+are each caller's own. Each of an agent's agents with a rule on its node
+answers only those holding what it needs, telling the others what that is
+(``forge_admin.chat_agents.access``): the runtime checks it as the agent
+runs, and the chat agent's as each turn starts, for the caller recorded here.
 """
 
 from a2a.server.tasks import TaskStore
@@ -23,15 +29,28 @@ from a2a.types import SecurityScheme
 from fastapi import APIRouter, HTTPException, Request, status
 from forge_agent_runtime import AgentExecutor
 from forge_agent_runtime.a2a import api_key_security, create_a2a_router, known_caller
-from forge_agent_runtime.executor import ResolvedAgent
+from forge_agent_runtime.executor import LocatedAgent, ResolvedAgent
 from forge_agent_runtime.server import CallAction, create_router
 
 from forge_admin.adk_workflows.a2a import workflow_a2a_service
-from forge_admin.auth.runtime_access import authorize_call, check_conversation_user
+from forge_admin.auth.runtime_access import (
+    MANAGE,
+    RUN,
+    admit_call,
+    caller_of,
+    conversation_owner,
+)
+from forge_admin.chat_agents.access import (
+    ANONYMOUS,
+    AgentUser,
+    agent_user,
+    set_agent_user,
+)
 from forge_admin.config import Settings
 from forge_admin.overview.recording import A2A, API, CLIENT_HEADER, CONSOLE, set_channel
 
 NOT_SET_UP = "Chat agents aren't set up: set FORGE_ADMIN_MONGO_URI"
+UNAVAILABLE = "The agents' database isn't answering; try again shortly"
 
 
 def executor_of(request: Request) -> AgentExecutor:
@@ -50,6 +69,27 @@ def tasks_of(request: Request) -> TaskStore:
     return tasks
 
 
+async def admit_agent(
+    request: Request,
+    agent: LocatedAgent,
+    *,
+    action: CallAction,
+) -> None:
+    """
+    Whether a request may call an agent, by its ID and organization alone,
+    before anything of it is read: a caller with agents:run in its
+    organization (agents:manage for its draft). Anyone without standing
+    there is told there's no such agent.
+
+    :raises HTTPException: 401 without a caller; 403 otherwise refused; 404
+        for another organization's agent.
+    """
+    draft = agent.ref.version == "draft"
+    await admit_call(
+        request, agent.organization_id, permission=MANAGE if draft else RUN
+    )
+
+
 async def authorize_agent(
     request: Request,
     agent: ResolvedAgent,
@@ -58,15 +98,19 @@ async def authorize_agent(
     user_id: str | None,
 ) -> None:
     """
-    Whether a request may call an agent: anyone when the runtime is public;
-    otherwise a caller with agents:run in the agent's organization, and
-    only into conversations of their own.
+    Record who a call of an agent, once let in, is for, and how its turns
+    came in.
 
-    :raises HTTPException: 401 without a caller; 403 otherwise refused.
+    :raises HTTPException: 404 when the agent found isn't of the
+        organization the caller was let in to.
     """
-    caller = await authorize_call(request, agent.document.organization_id)
-    if user_id is not None:
-        await check_conversation_user(request, caller, user_id)
+    caller = caller_of(request)
+    if (
+        caller.organization_id is not None
+        and caller.organization_id != agent.document.organization_id
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such agent")
+    await authorize_use(request, agent, caller.subject, caller.groups)
     # How its turns came in, for the conversation's audit: A2A, the builder's
     # chat (a signed-in person in Forge's console), or the run API.
     if action == "a2a":
@@ -75,6 +119,33 @@ async def authorize_agent(
         console = request.headers.get(CLIENT_HEADER) == CONSOLE
         person = not (caller.is_anonymous or caller.is_api_key)
         set_channel(CONSOLE if console and person else API)
+
+
+async def authorize_use(
+    request: Request,
+    agent: ResolvedAgent,
+    subject: str | None,
+    groups: tuple[str, ...] = (),
+) -> AgentUser:
+    """
+    Record who a call of an agent is for: the rules on its agents' nodes
+    are checked for them as each agent runs, and so are the runs of its
+    workflow tools.
+
+    :param subject: Who's calling: a user's ID, an API key's, or None.
+    :param groups: The company groups their sign-in names.
+    :return: Who's using it, and whether they manage the organization's
+        agents (who may use them all).
+    """
+    organization_id = agent.document.organization_id
+    if organization_id is None or subject is None:
+        user = AgentUser(subject, groups) if subject is not None else ANONYMOUS
+    else:
+        user = await agent_user(
+            request.app.state.enforcer, organization_id, subject, groups
+        )
+    set_agent_user(user)
+    return user
 
 
 def runtime_security() -> dict[str, SecurityScheme]:
@@ -88,16 +159,21 @@ def runtime_security() -> dict[str, SecurityScheme]:
     )
 
 
-router = create_router(executor_of, authorize=authorize_agent)
+router = create_router(
+    executor_of,
+    admit=admit_agent,
+    authorize=authorize_agent,
+    owner=conversation_owner,
+)
 
 
 def a2a_router(settings: Settings) -> APIRouter:
     """
-    :return: The A2A routes, their cards saying how to sign in when the
-        runtime isn't public, and where it is (``agent_runtime_url``); the
-        organizations' workflows (``ag_…``) beside their chat agents.
+    :return: The A2A routes, their cards saying how to sign in and where
+        they are (``agent_runtime_url``); the organizations' workflows
+        (``ag_…``) beside their chat agents.
     """
-    security = None if settings.agent_runtime_public else runtime_security()
+    security = runtime_security()
     return create_a2a_router(
         executor_of,
         path="/a2a",
@@ -106,6 +182,7 @@ def a2a_router(settings: Settings) -> APIRouter:
         caller=known_caller,
         security=security,
         base_url=settings.agent_runtime_url,
+        admit=admit_agent,
         authorize=authorize_agent,
         services=[workflow_a2a_service(security=security)],
     )

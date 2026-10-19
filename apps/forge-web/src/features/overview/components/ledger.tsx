@@ -19,11 +19,7 @@ import {
 } from "@/features/overview/components/panels"
 import { compact, duration, percent, usd } from "@/features/overview/lib/format"
 import { SCOPE_ROW, type LedgerRow } from "@/features/overview/lib/ledger"
-import {
-  OVERVIEW_PERIODS,
-  SUBJECT_KINDS,
-  type OverviewPeriod,
-} from "@/features/overview/lib/overview"
+import { SUBJECT_KINDS } from "@/features/overview/lib/overview"
 
 /*
  * The overview's ledger: every workflow and agent (and the assistant) the
@@ -231,12 +227,15 @@ const LEDGER_COLUMNS = ledger.columns([
 
 export function Ledger({
   rows,
-  period,
+  within,
+  title = "Workflows and agents",
   toolbar,
   onSelect,
 }: {
   rows: LedgerRow[]
-  period: OverviewPeriod
+  /** The period, opening a sentence: "In the last 7 days". */
+  within: string
+  title?: string
   /** Controls beside the table's own, such as the type switch. */
   toolbar?: React.ReactNode
   onSelect: (id: string) => void
@@ -244,8 +243,8 @@ export function Ledger({
   return (
     <>
       <DataTable
-        title="Workflows and agents"
-        description={`The last ${OVERVIEW_PERIODS[period].label}, each workflow and agent beside the rest. Select one to focus everything below on it.`}
+        title={title}
+        description={`${within.replace(/,$/, "")}, each workflow and agent beside the rest. Select one to focus the overview on it.`}
         columns={LEDGER_COLUMNS}
         data={rows}
         getRowId={(row) => row.id}

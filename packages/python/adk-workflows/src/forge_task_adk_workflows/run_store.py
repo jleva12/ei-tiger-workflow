@@ -9,13 +9,19 @@ A run's ``status``:
   ``next_attempt_at`` (its backoff), whatever job comes for it first.
 - ``running``: a worker has it, as ``lease_owner`` until ``lease_until``
   (renewed while it runs), its ``lease_epoch``-th taking of it. A run whose
-  lease ran out was interrupted: the worker's maintenance queues it again.
+  lease ran out was interrupted: the worker's maintenance queues it again
+  (or fails it), only while it's still the taking it found.
+  An interruption (its worker stopped, or went) isn't an attempt: the run
+  carries on as the same one, counting it in ``interruptions`` (since it
+  last waited or someone retried it).
   Abandoned while it runs, it's marked (``cancel_requested_at``): its worker
   stops it at its next step, or as it renews its lease, and abandons it; the
   maintenance does, should the worker go first.
 - ``paused``: waiting for people, at the approvals and questions in
-  ``gates`` (``pause`` is the first of them). A decision at any of them (or
-  its deadline) queues it again; the others stay open.
+  ``gates`` (``pause`` is the first of them), or for runs it started to end
+  (a workflow its LLM agent called). A decision at any of them (or its
+  deadline, or the run it waits for ending) queues it again; the others stay
+  open.
 - ``waiting``: waiting for a time (a delay), until ``waiting_until``; then a
   worker takes it again. It may wait at gates too meanwhile: a decision at
   one queues it at once.
@@ -33,6 +39,16 @@ call answered again (its worker stopped) finds the run it started rather than
 starting another (``create_child``). Abandoning a run abandons the runs it
 started, and theirs, that are still going; whatever else becomes of it, they go on.
 
+The run waits for the run its call started at a gate of its own (kind
+``child_run``, its ``details`` naming the run as ``child_run_id``), paused,
+its worker given back meanwhile. Nobody decides it: the run it waits for
+ending (succeeded, failed or abandoned) decides it, in the transaction that
+ends that run, and queues the run waiting for it (``_child_ended``); one
+that ended before the gate was asked decides it as it's asked (``pause``).
+Its deadline is the call's wait, timed out as any gate's is (``time_out``).
+A run's row is locked before its children's, whatever locks both (a run
+ending locks its parent's first), so two such transactions never deadlock.
+
 A run's open gates (``gates``) are the approvals and questions it waits at,
 each decided on its own (``decide``, by its ``id``), whatever the run is doing
 meanwhile: paused, waiting, or carrying on with a decision made at another.
@@ -40,12 +56,25 @@ A decision made while a worker has the run is read by its next attempt: the
 pause it ends at, finding it, queues the run again instead. A run from before
 gates has none: its ``pause`` is its only one.
 
+A run keeps how it was started, for an audit (:class:`Provenance`): what
+started it (``trigger_type``), through what (``channel``), for whom
+(``on_behalf_of``, and whether their own credential said so), via which agent
+and version, with which API key and credential, from where (``client_ip``,
+``user_agent``, ``request_id``), and the top of its parent chain
+(``root_run_id``: itself, for a run nothing started). A run another starts
+takes its starter's person, key and root. A start the admin API refused (the
+starter may not, or what it'd run doesn't build) is kept too
+(``adk_run_refusals``: :meth:`RunStore.refuse`), with the same columns.
+
 A run's decisions (``decisions``, by the gate's key) are what the worker's
 control answers ``approval`` with; ``state`` is what the run keeps
 (``control.keep``), made durable at each checkpoint. Every write a worker makes
 while it has a run is fenced on its lease, owned and not run out: a worker
 whose lease ran out (whether or not the run went to another yet) can't write
 to the run, nor renew its lease, as any other worker may take it by then.
+Its notes are too (``note`` with its ``owner``), and its writes elsewhere
+(its usage rows, its ADK session's events) land while it holds the run
+(``hold``, ``holding``): the run's row locked, so nobody takes it meanwhile.
 
 The admin API owns the tables: its Alembic migration ``0005adk_run_store``
 creates them as :data:`metadata` describes them. Times are UTC: stored naive,
@@ -54,10 +83,11 @@ read back aware.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import uuid
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -78,6 +108,9 @@ OPEN = frozenset({QUEUED, RUNNING, PAUSED, WAITING})
 FINISHED = frozenset({SUCCEEDED, FAILED, ABANDONED})
 #: What can be abandoned at once: anything not running and not finished, and a failed run.
 ABANDONABLE = frozenset({QUEUED, PAUSED, WAITING, FAILED})
+#: The gate a run waits at for a run it started to end (a workflow its LLM
+#: agent called): decided by that run's end, never by people.
+CHILD_RUN = "child_run"
 #: What can be abandoned at all: a running run too, which its worker stops.
 CANCELABLE = ABANDONABLE | {RUNNING}
 
@@ -87,8 +120,47 @@ CANCELABLE = ABANDONABLE | {RUNNING}
 #: ``interrupted`` (its worker went while it ran).
 FAILURE_CATEGORIES = ("failed", "error", "transient", "interrupted")
 
+#: What started a run (``trigger_type``): a person in the console (``manual``)
+#: or the builder's test panel (``builder_test``), the assistant's tools as
+#: the person (``assistant``), an API key on the admin API (``api_key``), the
+#: runtime's workflow API (``runtime_rest``) or A2A (``a2a``), a chat agent's
+#: Workflow tool (``chat_agent``) or an intake it completed (``intake``),
+#: another run (``workflow``), or a resubmission (``resubmit``).
+MANUAL, BUILDER_TEST, ASSISTANT, API_KEY = "manual", "builder_test", "assistant", "api_key"
+RUNTIME_REST, A2A, CHAT_AGENT, INTAKE = "runtime_rest", "a2a", "chat_agent", "intake"
+WORKFLOW, RESUBMIT = "workflow", "resubmit"
+TRIGGER_TYPES = (MANUAL, BUILDER_TEST, ASSISTANT, API_KEY, RUNTIME_REST, A2A, CHAT_AGENT, INTAKE, WORKFLOW, RESUBMIT)
+#: Through what the start came in (``channel``): Forge's console, the API,
+#: A2A, a chat page, the assistant, or a worker (a run starting another).
+CHANNELS = ("console", "api", "a2a", "page", "assistant", "worker")
+#: How the starter proved who they are (``auth_method``): a sign-in token, an
+#: organization's API key, nothing (a public runtime's anonymous caller), or
+#: the local development user (no credentials, as the deployment says).
+AUTH_METHODS = ("jwt", "api_key", "anonymous", "local")
+
 DATETIME = sa.DateTime().with_variant(mysql.DATETIME(fsp=6), "mysql")
 EVENT_ID = sa.BigInteger().with_variant(sa.Integer(), "sqlite")
+
+
+def _provenance_columns() -> list[sa.Column[Any]]:
+    """How a run was started (:class:`Provenance`), as a run or a refused
+    start keeps it (forge-admin's 0031adk_run_provenance): null where it
+    isn't known (what a run from before couldn't tell)."""
+    return [
+        sa.Column("trigger_type", sa.String(16), nullable=True),
+        sa.Column("channel", sa.String(16), nullable=True),
+        sa.Column("on_behalf_of", sa.String(255), nullable=True),
+        sa.Column("on_behalf_of_name", sa.String(255), nullable=True),
+        sa.Column("on_behalf_of_verified", sa.Boolean, nullable=True),
+        sa.Column("via_agent_id", sa.String(64), nullable=True),
+        sa.Column("via_agent_version", sa.String(16), nullable=True),
+        sa.Column("api_key_id", sa.String(64), nullable=True),
+        sa.Column("auth_method", sa.String(16), nullable=True),
+        sa.Column("client_ip", sa.String(64), nullable=True),
+        sa.Column("user_agent", sa.String(500), nullable=True),
+        sa.Column("request_id", sa.String(128), nullable=True),
+    ]
+
 
 metadata = sa.MetaData()
 
@@ -137,14 +209,25 @@ runs = sa.Table(
     # When a run queued again after a hiccup may be taken: not before (its
     # backoff), whatever job comes for it (forge-admin's 0022adk_run_backoff).
     sa.Column("next_attempt_at", DATETIME, nullable=True),
+    # How often in a row its worker stopped, or went, while it ran, since it
+    # last waited or someone retried it: an interruption isn't an attempt
+    # (forge-admin's 0035adk_run_interruptions).
+    sa.Column("interruptions", sa.Integer, nullable=False, server_default="0"),
     sa.Column("created_at", DATETIME, nullable=False),
     sa.Column("updated_at", DATETIME, nullable=False),
     sa.Column("started_at", DATETIME, nullable=True),
     sa.Column("finished_at", DATETIME, nullable=True),
+    # How it was started, for an audit (Provenance; forge-admin's
+    # 0031adk_run_provenance, as the indexes below).
+    *_provenance_columns(),
+    # The top of its parent chain: itself, for a run nothing started.
+    sa.Column("root_run_id", sa.String(32), nullable=True),
     sa.Index("ix_adk_runs_organization", "organization_id", "created_at"),
     sa.Index("ix_adk_runs_agent", "organization_id", "agent_id", "created_at"),
     sa.Index("ix_adk_runs_status", "status", "updated_at"),
     sa.Index("ix_adk_runs_parent", "parent_run_id", "created_at"),
+    sa.Index("ix_adk_runs_trigger", "organization_id", "trigger_type", "created_at"),
+    sa.Index("ix_adk_runs_on_behalf_of", "organization_id", "on_behalf_of", "created_at"),
 )
 
 events = sa.Table(
@@ -161,8 +244,29 @@ events = sa.Table(
     sa.Index("ix_adk_run_events_run", "run_id", "id"),
 )
 
+refusals = sa.Table(
+    "adk_run_refusals",
+    metadata,
+    sa.Column("id", EVENT_ID, primary_key=True, autoincrement=True),
+    sa.Column("organization_id", sa.String(64), nullable=False),
+    # The workflow it'd have run, and which version (when it was known).
+    sa.Column("agent_id", sa.String(64), nullable=False),
+    sa.Column("version", sa.String(16), nullable=True),
+    # What the admin API answered (403: they may not; 422: it doesn't fit or
+    # build), and why.
+    sa.Column("status_code", sa.Integer, nullable=False),
+    sa.Column("reason", sa.String(1000), nullable=False),
+    sa.Column("requested_by", sa.String(64), nullable=True),
+    sa.Column("requested_by_name", sa.String(255), nullable=True),
+    *_provenance_columns(),
+    sa.Column("at", DATETIME, nullable=False),
+    sa.Index("ix_adk_run_refusals_organization", "organization_id", "at"),
+)
+
 #: What a list of runs reads: everything but what only the run's own page shows.
 SUMMARY_COLUMNS = [c for c in runs.c if c.name not in ("payload", "state", "decisions", "result")]
+#: How a run was started (:class:`Provenance`), as its columns are named.
+PROVENANCE_COLUMNS = tuple(c.name for c in _provenance_columns())
 
 
 class RunStoreError(Exception):
@@ -179,6 +283,10 @@ class NotAllowed(RunStoreError):
 
 class NotOpen(NotAllowed):
     """The approval or question named isn't one the run waits at."""
+
+
+class RunTaken(NotAllowed):
+    """A start's ID is another start's run: of another workflow, or someone else's."""
 
 
 class LostLease(RunStoreError):
@@ -210,6 +318,80 @@ class Actor:
 
     id: str | None = None
     name: str = ""
+
+
+#: Each provenance column's length, which what's kept is cut to.
+_LENGTHS = {c.name: c.type.length for c in _provenance_columns() if isinstance(c.type, sa.String)}
+
+
+@dataclass(frozen=True)
+class Provenance:
+    """
+    How a run was started, for an audit.
+
+    :ivar trigger_type: What started it (:data:`TRIGGER_TYPES`).
+    :ivar channel: Through what it came in (:data:`CHANNELS`).
+    :ivar on_behalf_of: Whom it's for: the person (a chat agent's
+        conversation's, not the agent), else the API key or caller that
+        started it (``anonymous`` for nobody known).
+    :ivar on_behalf_of_name: Their name, when it's known.
+    :ivar on_behalf_of_verified: Whether their own credential said who they
+        are: False for an ID a caller passed on (a public runtime's, an API
+        key's end user's, a chat page's visitor's); None when unknown.
+    :ivar via_agent_id: The agent it was started through: a chat agent (its
+        Workflow tool, an intake it completed), or the workflow whose run
+        started it.
+    :ivar via_agent_version: Which version of it.
+    :ivar api_key_id: The organization's API key the start was made with.
+    :ivar auth_method: How the starter proved who they are (:data:`AUTH_METHODS`).
+    :ivar client_ip: Where the request that started it came from.
+    :ivar user_agent: What made it, as it said.
+    :ivar request_id: The request's ID (``X-Request-ID``), as its logs have it.
+    """
+
+    trigger_type: str
+    channel: str | None = None
+    on_behalf_of: str | None = None
+    on_behalf_of_name: str = ""
+    on_behalf_of_verified: bool | None = None
+    via_agent_id: str | None = None
+    via_agent_version: str | None = None
+    api_key_id: str | None = None
+    auth_method: str | None = None
+    client_ip: str | None = None
+    user_agent: str | None = None
+    request_id: str | None = None
+
+    def values(self) -> dict[str, Any]:
+        """:return: Its columns, each cut to its length; an empty name null."""
+        values: dict[str, Any] = {}
+        for name in PROVENANCE_COLUMNS:
+            value = getattr(self, name)
+            if isinstance(value, str):
+                value = value[: _LENGTHS[name]] or None
+            values[name] = value
+        return values
+
+    @classmethod
+    def of(cls, row: Mapping[str, Any]) -> Provenance | None:
+        """:return: A run's (or refusal's), as the store has it; None when it has no trigger type."""
+        trigger_type = row.get("trigger_type")
+        if not trigger_type:
+            return None
+        return cls(
+            str(trigger_type),
+            channel=row.get("channel"),
+            on_behalf_of=row.get("on_behalf_of"),
+            on_behalf_of_name=row.get("on_behalf_of_name") or "",
+            on_behalf_of_verified=row.get("on_behalf_of_verified"),
+            via_agent_id=row.get("via_agent_id"),
+            via_agent_version=row.get("via_agent_version"),
+            api_key_id=row.get("api_key_id"),
+            auth_method=row.get("auth_method"),
+            client_ip=row.get("client_ip"),
+            user_agent=row.get("user_agent"),
+            request_id=row.get("request_id"),
+        )
 
 
 def utcnow() -> datetime:
@@ -259,6 +441,35 @@ def _json(value: Any) -> Any:
     return copy.deepcopy(value)
 
 
+def _started_so(
+    table: sa.Table,
+    *,
+    trigger_types: Sequence[str] | None,
+    on_behalf_of: str | None,
+    via_agent_id: str | None,
+    api_key_id: str | None,
+    created_from: datetime | None,
+    created_to: datetime | None,
+    at: sa.Column[Any],
+) -> list[sa.ColumnElement[bool]]:
+    """:return: What picks the runs (or refusals) started so, then."""
+    where: list[sa.ColumnElement[bool]] = []
+    if trigger_types:
+        where.append(table.c.trigger_type.in_(list(trigger_types)))
+    for column, value in (
+        (table.c.on_behalf_of, on_behalf_of),
+        (table.c.via_agent_id, via_agent_id),
+        (table.c.api_key_id, api_key_id),
+    ):
+        if value is not None:
+            where.append(column == value)
+    if created_from is not None:
+        where.append(at >= _naive(created_from))
+    if created_to is not None:
+        where.append(at < _naive(created_to))
+    return where
+
+
 class RunStore:
     """ADK workflow runs and their activity, over the admin MySQL's engine."""
 
@@ -288,14 +499,45 @@ class RunStore:
         statuses: Sequence[str] | None = None,
         limit: int = 20,
         offset: int = 0,
+        trigger_types: Sequence[str] | None = None,
+        on_behalf_of: str | None = None,
+        via_agent_id: str | None = None,
+        api_key_id: str | None = None,
+        root_run_id: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
-        """:return: The organization's runs (of one ADK workflow, in some
-        statuses), newest first, without their payloads; and how many match."""
+        """
+        :param trigger_types: Only runs started so (:data:`TRIGGER_TYPES`).
+        :param on_behalf_of: Only runs for this person (or key, or caller).
+        :param via_agent_id: Only runs started through this agent.
+        :param api_key_id: Only runs started with this API key.
+        :param root_run_id: Only this run and those under it.
+        :param created_from: Only runs created then or later.
+        :param created_to: Only runs created before then.
+        :return: The organization's runs (of one ADK workflow, in some
+            statuses, started so), newest first, without their payloads;
+            and how many match.
+        """
         where = [runs.c.organization_id == organization_id]
         if agent_id is not None:
             where.append(runs.c.agent_id == agent_id)
         if statuses:
             where.append(runs.c.status.in_(list(statuses)))
+        where.extend(
+            _started_so(
+                runs,
+                trigger_types=trigger_types,
+                on_behalf_of=on_behalf_of,
+                via_agent_id=via_agent_id,
+                api_key_id=api_key_id,
+                created_from=created_from,
+                created_to=created_to,
+                at=runs.c.created_at,
+            )
+        )
+        if root_run_id is not None:
+            where.append(runs.c.root_run_id == root_run_id)
         query = (
             sa.select(*SUMMARY_COLUMNS)
             .where(*where)
@@ -397,10 +639,12 @@ class RunStore:
         resubmit_of: str | None = None,
         run_id: str | None = None,
         version: str | None = None,
+        provenance: Provenance | None = None,
     ) -> dict[str, Any]:
         """
         :param version: Which version of the workflow it runs: "draft" or a
             number; None when unknown.
+        :param provenance: How it was started; None leaves it unsaid.
         :return: A new run, queued: the caller queues its job.
         """
         async with self.engine.begin() as conn:
@@ -416,8 +660,75 @@ class RunStore:
                 resubmit_of=resubmit_of,
                 run_id=run_id,
                 version=version,
+                provenance=provenance,
             )
         return await self._must(run_id)
+
+    async def create_once(
+        self,
+        *,
+        run_id: str,
+        organization_id: str,
+        agent_id: str,
+        agent_name: str,
+        revision: int,
+        session_id: str,
+        payload: dict[str, Any],
+        requested_by: Actor,
+        version: str | None = None,
+        provenance: Provenance | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """
+        A run under an ID its start makes for it (an idempotency key's, an
+        A2A task's, an intake's record's): asked again for that ID, as when
+        the start is retried, it's the run the first start made, not another.
+
+        :return: The run, and whether it's new (queued: the caller queues its job).
+        :raises RunTaken: The ID is a run of another workflow, in another
+            organization, or someone else's.
+        """
+        existing = await self.started_as(
+            run_id, organization_id=organization_id, agent_id=agent_id, requested_by=requested_by
+        )
+        if existing is None:
+            try:
+                async with self.engine.begin() as conn:
+                    await self._insert(
+                        conn,
+                        organization_id=organization_id,
+                        agent_id=agent_id,
+                        agent_name=agent_name,
+                        revision=revision,
+                        session_id=session_id,
+                        payload=payload,
+                        requested_by=requested_by,
+                        resubmit_of=None,
+                        run_id=run_id,
+                        version=version,
+                        provenance=provenance,
+                    )
+                return await self._must(run_id), True
+            except sa.exc.IntegrityError:
+                # Another start for the ID got there first.
+                existing = await self.get(run_id)
+                if existing is None:
+                    raise
+        _same_start(existing, organization_id=organization_id, agent_id=agent_id, requested_by=requested_by)
+        return existing, False
+
+    async def started_as(
+        self, run_id: str, *, organization_id: str, agent_id: str, requested_by: Actor
+    ) -> dict[str, Any] | None:
+        """
+        :return: The run a start under this ID made (:meth:`create_once`);
+            None when none has yet.
+        :raises RunTaken: The ID is a run of another workflow, in another
+            organization, or someone else's.
+        """
+        existing = await self.get(run_id)
+        if existing is not None:
+            _same_start(existing, organization_id=organization_id, agent_id=agent_id, requested_by=requested_by)
+        return existing
 
     async def create_child(
         self,
@@ -438,6 +749,8 @@ class RunStore:
         A run another starts (a workflow its LLM agent calls as a tool), under
         the ID its call makes for it: asked again for that ID, as when the call
         is answered after its worker stopped, it's the run that call started.
+        It's for whom its parent is, with its API key and credential, under
+        its parent's root, started via the parent's workflow by a worker.
 
         :param owner: The parent's worker: a new run is started only while it
             has the parent (fenced on its lease, as its writes are: owned, and
@@ -449,7 +762,20 @@ class RunStore:
         async with self.engine.begin() as conn:
             parent = (
                 await conn.execute(
-                    sa.select(runs.c.status, runs.c.cancel_requested_at, runs.c.lease_owner, runs.c.lease_until)
+                    sa.select(
+                        runs.c.status,
+                        runs.c.cancel_requested_at,
+                        runs.c.lease_owner,
+                        runs.c.lease_until,
+                        runs.c.agent_id,
+                        runs.c.version,
+                        runs.c.root_run_id,
+                        runs.c.on_behalf_of,
+                        runs.c.on_behalf_of_name,
+                        runs.c.on_behalf_of_verified,
+                        runs.c.api_key_id,
+                        runs.c.auth_method,
+                    )
                     .where(runs.c.id == parent_run_id)
                     .with_for_update()
                 )
@@ -482,9 +808,103 @@ class RunStore:
                     run_id=run_id,
                     version=version,
                     parent_run_id=parent_run_id,
+                    root_run_id=parent.root_run_id or parent_run_id,
+                    provenance=Provenance(
+                        WORKFLOW,
+                        channel="worker",
+                        on_behalf_of=parent.on_behalf_of,
+                        on_behalf_of_name=parent.on_behalf_of_name or "",
+                        on_behalf_of_verified=parent.on_behalf_of_verified,
+                        via_agent_id=parent.agent_id,
+                        via_agent_version=parent.version,
+                        api_key_id=parent.api_key_id,
+                        auth_method=parent.auth_method,
+                    ),
                 )
                 created = True
         return await self._must(run_id), created
+
+    async def refuse(
+        self,
+        *,
+        organization_id: str,
+        agent_id: str,
+        status_code: int,
+        reason: str,
+        requested_by: Actor | None,
+        provenance: Provenance | None,
+        version: str | None = None,
+    ) -> int:
+        """
+        Keep a start that was refused (they may not start it, or what it'd
+        run doesn't fit or build), for the organization's audit: no run is
+        made.
+
+        :param status_code: What the start was answered (403, 422).
+        :param reason: Why, as it was answered.
+        :return: Its ID.
+        """
+        values: dict[str, Any] = {
+            "organization_id": organization_id,
+            "agent_id": agent_id[:64],
+            "version": version[:16] if version is not None else None,
+            "status_code": status_code,
+            "reason": reason[:1000],
+            "requested_by": requested_by.id[:64] if requested_by and requested_by.id else None,
+            "requested_by_name": (requested_by.name[:255] or None) if requested_by else None,
+            "at": self._now(),
+            **(provenance.values() if provenance is not None else {}),
+        }
+        async with self.engine.begin() as conn:
+            result = await conn.execute(sa.insert(refusals).values(values))
+        [refusal_id] = result.inserted_primary_key or (0,)
+        return int(refusal_id)
+
+    async def refused(
+        self,
+        organization_id: str,
+        *,
+        agent_id: str | None = None,
+        trigger_types: Sequence[str] | None = None,
+        on_behalf_of: str | None = None,
+        via_agent_id: str | None = None,
+        api_key_id: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """:return: The starts the organization refused (of one workflow,
+        started so, then), newest first; and how many match."""
+        where = [refusals.c.organization_id == organization_id]
+        if agent_id is not None:
+            where.append(refusals.c.agent_id == agent_id)
+        where.extend(
+            _started_so(
+                refusals,
+                trigger_types=trigger_types,
+                on_behalf_of=on_behalf_of,
+                via_agent_id=via_agent_id,
+                api_key_id=api_key_id,
+                created_from=created_from,
+                created_to=created_to,
+                at=refusals.c.at,
+            )
+        )
+        query = (
+            sa.select(refusals)
+            .where(*where)
+            .order_by(refusals.c.at.desc(), refusals.c.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        count = sa.select(sa.func.count()).select_from(refusals).where(*where)
+        async with self.engine.connect() as conn:
+            items = [dict(r) for r in (await conn.execute(query)).mappings()]
+            total = int((await conn.execute(count)).scalar_one())
+        for item in items:
+            item["at"] = _aware(item["at"])
+        return items, total
 
     async def children(self, run_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
         """:return: The runs the run started (a list's summary), oldest first."""
@@ -512,8 +932,16 @@ class RunStore:
         run_id: str | None,
         version: str | None,
         parent_run_id: str | None = None,
+        root_run_id: str | None = None,
+        provenance: Provenance | None = None,
     ) -> str:
-        """A new run, queued, with its first activity. :return: Its ID."""
+        """
+        A new run, queued, with its first activity.
+
+        :param root_run_id: The top of its parent chain; itself without one.
+        :param provenance: How it was started; None leaves it unsaid.
+        :return: Its ID.
+        """
         now = self._now()
         run_id = run_id or new_id()
         values: dict[str, Any] = {
@@ -538,6 +966,9 @@ class RunStore:
             values["version"] = version[:16]
         if parent_run_id is not None:
             values["parent_run_id"] = parent_run_id
+        values["root_run_id"] = root_run_id or run_id
+        started = provenance.values() if provenance is not None else {}
+        values.update(started)
         if resubmit_of:
             message = f"Resubmitted from run {resubmit_of[:8]}"
         elif parent_run_id:
@@ -545,7 +976,13 @@ class RunStore:
         else:
             message = "Started"
         await conn.execute(sa.insert(runs).values(values))
-        await self._event(conn, run_id, "created", message, actor=requested_by, at=now)
+        # How, beside it in its activity: what started it, through what, for whom.
+        attributes = {
+            key: started[key]
+            for key in ("trigger_type", "channel", "on_behalf_of", "on_behalf_of_verified", "via_agent_id")
+            if started.get(key) is not None
+        }
+        await self._event(conn, run_id, "created", message, actor=requested_by, at=now, attributes=attributes or None)
         return run_id
 
     async def decide(
@@ -563,42 +1000,36 @@ class RunStore:
         Decide (or answer) an approval or question the run waits at (one of
         its gates); the others stay open. Paused or waiting, the run is
         queued to carry on with it; queued or running, its next attempt reads
-        it. ``timed_out``: nobody did by its deadline (the worker's rejection).
+        it. ``timed_out``: nobody did by its deadline (the worker's rejection),
+        or the run a ``child_run`` gate waits for didn't end by it.
 
         :raises NoSuchRun: There's no such run.
         :raises NotOpen: It doesn't wait at ``request_id`` (decided already, or moved on).
+        :raises NotAllowed: It's a ``child_run`` gate, which only that run's end
+            (or its deadline) decides.
         """
         async with self.engine.begin() as conn:
             run = await self._locked(conn, run_id, organization_id)
-            gates = open_gates(run)
-            pause = next((gate for gate in gates if gate.get("id") == request_id), None)
+            pause = next((gate for gate in open_gates(run) if gate.get("id") == request_id), None)
             if pause is None:
                 raise NotOpen("The run doesn't wait at that approval or question any more")
+            child = _child_of(pause)
+            if pause.get("kind") == CHILD_RUN and not timed_out:
+                raise NotAllowed(
+                    f"The run waits for run {child[:8]} to end, not for a decision: it carries on once that run "
+                    "ends (or its wait is up)"
+                )
             now = self._now()
-            decisions = dict(run["decisions"] or {})
-            decisions[pause["key"]] = {
-                "approved": approved,
-                "comment": comment,
-                "actor_id": actor.id,
-                "actor_name": actor.name,
-                "request_id": request_id,
-                "decided_at": now.replace(tzinfo=UTC).isoformat(),
-            }
-            values: dict[str, Any] = {
-                "decisions": decisions,
-                "gates": [gate for gate in gates if gate is not pause] or None,
-                "updated_at": now,
-            }
-            if run["status"] in (PAUSED, WAITING):
-                values.update(status=QUEUED, pause=None, waiting_until=None, waiting_reason=None)
-            await self._update(conn, run_id, values, expect=(run["status"],))
-            if timed_out:
+            await self._decided(conn, run, pause, approved=approved, comment=comment, actor=actor, at=now)
+            if timed_out and pause.get("kind") == CHILD_RUN:
+                kind, message = "timed_out", f"Stopped waiting for run {child[:8]}: it didn't end in time"
+            elif timed_out:
                 kind, message = "timed_out", "Nobody decided in time"
             elif pause.get("kind") == "human_input":
                 kind, message = ("answered", "Answered") if approved else ("declined", "Declined to answer")
             else:
                 kind, message = ("decided", "Approved") if approved else ("decided", "Rejected")
-            what = (pause.get("details") or {}).get("step_name") or ""
+            what = "" if child else (pause.get("details") or {}).get("step_name") or ""
             await self._event(
                 conn,
                 run_id,
@@ -632,6 +1063,7 @@ class RunStore:
                 {
                     "status": QUEUED,
                     "attempt": attempt,
+                    "interruptions": 0,
                     "finished_at": None,
                     "cancel_requested_at": None,
                     "updated_at": now,
@@ -641,35 +1073,120 @@ class RunStore:
             await self._event(conn, run_id, "retried", f"Retried: attempt {attempt}", actor=actor, at=now)
         return await self._must(run_id)
 
-    async def resubmit(self, run_id: str, *, actor: Actor, organization_id: str | None = None) -> dict[str, Any]:
+    async def resubmit(
+        self,
+        run_id: str,
+        *,
+        actor: Actor,
+        organization_id: str | None = None,
+        provenance: Provenance | None = None,
+        agent_access: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
-        :return: A new run of the finished run's payload, queued, in an ADK
-            session of its own; its files stay in the session they were
-            saved in (``files_session_id``), and it copies them to its own.
+        A new run of a finished run's payload, started by ``actor``: a
+        resubmission (whatever ``provenance`` says it is, for them by
+        default), its own root. Its trigger says so; the trigger the payload
+        first had is kept as its ``original_trigger``.
+
+        :param agent_access: What whoever it's for holds now of the agent
+            permissions its agents' rules name (``RunPayload.agent_access``,
+            which the caller works out as it's asked): never what the run it's
+            of held, which is dropped. None: nobody holds any.
+        :return: The new run, queued, in an ADK session of its own; its files
+            stay in the session they were saved in (``files_session_id``),
+            and it copies them to its own.
         :raises NotAllowed: The run isn't finished.
         """
-        async with self.engine.begin() as conn:
-            run = await self._locked(conn, run_id, organization_id)
-            if run["status"] not in FINISHED:
-                raise NotAllowed("Only a finished run can be resubmitted")
-            payload = dict(run["payload"])
-            if payload.get("files") and not payload.get("files_session_id"):
-                payload["files_session_id"] = payload.get("session_id") or run["session_id"]
-            payload["session_id"] = session_id = new_session_id()
-            again = await self._insert(
-                conn,
-                organization_id=run["organization_id"],
-                agent_id=run["agent_id"],
-                agent_name=run["agent_name"],
-                revision=run["revision"],
-                session_id=session_id,
-                payload=payload,
+        again, _ = await self.resubmit_once(
+            run_id,
+            again_id=None,
+            actor=actor,
+            organization_id=organization_id,
+            provenance=provenance,
+            agent_access=agent_access,
+        )
+        return again
+
+    async def resubmit_once(
+        self,
+        run_id: str,
+        *,
+        again_id: str | None,
+        actor: Actor,
+        organization_id: str | None = None,
+        provenance: Provenance | None = None,
+        agent_access: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """
+        :meth:`resubmit`, under an ID its start makes for it (an idempotency
+        key's): asked again for that ID, it's the resubmission the first ask
+        made, with the access it was made with.
+
+        :param again_id: The new run's ID; None for a new one.
+        :return: The resubmission, and whether it's new (queued: the caller queues its job).
+        :raises NotAllowed: The run isn't finished.
+        :raises RunTaken: ``again_id`` is a run that isn't ``actor``'s
+            resubmission of this run.
+        """
+        if again_id is not None:
+            existing = await self.get(again_id)
+            if existing is not None:
+                _same_start(
+                    existing,
+                    organization_id=existing["organization_id"] if organization_id is None else organization_id,
+                    agent_id=existing["agent_id"],
+                    requested_by=actor,
+                    resubmit_of=run_id,
+                )
+                return existing, False
+        provenance = replace(
+            provenance or Provenance(RESUBMIT, on_behalf_of=actor.id, on_behalf_of_name=actor.name),
+            trigger_type=RESUBMIT,
+        )
+        try:
+            async with self.engine.begin() as conn:
+                run = await self._locked(conn, run_id, organization_id)
+                if run["status"] not in FINISHED:
+                    raise NotAllowed("Only a finished run can be resubmitted")
+                payload = dict(run["payload"])
+                if payload.get("files") and not payload.get("files_session_id"):
+                    payload["files_session_id"] = payload.get("session_id") or run["session_id"]
+                payload["session_id"] = session_id = new_session_id()
+                # The first run's trigger, however many times it's been resubmitted since.
+                original = payload.get("original_trigger") or payload.get("trigger")
+                if original is not None:
+                    payload["original_trigger"] = original
+                payload["trigger"] = {"type": RESUBMIT, "by": actor.id, "run_id": run_id}
+                # What its agents' rules are checked against: held now, never carried forward.
+                payload["agent_access"] = agent_access
+                again = await self._insert(
+                    conn,
+                    organization_id=run["organization_id"],
+                    agent_id=run["agent_id"],
+                    agent_name=run["agent_name"],
+                    revision=run["revision"],
+                    session_id=session_id,
+                    payload=payload,
+                    requested_by=actor,
+                    resubmit_of=run_id,
+                    run_id=again_id,
+                    version=run.get("version"),
+                    provenance=provenance,
+                )
+        except sa.exc.IntegrityError:
+            if again_id is None:
+                raise
+            # Another ask for the ID got there first.
+            existing = await self._must(again_id)
+            _same_start(
+                existing,
+                organization_id=existing["organization_id"] if organization_id is None else organization_id,
+                agent_id=existing["agent_id"],
                 requested_by=actor,
                 resubmit_of=run_id,
-                run_id=None,
-                version=run.get("version"),
             )
-        return await self._must(again)
+            return existing, False
+        return await self._must(again), True
 
     async def abandon(self, run_id: str, *, actor: Actor, organization_id: str | None = None) -> dict[str, Any]:
         """
@@ -677,11 +1194,13 @@ class RunStore:
         it's abandoned at once. Running, it's marked (``cancel_requested_at``):
         its worker stops it and abandons it (asking again changes nothing).
         The runs it started that are still going, and theirs, are abandoned
-        with it.
+        with it. Abandoned at once, a run its parent waits for is the
+        parent's answer: the parent is queued to carry on.
 
         :raises NotAllowed: It's finished, and didn't fail.
         """
         async with self.engine.begin() as conn:
+            parent = await self._parent_locked(conn, run_id)
             run = await self._locked(conn, run_id, organization_id)
             now = self._now()
             if run["status"] == RUNNING:
@@ -697,6 +1216,7 @@ class RunStore:
                     )
             else:
                 await self._abandon_now(conn, run, actor=actor, at=now)
+                await self._child_ended(conn, parent, run_id, ABANDONED, at=now)
             await self._abandon_descendants(conn, run_id, actor=actor, at=now)
         return await self._must(run_id)
 
@@ -771,10 +1291,12 @@ class RunStore:
         return abandoned
 
     async def delete_organization(self, organization_id: str) -> int:
-        """Forget an organization's runs (their activity goes with them). :return: How many."""
+        """Forget an organization's runs (their activity goes with them), and
+        the starts it refused. :return: How many runs."""
         async with self.engine.begin() as conn:
             ids = sa.select(runs.c.id).where(runs.c.organization_id == organization_id)
             await conn.execute(sa.delete(events).where(events.c.run_id.in_(ids)))
+            await conn.execute(sa.delete(refusals).where(refusals.c.organization_id == organization_id))
             result = await conn.execute(sa.delete(runs).where(runs.c.organization_id == organization_id))
         return int(result.rowcount or 0)
 
@@ -871,10 +1393,52 @@ class RunStore:
         kind: str = "note",
         actor: Actor | None = None,
         attributes: dict[str, Any] | None = None,
+        owner: str | None = None,
     ) -> None:
-        """A line on the run's activity."""
+        """
+        A line on the run's activity.
+
+        :param owner: The worker noting it as it runs the run: it's noted only
+            while the run is its (fenced on its lease, as its writes are).
+        :raises LostLease: The owner lost the run, or its lease ran out.
+        """
         async with self.engine.begin() as conn:
+            if owner is not None:
+                await self.hold(conn, run_id, owner=owner)
             await self._event(conn, run_id, kind, message, actor=actor, at=self._now(), attributes=attributes)
+
+    async def hold(self, conn: AsyncConnection, run_id: str, *, owner: str) -> None:
+        """
+        The owner's lease on the run, held for the rest of ``conn``'s
+        transaction: it's the owner's and hasn't run out, and the run's row is
+        locked against writes until the transaction ends, so no worker takes
+        the run (nor does the maintenance queue it again) meanwhile. A write
+        of the owner's in that transaction lands while it has the run, or not
+        at all; a write elsewhere made before it ends (``holding``) lands
+        before anyone else can have the run.
+
+        :raises LostLease: The owner lost the run, or its lease ran out.
+        """
+        held = await conn.execute(
+            sa.select(runs.c.id).where(runs.c.id == run_id, *self._lease(owner, self._now())).with_for_update(read=True)
+        )
+        if held.first() is None:
+            raise LostLease(f"run {run_id} is no longer {owner}'s, or its lease ran out")
+
+    @contextlib.asynccontextmanager
+    async def holding(self, run_id: str, *, owner: str) -> AsyncIterator[None]:
+        """
+        While inside, the owner has the run (``hold``, on a connection of its
+        own): for a write elsewhere (the run's ADK session) that mustn't land
+        once another worker may have the run. Writes to the run, the owner's
+        own among them, wait until the block ends: keep it short, and never
+        write to the run inside it.
+
+        :raises LostLease: The owner lost the run, or its lease ran out.
+        """
+        async with self.engine.begin() as conn:
+            await self.hold(conn, run_id, owner=owner)
+            yield
 
     async def pause(
         self,
@@ -895,7 +1459,9 @@ class RunStore:
 
         A gate someone decided while the worker had the run (its attempt read
         the run's decisions before) doesn't wait: the run is queued again
-        instead, for its next attempt to carry on with the decision.
+        instead, for its next attempt to carry on with the decision. So does
+        a ``child_run`` gate whose run has ended (or is gone): it's decided
+        as it's asked, as that run's end would have.
 
         :return: Its open gates (each ``id`` names it in a decision); None
             when it was queued again instead.
@@ -905,21 +1471,31 @@ class RunStore:
         now = self._now()
         async with self.engine.begin() as conn:
             run = await self._locked(conn, run_id, None)
-            decided = run["decisions"] or {}
+            decided = dict(run["decisions"] or {})
             known = {gate.get("key"): gate for gate in open_gates(run)}
             made = [_gate(gate, known.get(gate["key"]), now) for gate in gates]
             fresh = [gate for gate in made if gate["key"] not in known]
+            ended = await self._children_ended(conn, made, decided, now)
             values: dict[str, Any] = {
                 "state": _json(state),
                 "lease_owner": None,
                 "lease_until": None,
+                "interruptions": 0,
                 "updated_at": now,
             }
+            if ended:
+                values["decisions"] = decided
             if any(gate["key"] in decided for gate in made):
                 open_ = [gate for gate in made if gate["key"] not in decided]
                 values.update(status=QUEUED, pause=None, gates=open_ or None, waiting_until=None, waiting_reason=None)
                 await self._fenced(conn, run_id, owner, values, going=True)
-                await self._event(conn, run_id, "note", "Decided while it ran: it carries on", at=now)
+                for gate, status in ended:
+                    message = f"Run {_child_of(gate)[:8]} it waits for {_ended(status)}: it carries on"
+                    await self._event(
+                        conn, run_id, "child_ended", message, at=now, attributes={"run_id": _child_of(gate)}
+                    )
+                if len(ended) < sum(gate["key"] in decided for gate in made):
+                    await self._event(conn, run_id, "note", "Decided while it ran: it carries on", at=now)
                 return None
             if until is not None:
                 values.update(status=WAITING, pause=None, waiting_until=_naive(until), waiting_reason=reason[:500])
@@ -930,6 +1506,10 @@ class RunStore:
             if until is not None:
                 await self._event(conn, run_id, "waiting", reason[:1000] or "Waits", at=now)
             for gate in fresh:
+                if gate["kind"] == CHILD_RUN:
+                    attributes = {"run_id": _child_of(gate)}
+                    await self._event(conn, run_id, "waiting", gate["reason"], at=now, attributes=attributes)
+                    continue
                 what = "an answer" if gate["kind"] == "human_input" else "a decision"
                 await self._event(conn, run_id, "paused", f"Waits for {what}: {gate['reason']}"[:1000], at=now)
             if not fresh and until is None:
@@ -958,6 +1538,7 @@ class RunStore:
                     "waiting_reason": reason[:500],
                     "lease_owner": None,
                     "lease_until": None,
+                    "interruptions": 0,
                     "updated_at": now,
                 },
                 going=True,
@@ -974,7 +1555,12 @@ class RunStore:
         result: Any = None,
         error: dict[str, Any] | None = None,
     ) -> None:
-        """The run ended, succeeded or failed. :raises LostLease: The owner lost the run."""
+        """
+        The run ended, succeeded or failed: a run its parent waits for is the
+        parent's answer (the parent is queued to carry on).
+
+        :raises LostLease: The owner lost the run.
+        """
         now = self._now()
         values: dict[str, Any] = {
             "status": SUCCEEDED if succeeded else FAILED,
@@ -992,9 +1578,11 @@ class RunStore:
         if state is not None:
             values["state"] = _json(state)
         async with self.engine.begin() as conn:
+            parent = await self._parent_locked(conn, run_id)
             await self._fenced(conn, run_id, owner, values)
             message = "Succeeded" if succeeded else f"Failed: {(error or {}).get('message') or 'it failed'}"
             await self._event(conn, run_id, SUCCEEDED if succeeded else FAILED, message[:1000], at=now)
+            await self._child_ended(conn, parent, run_id, values["status"], at=now)
 
     async def requeue(
         self,
@@ -1004,29 +1592,44 @@ class RunStore:
         error: dict[str, Any],
         state: dict[str, Any] | None = None,
         not_before: datetime | None = None,
+        lease_epoch: int | None = None,
     ) -> dict[str, Any] | None:
         """
         A run that stopped on a hiccup (``owner``'s, which lets it go) or was
-        interrupted (``owner`` None: its lease ran out), queued again as its
-        next attempt.
+        interrupted (``owner`` None: its lease ran out), queued again: as its
+        next attempt, or, ``interrupted`` (``error``'s category: its worker
+        stopped or went), as the same one, one more of its ``interruptions``.
 
         :param not_before: When it may be taken (a hiccup's backoff): no job
             takes it sooner. None: at once.
+        :param lease_epoch: Interrupted, the taking of the run whose lease ran
+            out, as the maintenance found it (``interrupted``): a later one's,
+            whose worker may have gone too, is another's to recover, with what
+            that one kept. Needed when ``owner`` is None.
 
         :return: The run; None when it isn't the owner's, or its lease ran
-            out (or, interrupted, when its lease hasn't run out after all, or
-            someone abandoned it: the maintenance abandons it instead).
+            out (or, interrupted, when its lease hasn't run out after all, it
+            was taken again since, or someone abandoned it: the maintenance
+            abandons it instead).
         :raises CancelRequested: The owner's, and someone abandoned it.
+        :raises ValueError: Interrupted, without ``lease_epoch``.
         """
         now = self._now()
         if owner is not None:
             fence = sa.and_(*self._lease(owner, now))
+        elif lease_epoch is None:
+            raise ValueError("An interrupted run is queued again for the taking whose lease ran out: its lease_epoch")
         else:
-            fence = sa.and_(runs.c.status == RUNNING, runs.c.lease_until < now)
+            fence = sa.and_(*self._ran_out(lease_epoch, now))
         fence = sa.and_(fence, runs.c.cancel_requested_at.is_(None))
+        counted = (
+            {"interruptions": runs.c.interruptions + 1}
+            if error.get("category") == "interrupted"
+            else {"attempt": runs.c.attempt + 1}
+        )
         values: dict[str, Any] = {
             "status": QUEUED,
-            "attempt": runs.c.attempt + 1,
+            **counted,
             "error": _failure(error, now),
             "lease_owner": None,
             "lease_until": None,
@@ -1047,18 +1650,25 @@ class RunStore:
             await self._event(conn, run_id, kind, f"{why}: queued again"[:1000], at=now)
         return await self._must(run_id)
 
-    async def fail_interrupted(self, run_id: str, *, error: dict[str, Any], result: Any = None) -> bool:
+    async def fail_interrupted(
+        self, run_id: str, *, lease_epoch: int, error: dict[str, Any], result: Any = None
+    ) -> bool:
         """
         A run whose lease ran out once too often, or whose worker failed it
-        but couldn't say so (the failure it kept elsewhere): it fails.
+        but couldn't say so (the failure it kept elsewhere): it fails (and a
+        parent waiting for it is queued to carry on).
 
+        :param lease_epoch: The taking of the run whose lease ran out, as the
+            maintenance found it (``interrupted``), whose failure and
+            interruptions these are: a later taking's isn't failed with them.
         :return: Whether it did.
         """
         now = self._now()
         async with self.engine.begin() as conn:
+            parent = await self._parent_locked(conn, run_id)
             updated = await conn.execute(
                 sa.update(runs)
-                .where(runs.c.id == run_id, runs.c.status == RUNNING, runs.c.lease_until < now)
+                .where(runs.c.id == run_id, *self._ran_out(lease_epoch, now))
                 .values(
                     status=FAILED,
                     pause=None,
@@ -1074,11 +1684,13 @@ class RunStore:
             if updated.rowcount != 1:
                 return False
             await self._event(conn, run_id, FAILED, f"Failed: {error.get('message') or 'interrupted'}"[:1000], at=now)
+            await self._child_ended(conn, parent, run_id, FAILED, at=now)
         return True
 
     async def abandon_running(self, run_id: str, *, owner: str, state: dict[str, Any] | None) -> None:
         """
-        A run someone abandoned while it ran, stopped by its worker: abandoned.
+        A run someone abandoned while it ran, stopped by its worker: abandoned
+        (and a parent waiting for it is queued to carry on).
 
         :raises LostLease: The owner lost the run.
         """
@@ -1093,8 +1705,10 @@ class RunStore:
         if state is not None:
             values["state"] = _json(state)
         async with self.engine.begin() as conn:
+            parent = await self._parent_locked(conn, run_id)
             await self._fenced(conn, run_id, owner, values)
             await self._event(conn, run_id, ABANDONED, "Abandoned: its worker stopped it", at=now)
+            await self._child_ended(conn, parent, run_id, ABANDONED, at=now)
             # And what it started since someone abandoned it, before it stopped.
             await self._abandon_descendants(conn, run_id, actor=None, at=now)
 
@@ -1105,9 +1719,11 @@ class RunStore:
 
     async def abandon_stopping(self, run_id: str) -> bool:
         """A run someone abandoned while it ran, whose worker went before it
-        stopped it: abandoned. :return: Whether it was."""
+        stopped it: abandoned (and a parent waiting for it queued to carry
+        on). :return: Whether it was."""
         now = self._now()
         async with self.engine.begin() as conn:
+            parent = await self._parent_locked(conn, run_id)
             result = await conn.execute(
                 sa.update(runs)
                 .where(runs.c.id == run_id, runs.c.cancel_requested_at.is_not(None), self._left())
@@ -1126,6 +1742,7 @@ class RunStore:
             if result.rowcount != 1:
                 return False
             await self._event(conn, run_id, ABANDONED, "Abandoned: its worker went before it stopped it", at=now)
+            await self._child_ended(conn, parent, run_id, ABANDONED, at=now)
             await self._abandon_descendants(conn, run_id, actor=None, at=now)
         return True
 
@@ -1209,6 +1826,131 @@ class RunStore:
             raise NoSuchRun(run_id)
         return _row(found)
 
+    async def _decided(
+        self,
+        conn: AsyncConnection,
+        run: Mapping[str, Any],
+        gate: Mapping[str, Any],
+        *,
+        approved: bool,
+        comment: str,
+        actor: Actor,
+        at: datetime,
+        **more: Any,
+    ) -> None:
+        """
+        The decision at one of the run's open gates (``run`` locked: its
+        status, decisions, gates and pause), kept by the gate's key, the
+        gate closed; paused or waiting, the run is queued to carry on.
+
+        :param more: What else the decision keeps (a ``child_run`` gate's run and how it ended).
+        """
+        decisions = dict(run["decisions"] or {})
+        decisions[gate["key"]] = {
+            "approved": approved,
+            "comment": comment,
+            "actor_id": actor.id,
+            "actor_name": actor.name,
+            "request_id": gate["id"],
+            "decided_at": at.replace(tzinfo=UTC).isoformat(),
+            **more,
+        }
+        values: dict[str, Any] = {
+            "decisions": decisions,
+            "gates": [open_ for open_ in open_gates(run) if open_.get("id") != gate["id"]] or None,
+            "updated_at": at,
+        }
+        if run["status"] in (PAUSED, WAITING):
+            values.update(status=QUEUED, pause=None, waiting_until=None, waiting_reason=None)
+        await self._update(conn, run["id"], values, expect=(run["status"],))
+
+    async def _parent_locked(self, conn: AsyncConnection, run_id: str) -> dict[str, Any] | None:
+        """
+        The run's parent (its status, decisions and gates), locked for the
+        rest of ``conn``'s transaction, before the run's own row is written:
+        a run that ends may be its parent's answer (``_child_ended``), and a
+        parent pausing reads its children's rows with its own locked
+        (``pause``), so a parent's row is always locked before its child's.
+
+        :return: None for a run nothing started, or whose parent is gone.
+        """
+        parent_id = (
+            await conn.execute(sa.select(runs.c.parent_run_id).where(runs.c.id == run_id))
+        ).scalar_one_or_none()
+        if not parent_id:
+            return None
+        found = (
+            (
+                await conn.execute(
+                    sa.select(runs.c.id, runs.c.status, runs.c.decisions, runs.c.gates, runs.c.pause)
+                    .where(runs.c.id == parent_id)
+                    .with_for_update()
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return _row(found) if found is not None else None
+
+    async def _child_ended(
+        self, conn: AsyncConnection, parent: Mapping[str, Any] | None, run_id: str, status: str, *, at: datetime
+    ) -> bool:
+        """
+        A run ended (``status``) in ``conn``'s transaction: when its parent
+        (locked first, ``_parent_locked``) waits for it at a ``child_run``
+        gate, the gate is decided by its end, and the parent queued to carry
+        on with it, in the same transaction.
+
+        :return: Whether the parent was waiting for it.
+        """
+        gate = next(
+            (gate for gate in open_gates(parent or {}) if gate.get("kind") == CHILD_RUN and _child_of(gate) == run_id),
+            None,
+        )
+        if parent is None or gate is None:
+            return False
+        await self._decided(
+            conn, parent, gate, approved=True, comment=status, actor=Actor(), at=at, run_id=run_id, status=status
+        )
+        message = f"Run {run_id[:8]} it waits for {_ended(status)}: it carries on"
+        await self._event(conn, parent["id"], "child_ended", message, at=at, attributes={"run_id": run_id})
+        return True
+
+    async def _children_ended(
+        self, conn: AsyncConnection, gates: Sequence[Mapping[str, Any]], decided: dict[str, Any], at: datetime
+    ) -> list[tuple[Mapping[str, Any], str | None]]:
+        """
+        The ``child_run`` gates among ``gates`` whose run has ended (or is
+        gone) as the run waiting for it pauses (its row locked), each
+        decided in ``decided`` as that run's end would have: read locked, so
+        a run ending meanwhile has either ended (and is read so) or waits for
+        the pause to land (and decides its gate itself).
+
+        :return: Each gate decided, and how its run ended (None: it's gone).
+        """
+        ended: list[tuple[Mapping[str, Any], str | None]] = []
+        for gate in gates:
+            child = _child_of(gate)
+            if gate.get("kind") != CHILD_RUN or not child or gate["key"] in decided:
+                continue
+            status = (
+                await conn.execute(sa.select(runs.c.status).where(runs.c.id == child).with_for_update(read=True))
+            ).scalar_one_or_none()
+            if status is not None and status not in FINISHED:
+                continue
+            decided[gate["key"]] = {
+                "approved": True,
+                "comment": status or "",
+                "actor_id": None,
+                "actor_name": "",
+                "request_id": gate["id"],
+                "decided_at": at.replace(tzinfo=UTC).isoformat(),
+                "run_id": child,
+                "status": status,
+            }
+            ended.append((gate, status))
+        return ended
+
     async def _alone_in_session(self, conn: AsyncConnection, run: dict[str, Any]) -> None:
         """
         :raises NotAllowed: Another run of the run's ADK session is still going.
@@ -1270,6 +2012,12 @@ class RunStore:
         """The fence of the owner's writes: the run is running, under the owner's lease, which hasn't run out."""
         return [runs.c.status == RUNNING, runs.c.lease_owner == owner, runs.c.lease_until > now]
 
+    def _ran_out(self, lease_epoch: int, now: datetime) -> list[Any]:
+        """The fence of a recovery's writes: the run is running, its lease ran
+        out, and it's still the ``lease_epoch``-th taking of it, the one the
+        recovery found."""
+        return [runs.c.status == RUNNING, runs.c.lease_until < now, runs.c.lease_epoch == lease_epoch]
+
     def _held(self, lease_until: datetime | None) -> bool:
         """:return: Whether a lease that runs out at ``lease_until`` (as the column keeps it) hasn't yet."""
         return lease_until is not None and _naive(lease_until) > self._now()
@@ -1307,6 +2055,27 @@ class RunStore:
         )
 
 
+def _same_start(
+    run: Mapping[str, Any],
+    *,
+    organization_id: str,
+    agent_id: str,
+    requested_by: Actor,
+    resubmit_of: str | None = None,
+) -> None:
+    """
+    :raises RunTaken: ``run`` isn't what the start asking for its ID would
+        have made: another organization's, another workflow's, someone
+        else's, or (resubmitting) a resubmission of another run.
+    """
+    if (run["organization_id"], run["agent_id"], run["requested_by"] or "") != (
+        organization_id,
+        agent_id,
+        requested_by.id or "",
+    ) or (resubmit_of is not None and run.get("resubmit_of") != resubmit_of):
+        raise RunTaken(f"Run {run['id'][:8]} is another start's")
+
+
 def _failure(error: dict[str, Any] | None, now: datetime) -> dict[str, Any]:
     """A failure as a run keeps it: ``{message, category, step, occurred_at}``."""
     error = dict(error or {})
@@ -1330,6 +2099,19 @@ def open_gates(run: Mapping[str, Any]) -> list[dict[str, Any]]:
         return [gate for gate in gates if isinstance(gate, dict) and gate.get("id")]
     pause = run.get("pause")
     return [pause] if run.get("status") == PAUSED and isinstance(pause, dict) and pause.get("id") else []
+
+
+def _child_of(gate: Mapping[str, Any]) -> str:
+    """:return: The run a ``child_run`` gate waits for; empty for any other gate."""
+    if gate.get("kind") != CHILD_RUN:
+        return ""
+    child = (gate.get("details") or {}).get("child_run_id")
+    return child if isinstance(child, str) else ""
+
+
+def _ended(status: str | None) -> str:
+    """:return: How a run ended, in words: ``succeeded``, ``failed``, ``was abandoned``, ``is gone``."""
+    return {ABANDONED: "was abandoned", None: "is gone"}.get(status, status or "ended")
 
 
 def overdue_gates(run: Mapping[str, Any], now: datetime) -> list[dict[str, Any]]:

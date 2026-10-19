@@ -1,6 +1,6 @@
-import type { Editor, JSONContent } from "@tiptap/react"
+import type { Editor } from "@tiptap/react"
 
-import type { UploadHandler } from "./types"
+import type { UploadHandler, UrlPolicy } from "./types"
 
 export const IMAGE_TYPES = [
   "image/png",
@@ -8,17 +8,6 @@ export const IMAGE_TYPES = [
   "image/gif",
   "image/webp",
   "image/avif",
-  "image/svg+xml",
-]
-
-export const AUDIO_TYPES = [
-  "audio/mpeg",
-  "audio/mp4",
-  "audio/aac",
-  "audio/ogg",
-  "audio/wav",
-  "audio/webm",
-  "audio/flac",
 ]
 
 function readAsDataUrl(file: File) {
@@ -35,18 +24,9 @@ function formatBytes(bytes: number) {
   return `${Math.round(bytes / 1024)} KB`
 }
 
-function nodeFor(file: File, src: string): JSONContent | null {
-  if (file.type.startsWith("image/")) {
-    return { type: "image", attrs: { src, alt: file.name } }
-  }
-  if (file.type.startsWith("audio/")) return { type: "audio", attrs: { src } }
-  return null
-}
-
 /**
- * Uploads (or inlines) each image and audio file and inserts it at `pos`, or
- * at the selection. Files the editor can't hold are reported, not dropped
- * silently.
+ * Uploads (or inlines) each image and inserts it at `pos`, or at the
+ * selection. Files the editor can't hold are reported, not dropped silently.
  */
 export async function insertFiles(
   editor: Editor,
@@ -55,21 +35,20 @@ export async function insertFiles(
     upload,
     maxFileSize,
     pos,
+    urlPolicy,
     onError,
   }: {
     upload?: UploadHandler
     maxFileSize: number
     pos?: number
+    urlPolicy: UrlPolicy
     onError: (message: string) => void
   }
 ) {
   let at = pos
   for (const file of files) {
-    const supported =
-      (file.type.startsWith("image/") && editor.schema.nodes.image) ||
-      (file.type.startsWith("audio/") && editor.schema.nodes.audio)
-    if (!supported) {
-      onError(`${file.name} isn't an image or audio file this editor accepts.`)
+    if (!IMAGE_TYPES.includes(file.type) || !editor.schema.nodes.image) {
+      onError(`${file.name} isn't an image this editor accepts.`)
       continue
     }
     if (file.size > maxFileSize) {
@@ -78,9 +57,11 @@ export async function insertFiles(
     }
     try {
       const src = upload ? await upload(file) : await readAsDataUrl(file)
-      if (editor.isDestroyed) return
-      const node = nodeFor(file, src)
-      if (!node) continue
+      if (!urlPolicy(src, "image")) {
+        onError(`${file.name} came back with a URL the editor doesn't allow.`)
+        continue
+      }
+      const node = { type: "image", attrs: { src, alt: file.name } }
       if (at === undefined) {
         editor.chain().focus().insertContent(node).run()
       } else {

@@ -48,6 +48,7 @@ starts, so a missing key or a tool it can't set up stops it there, saying why.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import hmac
 import logging
 import os
@@ -82,6 +83,7 @@ if TYPE_CHECKING:
     from google.adk.memory import BaseMemoryService
     from google.adk.sessions import BaseSessionService
 
+    from forge_agent_runtime.server import ConversationOwner
     from forge_common.adk.models import ProviderModels
     from forge_common.model_provider import ModelProviderConfig
 
@@ -312,6 +314,66 @@ def _api_key_check(keys: list[SecretStr]) -> Depends:
             )
 
     return Depends(require_api_key)
+
+
+def key_caller(keys: list[SecretStr]) -> Callable[[Any], str | None]:
+    """
+    :return: Who a request's API key says is calling: ``api-key:<hash>``, a
+        name of each key's own (part of a hash of it, not the key), so callers
+        with different keys keep their conversations and A2A tasks apart;
+        None for a request without one of the keys.
+    """
+    named = [
+        (secret, f"api-key:{hashlib.sha256(secret).hexdigest()[:16]}")
+        for secret in (key.get_secret_value().encode() for key in keys)
+    ]
+
+    def caller(request: Any) -> str | None:
+        scheme, _, token = str(request.headers.get("authorization", "")).partition(" ")
+        given = str(request.headers.get("x-api-key") or (token.strip() if scheme.lower() == "bearer" else ""))
+        found = None
+        for secret, name in named:
+            # Every key compared, in constant time: which one matched isn't timed.
+            if hmac.compare_digest(given.encode(), secret):
+                found = name
+        return found
+
+    return caller
+
+
+def _caller(keys: list[SecretStr]) -> Callable[[Any], str | None]:
+    """
+    :return: Who a request is from, when the server knows: whoever a
+        ``with_auth`` dependency said (``request.state.user_id``), else the
+        API key's caller (:func:`key_caller`); None for anyone.
+    """
+    by_key = key_caller(keys) if keys else None
+
+    def caller(request: Any) -> str | None:
+        user = getattr(request.state, "user_id", None)
+        if user:
+            return str(user)
+        return by_key(request) if by_key is not None else None
+
+    return caller
+
+
+def conversation_owner(keys: list[SecretStr]) -> ConversationOwner:
+    """
+    The run API's ``owner``: a caller the server knows (:func:`_caller`)
+    keeps the conversations of the end users it names apart from everyone
+    else's (``server.owned_by``). On a server that knows nobody, which
+    anyone may call, the ``userId`` a call names is whose they are.
+    """
+    from forge_agent_runtime.server import owned_by
+
+    caller = _caller(keys)
+
+    async def owner(request: Any, user_id: str) -> str:
+        who = caller(request)
+        return owned_by(who, user_id) if who else user_id
+
+    return owner
 
 
 class AgentServer:
@@ -669,9 +731,12 @@ class AgentServer:
             return dict(describe(doc))
 
         app.include_router(agent_routes, prefix=prefix)
-        app.include_router(create_router(executor, dependencies=auth), prefix=prefix)
+        app.include_router(
+            create_router(executor, dependencies=auth, owner=conversation_owner(settings.api_keys)),
+            prefix=prefix,
+        )
         if tasks is not None:
-            from forge_agent_runtime.a2a import api_key_security, create_a2a_router, known_caller
+            from forge_agent_runtime.a2a import api_key_security, create_a2a_router
 
             app.include_router(
                 create_a2a_router(
@@ -681,8 +746,8 @@ class AgentServer:
                     tasks=tasks,
                     dependencies=auth,
                     card_dependencies=(),
-                    # A caller with a key is known; a with_auth dependency can say who (request.state.user_id).
-                    caller=(lambda request: "api-key") if settings.api_keys else known_caller,
+                    # Whoever a with_auth dependency says (request.state.user_id), else each key its own caller.
+                    caller=_caller(settings.api_keys),
                     security=api_key_security() if settings.api_keys else None,
                     base_url=settings.public_url,
                 ),

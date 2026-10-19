@@ -98,7 +98,9 @@ import {
   stepNameOf,
   stepStatusOf,
   stepTiming,
-  triggerLabel,
+  provenanceLine,
+  provenanceWords,
+  TRIGGER_LABELS,
   useAbandonAdkRun,
   useAdkRun,
   useAdkRunSessionFiles,
@@ -117,6 +119,7 @@ import {
   type AdkRunTab,
   type AdkStateChange,
   type AdkToolCall,
+  type RunFilters,
 } from "@/features/runs/lib/runs"
 import type { ChipTone } from "@/components/forge/variants"
 import {
@@ -209,6 +212,46 @@ function AdkPausePanel(props: Pause) {
   )
 }
 
+/**
+ * A workflow its LLM agent called, waiting for the run that call started:
+ * nobody decides it. That run's end carries this one on (or the call's wait
+ * being up, with where that run got to); no worker is busy with it meanwhile.
+ */
+function AdkChildRunWait({
+  pause,
+  onOpenRun,
+}: {
+  pause: AdkRunPause
+  onOpenRun?: (runId: string) => void
+}) {
+  const child = pause.details.child_run_id
+  const step = pause.details.step_name || pause.details.step
+  const workflow = pause.details.child_workflow_name || "a workflow"
+  return (
+    <WaitingNotice icon="branch" title={pause.reason} state="Waiting for a run">
+      {step ? `${step} called ${workflow}` : `It called ${workflow}`} as a tool,
+      and carries on with what that run hands on once it ends
+      {pause.deadline
+        ? `, or ${formatRelative(pause.deadline)} with where it got to`
+        : ""}
+      . No worker is busy with it meanwhile.
+      {child && onOpenRun && (
+        <>
+          {" "}
+          <Button
+            variant="link"
+            size="xs"
+            className="h-auto p-0 font-mono"
+            onClick={() => onOpenRun(child)}
+          >
+            Open run {shortId(child)}
+          </Button>
+        </>
+      )}
+    </WaitingNotice>
+  )
+}
+
 /** One of a Decision board's open choices, decided through the run. */
 function AdkBoardChoice({
   organizationId,
@@ -269,9 +312,11 @@ function AdkBoard({
 function AdkGates({
   organizationId,
   run,
+  onOpenRun,
 }: {
   organizationId: string
   run: AdkRunDetail
+  onOpenRun?: (runId: string) => void
 }) {
   return (
     <>
@@ -282,6 +327,12 @@ function AdkGates({
             organizationId={organizationId}
             runId={run.id}
             gates={group.gates}
+          />
+        ) : pauseKindOf(group.gate) === "child_run" ? (
+          <AdkChildRunWait
+            key={group.gate.id}
+            pause={group.gate}
+            onOpenRun={onOpenRun}
           />
         ) : (
           <AdkPausePanel
@@ -298,20 +349,27 @@ function AdkGates({
 
 /**
  * Where the run stands, when that needs saying: what it waits for (a
- * person, a time, a worker), its being stopped, the hiccup it's retried
- * after, or why it failed.
+ * person, a run it started, a time, a worker), its being stopped, the
+ * hiccup it's retried after, or why it failed.
  */
 export function StatusNotice({
   organizationId,
   run,
+  onOpenRun,
 }: {
   organizationId: string
   run: AdkRunDetail
+  /** Opens another run's page: a run it waits for. */
+  onOpenRun?: (runId: string) => void
 }) {
   return (
     <>
       {openGatesOf(run).length > 0 && (
-        <AdkGates organizationId={organizationId} run={run} />
+        <AdkGates
+          organizationId={organizationId}
+          run={run}
+          onOpenRun={onOpenRun}
+        />
       )}
       <StatusLine run={run} />
     </>
@@ -611,11 +669,13 @@ function AdkRunOverview({
   run,
   doc,
   onOpenRun,
+  onFilterRuns,
 }: {
   organizationId: string
   run: AdkRunDetail
   doc: AgentDocument | undefined
   onOpenRun: (runId: string) => void
+  onFilterRuns: (filters: RunFilters) => void
 }) {
   const sessionFiles = useAdkRunSessionFiles(organizationId, run)
   const saved = React.useMemo(
@@ -662,7 +722,11 @@ function AdkRunOverview({
           </AsideSection>
         }
       >
-        <StatusNotice organizationId={organizationId} run={run} />
+        <StatusNotice
+          organizationId={organizationId}
+          run={run}
+          onOpenRun={onOpenRun}
+        />
         <PageSection
           title="What it was given"
           meta={
@@ -772,14 +836,11 @@ function AdkRunOverview({
               {run.agent_name || run.agent_id} ·{" "}
               {versionLabel(run).toLowerCase()}
             </RecordRow>
-            <RecordRow label="Run by">
-              {run.requested_by.name || run.requested_by.id || "Unknown"}
-              {run.resubmit_of
-                ? " · Resubmitted"
-                : triggerLabel(run.trigger)
-                  ? ` · ${triggerLabel(run.trigger)}`
-                  : ""}
-            </RecordRow>
+            <RunStarted
+              run={run}
+              onOpenRun={onOpenRun}
+              onFilterRuns={onFilterRuns}
+            />
             {run.parent_run_id && (
               <RecordRow label="Started by run">
                 <Button
@@ -1169,7 +1230,11 @@ function AdkRunSteps({
   return (
     <div className={BODY}>
       {openGatesOf(run).length > 0 && (
-        <AdkGates organizationId={organizationId} run={run} />
+        <AdkGates
+          organizationId={organizationId}
+          run={run}
+          onOpenRun={onOpenRun}
+        />
       )}
       {body}
     </div>
@@ -1447,6 +1512,145 @@ function HeaderSkeleton() {
  * state at each). What it waits for is decided or answered in
  * Overview and Steps. It follows a run in progress every few seconds.
  */
+/**
+ * How the run was started, for its record: what started it, who asked,
+ * through which agent and for whom (and whether their credential said so),
+ * with which credential, and from where.
+ */
+function RunStarted({
+  run,
+  onOpenRun,
+  onFilterRuns,
+}: {
+  run: AdkRunDetail
+  onOpenRun: (runId: string) => void
+  onFilterRuns: (filters: RunFilters) => void
+}) {
+  const words = provenanceWords(run)
+  const origin = run.origin
+  const started = run.provenance
+  const person = started?.on_behalf_of
+  const root = run.root_run_id
+  // Under another run, or with runs under it: its tree.
+  const tree = root && (root !== run.id || (run.children?.length ?? 0) > 0)
+  const link = "h-auto p-0 text-xs"
+  const others = [
+    person && {
+      label: `For ${person.name || person.id}`,
+      filters: { person: person.id },
+    },
+    started?.via && {
+      label: `Via ${started.via.agent_id}`,
+      filters: { via: started.via.agent_id },
+    },
+    started?.api_key_id && {
+      label: "With its API key",
+      filters: { apiKey: started.api_key_id },
+    },
+    started && {
+      label: TRIGGER_LABELS[started.trigger_type] ?? started.trigger_type,
+      filters: { trigger: started.trigger_type },
+    },
+  ].filter(Boolean) as { label: string; filters: RunFilters }[]
+  return (
+    <>
+      <RecordRow label="Started">
+        <span className="flex flex-wrap items-center gap-2">
+          <span>{provenanceLine(words)}</span>
+          {words.verified === false && (
+            <Tooltip>
+              <TooltipTrigger
+                render={<Chip tone="warning">Unverified person</Chip>}
+              />
+              <TooltipContent className="max-w-xs">
+                Whom it&apos;s for was only passed on (a public caller, an API
+                key&apos;s end user, a chat page&apos;s visitor): no sign-in of
+                theirs said so.
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </span>
+      </RecordRow>
+      {others.length > 0 && (
+        <RecordRow label="Find runs">
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            {others.map((other) => (
+              <Button
+                key={other.label}
+                variant="link"
+                size="xs"
+                className={link}
+                onClick={() => onFilterRuns(other.filters)}
+              >
+                {other.label}
+              </Button>
+            ))}
+          </span>
+        </RecordRow>
+      )}
+      {tree && (
+        <RecordRow label="Run tree">
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            {root !== run.id ? (
+              <span>
+                Under run{" "}
+                <Button
+                  variant="link"
+                  size="xs"
+                  className={cn(link, "font-mono")}
+                  onClick={() => onOpenRun(root)}
+                >
+                  {shortId(root)}
+                </Button>
+              </span>
+            ) : (
+              <span>The top of its tree</span>
+            )}
+            <Button
+              variant="link"
+              size="xs"
+              className={link}
+              onClick={() => onFilterRuns({ root })}
+            >
+              Every run in it
+            </Button>
+          </span>
+        </RecordRow>
+      )}
+      {(words.channel || words.credential) && (
+        <RecordRow label="Came in">
+          {[
+            words.channel && `Through ${words.channel}`,
+            words.credential && `credential: ${words.credential}`,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </RecordRow>
+      )}
+      {origin && (
+        <RecordRow label="From">
+          <span className="flex flex-wrap items-center gap-x-2">
+            {origin.client_ip && <code>{origin.client_ip}</code>}
+            {origin.user_agent && (
+              <span
+                className="max-w-[40ch] truncate text-muted-foreground"
+                title={origin.user_agent}
+              >
+                {origin.user_agent}
+              </span>
+            )}
+            {origin.request_id && (
+              <span className="text-muted-foreground">
+                request <code>{origin.request_id}</code>
+              </span>
+            )}
+          </span>
+        </RecordRow>
+      )}
+    </>
+  )
+}
+
 export function AdkRunPage({
   organization,
   runId,
@@ -1455,6 +1659,7 @@ export function AdkRunPage({
   onTabChange,
   onBack,
   onOpenRun,
+  onFilterRuns,
 }: {
   organization: MyOrganization
   runId: string
@@ -1465,6 +1670,8 @@ export function AdkRunPage({
   onBack: () => void
   /** Open another run's page (a resubmitted one, the one it resubmitted). */
   onOpenRun: (runId: string) => void
+  /** Open the organization's runs narrowed to these: its tree, its person's, its agent's, its key's. */
+  onFilterRuns: (filters: RunFilters) => void
 }) {
   const detail = useAdkRun(organization.id, runId)
   const run = detail.data
@@ -1633,6 +1840,7 @@ export function AdkRunPage({
               run={run}
               doc={doc}
               onOpenRun={onOpenRun}
+              onFilterRuns={onFilterRuns}
             />
           </TabsContent>
           <TabsContent value="steps">

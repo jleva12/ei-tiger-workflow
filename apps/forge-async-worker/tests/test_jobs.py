@@ -13,10 +13,12 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
+from forge_common.adk.usage import Attribution, UsageCall, current_sink
 
 from forge_async_worker import jobs
-from forge_async_worker.jobs import MAX_ATTEMPTS, TIMED_OUT
+from forge_async_worker.jobs import MAX_ATTEMPTS, MAX_INTERRUPTIONS, TIMED_OUT
 from forge_async_worker.watchdog import Watchdog
+from forge_task_adk_workflows import usage_store as usage
 from forge_task_adk_workflows.run_store import (
     ABANDONED,
     FAILED,
@@ -58,7 +60,11 @@ async def set_attempt(worker: Worker, run_id: str, attempt: int) -> None:
 async def steal(worker: Worker, run_id: str) -> None:
     """Another worker takes the run: this one's lease ran out, and the run was recovered."""
     worker.clock.advance(jobs.LEASE_SECONDS + 1)
-    assert await worker.store.requeue(run_id, owner=None, error={"message": "gone", "category": "interrupted"})
+    taken = await worker.store.get(run_id)
+    assert taken is not None
+    assert await worker.store.requeue(
+        run_id, owner=None, error={"message": "gone", "category": "interrupted"}, lease_epoch=taken["lease_epoch"]
+    )
     assert await worker.store.claim(run_id, owner="w2", lease_seconds=600)
 
 
@@ -328,6 +334,28 @@ async def test_a_worker_that_lost_the_run_leaves_it_to_the_one_that_has_it(worke
     assert "succeeded" not in await worker.kinds(run["id"])
 
 
+async def test_a_worker_that_lost_the_run_records_no_more_usage(worker: Worker) -> None:
+    async with worker.store.engine.begin() as conn:
+        await conn.run_sync(usage.metadata.create_all)
+    run = await worker.start(HOOK, STEP)
+    who = Attribution("org-1", "workflow", "ag-1", "Support desk", run_id=run["id"])
+
+    async def taken(control: JobControl, index: int) -> None:
+        record = current_sink()
+        assert record is not None
+        await record(UsageCall(who, "model", "openai/gpt-5.2", "think", START))
+        await steal(worker, run["id"])
+        await record(UsageCall(who, "model", "openai/gpt-5.2", "think", START))  # another attempt's now: dropped
+
+    worker.task.hook = taken
+
+    assert await worker.run(run["id"]) == "dropped"
+
+    async with worker.store.engine.connect() as conn:
+        kept = (await conn.execute(sa.select(sa.func.count()).select_from(usage.calls))).scalar_one()
+    assert kept == 1
+
+
 async def test_a_lost_lease_stops_the_runs_job(worker: Worker, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(jobs, "LEASE_SECONDS", 0.3)
     run = await worker.start(HOOK, STEP)
@@ -434,7 +462,7 @@ async def test_a_long_run_keeps_its_lease_and_its_job_fresh(worker: Worker, monk
     assert job.touched == touched  # stopped with the run
 
 
-async def test_a_run_cut_off_by_a_stop_is_queued_again(worker: Worker) -> None:
+async def test_a_run_cut_off_by_a_stop_is_queued_again_with_a_job_of_its_own(worker: Worker) -> None:
     busy = asyncio.Event()
 
     async def hangs(control: JobControl, index: int) -> None:
@@ -451,9 +479,53 @@ async def test_a_run_cut_off_by_a_stop_is_queued_again(worker: Worker) -> None:
         await running
 
     queued = await worker.get(run["id"])
-    assert queued["status"] == QUEUED and queued["attempt"] == 2 and queued["lease_owner"] is None
+    assert queued["status"] == QUEUED and queued["lease_owner"] is None
     assert queued["error"]["category"] == "interrupted"
     assert queued["state"] == {"done": 1, "said": []}
+    # The next worker takes it from a job of its own, queued once the run was:
+    # not SAQ's re-queue of the cut-off job, which may come first and find it running.
+    [(function, sent)] = worker.sent
+    assert (function, sent["run_id"]) == ("run_adk", run["id"])
+    worker.task.hook = jobs_nothing
+    assert await worker.run(run["id"]) == "succeeded"
+
+
+async def test_an_interrupted_run_spends_no_attempt(worker: Worker) -> None:
+    busy = asyncio.Event()
+
+    async def hangs(control: JobControl, index: int) -> None:
+        busy.set()
+        await asyncio.sleep(3600)
+
+    worker.task.hook = hangs
+    run = await worker.start(HOOK)
+    await set_attempt(worker, run["id"], MAX_ATTEMPTS)  # its last attempt: one more hiccup fails it
+    for _ in range(3):  # three deploys, each cutting it off
+        busy.clear()
+        running = asyncio.create_task(worker.run(run["id"]))
+        await busy.wait()
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+    await worker.store.claim(run["id"], owner="dead", lease_seconds=60)  # and a worker that died with it
+    worker.clock.advance(61)
+    assert (await worker.state.jobs.maintain())["recovered"] == [run["id"]]
+
+    queued = await worker.get(run["id"])
+    assert (queued["status"], queued["attempt"], queued["interruptions"]) == (QUEUED, MAX_ATTEMPTS, 4)
+    worker.task.hook = jobs_nothing
+    assert await worker.run(run["id"]) == "succeeded"
+
+
+async def test_waiting_ends_a_runs_interruptions_in_a_row(worker: Worker) -> None:
+    run = await worker.start({"do": "wait", "until": (START + timedelta(hours=1)).isoformat()}, STEP)
+    await worker.store.claim(run["id"], owner="dead", lease_seconds=60)
+    worker.clock.advance(61)
+    await worker.state.jobs.maintain()
+    assert (await worker.get(run["id"]))["interruptions"] == 1
+
+    assert await worker.run(run["id"]) == "waiting"
+    assert (await worker.get(run["id"]))["interruptions"] == 0
 
 
 async def test_an_attempt_past_its_deadline_is_stopped_and_tried_again_later(worker: Worker) -> None:
@@ -1052,6 +1124,45 @@ async def test_an_earlier_takings_cleanup_never_takes_a_later_takings_failure(
     assert (failed["error"]["message"], failed["error"]["category"]) == ("Refund failed", "failed")
 
 
+async def test_a_maintenance_working_from_what_it_found_leaves_a_later_taking_alone(
+    worker: Worker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = await worker.start(STEP)
+    error = {"message": "Refund failed", "category": "failed"}
+    # Its first taking failed it, but couldn't say so: it kept the failure, and its worker went.
+    await worker.store.claim(run["id"], owner="w1", lease_seconds=60)
+    await worker.state.queue.keep_failure(run["id"], 1, {"error": error, "final": True, "epoch": 1})
+    worker.clock.advance(61)
+    reads = worker.state.queue.kept_failure
+
+    async def meanwhile(run_id: str, epoch: int) -> Any:
+        found = await reads(run_id, epoch)
+        # As this maintenance reads it, another worker's fails the run as its first taking
+        # meant; someone retries it; and its next taking's worker goes too.
+        assert await worker.store.fail_interrupted(run_id, lease_epoch=1, error=error)
+        await worker.store.retry(run_id, actor=BOB)
+        await worker.store.claim(run_id, owner="w2", lease_seconds=60)
+        worker.clock.advance(61)
+        return found
+
+    monkeypatch.setattr(worker.state.queue, "kept_failure", meanwhile)
+    done = await worker.state.jobs.maintain()
+
+    # What the first taking kept doesn't fail the second, or queue it: it's the next maintenance's.
+    assert (done["failed"], done["recovered"]) == ([], [])
+    taken = await worker.get(run["id"])
+    assert (taken["status"], taken["lease_owner"], taken["lease_epoch"], taken["interruptions"]) == (
+        RUNNING,
+        "w2",
+        2,
+        0,
+    )
+    monkeypatch.setattr(worker.state.queue, "kept_failure", reads)
+    assert (await worker.state.jobs.maintain())["recovered"] == [run["id"]]
+    recovered = await worker.get(run["id"])
+    assert (recovered["error"]["category"], recovered["interruptions"]) == ("interrupted", 1)
+
+
 # ----------------------------------------------------------------------------- expire_pause
 
 
@@ -1098,7 +1209,8 @@ async def test_maintenance_queues_again_runs_whose_worker_went(worker: Worker) -
     gone = await worker.start(STEP)
     await worker.store.claim(gone["id"], owner="dead", lease_seconds=60)
     too_often = await worker.start(STEP)
-    await set_attempt(worker, too_often["id"], MAX_ATTEMPTS)
+    async with worker.store.engine.begin() as conn:
+        await conn.execute(sa.update(runs).where(runs.c.id == too_often["id"]).values(interruptions=MAX_INTERRUPTIONS))
     await worker.store.claim(too_often["id"], owner="dead", lease_seconds=60)
     assert await worker.state.jobs.maintain() == {
         "recovered": [],
@@ -1114,11 +1226,13 @@ async def test_maintenance_queues_again_runs_whose_worker_went(worker: Worker) -
 
     assert (done["recovered"], done["failed"]) == ([gone["id"]], [too_often["id"]])
     recovered = await worker.get(gone["id"])
-    assert recovered["status"] == QUEUED and recovered["attempt"] == 2
+    # An interruption, not an attempt: it carries on as the same one.
+    assert (recovered["status"], recovered["attempt"], recovered["interruptions"]) == (QUEUED, 1, 1)
     assert recovered["error"]["category"] == "interrupted"
     assert [(f, kwargs["run_id"]) for f, kwargs in worker.sent] == [("run_adk", gone["id"])]
     failed = await worker.get(too_often["id"])
     assert failed["status"] == FAILED and failed["error"]["category"] == "interrupted"
+    assert failed["error"]["message"] == f"{jobs.INTERRUPTED}, {MAX_INTERRUPTIONS + 1} times in a row"
     assert await worker.run(gone["id"]) == "succeeded"
 
 
@@ -1133,9 +1247,10 @@ async def test_maintenance_queues_runs_no_job_took_and_waits_that_are_over(worke
     done = await worker.state.jobs.maintain()
 
     assert set(done["queued"]) == {queued["id"], waiting["id"]}
+    # Keyed by the run's taking: a dead worker's job, left active in Redis, holds up no later one.
     assert {kwargs["key"] for _, kwargs in worker.sent} == {
-        f"adk-run:{queued['id']}:sweep",
-        f"adk-run:{waiting['id']}:sweep",
+        f"adk-run:{queued['id']}:sweep-0",
+        f"adk-run:{waiting['id']}:sweep-1",
     }
 
 

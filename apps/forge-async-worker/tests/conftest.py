@@ -93,6 +93,7 @@ class FakeJob:
         self.id = "job-1"
         self.function = function
         self.timeout, self.heartbeat, self.retries = 10, 0, 1  # SAQ's defaults
+        self.retry_delay, self.retry_backoff = 0.0, False
         self.touched = 0
 
     async def update(self, **fields: object) -> None:

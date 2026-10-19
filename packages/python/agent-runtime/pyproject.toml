@@ -26,6 +26,10 @@ dependencies = [
     # Skills tools: SkillToolset's eager discovery (skills.skill_toolset)
     "google-adk>=2.10.0",
     "httpx>=0.28",
+    "httpcore>=1,<2",                # guarded HTTP transport with a pinned DNS backend
+    # MCP tools' connections, guarded the same way (mcp_guard): the MCP SDK's HTTP client
+    "httpx2>=2.13.1",
+    "httpcore2>=2.13.1,<3",
     "jsonschema>=4.23",
     # MCP tools: ADK's McpToolset exists only with it; 2.x's results check is
     # the one forge_common.mcp swaps

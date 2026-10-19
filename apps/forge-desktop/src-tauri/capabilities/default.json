@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the app's own screen may ask of the shell: keeping its agents, its window's size and place, moving the window by its own top bars, and the forge-agents:// link it was opened with.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "deep-link:default",
+    "store:default",
+    "window-state:default"
+  ]
+}

@@ -74,6 +74,10 @@ def test_the_chat_agent_catalog_lists_every_kind_the_runtime_builds(
     assert by_kind["mcp"]["outputs"] == []
     assert by_kind["saved_agent"]["handed_to"] is True
     assert by_kind["memory"]["workflow_tool"] is False
+    # An intake agent is handed off to, or used as a tool (its requests).
+    intake = by_kind["intake_agent"]
+    assert intake["handed_to"] is True and intake.get("tool", True) is True
+    assert [way["id"] for way in intake["outputs"]] == ["tools", "on_complete"]
 
 
 @pytest.mark.parametrize("path", [WORKFLOW, CHAT])

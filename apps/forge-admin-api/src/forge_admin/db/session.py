@@ -61,6 +61,29 @@ def create_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]
     return async_sessionmaker(engine, expire_on_commit=False)
 
 
+#: The isolation level of ADK's sessions in this database. ADK's
+#: ``create_session`` makes a member's state row the first time it sees them
+#: (``_get_or_create_state``): it inserts, and should another session's
+#: insert win, reads the winner's row. At MySQL's REPEATABLE READ that read
+#: sees the snapshot from before the winner committed, finds nothing and
+#: raises (1062, Duplicate entry ... 'user_states.PRIMARY'), so all but one
+#: of a new member's first conversations started together failed.
+ADK_SESSION_ISOLATION = "READ COMMITTED"
+
+
+def adk_session_engine(engine: AsyncEngine) -> AsyncEngine:
+    """
+    The engine for ADK's ``DatabaseSessionService``: the same pool, its
+    connections at ADK_SESSION_ISOLATION while ADK holds them (set as each is
+    checked out, reset as it goes back), so every other store keeps the
+    database's own. SQLite has no such level, nor the race (one writer at a
+    time): its engine as it is.
+    """
+    if engine.dialect.name == "sqlite":
+        return engine
+    return engine.execution_options(isolation_level=ADK_SESSION_ISOLATION)
+
+
 async def ping(engine: AsyncEngine) -> None:
     """
     Ping the database to verify connectivity.

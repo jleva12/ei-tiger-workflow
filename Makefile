@@ -82,6 +82,11 @@ SANDBOX_REFERENCES := \
   $(foreach s,$(OPENSHELL_SETTINGS),$(ADMIN_DIR)/.env:FORGE_ADMIN_AGENT_OPENSHELL__$(s):FORGE_OPENSHELL_$(s)) \
   $(ASYNC_WORKER_DIR)/.env:HYBRID_ADK_WORKFLOWS__AGENT_SANDBOX_MODE:FORGE_AGENT_SANDBOX_MODE \
   $(foreach s,$(OPENSHELL_SETTINGS),$(ASYNC_WORKER_DIR)/.env:HYBRID_ADK_WORKFLOWS__OPENSHELL__$(s):FORGE_OPENSHELL_$(s))
+# Every app's agents wait for the workflows they call at most the one cap in
+# .env.common (FORGE_AGENT_WORKFLOW_WAIT_MAX), as file:setting:shared name.
+WORKFLOW_WAIT_REFERENCES := \
+  $(ADMIN_DIR)/.env:FORGE_ADMIN_AGENT_WORKFLOW_WAIT_MAX:FORGE_AGENT_WORKFLOW_WAIT_MAX \
+  $(ASYNC_WORKER_DIR)/.env:HYBRID_ADK_WORKFLOWS__WORKFLOW_TOOL_WAIT_MAX:FORGE_AGENT_WORKFLOW_WAIT_MAX
 # The task packages the async worker bundles: checked and tested with it.
 TASK_PACKAGES := $(addprefix packages/python/,task-sdk adk-workflows documents embeddings)
 # Python packages the apps share.
@@ -93,12 +98,15 @@ CODEGRAPH_DIR := packages/python/codegraph
 JSONATA_DIR := packages/python/jsonata
 # The Forge UI design system: its demo and the shadcn registry apps install from.
 FORGE_UI_DIR := packages/forge-ui
+DESKTOP_DIR := apps/forge-desktop
 # The apps make up-all-local runs natively, each with its own make target.
 LOCAL_APPS := web admin async-worker worker codegraph-mcp
 .PHONY: help env install python-install infrastructure start up up-all-local up-all-local-deps down logs logs-web logs-admin logs-async-worker logs-worker logs-codegraph-mcp status restart docker-build check
 .PHONY: web web-install web-check web-test web-build web-lint web-token
+.PHONY: desktop desktop-install desktop-build desktop-check
 .PHONY: admin admin-install admin-deps admin-migrate admin-check admin-test-mysql admin-fmt
 .PHONY: async-worker async-worker-install async-worker-deps async-worker-check async-worker-fmt async-worker-test-redis
+.PHONY: async-worker-test-integration async-worker-test-integration-down
 .PHONY: docs-eval docs-eval-check docs-eval-compare
 .PHONY: worker worker-install worker-deps worker-check worker-fmt worker-test-python worker-test-typescript worker-test-spanner worker-test-mysql worker-test-java
 .PHONY: worker-spanner-cloud worker-spanner-cloud-update worker-spanner-cloud-reset
@@ -133,6 +141,9 @@ help:
 	@echo "make check              Infrastructure, web, admin, async worker, code graph worker and MCP server, shared package and Forge UI checks, and the web production build"
 	@echo "make web                Run the React dev server on http://localhost:5190"
 	@echo "make web-check / web-test / web-build / web-lint  Run one web step"
+	@echo "make desktop            Run the desktop app (Tauri) on its screen's dev server, http://localhost:5195; new agents start on make admin's server"
+	@echo "make desktop-build      Build the desktop app's installers into apps/forge-desktop/src-tauri/target/release/bundle (VITE_DESKTOP_API_URL: the server new agents start on)"
+	@echo "make desktop-check      Desktop app: Rust format, clippy, and its screen's typecheck"
 	@echo "make admin-deps         Start admin MySQL plus the shared MongoDB and Redis for native runs"
 	@echo "make admin              Run the admin API natively with reload on http://localhost:8101, reading the code graph in the emulator (SPANNER=cloud: managed)"
 	@echo "make admin-migrate      Apply admin database migrations natively"
@@ -144,6 +155,8 @@ help:
 	@echo "make async-worker-check Async worker and task packages: lint, format check, types and unit tests"
 	@echo "make async-worker-fmt   Format and autofix the async worker and task package sources"
 	@echo "make async-worker-test-redis  Start the shared Redis and run the SAQ worker integration tests"
+	@echo "make async-worker-test-integration  ADK runs on their own MySQL 8 and Redis with worker processes (minutes; IT_ARGS=\"-k claim\")"
+	@echo "make async-worker-test-integration-down  Remove the integration suite's MySQL and Redis"
 	@echo "make worker-install     Build the code graph worker's Python and TypeScript analyzers and download its Go modules"
 	@echo "make worker-deps        Start the Spanner emulator (127.0.0.1:19030) and the admin MySQL (its job queue) for native worker runs"
 	@echo "make worker             Run the code graph ingestion worker natively against the emulator (health probes on http://localhost:8090)"
@@ -271,7 +284,13 @@ env:
 	    perl -i -ne 'print unless /^(FORGE_ADMIN_AGENT|HYBRID_ADK_WORKFLOWS_)_CODE_EXECUTION=/' $$file; \
 	    echo "Removed $$file's code execution setting: FORGE_AGENT_SANDBOX_MODE in .env.common replaced it"; }; \
 	done
-	@for entry in $(CODEGRAPH_REFERENCES) $(SANDBOX_REFERENCES); do \
+	@# How long agents may wait for the workflows they call: a .env.common
+	@# from before it takes the template's lines (the apps name it below).
+	@grep -q '^FORGE_AGENT_WORKFLOW_WAIT_MAX=' .env.common || { \
+	  { [ -z "$$(tail -c1 .env.common)" ] || echo; echo; \
+	    sed -n '/^# Workflows agents call as tools:/,/^FORGE_AGENT_WORKFLOW_WAIT_MAX=/p' .env.common.example; } >> .env.common; \
+	  echo "Added FORGE_AGENT_WORKFLOW_WAIT_MAX to .env.common"; }
+	@for entry in $(CODEGRAPH_REFERENCES) $(SANDBOX_REFERENCES) $(WORKFLOW_WAIT_REFERENCES); do \
 	  file=$${entry%%:*}; rest=$${entry#*:}; setting=$${rest%%:*}; reference="\$${$${rest#*:}}"; \
 	  [ "$$(sed -n "s/^$$setting=//p" $$file | tail -1)" = "$$reference" ] && continue; \
 	  if grep -q "^$$setting=" $$file; then \
@@ -420,15 +439,32 @@ web-check:
 	cd $(WEB_DIR) && $(NPM) run check
 
 # The web console's tests (node --test): the builders' steps, the ADK
-# workflow and chat agent builders, and the timestamp helpers.
+# workflow and chat agent builders, the timestamp helpers, and the
+# organization overview's sums and dashboard layout.
 web-test:
-	cd $(WEB_DIR) && $(NPM) run test:steps && $(NPM) run test:agents && $(NPM) run test:timestamps
+	cd $(WEB_DIR) && $(NPM) run test:steps && $(NPM) run test:agents && $(NPM) run test:timestamps && $(NPM) run test:overview
 
 web-build:
 	cd $(WEB_DIR) && $(NPM) run build
 
 web-lint:
 	cd $(WEB_DIR) && $(NPM) run lint
+
+# The desktop app (apps/forge-desktop): a Tauri window around the web
+# console's chat pages (apps/forge-web/src/desktop). Needs Rust (rustup) and
+# make web-install; desktop-install installs the Tauri CLI.
+desktop-install:
+	cd $(DESKTOP_DIR) && $(NPM) ci
+
+desktop:
+	cd $(DESKTOP_DIR) && $(NPM) run dev
+
+desktop-build:
+	cd $(DESKTOP_DIR) && $(NPM) run build
+
+desktop-check:
+	cd $(DESKTOP_DIR)/src-tauri && cargo fmt --check && cargo clippy -- -D warnings
+	cd $(WEB_DIR) && npx tsc -b
 
 admin-install: python-install
 
@@ -525,6 +561,34 @@ async-worker-test-redis: env
 	$(COMPOSE) up -d --wait redis
 	@addr=$$($(COMPOSE) port redis 6379) && cd $(ASYNC_WORKER_DIR) && \
 	  HYBRID_TEST_REDIS_URL=redis://$$addr/15 $(UV) run pytest -m redis
+
+# The ADK workflow run machinery on a real MySQL 8 and Redis, with several
+# worker processes (apps/forge-async-worker/tests/integration, its README in
+# conftest.py and the findings in FINDINGS.md): a Compose project of its own
+# (forge-worker-it) on IT_MYSQL_PORT and IT_REDIS_PORT, clear of this stack's
+# and forge-aidlc-parent's, migrated with the admin API's migrations, then
+# the suite. Minutes long, and never part of make check. IT_ARGS passes pytest
+# arguments (IT_ARGS="-k claim" picks scenarios); its reports land in
+# tests/integration/.reports. async-worker-test-integration-down removes it.
+IT_MYSQL_PORT ?= 13346
+IT_REDIS_PORT ?= 16409
+IT_PORTS = FORGE_IT_MYSQL_PORT=$(IT_MYSQL_PORT) FORGE_IT_REDIS_PORT=$(IT_REDIS_PORT)
+IT_COMPOSE = $(DOCKER) compose -f $(CURDIR)/$(ASYNC_WORKER_DIR)/tests/integration/compose.yaml
+
+async-worker-test-integration:
+	$(IT_PORTS) $(IT_COMPOSE) up -d --wait
+	# The admin API's .env may reference .env.common, so it stays readable;
+	# the MySQL settings given here outrank both files.
+	cd $(ADMIN_DIR) && FORGE_ADMIN_MYSQL_HOST=127.0.0.1 FORGE_ADMIN_MYSQL_PORT=$(IT_MYSQL_PORT) \
+	  FORGE_ADMIN_MYSQL_DATABASE=forge_admin FORGE_ADMIN_MYSQL_USER=forge_admin FORGE_ADMIN_MYSQL_PASSWORD=local-it \
+	  $(UV) run alembic upgrade head
+	cd $(ASYNC_WORKER_DIR) && $(IT_PORTS) \
+	  FORGE_IT_MYSQL_URL=mysql+aiomysql://forge_admin:local-it@127.0.0.1:$(IT_MYSQL_PORT)/forge_admin \
+	  FORGE_IT_REDIS_URL=redis://127.0.0.1:$(IT_REDIS_PORT)/0 FORGE_IT_COMPOSE="$(IT_COMPOSE)" \
+	  $(UV) run pytest -m integration tests/integration --timeout 900 $(IT_ARGS)
+
+async-worker-test-integration-down:
+	$(IT_PORTS) $(IT_COMPOSE) down -v
 
 # The code graph worker's Pyright and TypeScript compiler bridges (each into
 # its dist/, which the worker runs under Node), then its Go modules.

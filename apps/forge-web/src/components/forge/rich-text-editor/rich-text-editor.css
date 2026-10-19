@@ -1,0 +1,534 @@
+/*
+ * Rich text in Forge's terms: document typography at the 14px UI size,
+ * every block the Markdown editor can hold, and its own chrome (table
+ * selection, find results, the AI's target, drop cursor) painted from theme
+ * tokens so it follows light and dark, contrast and the text-size preference.
+ */
+@import "katex/dist/katex.min.css";
+
+:root {
+  --rte-highlight: oklch(0.95 0.09 95);
+  --rte-find: oklch(0.93 0.11 95);
+  --rte-find-current: oklch(0.83 0.14 70);
+}
+
+.dark {
+  --rte-highlight: oklch(0.4 0.08 95);
+  --rte-find: oklch(0.45 0.09 95);
+  --rte-find-current: oklch(0.58 0.13 70);
+}
+
+/* ---------------------------------------------------------------- base */
+
+.rich-text .ProseMirror {
+  min-height: inherit;
+  padding: 0.75rem 1rem 1rem;
+  outline: none;
+  color: var(--foreground);
+  font-size: var(--text-ui);
+  line-height: 1.65;
+  overflow-wrap: break-word;
+  word-break: normal;
+  caret-color: var(--foreground);
+}
+
+.rich-text[data-drag-handle] .ProseMirror {
+  padding-left: 3.25rem;
+}
+
+/* Bare (RichTextView, a preview): the text sits flush in what holds it. */
+.rich-text[data-bare] .ProseMirror {
+  padding: 0;
+}
+
+/* The block handle follows the pointer; touch screens get the space back. */
+@media (hover: none) {
+  .rich-text[data-drag-handle] .ProseMirror {
+    padding-left: 1rem;
+  }
+
+  .rich-text .drag-handle {
+    display: none;
+  }
+}
+
+.rich-text .ProseMirror > * + * {
+  margin-top: 0.7em;
+}
+
+.rich-text .ProseMirror ::selection {
+  background: color-mix(in oklch, var(--focus) 26%, transparent);
+}
+
+/* The selection stays visible while a dialog or menu has focus. */
+.rich-text .ProseMirror .selection {
+  background: color-mix(in oklch, var(--focus) 26%, transparent);
+}
+
+.rich-text .ProseMirror p.is-empty::before,
+.rich-text .ProseMirror h1.is-empty::before,
+.rich-text .ProseMirror h2.is-empty::before,
+.rich-text .ProseMirror h3.is-empty::before,
+.rich-text .ProseMirror h4.is-empty::before,
+.rich-text .ProseMirror h5.is-empty::before,
+.rich-text .ProseMirror h6.is-empty::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--subtle);
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------- text */
+
+.rich-text .ProseMirror :is(h1, h2, h3, h4, h5, h6) {
+  margin-top: 1.4em;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  scroll-margin-top: 4rem;
+}
+
+.rich-text .ProseMirror > :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
+}
+
+.rich-text .ProseMirror :is(h1, h2, h3, h4, h5, h6) + * {
+  margin-top: 0.45em;
+}
+
+.rich-text .ProseMirror h1 {
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+}
+
+.rich-text .ProseMirror h2 {
+  font-size: 1.25rem;
+}
+
+.rich-text .ProseMirror h3 {
+  font-size: 1.0625rem;
+}
+
+.rich-text .ProseMirror h4 {
+  font-size: 0.9375rem;
+}
+
+.rich-text .ProseMirror h5 {
+  font-size: var(--text-ui);
+}
+
+.rich-text .ProseMirror h6 {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.rich-text .ProseMirror a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
+  text-underline-offset: 2px;
+  cursor: text;
+}
+
+.rich-text .ProseMirror a:hover {
+  text-decoration-color: var(--primary);
+}
+
+.rich-text:not([data-editable]) .ProseMirror a {
+  cursor: pointer;
+}
+
+.rich-text .ProseMirror code {
+  padding: 0.1em 0.3em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+.rich-text .ProseMirror mark {
+  padding: 0.05em 0.15em;
+  border-radius: 2px;
+  background: var(--rte-highlight);
+  color: inherit;
+  box-decoration-break: clone;
+}
+
+.rich-text .ProseMirror :is(sub, sup) {
+  font-size: 0.75em;
+}
+
+.rich-text .ProseMirror blockquote {
+  padding-left: 1em;
+  border-left: 2px solid
+    color-mix(in oklch, var(--muted-foreground) 30%, transparent);
+  color: var(--muted-foreground);
+}
+
+.rich-text .ProseMirror hr {
+  margin: 1.4em 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.rich-text .ProseMirror hr.ProseMirror-selectednode {
+  border-top-color: var(--focus);
+}
+
+/* ---------------------------------------------------------------- lists */
+
+.rich-text .ProseMirror :is(ul, ol) {
+  padding-left: 1.45em;
+}
+
+.rich-text .ProseMirror ul {
+  list-style: disc;
+}
+
+.rich-text .ProseMirror ul ul {
+  list-style: circle;
+}
+
+.rich-text .ProseMirror ul ul ul {
+  list-style: square;
+}
+
+.rich-text .ProseMirror ol {
+  list-style: decimal;
+}
+
+.rich-text .ProseMirror ol ol {
+  list-style: lower-alpha;
+}
+
+.rich-text .ProseMirror ol ol ol {
+  list-style: lower-roman;
+}
+
+.rich-text .ProseMirror li + li,
+.rich-text .ProseMirror li > :is(ul, ol) {
+  margin-top: 0.2em;
+}
+
+.rich-text .ProseMirror li::marker {
+  color: var(--muted-foreground);
+}
+
+.rich-text .ProseMirror ul[data-type="taskList"] {
+  padding-left: 0.1em;
+  list-style: none;
+}
+
+.rich-text .ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55em;
+}
+
+.rich-text .ProseMirror ul[data-type="taskList"] li > label {
+  flex: none;
+  margin-top: 0.3em;
+  user-select: none;
+}
+
+.rich-text .ProseMirror ul[data-type="taskList"] li > label input {
+  width: 0.95em;
+  height: 0.95em;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.rich-text .ProseMirror ul[data-type="taskList"] li > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rich-text .ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
+  text-decoration-color: var(--subtle);
+}
+
+/* ---------------------------------------------------------------- code */
+
+.rich-text .ProseMirror .code-block {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: color-mix(in oklch, var(--muted) 60%, var(--background));
+}
+
+.rich-text .ProseMirror .code-block-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0.25rem 0 0.25rem;
+  user-select: none;
+}
+
+.rich-text .ProseMirror pre {
+  margin: 0;
+  padding: 0.35rem 1rem 0.85rem;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.rich-text .ProseMirror pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+  color: var(--foreground);
+}
+
+/* Syntax colours from the validated data-viz set. */
+.rich-text .hljs-comment,
+.rich-text .hljs-quote {
+  color: var(--subtle);
+  font-style: italic;
+}
+
+.rich-text .hljs-keyword,
+.rich-text .hljs-selector-tag,
+.rich-text .hljs-meta .hljs-keyword,
+.rich-text .hljs-doctag {
+  color: var(--viz-5);
+}
+
+.rich-text .hljs-string,
+.rich-text .hljs-regexp,
+.rich-text .hljs-addition,
+.rich-text .hljs-meta .hljs-string {
+  color: var(--diff-added);
+}
+
+.rich-text .hljs-number,
+.rich-text .hljs-literal,
+.rich-text .hljs-symbol,
+.rich-text .hljs-bullet,
+.rich-text .hljs-variable.language_ {
+  color: var(--viz-3);
+}
+
+.rich-text .hljs-title,
+.rich-text .hljs-title.function_,
+.rich-text .hljs-section,
+.rich-text .hljs-selector-id {
+  color: var(--viz-1);
+}
+
+.rich-text .hljs-type,
+.rich-text .hljs-built_in,
+.rich-text .hljs-title.class_,
+.rich-text .hljs-selector-class {
+  color: var(--viz-2);
+}
+
+.rich-text .hljs-attr,
+.rich-text .hljs-attribute,
+.rich-text .hljs-name,
+.rich-text .hljs-tag,
+.rich-text .hljs-property {
+  color: var(--viz-4);
+}
+
+.rich-text .hljs-deletion {
+  color: var(--diff-removed);
+}
+
+.rich-text .hljs-meta,
+.rich-text .hljs-template-variable {
+  color: var(--muted-foreground);
+}
+
+.rich-text .hljs-emphasis {
+  font-style: italic;
+}
+
+.rich-text .hljs-strong {
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------- tables */
+
+.rich-text .ProseMirror .tableWrapper {
+  margin: 1em 0;
+  overflow-x: auto;
+}
+
+.rich-text .ProseMirror table {
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.rich-text .ProseMirror :is(td, th) {
+  position: relative;
+  min-width: 4em;
+  padding: 0.4em 0.6em;
+  border: 1px solid var(--border);
+  vertical-align: top;
+  text-align: left;
+}
+
+.rich-text .ProseMirror :is(td, th) > * + * {
+  margin-top: 0.4em;
+}
+
+.rich-text .ProseMirror th {
+  background: var(--muted);
+  font-weight: 500;
+}
+
+.rich-text .ProseMirror .selectedCell::after {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: color-mix(in oklch, var(--focus) 16%, transparent);
+  content: "";
+  pointer-events: none;
+}
+
+.rich-text .ProseMirror .column-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  bottom: -2px;
+  width: 4px;
+  background: var(--focus);
+  pointer-events: none;
+}
+
+.rich-text .ProseMirror.resize-cursor {
+  cursor: col-resize;
+}
+
+/* ---------------------------------------------------------------- images */
+
+.rich-text .ProseMirror img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-card);
+}
+
+.rich-text .ProseMirror img.ProseMirror-selectednode {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------- math */
+
+.rich-text .ProseMirror .tiptap-mathematics-render {
+  border-radius: var(--radius-item);
+}
+
+.rich-text .ProseMirror .tiptap-mathematics-render--editable {
+  cursor: pointer;
+  transition: background-color 120ms;
+}
+
+.rich-text .ProseMirror .tiptap-mathematics-render--editable:hover {
+  background: var(--muted);
+}
+
+.rich-text .ProseMirror [data-type="inline-math"] {
+  display: inline-block;
+  padding: 0 0.15em;
+}
+
+.rich-text .ProseMirror [data-type="block-math"] {
+  display: block;
+  padding: 0.6em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.rich-text .ProseMirror :is(.inline-math-error, .block-math-error) {
+  color: var(--destructive);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+.rich-text .ProseMirror .ProseMirror-selectednode.tiptap-mathematics-render {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ---------------------------------------------------------------- inline nodes */
+
+.rich-text .ProseMirror .mention {
+  padding: 0.05em 0.3em;
+  border-radius: var(--radius-chip);
+  background: var(--status-queued);
+  color: var(--status-queued-foreground);
+  font-weight: 500;
+  box-decoration-break: clone;
+}
+
+/* Markdown for a feature this editor has turned off, kept as written. */
+.rich-text .ProseMirror .markdown-literal {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  white-space: pre-wrap;
+}
+
+.rich-text .ProseMirror [data-type="emoji"] img {
+  display: inline-block;
+  width: 1.1em;
+  height: 1.1em;
+  vertical-align: -0.2em;
+}
+
+/* ---------------------------------------------------------------- editing aids */
+
+.rich-text .ProseMirror .find-and-replace-result {
+  border-radius: 2px;
+  background: var(--rte-find);
+}
+
+.rich-text .ProseMirror .find-and-replace-result-current {
+  background: var(--rte-find-current);
+}
+
+.rich-text .ProseMirror .tiptap-invisible-character::before {
+  color: var(--subtle);
+}
+
+/* The text an AI action is working on, until its answer goes in. */
+.rich-text .ProseMirror .rich-text-pending {
+  border-radius: 2px;
+  background: color-mix(in oklch, var(--focus) 16%, transparent);
+  box-decoration-break: clone;
+}
+
+/* An AI answer shown before it goes in: the document's typography, smaller. */
+.rich-text .rich-text-preview {
+  min-height: 0;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+}
+
+/* Focus mode: everything but the block being written fades back. */
+.rich-text[data-focus-mode] .ProseMirror > *:not(.has-focus) {
+  opacity: 0.35;
+  transition: opacity 150ms;
+}
+
+.rich-text .ProseMirror-gapcursor::after {
+  border-top-color: var(--foreground);
+}

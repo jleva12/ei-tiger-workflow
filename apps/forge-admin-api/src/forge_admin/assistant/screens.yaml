@@ -11,7 +11,7 @@
 # suggested.
 #
 # Toolsets (assistant/forge.py registers them): access, administration,
-# knowledge, code and workflows. Each
+# knowledge, code, workflows and agents. Each
 # is held by a specialist agent of the same name, which the supervisor is
 # offered on the screens that name its toolset. `- name` with `tools` gives the specialist only
 # those tools, by the names the model sees. Instructions go to the supervisor
@@ -171,6 +171,79 @@ screens:
         label: the last run
         prompt: Look at this workflow's latest run. If it failed, explain why in plain words and offer to fix the workflow.
 
+  # -- The agent builder ---------------------------------------------------------
+
+  - name: agent-builder
+    title: Agent builder
+    when:
+      route: /organizations/$organizationId_/chat-agents/$chatAgentId
+    toolsets: [agents]
+    # Designing an agentic system and its instructions takes some thought.
+    thinking_level: medium
+    instructions: |
+      The person is building one of their organization's agents on its
+      canvas, on the Agents page: the organization is the page's
+      organizationId parameter and the agent its chatAgentId parameter
+      (also the chat_agent on the page). "This agent", "it" and "here" mean
+      that one. A node they selected is in focus (a chat_agent_node, by its
+      id): "this tool", "this node" or "this sub-agent" is it. A version
+      search parameter means they're looking at a published version, which
+      never changes: changes go to its draft. Hand every request to
+      understand, design, build, change, check or try the agent to the agent
+      builder specialist, with the organization's and the agent's IDs, the
+      node in focus, and the person's whole goal in their words: it reads the
+      agent and what the organization has itself, and the person sees its
+      changes on the canvas as it makes them. Many of the people building
+      agents aren't technical: answer in plain words. The specialist reports
+      in two parts, "For the person" and "Details": answer from the first, in
+      its words, and keep the details (node ids, settings, JSON) to yourself
+      unless the person asks for them; here that comes before keeping the
+      specialist's IDs. Name parts as the canvas shows them ("Search HR
+      policies"). End with what's left for them to do, if anything.
+    prompts:
+      - title: Build it with me
+        label: from what it should do
+        prompt: Help me build this agent. Ask me what it should do and who it's for, propose how it will work in plain words, then build it on the canvas with its tools and instructions.
+      - title: Explain this agent
+        label: in plain words
+        prompt: Explain what this agent does in plain words, what each of its parts is for, and what it can't do yet.
+      - title: Will it work?
+        label: check and fix it
+        prompt: Check this agent. Will it work? Fix anything that's wrong or missing, then tell me what you changed.
+      - title: Try it
+        label: with a few messages
+        prompt: Try this agent with a few realistic messages and tell me how it answered and which tools it used.
+      - title: Give it more to work with
+        label: tools, documents, workflows
+        prompt: What could this agent use from our organization (knowledge bases, workflows, systems, other agents) to do its job better? Suggest it in plain words, then add what I pick.
+      - title: Improve its instructions
+        label: tone, steps and rules
+        prompt: Improve this agent's instructions. Ask me what it should do better, then rewrite them.
+
+  # -- The organization's agents --------------------------------------------------
+
+  - name: organization-agents
+    title: Agents
+    when:
+      route: /organizations/$organizationId
+      search: {view: chat-agents}
+    toolsets: [agents]
+    thinking_level: medium
+    instructions: |
+      The person is on their organization's Agents page, which lists its
+      agents (the page's organizationId parameter is the organization). The
+      agent builder specialist reads them, and makes a new one and builds it
+      when the person describes what they need: hand it their whole goal, in
+      their words. Each agent opens on its own canvas; give the person the
+      link the specialist reports.
+    prompts:
+      - title: Build me an agent
+        label: from what it should do
+        prompt: Help me make a new agent. Ask me what it should do and who it's for, propose how it will work in plain words, then build it.
+      - title: Our agents
+        label: at a glance
+        prompt: List this organization's agents, what each is for, and which are published.
+
   # -- The rest of the organization's workspace ---------------------------------
 
   - name: organization
@@ -185,6 +258,8 @@ screens:
           - describe_node_kinds
           - list_workflow_runs
           - get_workflow_run
+      - name: agents
+        tools: [list_agents, get_agent, describe_agent_parts]
     instructions: |
       The person is in their organization's workspace: its ADK workflows (the
       page without a view; an agentRun search parameter is one run's page, by
@@ -196,9 +271,11 @@ screens:
       workflow builder specialist reads the organization's ADK workflows and
       their runs here, and explains why a run failed; it builds and changes
       a workflow on the workflow's own page (its canvas): point the person
-      there to build one. No specialist reads or changes the agents from the
-      Agents page yet. The knowledge specialist reads and searches the
-      organization's knowledge bases.
+      there to build one. The agent builder specialist reads the
+      organization's agents here; it makes and builds them on the Agents
+      page and on each agent's own canvas: point the person there to build
+      one. The knowledge specialist reads and searches the organization's
+      knowledge bases.
 
   # -- Administration ----------------------------------------------------------
 

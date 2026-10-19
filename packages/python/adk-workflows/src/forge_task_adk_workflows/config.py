@@ -147,8 +147,11 @@ class AdkWorkflowsSettings(BaseModel):
     pi_command: str = Field(default="pi", min_length=1)
     pi_max_seconds: float = Field(default=3600.0, gt=0)
     # Seconds a workflow an LLM agent calls as a tool is waited for before
-    # the tool answers where it got to.
+    # the tool answers where it got to, when its Workflow tool doesn't say
+    # ("Wait up to"); and the most it may say: .env.common's
+    # FORGE_AGENT_WORKFLOW_WAIT_MAX, which chat agents (the admin API) share.
     workflow_tool_wait: float = Field(default=120.0, gt=0)
+    workflow_tool_wait_max: float = Field(default=900.0, gt=0)
     # System design knowledge bases' search: the code graph the worker
     # (apps/forge-codegraph-worker) writes to Spanner, read as every app reads
     # it (forge_codegraph_query): HYBRID_ADK_WORKFLOWS__CODEGRAPH__SPANNER__

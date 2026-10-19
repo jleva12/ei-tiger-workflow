@@ -64,15 +64,22 @@ def finish(result: str) -> types.Part:
     )
 
 
-def sse_events(response: httpx.Response) -> list[dict[str, Any]]:
-    """The ADK events of a ``run_sse`` response, in order."""
+def sse_events(
+    response: httpx.Response, *, lifecycle: bool = False
+) -> list[dict[str, Any]]:
+    """The ADK events, optionally including Forge's invocation control events."""
     assert response.status_code == 200, response.text
     assert response.headers["content-type"].startswith("text/event-stream")
-    return [
+    events = [
         json.loads(message.removeprefix("data: "))
         for message in response.text.split("\n\n")
         if message.startswith("data: ")
     ]
+    return (
+        events
+        if lifecycle
+        else [e for e in events if "forge:turn" not in e.get("customMetadata", {})]
+    )
 
 
 def run(client: TestClient, session_id: str, *parts: dict[str, Any], **extra: Any):

@@ -41,21 +41,32 @@ RUN_ADK = "run_adk"
 RUN_JOB = "run_job"
 EXPIRE_PAUSE = "expire_pause"
 MAINTAIN = "maintain"
-#: Seconds a running ``run_adk`` may go untouched before SAQ's sweeper takes
-#: it for lost (its worker died); the worker touches it as it renews the run's lease.
-HEARTBEAT = 120
-#: Each job's SAQ settings, whoever queued it. ``run_adk`` has no timeout (a
-#: run takes as long as it takes) and no SAQ retries: a run's own attempts are
-#: the run store's (a hiccup queues it again; the maintenance finds what a
-#: dead worker left).
+#: Seconds a running ``run_adk`` may go untouched before SAQ's sweep takes it
+#: for lost: never (0). Whether a run's attempt is alive is its lease's to say,
+#: in the run store, which the worker renews and fences every write on, and
+#: whose end the maintenance recovers the run at, with a job of its own. SAQ's
+#: sweep, which can't read the lease, aborted the job of a run whose worker
+#: had only lost Redis for a while (its touches failed), cutting off an attempt
+#: that held its lease. The worker still touches the job with each renewal,
+#: for anyone reading Redis.
+HEARTBEAT = 0
+#: Each job's SAQ settings, whoever queued it. ``run_adk`` has no heartbeat
+#: (HEARTBEAT) and no SAQ retries: a run's own attempts are the run store's (a
+#: hiccup queues it again; the maintenance finds what a dead worker left). Its
+#: timeout is the worker's that takes it, set as it does (0 here): as long as
+#: one attempt may take, and a while (``AdkRunJobs.job_seconds``), past which
+#: the worker has stopped it itself. So SAQ's sweep takes for lost only a dead
+#: worker's ``run_adk``, left active in Redis, long after the maintenance
+#: recovered its run.
 JOB_OPTIONS: dict[str, dict[str, Any]] = {
     RUN_ADK: {"timeout": 0, "heartbeat": HEARTBEAT, "retries": 1},
     EXPIRE_PAUSE: {"timeout": 60, "heartbeat": 0, "retries": 1},
     MAINTAIN: {"timeout": 300, "heartbeat": 0, "retries": 1},
     # A document's ingest: parsing a large PDF and embedding its chunks takes
     # minutes; a TransientError (the embedder's rate limit, Mongo's hiccup)
-    # is retried by SAQ.
-    RUN_JOB: {"timeout": 1800, "heartbeat": HEARTBEAT, "retries": 3, "retry_delay": 10.0, "retry_backoff": True},
+    # is retried by SAQ. Unlike workflow runs, document jobs don't renew a
+    # lease or touch SAQ: the execution timeout also bounds abandoned jobs.
+    RUN_JOB: {"timeout": 1800, "heartbeat": 0, "retries": 3, "retry_delay": 10.0, "retry_backoff": True},
 }
 
 

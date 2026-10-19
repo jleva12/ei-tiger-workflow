@@ -227,7 +227,7 @@ export function OrganizationSkills({
         canManage={canManage}
         onOpenSkill={onOpenSkill}
         onRetry={(job) => {
-          setRevising(skills.find((s) => s.id === job.revises))
+          setRevising(skills.find((s) => s.id === job.input.revises))
           setCreating(true)
         }}
       />
@@ -440,7 +440,7 @@ function CreatorJobs({
       className="flex flex-col gap-1.5 border-b px-4 py-3"
     >
       {jobs.map((job) => {
-        const made = skills.find((s) => s.id === job.skill_id)
+        const made = skills.find((s) => s.id === job.result?.skill_id)
         return (
           <div
             key={job.id}
@@ -462,7 +462,7 @@ function CreatorJobs({
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="flex flex-wrap items-center gap-2 text-xs text-foreground">
                 {job.status === "running"
-                  ? job.revises
+                  ? job.input.revises
                     ? "The skill creator is reworking a skill…"
                     : "The skill creator is writing a skill…"
                   : job.status === "done"
@@ -473,7 +473,7 @@ function CreatorJobs({
                 <Chip tone="neutral">{formatRelative(job.created_at)}</Chip>
               </span>
               <span className="line-clamp-2 text-2xs/[1.5] text-muted-foreground">
-                {job.brief}
+                {job.input.brief}
               </span>
               {job.status === "failed" && job.error && (
                 <span className="text-2xs text-destructive">{job.error}</span>

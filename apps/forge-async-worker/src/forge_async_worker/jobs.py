@@ -46,8 +46,10 @@ goes on past its deadline       the same, as a hiccup
 is stopped by an abandonment    is abandoned; whatever would have carried it on
                                 (a pause, a wait, a retry) abandons it instead
 raises anything else            fails (``error``)
-is stopped as its worker stops  is queued again at once (``interrupted``), once
-                                the job has stopped
+is stopped as its worker stops  is queued again at once (``interrupted``), with
+                                a ``run_adk`` of its own, once the job has
+                                stopped: an interruption, which spends no
+                                attempt (MAX_INTERRUPTIONS)
 loses its lease                 is left to whoever has it now
 ==============================  ==============================================
 
@@ -56,13 +58,21 @@ WRITE_SECONDS at most, up to WRITE_TRIES times while the database hiccups. A
 failure (or a hiccup) is kept in Redis first (``RunQueue.keep_failure``), and
 forgotten once written: should the write not land, the maintenance records
 it once the run's lease runs out, failing the run rather than running it
-again, whatever became of the worker meanwhile.
+again, whatever became of the worker meanwhile. What the attempt writes as it
+goes lands only while its lease is held too: its checkpoints and notes, its
+ADK session's events (control.py) and its model and tool calls' usage rows.
+An attempt that lost its run (its lease ran out on the maintenance's clock,
+and another took the run) writes nothing more, even on a worker whose own
+clock says it holds the run.
 
 ``expire_pause`` rejects an approval nobody decided by its deadline (the run
-carries on down its rejected way; the other gates stay open). ``maintain`` runs every minute: runs whose
-worker went are queued again (or fail: once too often, or with the failure
-their worker kept; while Redis can't say whether it kept one, they wait for
-the next maintenance), runs abandoned while their worker went are abandoned,
+carries on down its rejected way; the other gates stay open), and stops a
+workflow's call waiting for the run it started (``child_run``). A run that
+ends wakes its parent: the run store queued it with its end, should it wait
+for this run, and the worker sends it a job. ``maintain`` runs every minute: runs whose
+worker went are queued again, an interruption (or fail: interrupted too often
+in a row, or with the failure their worker kept; while Redis can't say whether
+it kept one, they wait for the next maintenance), runs abandoned while their worker went are abandoned,
 queued runs no job took and waits that are over get a job, and pauses past
 their deadline expire.
 """
@@ -71,7 +81,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
+import math
 import os
 import random
 import socket
@@ -82,7 +94,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from forge_common.adk.usage import recording
+from forge_common.adk.usage import UsageCall, UsageSink, recording
 from pydantic import ValidationError
 
 from forge_async_worker.control import PauseRun, RunControl, StopRun, WaitRun, is_hiccup
@@ -119,6 +131,11 @@ ATTEMPT_SECONDS = 7200.0
 #: Seconds a job asked to stop has to stop, its lease held meanwhile: past it,
 #: the process ends.
 STOP_SECONDS = 30.0
+#: Seconds a ``run_adk`` job may go on past its attempt's: the job stopping,
+#: what became of the run written, the jobs that carry it on queued. SAQ's
+#: timeout for the job is both (``AdkRunJobs.job_seconds``): what's still
+#: running then is a dead worker's.
+JOB_SLACK_SECONDS = 600.0
 #: Tries at writing what became of a run while the database hiccups, the pause
 #: after the first (it doubles), and the seconds one try may take.
 WRITE_TRIES = 4
@@ -126,8 +143,15 @@ WRITE_PAUSE_SECONDS = 1.0
 WRITE_SECONDS = 10.0
 #: Seconds one call to Redis (a job queued, a failure kept or read) may take.
 REDIS_SECONDS = 5.0
-#: The most attempts a run has: past it, a hiccup or an interruption fails it.
+#: The most attempts a run has: past it, a hiccup fails it. An interruption
+#: (its worker stopped, or went, while it ran) isn't an attempt: the run
+#: carries on as the same one, and counts it apart (its ``interruptions``).
 MAX_ATTEMPTS = 10
+#: The most interruptions a run has in a row (since it last waited, for
+#: people or a time, or someone retried it): past it, its worker going fails
+#: it, so a run that takes its worker down each time doesn't go on doing so.
+#: A worker stopping never fails a run.
+MAX_INTERRUPTIONS = 25
 BACKOFF_BASE = 30.0  # seconds
 BACKOFF_MAX = 1800.0
 #: Seconds a queued run may go without a worker taking it before the
@@ -189,6 +213,12 @@ class AdkRunJobs:
     def _owner(self) -> str:
         # One attempt's: a worker that lost a run and took it again isn't the same owner.
         return f"{self.name}/{uuid.uuid4().hex[:12]}"[-128:]
+
+    @property
+    def job_seconds(self) -> int:
+        """:return: The most seconds a ``run_adk`` job of this worker takes:
+        its attempt's, and JOB_SLACK_SECONDS (SAQ's timeout for the job)."""
+        return math.ceil(self.attempt_seconds + JOB_SLACK_SECONDS)
 
     # ------------------------------------------------------------------ run_adk
 
@@ -279,6 +309,7 @@ class AdkRunJobs:
                 "its abandonment",
                 lambda: self.store.abandon_running(control.run_id, owner=control.owner, state=control.state),
             )
+            await self._wake_parent(control.run)
             return "abandoned"
         except WorkerStops:
             await self._let_go(control)
@@ -315,12 +346,29 @@ class AdkRunJobs:
                 control.run_id, owner=control.owner, state=control.state, succeeded=True, result=detail.get("result")
             ),
         )
+        await self._wake_parent(control.run)
         return "succeeded"
 
     async def _run_job(self, spec: JobSpec, control: RunControl) -> JobResult:
-        sink = self.usage.record if self.usage is not None else None
-        with controlling(control), recording(sink):
+        with controlling(control), recording(self._usage_sink(control)):
             return await self.runner.run(spec)
+
+    def _usage_sink(self, control: RunControl) -> UsageSink | None:
+        """Where the attempt's model and tool calls are recorded: while it has
+        its run (fenced on its lease, as its writes are), never once another
+        attempt may have taken it, which records its own."""
+        usage = self.usage
+        if usage is None:
+            return None
+        fence = functools.partial(self.store.hold, run_id=control.run_id, owner=control.owner)
+
+        async def record(call: UsageCall) -> None:
+            try:
+                await usage.record(call, fence=fence)
+            except LostLease:
+                log.info("a %s call of run %s isn't recorded: its attempt lost the run", call.call, control.run_id)
+
+        return record
 
     async def _pause(self, control: RunControl, signal: PauseRun) -> str:
         gates = await self._durably(
@@ -427,6 +475,7 @@ class AdkRunJobs:
             raise
         if kept:
             await self._forget(control.run_id, control.lease_epoch)
+        await self._wake_parent(control.run)
         return "failed"
 
     async def _durably[T](self, control: RunControl, what: str, write: Callable[[], Awaitable[T]]) -> T:
@@ -485,13 +534,16 @@ class AdkRunJobs:
 
     async def _let_go(self, control: RunControl) -> None:
         """The worker stops mid-run, and the run's job has: the run is queued
-        again at once, for the next one, or abandoned when someone abandoned
-        it. Best effort: should it fail, the maintenance finds the run once
-        its lease runs out."""
+        again at once (an interruption, not an attempt), with a job of its
+        own for the next worker, or abandoned when someone abandoned it.
+        (SAQ re-queues the job that ran it too, but only when the job stopped
+        within a second, and a worker may take that before the run is
+        queued, skipping it.) Best effort: should it fail, the maintenance
+        finds the run once its lease runs out."""
         try:
             try:
                 async with asyncio.timeout(WRITE_SECONDS):
-                    await self.store.requeue(
+                    queued = await self.store.requeue(
                         control.run_id,
                         owner=control.owner,
                         error={"message": "Its worker stopped while it ran", "category": "interrupted"},
@@ -500,8 +552,14 @@ class AdkRunJobs:
             except CancelRequested:
                 async with asyncio.timeout(WRITE_SECONDS):
                     await self.store.abandon_running(control.run_id, owner=control.owner, state=control.state)
+                # Its end may be what its parent waits for.
+                await self._wake_parent(control.run)
+                return
         except Exception:
             log.warning("run %s: couldn't let it go as its worker stops", control.run_id, exc_info=True)
+            return
+        if queued is not None:
+            await self._send(f"run {control.run_id}, let go", self.queue.run_adk(control.run_id))
 
     # ------------------------------------------------------------------ expire_pause
 
@@ -559,14 +617,15 @@ class AdkRunJobs:
             with _apart(run["id"]):
                 if await self.store.abandon_stopping(run["id"]):
                     done["abandoned"].append(run["id"])
+                    await self._wake_parent(run)
         now = self.store.clock()
         for run in await self.store.stalled(idle_seconds=STALLED_AFTER):
             if _backing_off(run, now):
                 continue
-            # A fixed key: a run whose job waits in a busy queue gets no more of them.
-            if await self._send(
-                f"stalled run {run['id']}", self.queue.run_adk(run["id"], key=run_key(run["id"], "sweep"))
-            ):
+            # A key fixed for the run's taking: a run whose job waits in a busy queue gets no more of
+            # them, and a dead worker's job (left active in Redis: queue.HEARTBEAT) never holds up the next.
+            key = run_key(run["id"], f"sweep-{int(run.get('lease_epoch') or 0)}")
+            if await self._send(f"stalled run {run['id']}", self.queue.run_adk(run["id"], key=key)):
                 done["queued"].append(run["id"])
         for run in await self.store.overdue():
             with _apart(run["id"]):
@@ -583,11 +642,15 @@ class AdkRunJobs:
 
     async def _recover(self, run: dict[str, Any], done: dict[str, list[str]]) -> None:
         """A run whose worker went (its lease ran out): it fails, with the
-        failure its worker kept, or once too often; else it's queued again.
-        While Redis can't say what its worker kept, it's left for the next
-        maintenance: queued again, the failure kept would be an earlier
-        taking's, and lost."""
-        run_id, attempt = run["id"], int(run["attempt"])
+        failure its worker kept, or once interrupted too often in a row; else
+        it's queued again. While Redis can't say what its worker kept, it's
+        left for the next maintenance: queued again, the failure kept would
+        be an earlier taking's, and lost. Each write is fenced on the taking
+        it was found as (``lease_epoch``): one taken again since (by a worker
+        that may have gone too) isn't failed or queued with what this one
+        kept, or counted."""
+        run_id, interruptions = run["id"], int(run.get("interruptions") or 0)
+        epoch = int(run.get("lease_epoch") or 0)
         try:
             kept = await self._kept(run)
         except _Unknown:
@@ -597,26 +660,33 @@ class AdkRunJobs:
         if kept is not None and kept.get("final"):
             # Its worker failed it, and couldn't say so: it fails, as its worker meant.
             try:
-                handled = await self.store.fail_interrupted(run_id, error=kept["error"], result=kept.get("result"))
+                handled = await self.store.fail_interrupted(
+                    run_id, lease_epoch=epoch, error=kept["error"], result=kept.get("result")
+                )
             except Exception:
                 log.warning("run %s: its result can't be written; it fails without it", run_id, exc_info=True)
-                handled = await self.store.fail_interrupted(run_id, error=kept["error"])
+                handled = await self.store.fail_interrupted(run_id, lease_epoch=epoch, error=kept["error"])
             if handled:
                 done["failed"].append(run_id)
-        elif attempt >= MAX_ATTEMPTS:
-            error = {"message": f"{INTERRUPTED}, {attempt} times", "category": "interrupted"}
-            handled = await self.store.fail_interrupted(run_id, error=error)
+        elif kept is None and interruptions >= MAX_INTERRUPTIONS:
+            message = f"{INTERRUPTED}, {interruptions + 1} times in a row"
+            handled = await self.store.fail_interrupted(
+                run_id, lease_epoch=epoch, error={"message": message, "category": "interrupted"}
+            )
             if handled:
                 done["failed"].append(run_id)
         else:
-            # Its worker went, or hit a hiccup it couldn't say so of (the hiccup it kept).
+            # Its worker went (an interruption), or hit a hiccup it couldn't say so of (the
+            # hiccup it kept: an attempt, which its worker had attempts left for).
             error = kept["error"] if kept is not None else {"message": INTERRUPTED, "category": "interrupted"}
-            handled = await self.store.requeue(run_id, owner=None, error=error) is not None
+            handled = await self.store.requeue(run_id, owner=None, error=error, lease_epoch=epoch) is not None
             if handled:
                 await self._send(f"recovered run {run_id}", self.queue.run_adk(run_id))
                 done["recovered"].append(run_id)
         if handled and kept is not None:
-            await self._forget(run_id, int(run.get("lease_epoch") or 0))
+            await self._forget(run_id, epoch)
+        if handled and run_id in done["failed"]:
+            await self._wake_parent(run)
 
     async def _kept(self, run: dict[str, Any]) -> dict[str, Any] | None:
         """
@@ -646,6 +716,14 @@ class AdkRunJobs:
                 await self.queue.forget_failure(run_id, epoch)
         except Exception:
             log.warning("run %s: forgetting the failure its worker kept failed", run_id, exc_info=True)
+
+    async def _wake_parent(self, run: dict[str, Any]) -> None:
+        """A run that ended may be what its parent waits for (a workflow its
+        LLM agent called): the run store queued the parent with its end, if
+        so, and it's sent a job (one it doesn't need finds nothing to run)."""
+        parent = run.get("parent_run_id")
+        if parent:
+            await self._send(f"run {parent} after run {run['id']} ended", self.queue.run_adk(str(parent)))
 
     async def _send(self, what: str, sending: Awaitable[None]) -> bool:
         """Queues a job, REDIS_SECONDS at most. Best effort: the maintenance

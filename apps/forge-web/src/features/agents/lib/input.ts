@@ -43,7 +43,9 @@ const part = t.object(
 export const REQUEST_FIELDS: InputField[] = [
   {
     name: "appName",
-    type: t.string("The agent app the conversation belongs to."),
+    type: t.string(
+      "The agent's ID as the runtime knows it (ca_…): not a name to show people."
+    ),
     detail: "The agent app",
   },
   {

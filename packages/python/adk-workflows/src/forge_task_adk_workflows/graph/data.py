@@ -41,6 +41,11 @@ ERROR_KEY = "forge_error"
 #: agent's message, an HTTP request) records it, on an event of its own
 #: before it sends it: the run page shows it, even when the step fails.
 CALLED_WITH_KEY = "forge_called_with"
+#: Where a step whose effect may not be safe to repeat records that it
+#: began acting (``{key, host}``), on an event of its own, before it acts:
+#: an attempt that finds it there, with nothing after it saying how the step
+#: ended, knows the step was cut off (``factories.base.cut_off``).
+STARTED_KEY = "forge_started"
 #: Session state keys Forge keeps for itself, out of ``state``.
 PRIVATE_STATE = "forge:"
 #: Logic steps: they hand on what came in, and record the way they took.

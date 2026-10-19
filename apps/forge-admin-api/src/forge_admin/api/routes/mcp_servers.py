@@ -9,6 +9,13 @@ members have it by default). Auth methods are pluggable
 with their forms' fields. A method's secrets are write-only: a server answers
 which are set, never what they are.
 
+A server is where its agents may reach, as their HTTP tools may: not this
+API's own network (private, loopback, link-local, carrier-grade NAT…)
+unless ``agent_tools_allow_private`` or ``agent_tools_allowed_hosts`` allows
+it. Its URL is refused (422) when it's added or changed to one that isn't,
+and every connection to it, checking it, signing in or an agent's, is
+checked again as it's made.
+
 ``GET /mcp-server-defaults`` lists the servers the application offers
 ready-made (``forge_admin.mcp_servers.defaults``): the web console fills in
 the form with one, and the person adds what's theirs.
@@ -25,6 +32,8 @@ from datetime import timedelta
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path, Request, Response, status
+from forge_agent_runtime.mcp_guard import check_server_url
+from forge_common.adk import ToolFailure
 from forge_mcp_servers.auth import (
     HEADER_NAME_PATTERN,
     AuthError,
@@ -54,6 +63,7 @@ from forge_admin.auth.access import (
 )
 from forge_admin.db.audit import UtcDateTime, utc_now
 from forge_admin.mcp_servers.defaults import DefaultServer
+from forge_admin.mcp_servers.toolset import network_policy
 from forge_admin.models import McpOAuthFlow, McpServer
 
 logger = logging.getLogger(__name__)
@@ -251,6 +261,19 @@ def _unprocessable(message: str) -> HTTPException:
     return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, message)
 
 
+async def _reachable(request: Request, url: str) -> str:
+    """
+    :return: A server's URL, when its agents may reach it: not this API's own
+        network (``agent_tools_allow_private``, ``agent_tools_allowed_hosts``).
+        Every connection is checked again as it's made.
+    :raises HTTPException: 422 when they may not.
+    """
+    try:
+        return await check_server_url(url, network_policy(request.app.state.settings))
+    except ToolFailure as refused:
+        raise _unprocessable(f"Its URL can't be used: {refused.reason}") from None
+
+
 def _apply_auth(
     servers: McpServers, server: McpServer, auth: AuthInput, *, new: bool
 ) -> bool:
@@ -367,8 +390,9 @@ async def create_mcp_server(
     Add an MCP server to the organization. It's unchecked until checked.
     \f
     :raises HTTPException: 403 without mcp_servers:manage in the organization;
-        409 when the name is taken; 422 for an auth method there isn't, or
-        settings or secrets it doesn't take; 503 when MCP servers aren't set up.
+        409 when the name is taken; 422 for a URL on this API's own network,
+        an auth method there isn't, or settings or secrets it doesn't take;
+        503 when MCP servers aren't set up.
     """
     await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
     servers = service(request)
@@ -376,7 +400,7 @@ async def create_mcp_server(
         organization_id=organization_id,
         name=body.name,
         description=body.description,
-        url=body.url,
+        url=await _reachable(request, body.url),
         transport=body.transport,
         headers=[row.model_dump() for row in body.headers],
         timeout_seconds=body.timeout_seconds,
@@ -430,7 +454,8 @@ async def update_mcp_server(
     \f
     :raises HTTPException: 403 without mcp_servers:manage; 404 when the
         organization has no such server; 409 when the name is taken; 422 for
-        an auth method there isn't, or settings or secrets it doesn't take.
+        a URL on this API's own network, an auth method there isn't, or
+        settings or secrets it doesn't take.
     """
     await authorize(session, enforcer, user, MANAGE, Scope(Level.ORG, organization_id))
     servers = service(request)
@@ -441,7 +466,7 @@ async def update_mcp_server(
     if body.description is not None:
         server.description = body.description
     if body.url is not None and body.url != server.url:
-        server.url, reconnect = body.url, True
+        server.url, reconnect = await _reachable(request, body.url), True
     if body.headers is not None:
         server.headers = [row.model_dump() for row in body.headers]
     if body.timeout_seconds is not None:

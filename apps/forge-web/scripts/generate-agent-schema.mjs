@@ -29,7 +29,7 @@ const TARGETS = [
   {
     // What a chat agent's `present` call is built from (Rich answers): the
     // Generative UI vocabulary the web console draws, each component's props.
-    module: "/src/components/forge/assistant/rich-answers-schema.ts",
+    module: "/src/components/forge/generative-ui/catalog.ts",
     name: "presentCatalog",
     file: path.resolve(
       root,
@@ -75,6 +75,24 @@ try {
   }
 } finally {
   await server.close()
+}
+
+// A team component's call holds its inputs in `props`, and its template's
+// operators are `$` keys (forge_agent_runtime.generative_ui): no base
+// component may have a prop called either.
+for (const { name, schema } of schemas) {
+  if (name !== "presentCatalog") continue
+  for (const [component, { properties }] of Object.entries(schema.components)) {
+    const reserved = Object.keys(properties).filter(
+      (prop) => prop === "props" || prop.startsWith("$")
+    )
+    if (reserved.length) {
+      console.error(
+        `${component} has a prop called ${reserved.join(", ")}: props and $ names are team components'`
+      )
+      process.exit(1)
+    }
+  }
 }
 
 let stale = false

@@ -35,7 +35,8 @@ from forge_task_adk_workflows.graph import (
     due_pauses,
     pending_pauses,
 )
-from forge_task_adk_workflows.graph.data import CALLED_WITH_KEY
+from forge_task_adk_workflows.graph.data import CALLED_WITH_KEY, STARTED_KEY
+from forge_task_adk_workflows.graph.factories.base import HOST
 from forge_task_adk_workflows.graph.factories.logic import MergeAll
 from forge_task_adk_workflows.graph.schemas import is_model
 from forge_task_adk_workflows.support.expressions import Evaluator
@@ -315,12 +316,13 @@ def test_each_forge_kind_is_the_adk_node_its_factory_makes() -> None:
     graph = build_agent(document)
     assert isinstance(graph, AgentGraph)
     nodes = by_name(graph)
-    for name in ("get", "check", "pick", "rule", "done", "__input__", "__finish__"):
+    for name in ("check", "pick", "rule", "done", "__input__", "__finish__"):
         assert isinstance(nodes[name], FunctionNode), name
         assert not nodes[name].rerun_on_resume
-    # Pausing steps and the loop, which runs its body per item, run again when
-    # the run resumes.
-    for name in ("ask", "wait", "each", "person"):
+    # Pausing steps, the loop, which runs its body per item, and an HTTP step,
+    # which records its request before it sends it (sent again, or its Error
+    # way, when it was cut off), run again when the run resumes.
+    for name in ("get", "ask", "wait", "each", "person"):
         assert isinstance(nodes[name], FunctionNode)
         assert nodes[name].rerun_on_resume, name
     assert isinstance(nodes["both"], MergeAll)
@@ -917,14 +919,18 @@ def test_an_http_request_sends_its_body_and_hands_on_the_response() -> None:
     )
     posted = [e for e in session.events if name_of(e) == "post"]
     assert [e.actions.route for e in posted] == [None, "success"]
-    # The request, kept before it's sent: its headers by name, never their values.
+    # A POST carries its step's key, the same for every attempt of the request.
+    key = seen[0].headers["idempotency-key"]
+    # The request, kept before it's sent: its headers by name, never their
+    # values; and that it began, on this machine, under its key.
     assert posted[0].custom_metadata == {
         CALLED_WITH_KEY: {
             "method": "POST",
             "url": "https://api.example.com/issues/XMEN-12",
-            "headers": ["Authorization"],
+            "headers": ["Authorization", "Idempotency-Key"],
             "body": {"text": "Fix XMEN-12"},
-        }
+        },
+        STARTED_KEY: {"key": key, "host": HOST},
     }
 
 

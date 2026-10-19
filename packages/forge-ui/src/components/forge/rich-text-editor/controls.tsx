@@ -6,6 +6,7 @@ import { DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Kbd } from "@/components/ui/kbd"
 import { PopoverTrigger } from "@/components/ui/popover"
 import { Separator } from "@/components/ui/separator"
+import { Spinner } from "@/components/ui/spinner"
 import { Toggle } from "@/components/ui/toggle"
 import {
   Tooltip,
@@ -13,9 +14,39 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Icon } from "../icon"
-import type { IconProp } from "../icons"
-import type { Swatch } from "./palette"
+import { iconNames, type IconProp } from "../icons"
 import { formatShortcut } from "./shortcuts"
+import type { EditorAction } from "./types"
+
+const NAMES = new Set<string>(iconNames)
+
+/** Whether `icon` is a Hugeicons glyph (an array of SVG element tuples). */
+function isGlyph(icon: unknown): icon is IconProp {
+  return (
+    Array.isArray(icon) &&
+    Array.isArray(icon[0]) &&
+    typeof icon[0][0] === "string"
+  )
+}
+
+/**
+ * An action's icon, which may be a React node, a Forge icon name or a
+ * Hugeicons glyph. Strings that aren't icon names render as text.
+ */
+export function ActionIcon({
+  icon,
+  size,
+}: {
+  icon: EditorAction["icon"]
+  size?: number
+}) {
+  if (icon === undefined || icon === null || icon === false) return null
+  if (typeof icon === "string" && NAMES.has(icon)) {
+    return <Icon icon={icon as IconProp} size={size} />
+  }
+  if (isGlyph(icon)) return <Icon icon={icon} size={size} />
+  return <>{icon as React.ReactNode}</>
+}
 
 function Hint({ label, shortcut }: { label: string; shortcut?: string }) {
   return (
@@ -35,7 +66,7 @@ export function ToolbarToggle({
   disabled,
   onPressedChange,
 }: {
-  icon: IconProp
+  icon: EditorAction["icon"]
   label: string
   shortcut?: string
   pressed: boolean
@@ -56,7 +87,7 @@ export function ToolbarToggle({
           />
         }
       >
-        <Icon icon={icon} />
+        <ActionIcon icon={icon} />
       </TooltipTrigger>
       <Hint label={label} shortcut={shortcut} />
     </Tooltip>
@@ -69,13 +100,16 @@ export function ToolbarAction({
   label,
   shortcut,
   disabled,
+  busy,
   onClick,
   className,
 }: {
-  icon: IconProp
+  icon: EditorAction["icon"]
   label: string
   shortcut?: string
   disabled?: boolean
+  /** Shows a spinner while the action runs. */
+  busy?: boolean
   onClick: () => void
   className?: string
 }) {
@@ -88,13 +122,14 @@ export function ToolbarAction({
             variant="ghost"
             size="icon-sm"
             aria-label={label}
+            aria-busy={busy || undefined}
             disabled={disabled}
             onClick={onClick}
             className={cn("text-muted-foreground", className)}
           />
         }
       >
-        <Icon icon={icon} />
+        {busy ? <Spinner /> : <ActionIcon icon={icon} />}
       </TooltipTrigger>
       <Hint label={label} shortcut={shortcut} />
     </Tooltip>
@@ -116,7 +151,7 @@ export function ToolbarMenuTrigger({
   className,
   children,
 }: {
-  icon?: IconProp
+  icon?: EditorAction["icon"]
   label: string
   value?: React.ReactNode
   disabled?: boolean
@@ -148,7 +183,7 @@ export function ToolbarMenuTrigger({
           />
         }
       >
-        {icon && <Icon icon={icon} />}
+        <ActionIcon icon={icon} />
         {value !== undefined && (
           <span className="truncate text-xs text-foreground">{value}</span>
         )}
@@ -166,67 +201,5 @@ export function ToolbarSeparator() {
       orientation="vertical"
       className="mx-0.5 h-4 self-center data-vertical:self-center"
     />
-  )
-}
-
-/**
- * A row of colour swatches. Text colours show an "A" in the colour;
- * highlights show the fill. The chosen one is marked.
- */
-export function SwatchGrid({
-  label,
-  swatches,
-  kind,
-  current,
-  onSelect,
-}: {
-  label: string
-  swatches: Swatch[]
-  kind: "text" | "highlight"
-  current: string | null
-  onSelect: (value: string | null) => void
-}) {
-  return (
-    <div
-      role="group"
-      aria-label={label}
-      className="grid grid-cols-9 gap-1 px-1.5 pb-1.5"
-    >
-      {swatches.map((swatch) => {
-        const selected = (current ?? null) === swatch.value
-        return (
-          <Tooltip key={swatch.name}>
-            <TooltipTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label={`${label}: ${swatch.name}`}
-                  aria-pressed={selected}
-                  onClick={() => onSelect(swatch.value)}
-                  className="grid size-6 place-items-center overflow-hidden rounded-(--radius-item) border border-border text-xs font-semibold transition-shadow hover:shadow-(--shadow-raised) aria-pressed:border-foreground"
-                  style={
-                    swatch.value === null
-                      ? undefined
-                      : kind === "text"
-                        ? { color: swatch.value }
-                        : { background: swatch.value }
-                  }
-                />
-              }
-            >
-              {swatch.value === null ? (
-                <span
-                  aria-hidden="true"
-                  className="h-px w-8 -rotate-45 bg-muted-foreground/60"
-                />
-              ) : kind === "text" ? (
-                "A"
-              ) : null}
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{swatch.name}</TooltipContent>
-          </Tooltip>
-        )
-      })}
-    </div>
   )
 }

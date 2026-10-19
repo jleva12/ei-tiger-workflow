@@ -27,14 +27,15 @@ from fastapi import FastAPI
 from forge_agent_runtime.catalog import CHAT_NODE_CATALOG
 from forge_common.adk import ToolFailure
 from forge_task_adk_workflows.graph import NODE_CATALOG, outputs_of
-from google.adk.tools.function_tool import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 
+from forge_admin.assistant.building_blocks import building_blocks, workflow_block
 from forge_admin.assistant.person_api import PersonApi
 from forge_admin.assistant.route_tools import (
     ApiRefused,
     RouteToolset,
     pick,
+    quoted,
     slug_arg,
     uuid_arg,
 )
@@ -179,6 +180,7 @@ class WorkflowToolset(RouteToolset):
 
     READ_TOOLS = READ_TOOLS
     CHANGE_TOOLS = CHANGE_TOOLS
+    CONFIRMED = CONFIRMED
     STATUS_FIXES = {
         409: [
             "The workflow was saved since you read it (the person may be editing it "
@@ -196,16 +198,17 @@ class WorkflowToolset(RouteToolset):
     ) -> None:
         kwargs.setdefault("max_result_chars", 60_000)
         super().__init__(api, confirm_changes=confirm_changes, **kwargs)
-        self._tools = [
-            *(FunctionTool(getattr(self, name)) for name in self.READ_TOOLS),
-            *(
-                FunctionTool(
-                    getattr(self, name),
-                    require_confirmation=confirm_changes and name in CONFIRMED,
-                )
-                for name in self.CHANGE_TOOLS
-            ),
-        ]
+
+    async def confirmation_hint(
+        self, name: str, args: Mapping[str, Any], tool_context: ToolContext
+    ) -> str | None:
+        if name != "test_workflow":
+            return None
+        record = await self._read_quietly(
+            tool_context,
+            lambda: _workflow(args.get("organization_id"), args.get("workflow_id")),
+        )
+        return test_run_question(record, args.get("input"))
 
     # ------------------------------------------------------------- reading
 
@@ -221,7 +224,7 @@ class WorkflowToolset(RouteToolset):
             asks for.
         """
         found = await self._call(tool_context, "GET", _workflows(organization_id))
-        return [_listed(record) for record in found or []]
+        return [workflow_block(record) for record in found or []]
 
     async def get_workflow(
         self, organization_id: str, workflow_id: str, tool_context: ToolContext
@@ -277,46 +280,10 @@ class WorkflowToolset(RouteToolset):
         :param organization_id: The organization, by ID.
         :return: Each list, by kind; a list the person may not read says why.
         """
-        org = uuid_arg(organization_id, "organization_id")
-        sections: dict[str, tuple[str, Any]] = {
-            "agents": (f"/organizations/{org}/chat-agents", _agent_block),
-            "workflows": (f"/organizations/{org}/agents", _listed),
-            "credentials": (f"/organizations/{org}/credentials", _credential_block),
-            "knowledge_bases": (
-                f"/organizations/{org}/knowledge-bases",
-                lambda kb: pick(kb, ("id", "name", "description", "kind")),
-            ),
-            "mcp_servers": (f"/organizations/{org}/mcp-servers", _mcp_block),
-            "skills": (
-                f"/organizations/{org}/skills",
-                lambda skill: pick(skill, ("id", "name", "description")),
-            ),
-        }
-        found: dict[str, Any] = {}
-        for name, (path, shape) in sections.items():
-            try:
-                records = await self._call(tool_context, "GET", path)
-                found[name] = [shape(record) for record in records or []]
-            except ApiRefused as refused:
-                found[name] = {"unavailable": refused.reason}
-        try:
-            models = await self._call(tool_context, "GET", "/agents/apps/forge/models")
-            found["models"] = {
-                "default": (models or {}).get("defaultModel"),
-                "choices": [
-                    {
-                        "provider": model.get("provider"),
-                        "name": model.get("model"),
-                        "label": model.get("name"),
-                    }
-                    for model in (models or {}).get("models") or []
-                ],
-                "note": "An LLM node's model is {provider, name} from these; both "
-                "empty runs on the default.",
-            }
-        except ApiRefused as refused:
-            found["models"] = {"unavailable": refused.reason}
-        return found
+        return await building_blocks(
+            lambda method, path: self._call(tool_context, method, path),
+            organization_id,
+        )
 
     async def list_workflow_runs(
         self,
@@ -516,6 +483,26 @@ class WorkflowToolset(RouteToolset):
 # ------------------------------------------------------------- views
 
 
+def test_run_question(record: Any, run_input: Any) -> str:
+    """
+    What the person is asked before test_workflow runs a workflow's draft:
+    which workflow, and that its steps really act.
+
+    :param record: The workflow, as the API answers it; None when it
+        couldn't be read.
+    :param run_input: The run's input, as the model gave it.
+    """
+    record = record if isinstance(record, Mapping) else {}
+    document = record.get("document")
+    workflow = quoted((document or {}).get("name"), "this workflow")
+    given = "with the input below" if run_input else "with no input"
+    return (
+        f"Test-run {workflow}?\n"
+        f"Its draft runs once {given}. Every step runs for real, so anything a "
+        "step does, like sending a message or changing a record, really happens."
+    )
+
+
 def workflow_view(
     record: Mapping[str, Any], check: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -712,69 +699,6 @@ def describe_kinds(
 
 
 # ------------------------------------------------------------- shaping
-
-
-def _listed(record: Mapping[str, Any]) -> dict[str, Any]:
-    document = record.get("document") or {}
-    start = next(
-        (
-            node
-            for node in document.get("nodes") or []
-            if isinstance(node, dict) and node.get("kind") == "start"
-        ),
-        None,
-    )
-    schema = ((start or {}).get("config") or {}).get("input_schema") or {}
-    return {
-        "id": record.get("id"),
-        "name": document.get("name"),
-        "description": document.get("description") or "",
-        "status": record.get("status"),
-        "published_version": record.get("published_version"),
-        "input_fields": schema,
-    }
-
-
-def _agent_block(record: Mapping[str, Any]) -> dict[str, Any]:
-    document = record.get("document") or {}
-    state = next(
-        (
-            (node.get("config") or {}).get("state_schema")
-            for node in document.get("nodes") or []
-            if isinstance(node, dict)
-            and isinstance((node.get("config") or {}).get("state_schema"), dict)
-        ),
-        None,
-    )
-    found = {
-        "id": record.get("id"),
-        "name": document.get("name"),
-        "description": document.get("description") or "",
-        "status": record.get("status"),
-        "published_version": record.get("published_version"),
-    }
-    if state and state.get("properties"):
-        found["inputs"] = state
-    return found
-
-
-def _credential_block(record: Mapping[str, Any]) -> dict[str, Any]:
-    auth = record.get("auth") or {}
-    return {
-        **pick(record, ("id", "name", "description", "urls")),
-        "auth": auth.get("method") or auth.get("kind"),
-    }
-
-
-def _mcp_block(record: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        **pick(record, ("id", "name", "description", "status")),
-        "tools": [
-            tool.get("name")
-            for tool in record.get("tools") or []
-            if isinstance(tool, dict)
-        ],
-    }
 
 
 def _filled(config: Mapping[str, Any]) -> dict[str, Any]:

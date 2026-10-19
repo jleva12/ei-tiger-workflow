@@ -14,6 +14,14 @@ from forge_admin.auth.api_keys import (
     looks_like_key,
     verify_key,
 )
+from forge_admin.auth.origin import (
+    ANONYMOUS,
+    API_KEY,
+    JWT,
+    LOCAL,
+    origin_of,
+    set_origin,
+)
 from forge_admin.auth.tokens import TokenError, groups_of, verify_identity
 from forge_admin.db.audit import set_actor
 
@@ -92,8 +100,10 @@ async def _identify(
     user_id: str | None = None
     groups: tuple[str, ...] = ()
     organization_id: str | None = None
+    auth_method, actor = ANONYMOUS, None
     if key is not None:
         user_id, organization_id = key.subject, key.organization_id
+        auth_method = API_KEY
     elif token is not None:
         try:
             identity = verify_identity(settings, token)
@@ -101,13 +111,20 @@ async def _identify(
             raise _refused(str(error)) from None
         user_id, groups = identity.subject, identity.groups
         organization_id = identity.organization_id
+        auth_method, actor = JWT, identity.actor
     elif local and settings.local_user_id:
         user_id = settings.local_user_id
         groups = groups_of(settings.local_user_groups)
+        auth_method = LOCAL
     request.state.user_id = user_id
     request.state.groups = groups
     request.state.api_key = key
     request.state.organization_id = organization_id
+    # Where the call came from and how its caller signed in, for what it starts.
+    request.state.origin = origin = origin_of(
+        request, auth_method=auth_method, actor=actor
+    )
+    set_origin(origin)
     set_caller(user_id, groups)
     fallback = ANONYMOUS_ACTOR if expected is None or not gate else API_KEY_ACTOR
     set_actor(user_id or fallback)
@@ -131,7 +148,9 @@ async def authenticate(
     the company groups their token names (whose linked permissions
     authorization counts), ``request.state.api_key`` the key's identity,
     ``request.state.organization_id`` the organization the credential is
-    for (a key's own, or the one a token was minted for), and changes are
+    for (a key's own, or the one a token was minted for),
+    ``request.state.origin`` where the call came from and how its caller
+    signed in (``origin.RequestOrigin``, for what it starts), and changes are
     audited as the caller, or as ``api-key`` when only the
     deployment's key was verified, or ``anonymous``. This dependency is async
     so the actor stays set for the route that follows.
@@ -152,9 +171,9 @@ async def identify(
 ) -> None:
     """
     Identify the caller from the credentials they sent, asking for none: for
-    the runtime when it's public. Without credentials the caller is
-    anonymous (not the local user: a public runtime's anonymous callers are
-    anonymous everywhere); credentials that are sent must be valid.
+    chat pages, whose link is the credential. Without credentials the caller
+    is anonymous (not the local user: a page's visitors are anonymous
+    everywhere); credentials that are sent must be valid.
 
     :raises HTTPException: 401 for a key or token that isn't valid.
     """

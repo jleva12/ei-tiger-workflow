@@ -644,6 +644,7 @@ def test_files_an_agent_saves_can_be_listed_loaded_and_deleted(
 def test_deleting_a_conversation_deletes_its_files(agent_client: Client) -> None:
     async def write_notes(tool_context: ToolContext) -> dict[str, int]:
         """Write notes."""
+        await tool_context.save_artifact("user:profile.md", text("Shared profile"))
         return {
             "version": await tool_context.save_artifact("notes.md", text("# Notes"))
         }
@@ -659,4 +660,9 @@ def test_deleting_a_conversation_deletes_its_files(agent_client: Client) -> None
 
     client.delete(f"{SESSIONS}/{session_id}")
 
-    assert client.get(artifacts).json() == []
+    assert client.get(artifacts).json() == ["user:profile.md"]
+    other_session = start(client)
+    shared = f"{SESSIONS}/{other_session}/artifacts/user:profile.md"
+    assert client.get(shared).json() == {"text": "Shared profile"}
+    assert client.delete(f"{SESSIONS}/missing-session").status_code == 204
+    assert client.get(shared).json() == {"text": "Shared profile"}

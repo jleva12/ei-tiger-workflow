@@ -26,6 +26,10 @@ failure suggests come from a :class:`ToolFailure` the tool raises, then
 ``default_suggested_fixes``; override
 :meth:`ForgeBaseToolset.suggest_fixes` to suggest fixes for errors a tool can't
 anticipate, such as a client library's.
+
+A toolset that can't list its tools gives none, and the agent runs without
+them; a caller whose agent mustn't (a workflow's step) lists them with
+:meth:`ForgeBaseToolset.get_tools_or_raise`, which raises why instead.
 """
 
 import asyncio
@@ -132,9 +136,10 @@ class ForgeBaseToolset(BaseToolset):
     oversized payloads cut down and kept whole in a file.
 
     Guarding a tool keeps its type, name, declaration and request processing:
-    only its answers change. Listing the tools never raises either: a toolset
-    whose ``get_raw_tools`` fails gives the agent no tools, instead of ADK
-    dropping it.
+    only its answers change. Listing the tools with ``get_tools``, as ADK
+    does, never raises either: a toolset whose ``get_raw_tools`` fails gives
+    the agent no tools, instead of ADK dropping it. Listing them with
+    :meth:`get_tools_or_raise` raises the failure.
 
     :param max_result_chars: The most characters of JSON a payload may take;
         a longer one is cut down to fit.
@@ -156,11 +161,12 @@ class ForgeBaseToolset(BaseToolset):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        if "get_tools" in cls.__dict__:
-            raise TypeError(
-                f"{cls.__qualname__} overrides get_tools, which guards its tools; "
-                "list them in get_raw_tools instead"
-            )
+        for listing in ("get_tools", "get_tools_or_raise"):
+            if listing in cls.__dict__:
+                raise TypeError(
+                    f"{cls.__qualname__} overrides {listing}, which guards its tools; "
+                    "list them in get_raw_tools instead"
+                )
 
     def __init__(
         self,
@@ -197,18 +203,32 @@ class ForgeBaseToolset(BaseToolset):
     @final
     async def get_tools(self, readonly_context: ReadonlyContext | None = None) -> list[BaseTool]:
         try:
-            tools = await self.get_raw_tools(readonly_context)
-            return [
-                self._guard(tool)
-                for tool in tools
-                if self._is_tool_selected(tool, readonly_context)
-            ]
+            return await self.get_tools_or_raise(readonly_context)
         except Exception:
             logger.exception(
                 "%s couldn't list its tools; the agent runs without them",
                 type(self).__name__,
             )
             return []
+
+    @final
+    async def get_tools_or_raise(
+        self, readonly_context: ReadonlyContext | None = None
+    ) -> list[BaseTool]:
+        """
+        The tools ``get_tools`` gives, filtered and guarded; but when they
+        can't be listed (an MCP server that won't connect), why, raised: for
+        a caller whose agent mustn't go on without them, where ``get_tools``
+        has it run without.
+
+        :param readonly_context: The invocation's context; None to list every
+            tool.
+        :raises Exception: What listing them raised.
+        """
+        tools = await self.get_raw_tools(readonly_context)
+        return [
+            self._guard(tool) for tool in tools if self._is_tool_selected(tool, readonly_context)
+        ]
 
     def suggest_fixes(
         self, tool: BaseTool, args: dict[str, Any], error: Exception

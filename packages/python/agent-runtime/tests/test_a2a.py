@@ -1,14 +1,22 @@
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import pytest
+from a2a.helpers import new_task
+from a2a.server.tasks import InMemoryTaskStore
+from a2a.types import TaskState, TaskStatusUpdateEvent
 from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
+from google.adk.models.llm_response import LlmResponse
+from google.genai import types
 
+from forge_agent_runtime import a2a
 from forge_agent_runtime.a2a import api_key_security, create_a2a_router, owner_of, task_store
 from forge_agent_runtime.executor import AgentExecutor, DirectoryAgentSource
 from forge_agent_runtime.services import RuntimeServices
+from forge_common.adk.turns import TURN_KEY, current_turn
 from tests.conftest import EXAMPLE_HOSTS, call, text, without
 
 AGENT = "ca_1k2cuqsuev"
@@ -204,6 +212,402 @@ def test_a_model_failure_fails_the_task_saying_why(client, llm):
     task = rpc(client, "SendMessage", message_v1("Hi", "c7"), headers=V1)["result"]["task"]
     assert task["status"]["state"] == "TASK_STATE_FAILED"
     assert task["status"]["message"]["parts"][0]["text"] == "The prompt is too long."
+
+
+def model_replies(monkeypatch, llm, replies):
+    """Native model responses through the real ProviderModels and agent runner."""
+
+    async def generate(self, request, stream=False):
+        self.requests.append(request)
+        for response in replies:
+            if isinstance(response, Exception):
+                raise response
+            yield response
+
+    monkeypatch.setattr(type(llm), "generate_content_async", generate)
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_a_native_truncated_reply_fails_with_its_partial_artifact(client, llm, monkeypatch, streaming):
+    response = LlmResponse.create(
+        types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(
+                    content=types.Content(role="model", parts=[text("This answer was cut off")]),
+                    finish_reason=types.FinishReason.MAX_TOKENS,
+                )
+            ]
+        )
+    )
+    # Gemini supplies the stop reason without error_code when it produced text.
+    assert response.error_code is None
+    model_replies(monkeypatch, llm, [response])
+    if streaming:
+        with client.stream(
+            "POST",
+            f"/a2a/{AGENT}",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "SendStreamingMessage",
+                "params": message_v1("Hi", "truncated"),
+            },
+            headers=V1,
+        ) as reply:
+            events = [
+                json.loads(line[5:])["result"] for line in reply.iter_lines() if line.startswith("data:")
+            ]
+        states = [event["statusUpdate"]["status"]["state"] for event in events if "statusUpdate" in event]
+        assert states[-1] == "TASK_STATE_FAILED"
+        assert states.count("TASK_STATE_FAILED") == 1
+        assert "TASK_STATE_COMPLETED" not in states
+        assert any("artifactUpdate" in event for event in events[:-1])
+        task_id = events[0]["task"]["id"]
+        task = rpc(client, "GetTask", {"id": task_id}, headers=V1)["result"]
+    else:
+        task = rpc(client, "SendMessage", message_v1("Hi", "truncated"), headers=V1)["result"]["task"]
+    assert task["status"]["state"] == "TASK_STATE_FAILED"
+    assert task["status"]["message"]["parts"][0]["text"]
+    assert task["artifacts"][0]["parts"] == [{"text": "This answer was cut off"}]
+    assert task["artifacts"][0]["metadata"]["forge"]["incomplete"] is True
+
+
+@pytest.mark.parametrize(
+    "replies",
+    [
+        [],
+        [LlmResponse(content=types.Content(role="model", parts=[]))],
+        [LlmResponse(content=types.Content(role="model", parts=[text("Unfinished")]), partial=True)],
+    ],
+)
+def test_an_empty_or_unfinished_model_turn_fails_instead_of_completing(client, llm, monkeypatch, replies):
+    model_replies(monkeypatch, llm, replies)
+    task = rpc(client, "SendMessage", message_v1("Hi", "unfinished"), headers=V1)["result"]["task"]
+    assert task["status"]["state"] == "TASK_STATE_FAILED"
+    assert task["status"]["message"]["parts"][0]["text"]
+    if replies and replies[0].partial:
+        assert task["artifacts"][0]["parts"] == [{"text": "Unfinished"}]
+
+
+def test_a_model_connection_failure_keeps_the_text_already_received(client, llm, monkeypatch):
+    model_replies(
+        monkeypatch,
+        llm,
+        [
+            LlmResponse(content=types.Content(role="model", parts=[text("Already written")]), partial=True),
+            ConnectionError("The model connection closed."),
+        ],
+    )
+    task = rpc(client, "SendMessage", message_v1("Hi", "disconnected"), headers=V1)["result"]["task"]
+    assert task["status"]["state"] == "TASK_STATE_FAILED"
+    assert "Try again" in task["status"]["message"]["parts"][0]["text"]
+    assert task["artifacts"][0]["parts"] == [{"text": "Already written"}]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_an_error_on_a_partial_model_response_is_not_dropped(client, llm, monkeypatch, legacy):
+    model_replies(
+        monkeypatch,
+        llm,
+        [
+            LlmResponse(
+                content=types.Content(role="model", parts=[text("Partial response")]),
+                partial=True,
+                error_code="PROVIDER_UNAVAILABLE",
+                error_message="The model's service became unavailable. Please retry.",
+            )
+        ],
+    )
+    if legacy:
+        params = {
+            "message": {
+                "kind": "message",
+                "messageId": "partial-error",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "Hi"}],
+                "contextId": "partial-error",
+            }
+        }
+        task = rpc(client, "message/send", params)["result"]
+        assert task["status"]["state"] == "failed"
+    else:
+        task = rpc(client, "SendMessage", message_v1("Hi", "partial-error"), headers=V1)["result"]["task"]
+        assert task["status"]["state"] == "TASK_STATE_FAILED"
+    assert task["status"]["message"]["parts"][0]["text"] == (
+        "The model's service became unavailable. Please retry."
+    )
+    assert task["artifacts"][0]["parts"][0]["text"] == "Partial response"
+    assert task["artifacts"][0]["metadata"]["forge"]["incomplete"] is True
+
+
+def test_a_later_connection_error_preserves_the_original_failure_and_audit(
+    client, executor, llm, monkeypatch
+):
+    audited = []
+    explanation = "The model's service became unavailable. Please retry."
+
+    class Observer:
+        def plugins(self, agent):
+            return ()
+
+        @asynccontextmanager
+        async def invocation(self, agent, request):
+            try:
+                yield
+            finally:
+                audited.append((current_turn().status, current_turn().error_message))
+
+    executor.observer = Observer()
+    model_replies(
+        monkeypatch,
+        llm,
+        [
+            LlmResponse(
+                content=types.Content(role="model", parts=[text("Partial response")]),
+                partial=True,
+                error_code="PROVIDER_UNAVAILABLE",
+                error_message=explanation,
+            ),
+            ConnectionError("The model connection closed after its error."),
+        ],
+    )
+
+    task = rpc(client, "SendMessage", message_v1("Hi", "native-before-close"), headers=V1)["result"]["task"]
+
+    assert task["status"]["state"] == "TASK_STATE_FAILED"
+    assert task["status"]["message"]["parts"][0]["text"] == explanation
+    assert task["artifacts"][0]["parts"] == [{"text": "Partial response"}]
+    assert audited == [("failed", explanation)]
+
+
+def test_a_native_interruption_cancels_the_task_and_audit_with_partial_output(
+    client, executor, llm, monkeypatch
+):
+    audited = []
+
+    class Observer:
+        def plugins(self, agent):
+            return ()
+
+        @asynccontextmanager
+        async def invocation(self, agent, request):
+            yield
+            audited.append(current_turn().status)
+
+    executor.observer = Observer()
+    model_replies(
+        monkeypatch,
+        llm,
+        [
+            LlmResponse(
+                content=types.Content(role="model", parts=[text("Interrupted output")]),
+                interrupted=True,
+            )
+        ],
+    )
+
+    task = rpc(client, "SendMessage", message_v1("Hi", "interrupted"), headers=V1)["result"]["task"]
+
+    assert task["status"]["state"] == "TASK_STATE_CANCELED"
+    assert "stopped before it finished" in task["status"]["message"]["parts"][0]["text"]
+    assert task["artifacts"][0]["parts"] == [{"text": "Interrupted output"}]
+    assert task["artifacts"][0]["metadata"]["forge"]["incomplete"] is True
+    assert audited == ["cancelled"]
+
+
+@pytest.mark.parametrize("failure", ["convert", "enqueue"])
+async def test_transport_failures_close_the_executor_with_a_failed_audit(
+    client, executor, llm, monkeypatch, failure
+):
+    audited = []
+    restored = []
+    saved_before_terminal = []
+    execute = a2a.ForgeA2aExecutor.execute
+
+    async def checked_execute(self, context, event_queue):
+        previous = current_turn()
+        enqueue = event_queue.enqueue_event
+        failed = False
+
+        async def checked_enqueue(event):
+            nonlocal failed
+            if isinstance(event, TaskStatusUpdateEvent):
+                if (
+                    failure == "enqueue"
+                    and not failed
+                    and event.status.state == TaskState.TASK_STATE_WORKING
+                    and event.status.message.parts
+                ):
+                    failed = True
+                    raise ValueError("The reply could not be queued.")
+                if event.status.state == TaskState.TASK_STATE_FAILED:
+                    kept = await executor.sessions.get_session(
+                        app_name=AGENT,
+                        user_id="A2A_USER_transport-failed",
+                        session_id="transport-failed",
+                    )
+                    saved_before_terminal.append(
+                        any(TURN_KEY in (item.custom_metadata or {}) for item in kept.events)
+                    )
+            await enqueue(event)
+
+        monkeypatch.setattr(event_queue, "enqueue_event", checked_enqueue)
+        try:
+            await execute(self, context, event_queue)
+        finally:
+            restored.append(current_turn() is previous)
+
+    monkeypatch.setattr(a2a.ForgeA2aExecutor, "execute", checked_execute)
+
+    class Observer:
+        def plugins(self, agent):
+            return ()
+
+        @asynccontextmanager
+        async def invocation(self, agent, request):
+            try:
+                yield
+            finally:
+                audited.append(current_turn().status)
+
+    executor.observer = Observer()
+    llm.turns = [[text("Output retained")]]
+    if failure == "convert":
+
+        def refused(*args, **kwargs):
+            raise ValueError("The reply could not be converted.")
+
+        monkeypatch.setattr(a2a, "convert_event_to_a2a_events", refused)
+    task = rpc(client, "SendMessage", message_v1("Hi", "transport-failed"), headers=V1)["result"]["task"]
+
+    assert task["status"]["state"] == "TASK_STATE_FAILED"
+    assert task["artifacts"][0]["parts"] == [{"text": "Output retained"}]
+    # The executor has closed in the transport's task before it sends failure.
+    assert audited == ["failed"]
+    assert restored == [True]
+    assert saved_before_terminal == [True]
+    history = await executor.sessions.get_session(
+        app_name=AGENT,
+        user_id="A2A_USER_transport-failed",
+        session_id="transport-failed",
+    )
+    markers = [event for event in history.events if TURN_KEY in (event.custom_metadata or {})]
+    assert len(markers) == 1
+    marker = markers[0].custom_metadata[TURN_KEY]
+    assert marker["status"] == "failed"
+    assert marker["errorMessage"] == task["status"]["message"]["parts"][0]["text"]
+    answer = next(event for event in history.events if event.content and event.content.role == "model")
+    assert markers[0].invocation_id == answer.invocation_id
+
+
+def test_a_tool_confirmation_still_waits_for_input(client, llm, agents):
+    path = agents / "support.json"
+    document = json.loads(path.read_text())
+    next(node for node in document["nodes"] if node["id"] == "orders")["config"]["confirm"] = True
+    path.write_text(json.dumps(document))
+    llm.turns = [[call("look_up_order", order_id="A1")]]
+
+    task = rpc(client, "SendMessage", message_v1("A1?", "confirmation"), headers=V1)["result"]["task"]
+
+    assert task["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+    assert task["status"]["message"]["parts"]
+
+
+def test_an_executor_that_ends_without_events_does_not_complete_an_empty_task(client, executor, monkeypatch):
+    async def empty(*args, **kwargs):
+        if False:
+            yield
+
+    monkeypatch.setattr(executor, "run", empty)
+    task = rpc(client, "SendMessage", message_v1("Hi", "empty-executor"), headers=V1)["result"]["task"]
+    assert task["status"]["state"] == "TASK_STATE_FAILED"
+    assert "without returning a reply" in task["status"]["message"]["parts"][0]["text"]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("failure", ["task_store", "service"])
+def test_unexpected_protocol_failures_are_logged_and_safe_for_clients(
+    executor, caplog, legacy, streaming, failure
+):
+    secret = "mysql://user:private-password@database/internal"
+
+    class BrokenStore(InMemoryTaskStore):
+        async def get(self, task_id, context):
+            raise RuntimeError(secret)
+
+    class BrokenServiceHandler(a2a.ForgeRequestHandler):
+        async def on_message_send(self, params, context):
+            raise RuntimeError(secret)
+
+        async def on_message_send_stream(self, params, context):
+            yield new_task("service-task", "service-context", TaskState.TASK_STATE_WORKING)
+            raise RuntimeError(secret)
+
+    async def find(request, name, action):
+        return name
+
+    async def card(request, name, url):
+        return a2a._GENERIC_CARD
+
+    options = {}
+    if failure == "task_store":
+        options["tasks"] = BrokenStore()
+        target = AGENT
+        method = (
+            ("tasks/resubscribe" if streaming else "tasks/get")
+            if legacy
+            else ("SubscribeToTask" if streaming else "GetTask")
+        )
+        params = {"id": "stored-task"}
+    else:
+        options["services"] = [
+            a2a.A2aService(
+                prefix="ag_",
+                find=find,
+                card=card,
+                executor=a2a.ForgeA2aExecutor(executor),
+                handler=BrokenServiceHandler,
+            )
+        ]
+        target = "ag_broken"
+        method = (
+            ("message/stream" if streaming else "message/send")
+            if legacy
+            else ("SendStreamingMessage" if streaming else "SendMessage")
+        )
+        params = (
+            {
+                "message": {
+                    "kind": "message",
+                    "messageId": "failure",
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "Hi"}],
+                }
+            }
+            if legacy
+            else message_v1("Hi")
+        )
+
+    with TestClient(app_of(executor, **options)) as client:
+        response = client.post(
+            f"/a2a/{target}",
+            headers={} if legacy else V1,
+            json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+        )
+
+    assert response.status_code == 200
+    assert secret not in response.text
+    if response.headers["content-type"].startswith("text/event-stream"):
+        messages = [json.loads(line[5:]) for line in response.iter_lines() if line.startswith("data:")]
+        if failure == "service":
+            assert "result" in messages[0]
+        error = messages[-1]["error"]
+    else:
+        error = response.json()["error"]
+    assert error["code"] == -32603
+    assert error["message"] == "The agent service ran into a problem. Please try again."
+    assert any(record.exc_info and secret in str(record.exc_info[1]) for record in caplog.records)
 
 
 def test_a_task_is_found_only_through_its_own_agent(client, llm):

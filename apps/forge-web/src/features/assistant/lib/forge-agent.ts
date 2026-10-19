@@ -18,9 +18,11 @@ import {
 } from "@/features/assistant/lib/page-context"
 import { apiAuthHeaders } from "@/lib/api-instance"
 import {
+  agentChangesOf,
+  announceAgentChange,
   announceWorkflowChange,
   workflowChangesOf,
-} from "@/features/assistant/lib/workflow-changes"
+} from "@/features/assistant/lib/builder-changes"
 import { useUserPreferences } from "@/lib/user-preferences"
 import { useWorkspaceScopeApi } from "@/app/workspace-scope"
 
@@ -198,6 +200,7 @@ export function useForgeAgent(
           // ADK keeps each user's conversations apart by this ID.
           adk: { url: ADK_URL, appName: ADK_APP, userId },
           headers: authHeaders,
+          requireTurnOutcome: FORGE_AGENT_SERVER,
           // Where they are with every message; null clears the last one
           // while they're not sharing it.
           runState: () => ({ page_context: sharing ? readPage() : null }),
@@ -210,10 +213,13 @@ export function useForgeAgent(
           defaultThinkingLevel: savedLevel || undefined,
           // A few questions to ask next, above the composer after each reply.
           suggestFollowUps: true,
-          // A workflow draft it saved shows on that workflow's canvas at once.
+          // A workflow's or an agent's draft it saved shows on that
+          // workflow's or agent's canvas at once.
           onEvent: (event) => {
             for (const change of workflowChangesOf(event))
               announceWorkflowChange(change)
+            for (const change of agentChangesOf(event))
+              announceAgentChange(change)
           },
         }
       : { stream: notConnected }

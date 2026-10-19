@@ -25,7 +25,7 @@ large results are cut down.
 
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -34,7 +34,7 @@ from forge_common.adk import ToolFailure
 from google.adk.tools.tool_context import ToolContext
 
 from forge_admin.assistant.person_api import PersonApi
-from forge_admin.assistant.route_tools import ApiRefused, RouteToolset, pick
+from forge_admin.assistant.route_tools import ApiRefused, RouteToolset, pick, quoted
 from forge_admin.auth.access import SCOPE_PATTERN
 from forge_admin.auth.authorization import ROLE_KEY_PATTERN
 
@@ -138,6 +138,34 @@ class AccessToolset(RouteToolset):
             "with level lists them), and must be one of list_available_roles'."
         ],
     }
+
+    async def confirmation_hint(
+        self, name: str, args: Mapping[str, Any], tool_context: ToolContext
+    ) -> str | None:
+        if name not in ("assign_member_role", "remove_member_role"):
+            return None
+        scope, member_id, role = (
+            str(args.get(field) or "") for field in ("scope", "member_id", "role")
+        )
+        member = (await self._people(tool_context)).get(member_id) or {}
+        person = (
+            member.get("name")
+            or member.get("email")
+            or (f"the member {member_id}" if member_id else "this person")
+        )
+        found = await self._read_quietly(
+            tool_context, lambda: f"/roles/{_role_key(role)}"
+        )
+        return role_question(
+            name,
+            person=person,
+            role=quoted((found or {}).get("name"), quoted(role, "")),
+            scope=scope,
+            organization=quoted(
+                await self._organization_name(tool_context, scope),
+                "this organization",
+            ),
+        )
 
     # -- The person's own access ---------------------------------------------
 
@@ -366,6 +394,20 @@ class AccessToolset(RouteToolset):
             "removed": {"subjectId": member_id, "role": role, "scope": scope},
         }
 
+    async def _organization_name(self, tool_context: ToolContext, scope: str) -> Any:
+        """An org scope's organization's name: among the person's own, else read."""
+        if not scope.startswith("org:"):
+            return None
+        organization = scope.removeprefix("org:").lower()
+        mine = await self._read_quietly(tool_context, lambda: "/me/organizations")
+        for found in mine if isinstance(mine, list) else []:
+            if isinstance(found, dict) and str(found.get("id")).lower() == organization:
+                return found.get("name")
+        found = await self._read_quietly(
+            tool_context, lambda: f"/organizations/{_scope(scope).removeprefix('org:')}"
+        )
+        return found.get("name") if isinstance(found, dict) else None
+
     async def _people(self, tool_context: ToolContext) -> dict[str, dict[str, Any]]:
         """Forge's users by ID, to name members; none when they can't be read."""
         try:
@@ -396,6 +438,35 @@ def toolset(app: FastAPI, **kwargs: Any) -> AccessToolset | None:
         )
         return None
     return AccessToolset(PersonApi.of_app(app), **kwargs)
+
+
+def role_question(
+    change: str, *, person: str, role: str, scope: str, organization: str
+) -> str:
+    """
+    What the person is asked before a member's role is given or taken away:
+    who, which role and where, in words.
+
+    :param change: assign_member_role or remove_member_role.
+    :param person: Whose role, by name.
+    :param role: The role's name, quoted; empty when it has none.
+    :param scope: Where, as the tool was given it.
+    :param organization: The scope's organization, quoted.
+    """
+    site = scope == "site"
+    where = "across Forge" if site else f"in {organization}"
+    role = f"the {role} role" if role else "this role"
+    if change == "assign_member_role":
+        return (
+            f"Give {person} {role} {where}?\n"
+            "They can then do everything the role allows "
+            + ("in every organization." if site else "there.")
+        )
+    return (
+        f"Take {role} away from {person} {where}?\n"
+        f"They can no longer do what it allows{'' if site else ' there'}, unless "
+        "another of their roles allows it too."
+    )
 
 
 # -- Checking arguments ------------------------------------------------------

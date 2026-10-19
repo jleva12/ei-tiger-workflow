@@ -73,6 +73,7 @@ import {
 } from "@/components/ui/select"
 import { Sheet, SheetTrigger } from "@/components/ui/sheet"
 import { Spinner } from "@/components/ui/spinner"
+import { StreamingText } from "@/components/ui/streaming-text"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/components/ui/toast"
@@ -1143,6 +1144,24 @@ export function BadgesSection() {
 /* Feedback                                                                   */
 /* -------------------------------------------------------------------------- */
 
+const STREAMED =
+  "Deployed main to staging in 4m 12s. Two checks were slow: the end-to-end suite and the image scan.\nNothing failed, so production can go out whenever you're ready."
+
+function StreamingTextDemo() {
+  const [run, setRun] = React.useState(0)
+  return (
+    <div className="flex max-w-xl flex-col items-start gap-3">
+      <p className="min-h-16 text-sm leading-relaxed">
+        <StreamingText key={run} text={STREAMED} speed={60} />
+      </p>
+      <Button variant="outline" size="sm" onClick={() => setRun(run + 1)}>
+        <Icon icon="refresh" data-icon="inline-start" />
+        Replay
+      </Button>
+    </div>
+  )
+}
+
 export function FeedbackSection() {
   return (
     <SectionPage
@@ -1234,6 +1253,18 @@ toast.add({ title: "Task link copied.", type: "info" })`}
             <TaskListSkeleton groups={1} rows={3} />
           </div>
         </div>
+      </Specimen>
+      <Specimen
+        title="Streaming text"
+        description="Iconiq's StreamingText writes text in word by word: each word fades in wearing a blue gradient, then settles into the foreground, with a pulsing dot at the stream head. The assistant thread writes in replies that arrive whole (an agent server that doesn't stream) the same way. Reduced motion shows the text at once."
+        code={`<StreamingText
+  text="Deployed main to staging in 4m 12s."
+  speed={120} // ms between words
+  settleDelay={300} // how long a word stays blue
+  onComplete={() => setDone(true)}
+/>`}
+      >
+        <StreamingTextDemo />
       </Specimen>
       <Specimen
         title="Banners & list helpers"

@@ -121,5 +121,20 @@ class SandboxTemplatesTest(unittest.TestCase):
                 self.assertFalse([key for key in template if key.endswith("CODE_EXECUTION")])
 
 
+
+class WorkflowWaitTemplatesTest(unittest.TestCase):
+    def test_every_app_running_agents_names_the_shared_workflow_wait_cap(self):
+        # Chat agents (the admin API) and workflows' agents (the async worker)
+        # wait for the workflows they call at most the one cap in .env.common.
+        common = env_file(ROOT / ".env.common.example")
+        self.assertEqual(common["FORGE_AGENT_WORKFLOW_WAIT_MAX"], "900")
+        for path, setting in (
+            ("apps/forge-admin-api/.env.example", "FORGE_ADMIN_AGENT_WORKFLOW_WAIT_MAX"),
+            ("apps/forge-async-worker/.env.example", "HYBRID_ADK_WORKFLOWS__WORKFLOW_TOOL_WAIT_MAX"),
+        ):
+            with self.subTest(template=path):
+                template = env_file(ROOT / path)
+                self.assertEqual(template.get(setting), "${FORGE_AGENT_WORKFLOW_WAIT_MAX}")
+
 if __name__ == "__main__":
     unittest.main()

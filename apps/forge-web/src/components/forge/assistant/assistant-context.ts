@@ -5,6 +5,7 @@ import type {
 } from "@assistant-ui/react-google-adk"
 
 import type { AssistantCommand } from "./commands"
+import type { ModelWindow } from "./context-window"
 import type { ModelSettings } from "./model-settings"
 import type { AssistantSourcesConfig } from "./sources"
 import type { AdkArtifactsApi } from "./use-adk-assistant"
@@ -33,6 +34,8 @@ export type AssistantSettings = {
   showModels?: boolean | undefined
   /** Whether the composer shows the context meter; see `AssistantOptions`. */
   showContext?: boolean | undefined
+  /** The model the agent starts on, for the context meter; see `AssistantOptions`. */
+  contextModel?: ModelWindow | undefined
   modelSettings?: ModelSettings | undefined
   commands?: AssistantCommand[] | undefined
   /** Shown at the top of the composer; see `AssistantOptions`. */

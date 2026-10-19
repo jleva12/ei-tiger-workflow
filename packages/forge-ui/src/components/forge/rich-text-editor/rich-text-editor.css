@@ -1,53 +1,19 @@
 /*
  * Rich text in Forge's terms: document typography at the 14px UI size,
- * every block Tiptap can hold, and the editor's own chrome (resize handles,
- * table selection, find results, drop cursor) painted from theme tokens so
- * it follows light and dark, contrast and the text-size preference.
+ * every block the Markdown editor can hold, and its own chrome (table
+ * selection, find results, the AI's target, drop cursor) painted from theme
+ * tokens so it follows light and dark, contrast and the text-size preference.
  */
 @import "katex/dist/katex.min.css";
 
-/*
- * Text and highlight colours are stored in documents as these variables,
- * not hex values, so coloured text stays legible when the theme flips.
- */
 :root {
-  --rte-text-gray: oklch(0.55 0.012 260);
-  --rte-text-red: oklch(0.55 0.19 25);
-  --rte-text-orange: oklch(0.6 0.16 50);
-  --rte-text-yellow: oklch(0.58 0.12 80);
-  --rte-text-green: oklch(0.55 0.13 155);
-  --rte-text-blue: oklch(0.52 0.16 256);
-  --rte-text-purple: oklch(0.52 0.18 300);
-  --rte-text-pink: oklch(0.56 0.18 347);
-  --rte-highlight-gray: oklch(0.93 0.005 260);
-  --rte-highlight-red: oklch(0.92 0.05 25);
-  --rte-highlight-orange: oklch(0.93 0.06 60);
-  --rte-highlight-yellow: oklch(0.95 0.09 95);
-  --rte-highlight-green: oklch(0.93 0.06 155);
-  --rte-highlight-blue: oklch(0.92 0.045 250);
-  --rte-highlight-purple: oklch(0.92 0.05 300);
-  --rte-highlight-pink: oklch(0.93 0.05 347);
+  --rte-highlight: oklch(0.95 0.09 95);
   --rte-find: oklch(0.93 0.11 95);
   --rte-find-current: oklch(0.83 0.14 70);
 }
 
 .dark {
-  --rte-text-gray: oklch(0.72 0.01 260);
-  --rte-text-red: oklch(0.74 0.14 25);
-  --rte-text-orange: oklch(0.78 0.13 55);
-  --rte-text-yellow: oklch(0.84 0.13 90);
-  --rte-text-green: oklch(0.78 0.12 155);
-  --rte-text-blue: oklch(0.76 0.11 256);
-  --rte-text-purple: oklch(0.76 0.12 300);
-  --rte-text-pink: oklch(0.77 0.13 347);
-  --rte-highlight-gray: oklch(0.32 0.008 260);
-  --rte-highlight-red: oklch(0.34 0.07 25);
-  --rte-highlight-orange: oklch(0.36 0.07 55);
-  --rte-highlight-yellow: oklch(0.4 0.08 95);
-  --rte-highlight-green: oklch(0.34 0.06 155);
-  --rte-highlight-blue: oklch(0.34 0.06 256);
-  --rte-highlight-purple: oklch(0.34 0.07 300);
-  --rte-highlight-pink: oklch(0.35 0.07 347);
+  --rte-highlight: oklch(0.4 0.08 95);
   --rte-find: oklch(0.45 0.09 95);
   --rte-find-current: oklch(0.58 0.13 70);
 }
@@ -68,6 +34,11 @@
 
 .rich-text[data-drag-handle] .ProseMirror {
   padding-left: 3.25rem;
+}
+
+/* Bare (RichTextView, a preview): the text sits flush in what holds it. */
+.rich-text[data-bare] .ProseMirror {
+  padding: 0;
 }
 
 /* The block handle follows the pointer; touch screens get the space back. */
@@ -182,7 +153,7 @@
 .rich-text .ProseMirror mark {
   padding: 0.05em 0.15em;
   border-radius: 2px;
-  background: var(--rte-highlight-yellow);
+  background: var(--rte-highlight);
   color: inherit;
   box-decoration-break: clone;
 }
@@ -444,7 +415,7 @@
   cursor: col-resize;
 }
 
-/* ---------------------------------------------------------------- media */
+/* ---------------------------------------------------------------- images */
 
 .rich-text .ProseMirror img {
   display: block;
@@ -453,90 +424,9 @@
   border-radius: var(--radius-card);
 }
 
-.rich-text .ProseMirror [data-resize-container] {
-  max-width: 100%;
-}
-
-.rich-text .ProseMirror [data-resize-wrapper] {
-  max-width: 100%;
-}
-
-.rich-text
-  .ProseMirror
-  :is(img, [data-resize-container]).ProseMirror-selectednode
-  img,
 .rich-text .ProseMirror img.ProseMirror-selectednode {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
-}
-
-.rich-text .ProseMirror [data-resize-handle] {
-  z-index: 3;
-  width: 0.625rem;
-  height: 0.625rem;
-  border: 1.5px solid var(--background);
-  border-radius: 999px;
-  background: var(--focus);
-  opacity: 0;
-  transition: opacity 120ms;
-}
-
-.rich-text .ProseMirror [data-resize-handle="top-left"] {
-  margin: -0.3rem 0 0 -0.3rem;
-  cursor: nwse-resize;
-}
-
-.rich-text .ProseMirror [data-resize-handle="top-right"] {
-  margin: -0.3rem -0.3rem 0 0;
-  cursor: nesw-resize;
-}
-
-.rich-text .ProseMirror [data-resize-handle="bottom-left"] {
-  margin: 0 0 -0.3rem -0.3rem;
-  cursor: nesw-resize;
-}
-
-.rich-text .ProseMirror [data-resize-handle="bottom-right"] {
-  margin: 0 -0.3rem -0.3rem 0;
-  cursor: nwse-resize;
-}
-
-.rich-text[data-editable]
-  .ProseMirror
-  [data-resize-container]:is(:hover, .ProseMirror-selectednode)
-  [data-resize-handle] {
-  opacity: 1;
-}
-
-.rich-text .ProseMirror :is(div[data-youtube-video], div[data-twitch-video]) {
-  cursor: move;
-}
-
-.rich-text .ProseMirror iframe {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  height: auto;
-  aspect-ratio: 16 / 9;
-  border: 0;
-  border-radius: var(--radius-card);
-  background: var(--muted);
-}
-
-.rich-text[data-editable] .ProseMirror iframe {
-  pointer-events: none;
-}
-
-.rich-text .ProseMirror .ProseMirror-selectednode :is(iframe, audio),
-.rich-text .ProseMirror :is(iframe, audio).ProseMirror-selectednode {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-.rich-text .ProseMirror audio {
-  display: block;
-  width: 100%;
-  max-width: 32rem;
 }
 
 /* ---------------------------------------------------------------- math */
@@ -577,68 +467,6 @@
   outline-offset: 1px;
 }
 
-/* ---------------------------------------------------------------- details */
-
-.rich-text .ProseMirror .details {
-  display: flex;
-  gap: 0.35rem;
-  padding: 0.45rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-}
-
-.rich-text .ProseMirror .details > button {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 1.3rem;
-  height: 1.3rem;
-  margin-top: 0.12rem;
-  padding: 0;
-  border-radius: var(--radius-chip);
-  background: transparent;
-  color: var(--muted-foreground);
-  font-size: 0.55rem;
-}
-
-.rich-text .ProseMirror .details > button:hover {
-  background: var(--muted);
-  color: var(--foreground);
-}
-
-.rich-text .ProseMirror .details > button::before {
-  content: "\25B6";
-  transition: transform 120ms;
-}
-
-.rich-text .ProseMirror .details.is-open > button::before {
-  transform: rotate(90deg);
-}
-
-.rich-text .ProseMirror .details > div {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.rich-text .ProseMirror .details summary {
-  font-weight: 500;
-  list-style: none;
-}
-
-.rich-text .ProseMirror .details summary::-webkit-details-marker {
-  display: none;
-}
-
-.rich-text .ProseMirror .details [data-type="detailsContent"] {
-  margin-top: 0.35em;
-}
-
-.rich-text .ProseMirror .details [data-type="detailsContent"] > * + * {
-  margin-top: 0.7em;
-}
-
 /* ---------------------------------------------------------------- inline nodes */
 
 .rich-text .ProseMirror .mention {
@@ -648,6 +476,14 @@
   color: var(--status-queued-foreground);
   font-weight: 500;
   box-decoration-break: clone;
+}
+
+/* Markdown for a feature this editor has turned off, kept as written. */
+.rich-text .ProseMirror .markdown-literal {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  white-space: pre-wrap;
 }
 
 .rich-text .ProseMirror [data-type="emoji"] img {
@@ -670,6 +506,21 @@
 
 .rich-text .ProseMirror .tiptap-invisible-character::before {
   color: var(--subtle);
+}
+
+/* The text an AI action is working on, until its answer goes in. */
+.rich-text .ProseMirror .rich-text-pending {
+  border-radius: 2px;
+  background: color-mix(in oklch, var(--focus) 16%, transparent);
+  box-decoration-break: clone;
+}
+
+/* An AI answer shown before it goes in: the document's typography, smaller. */
+.rich-text .rich-text-preview {
+  min-height: 0;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
 }
 
 /* Focus mode: everything but the block being written fades back. */

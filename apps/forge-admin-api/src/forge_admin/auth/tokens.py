@@ -8,6 +8,13 @@ e.g. for the web console's ``VITE_API_TOKEN`` (``make web-token``). The
 assistant mints short-lived ones for the person it is talking to
 (``mint_subject_token``), to call other Forge services as them.
 
+Besides who the user is, a token names the company groups they're in, in
+``FORGE_ADMIN_JWT_GROUPS_CLAIM`` (``groups``), as the company's identity
+provider does: the site's permissions linked to a group, and each
+organization's agent permissions linked to it, are theirs through it. Minted
+tokens carry them too, so a call made as someone (the assistant's) holds
+what their own sign-in would.
+
 A token may also name the organization it acts in (``ORGANIZATION_CLAIM``):
 ``forge-admin-token --organization`` mints one, for services that serve one
 organization's data at a time, such as the code graph's MCP server, which
@@ -15,6 +22,7 @@ reads only that organization's repositories (``GET /code-graph/access``).
 """
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -34,6 +42,12 @@ from forge_admin.models import User
 ALGORITHM = "HS256"
 #: The claim naming the organization a token acts in, by ID.
 ORGANIZATION_CLAIM = "org_id"
+#: The claim naming who acts for the user (RFC 8693's actor, ``{"sub": …}``):
+#: the assistant, in the tokens it's minted to call as the person. Its runs
+#: say they were the assistant's.
+ACTOR_CLAIM = "act"
+#: What an actor is called: a word, e.g. ``assistant``.
+ACTOR_PATTERN = r"[a-z][a-z_]{0,31}"
 
 
 # The most groups read from a token; a directory's long tail stops here.
@@ -54,6 +68,8 @@ class Identity:
     subject: str
     groups: tuple[str, ...] = ()
     organization_id: str | None = None
+    #: Who acts for them, when it isn't them: ``assistant``.
+    actor: str | None = None
 
 
 def mint_token(
@@ -94,8 +110,7 @@ def mint_token(
         "name": f"{user.first_name} {user.last_name}",
         "msid": user.msid,
     }
-    if groups:
-        claims[settings.jwt_groups_claim] = list(groups)
+    _add_groups(settings, claims, groups or ())
     return _sign(settings, _for_organization(claims, organization_id))
 
 
@@ -106,11 +121,14 @@ def mint_subject_token(
     lifetime: timedelta,
     now: datetime | None = None,
     organization_id: str | None = None,
+    groups: Iterable[str] = (),
+    actor: str | None = None,
 ) -> str:
     """
-    Sign a token that only identifies a user, for this API's own calls on
-    their behalf: the assistant calls this API's routes as the person it is
-    talking to.
+    Sign a token that identifies a user and the company groups they're in,
+    for this API's own calls on their behalf: the assistant calls this API's
+    routes as the person it is talking to, holding what their sign-in holds,
+    and saying it's the one acting (``actor``).
 
     :param settings: Settings with ``jwt_secret``.
     :param subject: The user's ID.
@@ -118,15 +136,43 @@ def mint_subject_token(
     :param now: When it is issued; defaults to the current time.
     :param organization_id: The organization it acts in, for a service that
         serves one organization's data at a time.
+    :param groups: The company groups they're in: their own sign-in's.
+    :param actor: Who acts for them (``ACTOR_CLAIM``): e.g. ``assistant``.
     :return: The encoded JWT.
-    :raises TokenError: No ``jwt_secret`` is configured, or the subject or
-        organization ID isn't one ``verify_identity`` would accept.
+    :raises TokenError: No ``jwt_secret`` is configured, or the subject,
+        organization ID, a group or the actor isn't one ``verify_identity``
+        would accept.
     """
     if not re.fullmatch(SUBJECT_PATTERN, subject) or is_reserved_subject(subject):
         raise TokenError("Invalid token subject")
     issued = now or utc_now()
     claims: dict[str, Any] = {"sub": subject, "iat": issued, "exp": issued + lifetime}
+    _add_groups(settings, claims, groups)
+    if actor is not None:
+        if not re.fullmatch(ACTOR_PATTERN, actor):
+            raise TokenError("Invalid token actor")
+        claims[ACTOR_CLAIM] = {"sub": actor}
     return _sign(settings, _for_organization(claims, organization_id))
+
+
+def _add_groups(
+    settings: Settings, claims: dict[str, Any], groups: Iterable[str]
+) -> None:
+    """
+    Name the company groups in the groups claim, each once, when there are any.
+
+    :raises TokenError: A name couldn't be a group's, or there are more than
+        ``verify_identity`` reads.
+    """
+    names = list(dict.fromkeys(groups))
+    if not names:
+        return
+    for name in names:
+        if not re.fullmatch(GROUP_NAME_PATTERN, name):
+            raise TokenError(f"Invalid company group {name!r}")
+    if len(names) > MAX_GROUPS:
+        raise TokenError(f"A token names at most {MAX_GROUPS} company groups")
+    claims[settings.jwt_groups_claim] = names
 
 
 def _for_organization(
@@ -215,5 +261,17 @@ def verify_identity(settings: Settings, token: str) -> Identity:
     ):
         raise TokenError("Invalid bearer token organization")
     return Identity(
-        str(subject), groups_of(claims.get(settings.jwt_groups_claim)), organization
+        str(subject),
+        groups_of(claims.get(settings.jwt_groups_claim)),
+        organization,
+        actor_of(claims.get(ACTOR_CLAIM)),
+    )
+
+
+def actor_of(value: object) -> str | None:
+    """:return: Who a token's actor claim (``{"sub": …}``) says acts for its
+    user; None when it names nobody, or nothing an actor is called."""
+    actor = value.get("sub") if isinstance(value, dict) else None
+    return (
+        actor if isinstance(actor, str) and re.fullmatch(ACTOR_PATTERN, actor) else None
     )

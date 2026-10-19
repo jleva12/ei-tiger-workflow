@@ -222,6 +222,7 @@ export function OptionalNumberField({
   integer,
   placeholder,
   issue,
+  description,
 }: {
   label: string
   value: number | null
@@ -232,6 +233,7 @@ export function OptionalNumberField({
   placeholder: string
   /** The setting it holds, for its issues. */
   issue?: string
+  description?: React.ReactNode
 }) {
   const id = React.useId()
   const { issues, invalid, key } = useFieldIssues(issue)
@@ -272,7 +274,7 @@ export function OptionalNumberField({
         onBlur={() => setText(value === null ? "" : String(value))}
         className="tabular-nums"
       />
-      <IssueMessages issues={issues} />
+      <Below issues={issues} description={description} />
     </Field>
   )
 }

@@ -86,6 +86,7 @@ def test_the_bundled_screens_name_only_what_exists(settings: Settings) -> None:
         "knowledge",
         "code",
         "workflows",
+        "agents",
     }
     names = [screen.name for screen in screens.config.screens]
     # The catch-all organization screen comes after every other organization screen.
@@ -102,7 +103,7 @@ BUILDER = "/organizations/$organizationId_/agents/$agentId"
         (None, [], "some"),
         (page(route="/"), [], "some"),
         (page(), ["organization"], "some"),
-        (page("chat-agents"), ["organization"], "some"),
+        (page("chat-agents"), ["organization-agents", "organization"], "some"),
         (page("config"), ["organization-config", "organization"], "all"),
     ],
 )
@@ -115,7 +116,11 @@ def test_the_bundled_screens_match_the_organization_workspace(
     assert ("all" if resolved.toolsets["access"] is None else "some") == access
     # Asking what the documents say works everywhere; retrying and
     # re-indexing them only on the knowledge base pages.
-    assert set(resolved.toolsets) - {"workflows"} == {"access", "knowledge", "code"}
+    assert set(resolved.toolsets) - {"workflows", "agents"} == {
+        "access",
+        "knowledge",
+        "code",
+    }
     assert resolved.toolsets["knowledge"] == set(knowledge_tools.READ_TOOLS)
     # The organization's workflows and runs are read in its workspace; they're
     # built on a workflow's own page.
@@ -125,6 +130,37 @@ def test_the_bundled_screens_match_the_organization_workspace(
         }
     else:
         assert "workflows" not in resolved.toolsets
+    # Its agents are read there too; made and built on the Agents page.
+    if "organization-agents" in screens:
+        assert resolved.toolsets["agents"] is None
+    elif "organization" in screens:
+        assert resolved.toolsets["agents"] == {
+            "list_agents",
+            "get_agent",
+            "describe_agent_parts",
+        }
+    else:
+        assert "agents" not in resolved.toolsets
+    assert len(resolved.prompts) <= 6
+
+
+AGENT_BUILDER = "/organizations/$organizationId_/chat-agents/$chatAgentId"
+
+
+def test_the_agent_builder_page_has_every_agent_tool(settings: Settings) -> None:
+    resolved = bundled(settings).resolve(context(page(route=AGENT_BUILDER)))
+
+    assert [screen.name for screen in resolved.screens] == ["agent-builder"]
+    assert resolved.toolsets["agents"] is None
+    assert "workflows" not in resolved.toolsets
+    assert resolved.thinking_level == "medium"
+    [instruction] = resolved.instructions
+    assert "chatAgentId parameter" in instruction
+    assert "chat_agent_node" in instruction
+    assert [prompt.title for prompt in resolved.prompts][:2] == [
+        "Build it with me",
+        "Explain this agent",
+    ]
     assert len(resolved.prompts) <= 6
 
 

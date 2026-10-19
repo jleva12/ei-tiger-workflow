@@ -10,8 +10,8 @@ import { documentOf, useBuilderApi } from "./store"
  * save runs at a time, each made from the revision the last one returned,
  * so a teammate's save in between is noticed (409) rather than overwritten.
  * A save that can't reach the API tries again, sooner then later; one the
- * API refuses waits for the next change. Leaving the page sends what's
- * left, and the browser finishes it after the page closes.
+ * API refuses waits for the next change. Leaving warns while work is
+ * unsaved; pagehide makes a best-effort save through the same queue.
  */
 
 // How long editing pauses before a save, in milliseconds.
@@ -99,6 +99,7 @@ export function useBuilderAutosave<Doc, Rec extends SavedRecord<Doc>>(
     let timer: ReturnType<typeof setTimeout> | undefined
     let running: Promise<void> | undefined
     let again = false
+    let againKeepalive = false
     const report = (next: SaveState) => {
       if (!disposed) setState(next)
     }
@@ -106,8 +107,10 @@ export function useBuilderAutosave<Doc, Rec extends SavedRecord<Doc>>(
       const now = comparable(documentOf(api.getState()))
       return now !== saved && now !== refused
     }
+    // A refusal stops automatic retries, but the edit is still unsaved.
+    const dirty = () => comparable(documentOf(api.getState())) !== saved
 
-    const run = async () => {
+    const run = async (keepalive: boolean) => {
       const doc = documentOf(api.getState()) as Doc
       const key = comparable(doc)
       if (halted || key === saved || key === refused) return
@@ -116,7 +119,7 @@ export function useBuilderAutosave<Doc, Rec extends SavedRecord<Doc>>(
         const record = await ioRef.current.save(
           id,
           { document: doc, revision },
-          { keepalive: false }
+          { keepalive }
         )
         revision = record.revision
         saved = key
@@ -163,17 +166,20 @@ export function useBuilderAutosave<Doc, Rec extends SavedRecord<Doc>>(
     }
 
     // One at a time; a change during a save is saved right after it.
-    const save = (): Promise<void> => {
+    const save = (keepalive = false): Promise<void> => {
       timer = undefined
       if (running) {
         again = true
+        againKeepalive ||= keepalive
         return running
       }
-      running = run().finally(() => {
+      running = run(keepalive).finally(() => {
         running = undefined
         if (again) {
           again = false
-          void save()
+          const queuedKeepalive = againKeepalive
+          againKeepalive = false
+          void save(queuedKeepalive)
         }
       })
       return running
@@ -194,18 +200,19 @@ export function useBuilderAutosave<Doc, Rec extends SavedRecord<Doc>>(
       timer = setTimeout(() => void save(), structural ? 0 : PAUSE_MS)
     })
 
-    // Closing or leaving the tab: send what's left, finished by the browser.
+    // Never race a request whose next revision we have not received yet.
+    // If the page stays alive, the queued save uses that returned revision.
     const onPageHide = () => {
-      if (halted || !pending()) return
-      const doc = documentOf(api.getState()) as Doc
-      void ioRef.current
-        .save(id, { document: doc, revision }, { keepalive: true })
-        .catch(() => undefined)
+      if (halted || (!running && !pending())) return
+      clearTimeout(timer)
+      void save(true)
     }
-    // Asked before closing when changes can't be saved.
+    // Browser unload cannot guarantee that an outstanding save completes.
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      if ((halted || refused !== undefined || attempt > 0) && pending())
+      if (running || dirty()) {
         event.preventDefault()
+        event.returnValue = ""
+      }
     }
     window.addEventListener("pagehide", onPageHide)
     window.addEventListener("beforeunload", onBeforeUnload)
@@ -256,7 +263,7 @@ export function useBuilderAutosave<Doc, Rec extends SavedRecord<Doc>>(
       window.removeEventListener("beforeunload", onBeforeUnload)
       clearTimeout(timer)
       // Leaving the builder: what's left is saved after it's gone.
-      if (!halted && pending()) void save()
+      if (!halted && (running || pending())) void save()
     }
   }, [api, start])
 

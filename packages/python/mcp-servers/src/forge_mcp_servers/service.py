@@ -7,6 +7,7 @@ committing to the caller. A row is anything with a server's fields
 :class:`~forge_mcp_servers.store.StoredServer`.
 """
 
+import functools
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -23,7 +24,12 @@ from forge_mcp_servers.auth import (
     InteractiveAuthMethod,
     NotConnected,
 )
-from forge_mcp_servers.client import Listing, McpConnectionError, list_tools
+from forge_mcp_servers.client import (
+    ClientFactory,
+    Listing,
+    McpConnectionError,
+    list_tools,
+)
 from forge_mcp_servers.registry import AUTH_METHODS
 from forge_mcp_servers.secrets import SecretBox, SecretsError
 
@@ -65,9 +71,13 @@ class McpServers:
     :param box: Encrypts the servers' secrets and grants.
     :param timeout: Seconds an authorization server has to answer.
     :param methods: The auth methods there are.
-    :param lister: Lists a server's tools (:func:`list_tools`); tests stand
-        one in.
+    :param lister: Lists a server's tools (:func:`list_tools`, through
+        ``client_factory``); tests stand one in.
     :param transport: For the auth methods' own requests; tests stand one in.
+    :param client_factory: Makes the clients it connects through, to a server and to
+        its authorization server: the hosted runtime's hold every connection
+        to its network policy (``forge_agent_runtime.mcp_guard``), as its
+        agents' are. httpx2's own when None.
     """
 
     def __init__(
@@ -76,17 +86,23 @@ class McpServers:
         *,
         timeout: float = 15.0,
         methods: AuthMethods = AUTH_METHODS,
-        lister: Lister = list_tools,
+        lister: Lister | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        client_factory: ClientFactory | None = None,
     ) -> None:
         self.box = box
         self.timeout = timeout
         self.methods = methods
-        self.lister = lister
+        self.lister = lister or functools.partial(
+            list_tools, client_factory=client_factory
+        )
         self.transport = transport
+        self.client_factory = client_factory
 
     def http(self) -> httpx.AsyncClient:
         """:return: A client for an auth method's requests; close it after."""
+        if self.client_factory is not None and self.transport is None:
+            return self.client_factory(timeout=httpx.Timeout(self.timeout))
         return httpx.AsyncClient(timeout=self.timeout, transport=self.transport)
 
     def method(self, server: ServerRow) -> AuthMethod[Any, Any]:

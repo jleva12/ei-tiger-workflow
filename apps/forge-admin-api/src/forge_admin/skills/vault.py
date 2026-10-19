@@ -1,6 +1,7 @@
 """The organization's skills as what runs reads them: by ID, whole, and only
 its own.
 
+- :func:`fill`: a row made a skill, however it got into the vault.
 - :func:`bundles_of`: skills by ID, for a workflow run to carry and an
   exported agent to bundle.
 - :class:`OrganizationSkills`: the hosted runtime's ``SkillLibrary``.
@@ -16,6 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import undefer
 
 from forge_admin.models import Skill
+
+
+def fill(row: Skill, skill: SkillBundle) -> None:
+    """Make the row this skill."""
+    row.name = skill.name
+    row.description = skill.description
+    row.bundle = skill.model_dump(mode="json")
+    row.file_count = len(skill.files)
+    row.size_bytes = skill.size
 
 
 async def bundles_of(
