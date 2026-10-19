@@ -42,20 +42,19 @@ SUPERSEDED before doing any work; its job completes without retries.
 
 ## Admission
 
-A deployment is admitted through `codegraph-admin`, whose admission route
-creates the run and its job in one transaction, bound to an analysis
-configuration digest. The digest identifies what the
-worker computes: the parser registry, the resolver version and policy, and
-the parser, build and discovery limits. A worker claims only jobs that carry
-its own digest. Admission runs in processes that never link the analysis
-stack, so each worker publishes the digest itself: one `CGWorkers` row per
-process with queue, owner, digest, languages, build mode and retry limit,
-written at startup, refreshed on every health tick and deleted on a clean
-shutdown. Admission reads the workers whose heartbeat is within the admin's
-window, requires them to agree on one digest, and otherwise refuses (no
-worker, or a divided fleet) rather than enqueue a job nothing could claim.
-The overview counts READY jobs whose digest differs from the fleet's as
-mismatched.
+Ingestion jobs come from the admin API's MySQL: it queues each as a row of
+`code_ingestion_jobs`, and a worker claims one there (`internal/jobqueue`:
+`FOR UPDATE SKIP LOCKED`, a lease it renews, every write fenced on the
+claim). The worker admits the job's run itself (`admit` in
+`internal/workerapp/ingest.go`): it resolves the branch's head when the job
+names no commit, registers the repository on its first ingestion, and admits
+a run in Spanner under the job's submission ID, so a retry finds the same
+run. The run is bound to the worker's own analysis configuration digest,
+which identifies what the worker computes: the parser registry, the resolver
+version and policy, and the parser, build and discovery limits. Each worker
+still writes a `CGWorkers` row (queue, owner, digest, languages, build mode
+and retry limit) at startup, refreshes it on every health tick and deletes it
+on a clean shutdown; admission no longer reads it.
 
 ## Incremental scope
 

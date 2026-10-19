@@ -8,7 +8,7 @@ type Parser interface {
 }
 ```
 
-The public package implements the interface, typed inputs/options/budgets, errors, and input validation. The concrete [Java adapter](../internal/parser/java/README.md) and [TypeScript/JavaScript adapter](../internal/parser/typescript/README.md) implement extraction. Discovery (`internal/discovery`), binding (`internal/resolve/java`, `internal/resolve/typescript`) and projection (`internal/graphanalysis`) consume their output and never feed back into it. The package depends only on the standard library and `pkg/ir`.
+The public package implements the interface, typed inputs/options/budgets, errors, and input validation. The concrete [Java adapter](../internal/parser/java/README.md), [TypeScript/JavaScript adapter](../internal/parser/typescript/README.md) and Python adapter (`internal/parser/python`, see [Python ingestion](python-ingestion.md)) implement extraction. Discovery (`internal/discovery`), binding (`internal/resolve/java`, `internal/resolve/typescript`, `internal/resolve/python`) and projection (`internal/graphanalysis`) consume their output and never feed back into it. The package depends only on the standard library and `pkg/ir`.
 
 The public package also supplies an immutable `Registry`, adapter `Registration` and worker-owned `Session` lifecycle contract. See [language routing](language-routing.md) for registration, configuration and discovery.
 

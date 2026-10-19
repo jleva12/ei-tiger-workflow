@@ -16,9 +16,10 @@ stale `make up-all-local` workers never see its jobs. Every test clears its
 tables and Redis first. Outside the make target the tests skip unless
 `FORGE_IT_MYSQL_URL` and `FORGE_IT_REDIS_URL` are set (conftest.py).
 
-What each scenario found is in [FINDINGS.md](FINDINGS.md). A finding's tests
-are `xfail(strict=True)`: once fixed they XPASS, which fails the suite until
-the marker is removed.
+What the scenarios found (IT-1 to IT-8) is fixed and listed in the repo's
+[CURRENT_STATE.md](../../../../CURRENT_STATE.md); every scenario passes. A
+new finding's tests are marked `xfail(strict=True)`, their reason naming it:
+once fixed they XPASS, which fails the suite until the marker is removed.
 
 ## Reports
 
@@ -53,7 +54,7 @@ A scenario is an async test taking the `scenario` fixture:
 
 ```python
 async def test_something(scenario: Scenario) -> None:
-    await scenario.warm_sessions()  # ADK's state rows first (FINDINGS.md IT-1)
+    await scenario.warm_sessions()  # ADK's state rows first (CURRENT_STATE.md IT-1)
     await scenario.spawn_all("w1", "w2", maintenance=2)
     scenario.mock.hold("charge")
     run_id = await scenario.start(w.line(w.http("charge", scenario.mock.effect_url("charge")), w.end("done")))

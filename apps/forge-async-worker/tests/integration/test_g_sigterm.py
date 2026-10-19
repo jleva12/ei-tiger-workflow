@@ -123,7 +123,7 @@ def test_a_run_let_go_at_shutdown_is_taken_again_at_once(cut_at_grace: dict[str,
 def test_a_run_let_go_at_shutdown_goes_on_to_its_end(cut_at_grace: dict[str, Any]) -> None:
     run = cut_at_grace["run"]
     assert run["status"] == "succeeded" and run["result"] is not None and run["result"]["name"] == "long"
-    # The GET cut off at shutdown, and the next attempt's (FINDINGS.md IT-2: it was skipped).
+    # The GET cut off at shutdown, and the next attempt's (CURRENT_STATE.md IT-2: it was skipped).
     assert cut_at_grace["effects"] == 2
 
 

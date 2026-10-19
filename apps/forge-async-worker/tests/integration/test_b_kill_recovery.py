@@ -10,7 +10,7 @@ what it left running is stopped, and it takes its Error way, or with none the
 run fails, saying it may have run. The tests hold the run to that: going on
 to its end, or failing closed (failing, saying where it was cut off), its
 effect had once; never ending as if the step had answered when it didn't
-(FINDINGS.md IT-2), nor the killed attempt's command going on beside the
+(CURRENT_STATE.md IT-2), nor the killed attempt's command going on beside the
 run's next attempt (IT-3).
 """
 

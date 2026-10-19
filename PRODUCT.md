@@ -16,11 +16,11 @@ web
 
 ## Product Purpose
 
-Forge is where organizations build and run Google ADK workflows, and design Google ADK agents: a place to design, run and supervise an organization's processes end to end on [Google ADK](https://google.github.io/adk-docs/). An ADK workflow starts by hand, from the console. It then moves through its nodes on ADK's graph engine, calling LLM agents and outside services, transforming data, waiting, and pausing for a person wherever a decision or an answer belongs to one.
+Forge is where organizations build and run Google ADK workflows, and design Google ADK agents: a place to design, run and supervise an organization's processes end to end on [Google ADK](https://google.github.io/adk-docs/). An ADK workflow starts from the console, from an outside app over REST or A2A, from a chat agent that uses it as a tool, or when an intake agent's request is complete. It then moves through its nodes on ADK's graph engine, calling LLM agents and outside services, transforming data, waiting, and pausing for a person wherever a decision or an answer belongs to one.
 
 Success means an organization can put a real process into Forge and trust it, because every run is visible step by step, every decision a person made is recorded, and every run survives waits, failures and restarts.
 
-**Built today:** the ADK workflow builder (a canvas with a node library, node settings with JSONata expression fields and a live check of what to fix), ADK workflow runs on the async worker with approvals, human input, delays and saved ADK workflows run inside others, the agent builder for Google ADK chat agents, the site → organization hierarchy with role-based access, users and bearer tokens, and the assistant, which explains access and helps administer organizations, people, roles and permissions. **Not built yet:** keeping agents anywhere but the browser, and running or chatting with them; starting runs other than by hand; tools for LLM agents inside an ADK workflow; the assistant reading or building ADK workflows; and connections to third-party apps.
+**Built today:** the ADK workflow builder (a canvas with a node library, node settings with JSONata expression fields and a live check of what to fix), ADK workflow runs on the async worker with approvals, human input, delays and saved ADK workflows run inside others, tools for LLM agents inside an ADK workflow, the agent builder for Google ADK chat agents with draft and published versions, the hosted runtime that runs agents and workflows for chat, REST and A2A callers, the site → organization hierarchy with role-based access, users, bearer tokens and organization API keys, connections to MCP servers and GitHub, and the assistant, which explains access, helps administer organizations, people, roles and permissions, and builds ADK workflows and agents with the person (the workflow and agent co-pilots).
 
 ## Positioning
 
@@ -30,10 +30,10 @@ Forge runs governed Google ADK workflows, not a single assistant or a script run
 
 - **Hierarchy:** site → organization. ADK workflows, their runs, agents and members all belong to one organization. The site level is for administration.
 - **Workspace scope:** a person works either in site administration (site administrators only) or in one of their organizations. The switcher at the top of the sidebar changes scope, and Home reopens the last one used.
-- **ADK workflow nodes:** Start; LLM agents, sequential, parallel and loop agents, and saved ADK workflows; human input and approvals; HTTP, Transform and Delay; If, Switch, Match, Loop, Merge and End. Every expression is JSONata, and a node can read what earlier steps produced.
+- **ADK workflow nodes:** Start; LLM agents, sequential, parallel and loop agents, saved ADK workflows and the Pi coding agent; human input, approvals and decision boards; HTTP, Bash, Transform, Filter and Delay; GitHub's clone, branch, commit and push, and pull request; If, Switch, Match, Loop, For each, Merge and End. Every expression is JSONata, and a node can read what earlier steps produced.
 - **Runs:** the admin API checks a run, keeps it in the admin MySQL and queues it for the async worker, which runs it on Google ADK's graph engine, keeping its state in an ADK session. Each run keeps its status, each step's output, its failures and retries, and its activity. A run that waits (an approval, a person's answer, a long delay) lets its worker go and picks up where it left off.
-- **Agents:** a builder for one Google ADK chat agent: its instructions and model, its tools and the agents it hands off to. Agents are kept in the browser for now; nothing runs them yet.
-- **Forge assistant:** a Google ADK agent available from every page, served by the admin API on Gemini, or on the models of the shared model-provider configuration. It acts as the signed-in person, within their permissions: it explains their access and why something was refused, shows and changes who holds which role, and reads and edits organizations, roles, permissions and users. It asks the person to confirm every change first. Until a model key is set, it explains how to set one.
+- **Agents:** a builder for one Google ADK chat agent: its instructions and model, its tools and the agents it hands off to. Agents are kept in MongoDB as a draft and published versions. The admin API's hosted runtime runs them for chat, ADK's run API and A2A, and a published agent can be shared as a chat page.
+- **Forge assistant:** a Google ADK agent available from every page to every signed-in person (not to API keys), served by the admin API on Gemini, or on the models of the shared model-provider configuration. It acts as the signed-in person, within their permissions: it explains their access and why something was refused, answers from the organization's knowledge bases and code, reads ADK workflows and agents and builds them with the person on their canvases, shows and changes who holds which role, and reads and edits organizations, roles, permissions and users. It asks the person to confirm every change first, except edits to a workflow's or agent's draft, which the person can undo. Until a model key is set, it explains how to set one.
 - **Identity:** people sign in with a bearer token. Users are identified by first and last name, email and MS ID.
 
 ## Capabilities and Constraints
@@ -41,7 +41,7 @@ Forge runs governed Google ADK workflows, not a single assistant or a script run
 - **Hierarchy records:** organizations can be created, renamed and deleted. Every record carries who created and last changed it, and when.
 - **Access as data (Casbin):**
   - Permission keys are `resource:action`, and either part may be `*`.
-  - Roles are keyed `<level>:<name>`. A role is assigned in a scope (the site or an organization) and applies there and everywhere below it. The defaults are site administrator, organization administrator, organization member and organization viewer.
+  - Roles are keyed `<level>:<name>`. A role is assigned in a scope (the site or an organization) and applies there and everywhere below it. The defaults are site administrator, organization administrator, organization member, organization viewer and API caller (what an organization's API key usually holds).
   - Roles, permissions and assignments change through the API without a deploy.
   - The API enforces every request. The console only decides which actions to offer.
 - **ADK workflows as data:** each ADK workflow is one `forge.agent/v1` JSON document, checked against its JSON Schema on every save. Every save names the revision it was made from, so two people's changes never silently overwrite each other.
@@ -49,14 +49,13 @@ Forge runs governed Google ADK workflows, not a single assistant or a script run
 - **Display preferences:** theme, density (comfortable/compact), text size, contrast (system/standard/more) and motion (system/reduce). They are saved in the browser.
 - **Terminology:** organization, scope, site administrator, role, permission, member, ADK workflow, agent, node, step, run, approval, assistant, MS ID. Use these words as the product uses them.
 - **Undecided:**
-  - Which tools LLM agents get, and which outside systems ADK workflows may reach beyond HTTP nodes.
   - Whether Forge is used only inside one company or offered more widely. No public or marketing surface exists.
   - Any formal accessibility conformance target.
 
 ## Brand Commitments
 
 - **Name:** Forge (shown as "Forge Workspace" in the sidebar brand).
-- **Design system (confirmed binding):** the Forge UI design system is the visual foundation. It comes from `jleva12/forge-ui`, is pinned in `apps/forge-web/skills-lock.json` and is documented for agents in `.claude/skills/forge-ui`. New work extends its composites, primitives, tokens and icon vocabulary; it does not replace them.
+- **Design system (confirmed binding):** the Forge UI design system is the visual foundation. It comes from this repository's `packages/forge-ui` (installed from `jleva12/ei-tiger-workflow`), is pinned in `apps/forge-web/skills-lock.json` and is documented for agents in `.claude/skills/forge-ui`. New work extends its composites, primitives, tokens and icon vocabulary; it does not replace them.
 - **Voice (seen in shipped copy, not separately confirmed):**
   - Plain, second person, short sentences that say what happens and where.
   - Example: "None of your roles covers it. Ask an administrator for access."

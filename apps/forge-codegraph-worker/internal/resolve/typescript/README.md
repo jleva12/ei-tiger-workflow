@@ -125,4 +125,5 @@ Members of object literals assigned to variables, destructured parameters
 (`({ title }: Props)`), members of union constituents beyond the first that
 declares them, conditional `exports` subpath patterns and `tsconfig` project
 references are beyond this tier; the compiler tier binds them when it runs.
-Tracked in [closing the breadth gap](../../../docs/gap-closure.md).
+Pending work is tracked in [CURRENT_STATE.md](../../../../../CURRENT_STATE.md)
+(Pending work, Code graph).

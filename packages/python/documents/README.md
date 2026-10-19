@@ -7,7 +7,7 @@ The `documents` task (`import forge_task_documents`), on the `documents` queue:
 load a file (local path or `s3://`), parse it (PDF, Word, PowerPoint, Excel, CSV,
 Markdown, HTML, text, Visio, Mermaid; docling optional), chunk, enrich, embed and store it in MongoDB Atlas or Spanner for
 hybrid (BM25 + vector) search. It registers with the
-[async worker](../../../../apps/forge-async-worker/README.md) through the
+[async worker](../../../apps/forge-async-worker/README.md) through the
 `forge_async_worker.tasks` entry point; its model clients come from
 [forge-embeddings](../embeddings/README.md).
 

@@ -1,6 +1,6 @@
 # Post-parse IR contract
 
-Schema version: `1.1.0`. Entry type: [SourceFile](../../../packages/go/code-graph/domain/ir/file.go).
+Schema version: `1.3.0`. Entry type: [SourceFile](../../../packages/go/code-graph/domain/ir/file.go).
 
 This is a Java-oriented foundation with reusable language/source identifiers. Defining a construct in the model does not establish parser support for a Java version or another language. The [Java Tree-sitter adapter](../internal/parser/java/README.md) documents its extraction feature set and release profiles. Binding is not part of this model: the [javac resolver](../internal/resolve/java/README.md) proves targets and writes them as `pkg/semantic` symbols and lookups that reference these file-local IDs.
 
@@ -114,4 +114,4 @@ The complete/partial/failed extraction status is relative to `Coverage.FeatureSe
 
 The hand-authored [fixture](../../../packages/go/code-graph/domain/ir/testdata/parsed_file.json) is marked partial and has no resolved edges. [Contract tests](../../../packages/go/code-graph/domain/ir/ir_test.go) verify serialization fidelity and reject common corruptions. The [Java parser tests](../internal/parser/java/parser_test.go) independently assert real extraction facts, ownership, coverage, budgets, cancellation and malformed-input recovery.
 
-Version 1.1.0 requires an explicit decoder update or re-extraction of 1.0.0 artifacts; the strict validator rejects old versions. New Java output declares adapter `0.2.0` and feature set `java-syntax/2`. Pattern and statement IDs and updated Unicode mapping mean old file-local IDs must not be mixed with new extraction output. The graph schema in Spanner is versioned separately.
+Version 1.3.0 requires an explicit decoder update or re-extraction of older artifacts; the strict validator rejects every other version. New Java output declares adapter `0.2.1` and feature set `java-syntax/2`. Pattern and statement IDs and updated Unicode mapping mean old file-local IDs must not be mixed with new extraction output. The graph schema in Spanner is versioned separately.

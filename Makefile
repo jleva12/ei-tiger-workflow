@@ -564,7 +564,7 @@ async-worker-test-redis: env
 
 # The ADK workflow run machinery on a real MySQL 8 and Redis, with several
 # worker processes (apps/forge-async-worker/tests/integration, its README in
-# conftest.py and the findings in FINDINGS.md): a Compose project of its own
+# conftest.py, its findings in CURRENT_STATE.md): a Compose project of its own
 # (forge-worker-it) on IT_MYSQL_PORT and IT_REDIS_PORT, clear of this stack's
 # and forge-aidlc-parent's, migrated with the admin API's migrations, then
 # the suite. Minutes long, and never part of make check. IT_ARGS passes pytest

@@ -23,7 +23,7 @@ that repository's.
 | `internal/workerapp` | Configuration on top of `packages/go/code-graph/serviceconfig`, language bootstrap, the job loop (claim, admit, run, settle: `ingest.go`), health probes, worker registration |
 | `internal/jobqueue` | The queue of ingestion jobs in the admin API's MySQL (`code_ingestion_jobs`): claims under `FOR UPDATE SKIP LOCKED`, leases, fenced writes |
 | `internal/ingestion` | The pipeline and the analysis configuration digest |
-| `internal/languages`, `internal/parser/{java,typescript}`, `internal/resolve/{java,typescript}` | Language adapters, the Tree-sitter Java and TypeScript/JavaScript parsers, the javac binding bridge and the TypeScript syntax-tier resolver |
+| `internal/languages`, `internal/parser/{java,typescript,python}`, `internal/resolve/{java,typescript,python}` | Language adapters, the Tree-sitter Java, TypeScript/JavaScript and Python parsers, the javac binding bridge, the TypeScript syntax-tier and compiler resolver, and the Pyright resolver |
 | `internal/buildcontext`, `internal/discovery` | Maven, Gradle, manifest and syntax build providers, composed per language; file discovery |
 | `internal/graphanalysis`, `internal/localindex` | Identity matching, projection and diffing; the SQLite run index and syntax cache |
 | `internal/repository/github` | Git mirrors and diffs |

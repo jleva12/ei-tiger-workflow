@@ -1,7 +1,7 @@
 # forge-embeddings
 
 Model clients and search helpers shared by the embedding tasks
-([documents](../documents/README.md), [commits](../commits/README.md)):
+([documents](../documents/README.md)):
 OpenAI, Voyage and hashing embedders, rerankers, tokenizers, Anthropic and
 OpenAI LLM clients, BM25 and reciprocal-rank fusion, identifier extraction,
 and BSON vector encoding for MongoDB (`import forge_embeddings`).

@@ -368,7 +368,7 @@ class Scenario:
         """ADK's app and user state rows for the members' runs, made before
         any run's (``create_session`` makes them the first time), so a
         scenario about something else doesn't race for them too (they once
-        failed the runs: FINDINGS.md IT-1)."""
+        failed the runs: CURRENT_STATE.md IT-1)."""
         from google.adk.sessions import DatabaseSessionService
 
         from forge_task_adk_workflows.runs import APP_NAME

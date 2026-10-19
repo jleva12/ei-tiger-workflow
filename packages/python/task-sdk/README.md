@@ -19,7 +19,8 @@ never on the worker.
 - `runtime` / `runner`: an inline runtime that runs jobs in-process,
   breadth-first with their follow-ups, for tests and the CLI. The worker
   builds the same tasks, and runs an ADK workflow run's job off its queue, on
-  the run in the run store (`forge_task_adk_workflows.run_store`).
+  the run in the run store (`forge_task_adk_workflows.run_store`), and a
+  documents job off the `documents` queue through the runner.
 - `control`: what a long-running job asks of its run (`current_control()`):
   state it keeps between attempts, checkpoints, a person's decision, a wait
   until later, notes. The worker's control is backed by the run store;
@@ -130,8 +131,9 @@ invoices = "forge_task_invoices.task:InvoicesTaskFactory"
 ```
 
 Then `forge-async-worker tasks` lists it, and `forge-async-worker run
-invoices record '{...}'` runs its jobs inline. The worker itself serves only
-the `adk_workflows` queue, running each ADK workflow run on its run in the run
-store: serving another task type's queue means giving the worker a job
-function for it (and somewhere its runs are kept). The full example is
-`NotesTask` in `tests/test_framework.py`.
+invoices record '{...}'` runs its jobs inline. The worker itself serves two
+queues: `adk_workflows`, running each ADK workflow run on its run in the run
+store, and `documents`, where `run_job` runs a documents task job from its
+spec (`saq_worker.py`). Serving another task type's queue means adding it to
+the worker's queues (`TASK_QUEUES`) with a job function for it. The full
+example is `NotesTask` in `tests/test_framework.py`.
