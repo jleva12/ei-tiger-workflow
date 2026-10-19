@@ -46,7 +46,7 @@ if err != nil {
 
 Build with Go 1.25+ and a C compiler (`CGO_ENABLED=1`). A JDK is not required to extract syntax; the [javac resolver](../../resolve/java/README.md) needs one, together with the build inventory, to bind what this adapter extracts.
 
-## Extraction feature set: `java-syntax/2` (adapter `0.2.0`, IR `1.1.0`)
+## Extraction feature set: `java-syntax/2` (adapter `0.2.1`, IR `1.3.0`)
 
 Implemented facts include packages; all four traditional import forms; classes, interfaces, enums, records, annotation types, local/anonymous types; methods and normal/compact constructors; fields, locals, parameters, receivers, record components and type parameters; explicit modifiers, adjacent Javadocs and initializer blocks; written qualified/generic/array/wildcard/intersection/union types; heritage, bounds, throws and type uses; annotation identity, keys, arrays, nested annotations and unevaluated values; lexical scopes for blocks, lambdas, loops, catches and resources; expressions, complete receivers, ordered arguments, construction/delegation, separate callable references, and name/member read/write occurrences. The extractor now also preserves statements, block-lambda bodies, return/yield expressions, control-flow syntax, type/record patterns, switch labels/guards/arms, module directives, diamond syntax and annotation-element defaults. See the [syntax support boundary](../../../docs/java-syntax-support.md).
 
@@ -88,7 +88,7 @@ JAVAC=/abs/jdk/bin/javac go test ./apps/forge-codegraph-worker/internal/parser/j
 sh packages/go/code-graph/tree-sitter-java/generate.sh --check
 ```
 
-Tests independently assert extraction on real Java fixtures, original-engine fixture compatibility, scope restoration, complete receiver chains and qualified `super`, constructor/reference distinctions, generic segment association, post-name dimensions, annotation values, resource visibility, deterministic output, source ownership/positions, release diagnostics, hard limits, cancellation/reuse, native session separation and malformed-input recovery. The hand-authored `pkg/ir/testdata/parsed_file.json` is not used as a parser oracle.
+Tests independently assert extraction on real Java fixtures, original-engine fixture compatibility, scope restoration, complete receiver chains and qualified `super`, constructor/reference distinctions, generic segment association, post-name dimensions, annotation values, resource visibility, deterministic output, source ownership/positions, release diagnostics, hard limits, cancellation/reuse, native session separation and malformed-input recovery. The hand-authored `packages/go/code-graph/domain/ir/testdata/parsed_file.json` is not used as a parser oracle.
 
 The optional compiler suite checks 16 valid fixture groups under `--release 21` and two expected Java 8 rejections. The regular suite asserts typed required/forbidden facts and table integrity/budgets. Compiler acceptance is a fixture oracle only; neither test suite asserts resolved call targets.
 

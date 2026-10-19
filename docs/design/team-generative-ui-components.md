@@ -1,6 +1,6 @@
 # Team Generative UI Components Design Brief
 
-Status: Proposed design (revision 2)  
+Status: Phases 1–3 shipped (the compiler and runtime protocol, the store and APIs, the runtime lookup and instruction writer). Phases 4–5 are not built: the UI Components settings page (library, editor, preview, publishing), the writer helper, the Rich answers picker with team groups, the pilot setting and general availability. Design revision 2.  
 Date: October 18, 2026  
 Scope: Organization settings, hosted APIs, agent runtime, web console, and desktop chat. Exported agents and workflow runs carry definitions; rendering in the standalone starter is out of scope.
 

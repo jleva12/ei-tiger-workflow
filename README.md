@@ -13,6 +13,8 @@ and served by the admin API over ADK's run API and Google's A2A protocol, or
 generated as a project of its own. An AI assistant on every page helps with
 access and administration.
 
+Current state, pending work and known bugs: [CURRENT_STATE.md](CURRENT_STATE.md)
+
 Deployable applications live under `apps/`, shared libraries under
 `packages/`. The web console owns its `package.json` and `node_modules`. The
 Python apps and packages are one [uv workspace](https://docs.astral.sh/uv/concepts/projects/workspaces/):
@@ -64,8 +66,10 @@ the **assistant** (the AI helper on every page).
   to users in a scope (the site or an organization) and enforced by the API on
   every request. People and other systems call the API with bearer tokens.
 - **ADK workflow builder.** Nodes: Start; LLM agents, sequential, parallel
-  and loop agents, and saved ADK workflows; human input and approvals; HTTP,
-  Transform and Delay; If / Switch / Match, Loop, Merge and End. An LLM agent
+  and loop agents, saved ADK workflows and the Pi coding agent; human input,
+  approvals and decision boards; HTTP, Bash, Transform, Filter and Delay;
+  GitHub's clone, branch, commit and push, and pull request; If / Switch /
+  Match, Loop, For each, Merge and End. An LLM agent
   is either set up in its node, with the Agents builder's tools (the
   organization's MCP servers, knowledge bases, HTTP tools, OpenAPI specs,
   agents and workflows), its sub-agents too; or it is an agent from the
@@ -103,9 +107,11 @@ the **assistant** (the AI helper on every page).
   (`/api/v1/runtime/workflows/{ref}/runs`: start, wait, answer what a run
   waits at) or A2A (a task is a run; its pauses are `input-required`). Each
   organization makes **API keys** (Settings → API keys), each holding one of
-  its roles (API caller by default), sent as `Authorization: Bearer fk_…`;
-  when the runtime isn't public, calls need one (or a sign-in) with
-  `agents:run` where the agent or workflow is.
+  its roles (API caller by default), sent as `Authorization: Bearer fk_…`.
+  Every runtime call (chat agents, workflows, A2A) needs one (or a Forge
+  sign-in) with `agents:run` where the agent or workflow is. A chat page's
+  link is the only way in without either: its visitors get signed tokens
+  (`X-Forge-Visitor`).
 - **Code ingestion.** The code graph worker
   ([forge-codegraph-worker](apps/forge-codegraph-worker/README.md)) turns a
   GitHub repository's branch into a graph of its code: declarations,
@@ -130,7 +136,8 @@ the **assistant** (the AI helper on every page).
   the code graph follows across repositories), explores each one's code
   graph and audits its ingestions; chat agents and workflow LLM nodes search
   it with their knowledge base tool, as they search a RAG one's documents,
-  through the worker's search API, are told its applications and
+  reading the code graph with `codegraph-query` (through
+  `packages/python/codegraph`), are told its applications and
   connections, and cite the declarations they answer from. The code graph MCP server
   ([forge-codegraph-mcp](apps/forge-codegraph-mcp/README.md)) serves the
   published graphs to agents: read-only tools to explore a question, search,
@@ -153,8 +160,10 @@ the **assistant** (the AI helper on every page).
 | `codegraph-mcp` | `apps/forge-codegraph-mcp` | 8103 (native), 18203 (Compose) | Python MCP server (FastMCP, streamable HTTP at `/mcp`) over the worker's code graph: explore, search, callers and callees, impact, changes, path, hubs and source; reads the worker's Spanner database |
 | `worker-spanner` | `apps/forge-codegraph-worker` | 19030 (gRPC), 19040 (REST) | Cloud Spanner emulator the worker writes the code graph to; in memory, so `make down` loses it (`SPANNER=cloud` uses managed Spanner instead) |
 | `async-worker-adk-workflows` | `apps/forge-async-worker` | none (SAQ worker) | Async worker (`forge-async-worker`) serving the `adk_workflows` queue: runs organizations' ADK workflows on Google ADK, the runs and their sessions in the admin MySQL, pausing for approvals, questions and waits |
-| `mongo` | `compose.infrastructure.yaml` | 27037 | Shared MongoDB (Atlas Local 8.3.9, a single-node replica set): ADK workflows (`forge_admin`); persistent volumes |
-| `redis` | `compose.infrastructure.yaml` | 16389 | Shared Redis: the async worker's SAQ queue in database 0; persistent AOF, no eviction |
+| `async-worker-documents` | `apps/forge-async-worker` | none (SAQ worker) | The same async worker serving the `documents` queue: parses, chunks and embeds the knowledge base documents the admin API stored in `knowledge-s3` into MongoDB (`forge_knowledge`), and removes them again |
+| `mongo` | `compose.infrastructure.yaml` | 27037 | Shared MongoDB (Atlas Local 8.3.9, a single-node replica set): ADK workflows and chat agents (`forge_admin`), knowledge base chunks (`forge_knowledge`); persistent volumes |
+| `redis` | `compose.infrastructure.yaml` | 16389 | Shared Redis: the async worker's SAQ queues in database 0; persistent AOF, no eviction |
+| `knowledge-s3` | `compose.infrastructure.yaml` | 19010 | S3-compatible storage (RustFS): knowledge base uploads, and the files workflow runs start with; persistent volume |
 
 ```text
  web console
@@ -172,7 +181,7 @@ the **assistant** (the AI helper on every page).
                      └──► Spanner  each repository's code graph, its source and embeddings
 ```
 
-MongoDB and Redis are defined once in [compose.infrastructure.yaml](compose.infrastructure.yaml),
+MongoDB, Redis and `knowledge-s3` are defined once in [compose.infrastructure.yaml](compose.infrastructure.yaml),
 and every application's `compose.yaml` is a fragment of the root deployment
 ([compose.yaml](compose.yaml)). Connection settings and published ports live in
 `.env.common` (`FORGE_MONGO_*`, `FORGE_REDIS_PORT`, `FORGE_REDIS_URL`); app
@@ -210,9 +219,10 @@ For native development, install once and run each app with reload:
 make install           # npm ci in apps/forge-web and packages/forge-ui; uv sync --all-packages into the root .venv;
                        # the code graph worker's analyzers and Go modules
 make web               # Vite dev server on http://localhost:5190
-make admin-deps        # admin-mysql, and the shared mongo and redis
+make admin-deps        # admin-mysql, and the shared mongo, redis and knowledge-s3
 make admin             # admin API on http://localhost:8101; docs at /docs
-make async-worker      # redis and admin-mysql, then the async worker on the adk_workflows queue
+make async-worker      # redis, admin-mysql, mongo and knowledge-s3, then the async worker on the adk_workflows
+                       # and documents queues
 make worker            # the Spanner emulator, then the code graph worker on http://localhost:8090
 make codegraph-mcp     # the code graph MCP server on http://localhost:8103/mcp, reading the worker's graph
 ```
@@ -293,12 +303,13 @@ apps/
     alembic.ini           Alembic CLI settings for creating and applying revisions
     .env.example          Service settings template
     pyproject.toml        The app's dependencies and tool settings (a workspace member)
-  forge-async-worker/     forge-async-worker: runs ADK workflow runs off the adk_workflows SAQ queue on Redis, kept in the run store
-    src/forge_async_worker/  saq_worker.py (run_adk, expire_pause, the maintain cron, graceful stop, health check), jobs.py
+  forge-async-worker/     forge-async-worker: runs ADK workflow runs off the adk_workflows SAQ queue on Redis, kept in the run store,
+                          and knowledge base documents off the documents queue
+    src/forge_async_worker/  saq_worker.py (run_adk, expire_pause, the maintain cron, run_job, graceful stop, health check), jobs.py
                           (what each job does to a run), control.py (a run's JobControl on the run store), queue.py, cli.py
     tests/                The jobs on a SQLite run store, with a stand-in task and the real ADK one; the worker on a real Redis
-    Dockerfile            uv-built worker image with the ADK workflows task, built from the repository root
-    compose.yaml          async-worker-adk-workflows
+    Dockerfile            uv-built worker image with the ADK workflows and documents tasks, built from the repository root
+    compose.yaml          async-worker-adk-workflows and async-worker-documents
     .env.example          Worker and task settings template
     pyproject.toml        The app's dependencies (the ADK workflows task among them) and tool settings (a workspace member)
   forge-codegraph-worker/ Go code ingestion engine: GitHub repositories into a code graph in Spanner (see its README)
@@ -337,7 +348,7 @@ tests/infrastructure/     Validates the rendered Compose stack (make infrastruct
 .github/workflows/        forge-ui-registry.yml: Forge UI's typecheck, tests and committed-registry check
 registry.json             Includes packages/forge-ui/registry.json, for shadcn's owner/repo/item addresses
 compose.yaml              Includes compose.infrastructure.yaml and each app's compose.yaml
-compose.infrastructure.yaml  The shared MongoDB and Redis
+compose.infrastructure.yaml  The shared MongoDB, Redis and knowledge-s3 (RustFS)
 compose.cloud.yaml        Overlay that puts the code graph worker and MCP server on managed Cloud Spanner (make up SPANNER=cloud)
 go.work, go.work.sum      The Go workspace: the code graph worker and its modules
 .env.compose.example      Root Compose settings template

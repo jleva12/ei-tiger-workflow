@@ -1,5 +1,7 @@
 # Storage compaction
 
+Status: proposed; not started.
+
 How to cut what a repository costs in Spanner without changing what the
 graph says or slowing any read. Measured on google/adk-java (558 Java files,
 139,621 lines, 5.4 MB of source) at generation 2 on the managed instance
@@ -197,8 +199,11 @@ entry, about 46 MB on adk-java, and no reader needs it stored:
 
 - The differ already falls back to `v.Fact.Digest()` when the column is
   empty ([differ.go:216](../internal/graphanalysis/differ.go#L216)).
-- No API or MCP response carries it (checked against the Go query code of
-  the time; check `forge_codegraph_query` again before step 2).
+- Readers carry it, though none needs it stored: `forge_codegraph_query`
+  reads the column into `Version.fact_digest`, and `Version.to_json` puts it
+  in a record's history as `fact_digest`
+  ([model.py](../../../packages/python/codegraph-query/src/forge_codegraph_query/model.py)).
+  Step 1 has to compute it there too, or drop it from that response.
 - `RecordsByLineage` selects the base row, not the stored column.
 
 Steps, each safe on its own:
@@ -253,7 +258,8 @@ the compaction release.
 
 ## Backfilling existing repositories
 
-A `codegraph-admin recode-records -repository-id <id>` command rewrites
+A new `recode-records -repository-id <id>` command (none exists yet; this
+repository has no `codegraph-admin`, so it would go under `cmd/`) rewrites
 `Payload` in place for rows in the legacy encoding:
 
 - Scans `CGRecords` by primary key range in pages of 1,000, decodes each
@@ -340,14 +346,14 @@ where the initial load of a large repository gains.
    `PutFileIdentities`, `GetFileIdentities`, the `CODEGRAPH_RECORD_ENCODING`
    setting, `MaxRecordBytes` applied to encoded bytes, and the extended
    emulator pipeline test.
-4. **Benchmark command** under `apps/api/cmd/codegraph-search` alongside
-   the existing reindex flag, plus the baseline numbers for adk-java
-   recorded in `reports/`.
-5. **Backfill command** in `codegraph-admin` with `-verify`.
+4. **Benchmark command** under `cmd/` (this repository has no search
+   command to extend), plus the baseline numbers for adk-java.
+5. **Backfill command** (`recode-records`) with `-verify`.
 6. **Release 1**: decode both formats, default `json`. Deploy all
    processes. Switch workers to `compact`. Backfill adk-java and compare
    against the baseline.
-7. **Phase 2 DDL** as a numbered file under `schema/migrations/` applied
+7. **Phase 2 DDL** as the next numbered file in
+   `packages/go/code-graph/storage/spanner/schema/` applied
    with `gcloud spanner databases ddl update`, the base DDL updated for new
    databases, and `Store.Ping` checking `FactDigest` nullability the way it
    checks the vector length today, so a process fails at startup against an

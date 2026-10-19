@@ -16,8 +16,9 @@ or Redis anything else uses.
 Each scenario's timeline (the test's actions, the mock server's requests,
 the runs' activity and the workers' warnings, by time) and what it observed
 are written to FORGE_IT_REPORT_DIR (default tests/integration/.reports), and
-shown with a failure. Expected failures are marked xfail, their reason naming
-the finding in FINDINGS.md: a fix turns its test green (XPASS, strict).
+shown with a failure. A known failure is marked xfail, its reason naming the
+finding (IT-n, listed in the repo's CURRENT_STATE.md): a fix turns its test
+green (XPASS, strict).
 """
 
 from __future__ import annotations

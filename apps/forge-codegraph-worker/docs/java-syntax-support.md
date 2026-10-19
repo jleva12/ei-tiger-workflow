@@ -1,8 +1,8 @@
 # Java syntax support boundary
 
 What the Java Tree-sitter adapter extracts, which releases it accepts, what it
-deliberately does not claim, and how that is tested. Adapter `0.2.0`,
-extraction feature set `java-syntax/2`, IR schema `1.1.0`, patched grammar
+deliberately does not claim, and how that is tested. Adapter `0.2.1`,
+extraction feature set `java-syntax/2`, IR schema `1.3.0`, patched grammar
 `0.23.5-ei.1` on Go Tree-sitter binding `0.25.0`. Binding is the
 [javac resolver's](../internal/resolve/java/README.md) job; nothing here selects
 a target.

@@ -3,7 +3,9 @@
 How the worker composes a parser, a build provider and a binding resolver per
 language, which build modes can complete a run, and what bundling another
 language requires. Three adapters are bundled: Java, bound by javac,
-TypeScript/JavaScript, bound by a syntax-tier resolver, and Python, bound by
+TypeScript/JavaScript, bound by a syntax-tier resolver and then, where it can
+prove a binding, the TypeScript compiler
+([TypeScript compiler tier](typescript-compiler.md)), and Python, bound by
 a pinned Pyright process ([Python ingestion](python-ingestion.md)).
 
 ## Composition at startup
@@ -27,8 +29,8 @@ files during discovery and parses them, so extension mappings cannot diverge.
 The analysis configuration digest binds every admitted run to the dispatcher
 digest, every language's resolver version and policy, and the parser, build
 and discovery limits; changing any of them, including adding a language,
-means new admissions. The worker registers the same list of languages in
-`CGWorkers`, which the admin API reports.
+means new admissions. The worker also writes its list of languages to its
+`CGWorkers` row.
 
 ## Configuration
 
@@ -225,4 +227,5 @@ language with a compiler-grade binder plugs it in as its resolver instead.
 Python now has a Tree-sitter adapter and pinned Pyright semantic resolver;
 see [Python ingestion](python-ingestion.md). TypeScript has a compiler tier
 over its syntax tier ([typescript-compiler.md](typescript-compiler.md)). Go,
-C# and Groovy are tracked in [closing the breadth gap](gap-closure.md).
+C# and Groovy are tracked in [CURRENT_STATE.md](../../../CURRENT_STATE.md)
+(Pending work, Code graph).

@@ -3,13 +3,16 @@
 The async worker for this monorepo: app `apps/forge-async-worker`, package
 `forge-async-worker`, module `forge_async_worker`, on Python 3.13 with uv. It
 runs organizations' **ADK workflow runs** off the `adk_workflows` SAQ queue on
-Redis. Each run lives in the **run store**
+Redis, and **knowledge base documents** off the `documents` queue. Each run
+lives in the **run store**
 ([`run_store.py`](../../packages/python/adk-workflows/src/forge_task_adk_workflows/run_store.py):
 the `adk_runs` and `adk_run_events` tables in the admin MySQL, beside the
 runs' ADK sessions), where the admin API starts, lists and acts on it, and
 the worker takes it, runs it, and records how it went. The ADK logic lives in
 the [ADK workflows task](../../packages/python/adk-workflows/README.md);
-the worker holds none.
+the worker holds none. On the `documents` queue, `run_job` runs a job of the
+[documents task](../../packages/python/documents/README.md): it ingests or
+deletes a document the admin API stored.
 
 ```
  admin API ── create the run ──► run store (admin MySQL) ◄── claim, checkpoint, pause, wait, finish ──┐
@@ -26,21 +29,21 @@ the worker holds none.
 
 ```
 src/forge_async_worker/
-  saq_worker.py   the SAQ job functions (run_adk, expire_pause, maintain), the settings every job runs under,
+  saq_worker.py   the SAQ job functions (run_adk, expire_pause, maintain, and run_job for the documents queue), the settings every job runs under,
                   the runs' worker and the upkeep's (with its cron), graceful stop, the health check, opening the run store
   jobs.py         AdkRunJobs: what each job does to a run (below)
   watchdog.py     Watchdog: a thread that ends the process when a run's job outlives its lease, or its time to stop,
                   backed by faulthandler's timer for when another thread holds the interpreter lock
   control.py      RunControl: a run's JobControl on the run store (kept state, decisions, pauses, waits, notes)
   queue.py        RunQueue: run_adk on the adk_workflows queue, expire_pause on adk_workflows_upkeep, failures
-                  kept in Redis for the maintenance, and each job's SAQ settings
+                  kept in Redis for the maintenance, and each job's SAQ settings (run_job's on documents too)
   runtime.py      build_runtime(): the installed task packages, built (entry points)
   config.py       WorkerSettings: HYBRID_ENABLED_TASKS, HYBRID_REDIS_URL and HYBRID_LOGGING__*
   cli.py          forge-async-worker: worker, tasks, ensure-schema, prepare, run
 tests/                    the jobs on a SQLite run store with a stand-in task (toy_tasks.py), and with the real
                           ADK workflows task (test_adk_runs.py); the worker on a real Redis (test_saq_redis.py)
-Dockerfile                uv-built image with the ADK workflows task and what its prepare() downloads
-compose.yaml              async-worker-adk-workflows
+Dockerfile                uv-built image with the ADK workflows and documents tasks and what their prepare() downloads
+compose.yaml              async-worker-adk-workflows and async-worker-documents
 .env.example              settings template; make env copies it to .env
 pyproject.toml            dependencies (a member of the root uv workspace, whose uv.lock and .venv it uses)
 ```
@@ -50,10 +53,15 @@ pyproject.toml            dependencies (a member of the root uv workspace, whose
 Other services enqueue by name, with no code from this package:
 `enqueue("run_adk", run_id=..., key=...)` on the `adk_workflows` queue (the
 admin API does after it creates, decides, answers, retries or resubmits a
-run). A job whose key is queued or running already isn't queued again, and a
+run), and `enqueue("run_job", spec={...}, key=...)` on the `documents` queue
+(the admin API does for each knowledge base document uploaded, retried or
+removed). A job whose key is queued or running already isn't queued again, and a
 duplicate is harmless: taking a run is atomic. The worker runs every job
-under its own settings (`queue.JOB_OPTIONS`: `run_adk` has no timeout, a
-2-minute heartbeat and no SAQ retries), whatever it was enqueued with.
+under its own settings (`queue.JOB_OPTIONS`: `run_adk` has no heartbeat,
+since the run's lease in MySQL says whether it's alive, no SAQ retries, and
+the worker's `job_seconds` as its timeout: the attempt's time and 10
+minutes), whatever it was enqueued with. `run_job` has a 30-minute timeout
+and 3 SAQ retries with backoff.
 
 **`run_adk(run_id)`** takes the run (`claim`, which counts the takings in
 `lease_epoch`). A run that isn't to be run now (another worker's, paused,
@@ -189,11 +197,13 @@ From the repository root:
 ```sh
 make async-worker-install     # uv sync --locked --all-packages: the whole Python workspace and its dev tools, in the root .venv
 make async-worker-check       # ruff, format check, mypy and pytest: the app, then each task package; no services needed
-make async-worker-deps        # redis (127.0.0.1:16389) and admin-mysql (127.0.0.1:13326)
+make async-worker-deps        # redis (127.0.0.1:16389), admin-mysql (127.0.0.1:13326), mongo (127.0.0.1:27037)
+                              # and knowledge-s3 (127.0.0.1:19010)
 make async-worker             # the worker natively, after ensure-schema
-make up                       # the whole stack, async-worker-adk-workflows included
+make up                       # the whole stack, async-worker-adk-workflows and async-worker-documents included
 make logs-async-worker
 make async-worker-test-redis  # the SAQ worker on a real Redis (database 15 of redis, cleared)
+make async-worker-test-integration  # the run machinery on MySQL 8.4 and Redis, with real worker processes (opt-in)
 ```
 
 ```sh
@@ -211,9 +221,11 @@ is an interruption, not an attempt: a run's attempts (`MAX_ATTEMPTS`) are
 its hiccups', and it fails for interruptions only after `MAX_INTERRUPTIONS`
 in a row with its worker gone. A stop takes up to `--grace-period` plus 70
 seconds; Compose's `stop_grace_period` is 2 minutes
-(`ASYNC_WORKER_STOP_GRACE_PERIOD`). Compose runs one service, `async-worker-adk-workflows`
-(`ASYNC_WORKER_ADK_WORKFLOWS_CONCURRENCY` and `_REPLICAS` in `.env.compose`);
-replicas share the queue.
+(`ASYNC_WORKER_STOP_GRACE_PERIOD`). Compose runs a service per queue:
+`async-worker-adk-workflows` (`ASYNC_WORKER_ADK_WORKFLOWS_CONCURRENCY` and
+`_REPLICAS` in `.env.compose`) and `async-worker-documents`
+(`ASYNC_WORKER_DOCUMENTS_CONCURRENCY` and `_REPLICAS`); replicas share their
+queue.
 
 The CLI also runs a job inline, without a worker or the run store (its state
 in memory, a wait ending it). Run it from `apps/forge-async-worker` so it
@@ -269,5 +281,12 @@ fill every slot, the health check sees this host, a stop takes no new runs
 (one a dequeue took goes back to the queue) and waits for running runs but
 not for idle workers, and a bare enqueue runs under the worker's settings.
 
-**Not yet run** against MySQL (the run store's tests use SQLite) or as the
-Compose stack.
+**Verified on MySQL and Redis** (`make async-worker-test-integration`,
+opt-in and never part of `make check`): the integration suite
+(`tests/integration`) runs the run machinery on MySQL 8.4 and Redis, in a
+Compose project of its own, with real worker processes, several at once:
+claim races, a killed worker's recovery, lease fencing, gate and abandon
+races, child-run starvation, SIGTERM, a Redis outage and the recovery's
+epoch fence.
+
+**Not yet run** as the Compose stack.

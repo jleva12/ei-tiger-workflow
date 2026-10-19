@@ -2,7 +2,14 @@
 
 Status: initial implementation delivered. See [Python ingestion](python-ingestion.md)
 for setup, supported behavior, validation and remaining boundaries. This document
-retains the broader target design; not every phase below is implemented.
+retains the broader target design; not every phase below is implemented. Of the
+implementation order ([section 10](#10-implementation-order-and-acceptance)),
+phases 1 and 2 are done, and most of phase 3, candidate projection among it.
+Pending: the rest of phase 3 (separate runtime/test contexts), phases 4 and 5,
+a distribution-to-module map, a deployment-fidelity mode, a 3.14 profile,
+structured binding evidence, possible-calls queries, framework enrichment and
+module-level invalidation. [CURRENT_STATE.md](../../../CURRENT_STATE.md)
+(Pending work, Code graph) tracks them.
 
 ## Recommendation
 
@@ -272,8 +279,10 @@ metadata beyond the existing single `ExternalSymbol` artifact reference.
 
 Proposed shared-model additions:
 
-- Provenance `type_analyzer`, with analyzer version and policy digest. Extend
-  the vocabulary in `docs/gap-closure.md`; do not label Pyright results `compiler`.
+- Provenance `type_analyzer` (now in `semantic.Lookup.Provenance`), with
+  analyzer version and policy digest, beside the shared vocabulary `compiler`,
+  `syntax`, `framework_rule` and `extracted`; do not label Pyright results
+  `compiler`.
 - Structured binding evidence: static contract versus implementation,
   annotation/stub/inference origin, implicit-call role and framework rule ID.
 - Candidate completeness, truncation and unknown-alternative flags. One known
@@ -285,11 +294,12 @@ Proposed shared-model additions:
 - Explicit import/module binding and alias/implementation relationships where
   existing lookup kinds cannot express them accurately.
 
-**Required projector fix:** `semantic.Lookup` already has `CandidateIDs`, but
-`projectLookup` currently emits only an unresolved node for non-resolved status.
-It does not persist those candidates. Project candidate links after mapping
-run-local symbol IDs to persistent entities, or persist equivalent typed target
-data. Query responses must expose them with their status and completeness.
+**Projector candidates (done):** for a non-resolved lookup with a candidate
+role, `projectLookup` persists the candidates on the lookup node:
+`candidate_role`, `has_unknown_candidates` and `candidate_target_ids`, the
+run-local symbol IDs mapped to persistent entities (at most
+`maxCandidateTargets`, with `candidate_count` when cut). Query responses don't
+yet expose them with their status and completeness.
 
 Java-specific qualification: `occurrenceBinding` currently returns on a compiler
 diagnostic before collecting candidate events. An ambiguous Java call can
@@ -357,7 +367,7 @@ from semantic results. Every semantic cache key includes all effective inputs.
 | `apps/forge-codegraph-worker/internal/languages/python/environment/` | Explicit/prepared dependency inventory |
 | `apps/forge-codegraph-worker/internal/parser/python/` | Tree-sitter extraction, registration and fixtures |
 | `apps/forge-codegraph-worker/internal/resolve/python/` | Bridge lifecycle, events, joins and semantic policy |
-| `apps/forge-codegraph-worker/internal/resolve/python/bridge/` | Pinned TypeScript analyzer integration |
+| `apps/forge-codegraph-worker/python-analyzer/src/bridge.ts` | Pinned Pyright analyzer bridge (TypeScript, run under Node) |
 | `apps/forge-codegraph-worker/internal/languages/python/framework/` | Optional framework rules |
 | `apps/forge-codegraph-worker/internal/languages/builtin/registry.go` | Register Python alongside Java and TypeScript |
 | `packages/go/code-graph/domain/ir/` | Versioned syntax additions and validation |

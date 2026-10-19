@@ -5,7 +5,7 @@ safe to repeat runs again. One whose effect may not be (a POST, a Bash
 command, Pi with tools that change things, a push) is neither skipped nor run
 again: it takes its Error way, saying it may have run, or with none the run
 fails. What a command left running is stopped first. And a run never ends as
-a success the session can't show (FINDINGS.md IT-2, IT-3 of the worker's
+a success the session can't show (CURRENT_STATE.md IT-2, IT-3 of the worker's
 integration suite).
 """
 

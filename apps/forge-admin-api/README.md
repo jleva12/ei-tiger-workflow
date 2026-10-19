@@ -85,6 +85,8 @@ src/forge_admin/
     admin_tools.py       The administration toolset
     knowledge_tools.py   The knowledge base toolset
     code_tools.py        The code toolset: the code graph MCP server's tools, as the person
+    workflow_tools.py    The workflows toolset: reading and building ADK workflows (the workflow co-pilot)
+    agent_tools.py       The agents toolset: reading and building chat agents (the agent co-pilot)
     runtime.py           AgentRuntime: a runner per agent, the session and artifact services
     wire.py              ADK's models as the JSON the web console reads
   api/                   The HTTP service
@@ -448,17 +450,21 @@ to pass to `enforce`.
 **Default roles** come from the migrations (the baseline, `0002agents` for
 `agents:manage`, `0003adk_runs` for `agents:run` and `agents:approve`,
 `0004adk_only`, which takes away the permissions only Forge workflows and
-inbound events used, and `0005adk_run_store`, which renames
-`background_tasks:manage` to `agents:manage_runs`), written once; edit them
+inbound events used, `0005adk_run_store`, which renames
+`background_tasks:manage` to `agents:manage_runs`, and the later ones that
+each add a permission: `0006mcp_servers`, `0008knowledge`, `0011api_keys`,
+`0014code_repositories`, `0015repositories_read`, `0023api_credentials`,
+`0024conversation_audit`, `0025skills`, `0027agent_access`,
+`0030shared_widgets` and `0034ui_components`), written once; edit them
 freely afterwards.
 
 | Role | Name | Grants |
 |---|---|---|
 | `site:admin` | Site administrator | `*:*`: everything, in every organization |
-| `org:admin` | Organization administrator | `organizations:read`, `organizations:update`, `members:read`, `members:update`, `agents:manage`, `agents:run`, `agents:approve`, `agents:manage_runs` |
-| `org:member` | Organization member | `organizations:read`, `members:read`, `agents:manage`, `agents:run` |
-| `org:viewer` | Organization viewer | `organizations:read`, `members:read` |
-| `org:api` | API caller | `agents:run`: what an organization's API key usually holds |
+| `org:admin` | Organization administrator | `organizations:read`, `organizations:update`, `members:read`, `members:update`, `agents:manage`, `agents:run`, `agents:approve`, `agents:manage_runs`, `agents:audit`, `mcp_servers:manage`, `knowledge_bases:manage`, `api_keys:manage`, `repositories:manage`, `repositories:read`, `credentials:manage`, `skills:manage`, `agent_access:manage`, `shared_widgets:manage`, `ui_components:manage` |
+| `org:member` | Organization member | `organizations:read`, `members:read`, `agents:manage`, `agents:run`, `mcp_servers:manage`, `knowledge_bases:manage`, `repositories:manage`, `repositories:read`, `credentials:manage`, `skills:manage` |
+| `org:viewer` | Organization viewer | `organizations:read`, `members:read`, `repositories:read` |
+| `org:api` | API caller | `agents:run`, `repositories:read`: what an organization's API key usually holds |
 
 The default permissions, and what checks them:
 
@@ -471,12 +477,20 @@ The default permissions, and what checks them:
 | `roles:create` / `update` / `delete` | Creating, editing and deleting roles (on the site) |
 | `permissions:create` / `update` / `delete` | Creating, editing and deleting permissions (on the site) |
 | `agents:manage` | Making, saving and deleting agents |
-| `agents:run` | Running ADK workflows (agents); answering their runs' questions and deciding the approvals any member may; calling the organization's agents and workflows through the runtime when it isn't public |
+| `agents:run` | Running ADK workflows (agents); answering their runs' questions and deciding the approvals any member may; calling the organization's agents and workflows through the runtime |
 | `api_keys:manage` | Making, changing and deleting the organization's API keys (`org:admin` by default) |
 | `repositories:manage` | Adding and removing the organization's code repositories, and starting and retrying their ingestions (`org:admin` and `org:member` by default) |
 | `repositories:read` | Reading the organization's code through the code graph MCP server (`GET /code-graph/access`; every organization role and `org:api` by default) |
 | `agents:approve` | Deciding the ADK workflow runs' approvals the organization's administrators decide |
 | `agents:manage_runs` | Retrying, resubmitting and abandoning the organization's ADK workflow runs |
+| `agents:audit` | Reading every conversation of the organization's agents and of the assistant: messages, state, tool calls and usage (the Conversations page; `org:admin` by default) |
+| `mcp_servers:manage` | Adding, changing, checking, connecting and deleting the organization's MCP servers (`org:admin` and `org:member` by default) |
+| `knowledge_bases:manage` | Creating, changing and deleting the organization's knowledge bases, and uploading, filing, retrying and removing their documents (`org:admin` and `org:member` by default) |
+| `credentials:manage` | Adding, changing, signing in with and deleting the organization's API credentials (`org:admin` and `org:member` by default) |
+| `skills:manage` | Adding, changing, importing and deleting the organization's skills, and having the skill creator write one (`org:admin` and `org:member` by default) |
+| `agent_access:manage` | Setting up the organization's agent permissions and linking them to company groups and API keys; reading them takes `members:read` (`org:admin` by default) |
+| `shared_widgets:manage` | Taking away widgets members shared with the organization; whoever shared one may too (`org:admin` by default) |
+| `ui_components:manage` | Writing, previewing, publishing, disabling and archiving the organization's team UI components; reading its published ones takes `organizations:read` (`org:admin` by default) |
 | `*:*` | Everything |
 
 Reading roles, permissions and users needs only a signed-in user.
@@ -757,10 +771,8 @@ A start sent with an `Idempotency-Key` header (up to 255 printable ASCII
 characters) is safe to retry: its run's ID is UUID5 of the key in the
 organization's namespace, so the same key from the same caller starts one
 run, and sending it again answers that run (200, not 201). The key with
-another input, or another caller's key of the same name, answers 409.
-Anonymous callers' keys are ignored (an anonymous run is read by its ID,
-which a key mustn't make guessable). The console's start
-(`…/agents/{agent}/runs`) and resubmit (`…/adk-runs/{run}/resubmit`) take
+another input, or another caller's key of the same name, answers 409. The
+console's start (`…/agents/{agent}/runs`) and resubmit (`…/adk-runs/{run}/resubmit`) take
 the header too.
 
 Over A2A a task is a run (its ID the run's): the first message's data part
@@ -958,10 +970,15 @@ results are cut down.
 | `administration` | `admin_tools.py` | Read, create and update organizations, role definitions, permission definitions and users; never deletes |
 | `knowledge` | `knowledge_tools.py` | An organization's knowledge bases and documents, how their ingestion went, answering from them with cited passages, retrying and re-indexing |
 | `code` | `code_tools.py` | The code graph MCP server's tools, the same definitions (`forge_codegraph.tools`): explore and search code, callers, callees, impact, paths, hubs, changes, exact source, how repositories and systems connect. Each takes the `organization_id` whose code it reads and reads only what the person may there (`repositories:read`, as `GET /organizations/{id}/code-graph/access` answers, kept 30 seconds); read-only |
+| `workflows` | `workflow_tools.py` | An organization's ADK workflows and their runs: explaining one and why a run failed, and, on the workflow builder's page, building its draft with the person (adding, changing and connecting nodes, their settings and fields), checking what would stop a run and test-running the draft. Reads need `organizations:read`, saves and test runs `agents:manage`; edits change the draft only, which the canvas shows and can undo, and a test run asks first |
+| `agents` | `agent_tools.py` | An organization's agents from the Agents page: explaining one and, on the agent builder's page, building its draft with the person (its tools, sub-agents and instructions), checking what would stop it working, trying it and making new agents. Reads need `organizations:read`, saves and tries `agents:manage`; changes go to the draft only, and a try asks first |
 
-No toolset reaches ADK workflows, their runs or agents yet; on those pages
-the assistant says so (`screens.yaml`'s `organization` screen). Left out on
-purpose: deleting organizations, roles, permissions or users.
+On the organization's workspace the assistant has only the reading tools of
+`workflows` and `agents` (`screens.yaml`'s `organization` screen). It builds
+a workflow on the workflow's own page (`workflow-builder`), and an agent on
+the agent's page or, a new one, on the Agents page (`agent-builder`,
+`organization-agents`). Left out on purpose: deleting organizations, roles,
+permissions or users.
 
 ## Helper agents
 

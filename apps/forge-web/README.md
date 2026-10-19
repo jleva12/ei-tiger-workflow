@@ -16,15 +16,18 @@ What it has:
   sidebar picks one.
 - **The ADK workflow builder**
   (`/organizations/$organizationId/agents/$agentId`): a Google ADK graph on a
-  canvas (LLM, sequential, parallel and loop agents, saved workflows, human
-  input, and Forge's steps: Approval, HTTP request, Transform, Delay, If /
-  else, Switch, Match, Loop, Merge, End), each node's settings with JSONata
+  canvas (LLM, sequential, parallel and loop agents, saved workflows, the Pi
+  coding agent, human input, and Forge's steps: Approval, Decision board,
+  HTTP request, Bash, Transform, Filter, Delay, Clone repository, Create
+  branch, Commit and push, Open pull request, If / else, Switch, Match, Loop,
+  For each, Merge, End), each node's settings with JSONata
   expressions checked as you type, autosave with revisions, runs and what
   they wait for.
 - **The chat agent builder**
   (`/organizations/$organizationId/chat-agents/$chatAgentId`): a Google ADK
-  agent with its sub-agents and tools. Kept in the browser until the admin
-  API stores agents.
+  agent with its sub-agents and tools. The admin API keeps agents in MongoDB
+  (`chat_agents/store.py`): a draft autosaved with revisions, and published
+  versions that never change.
 - **The instruction writer**: the ✨ beside an LLM agent's instruction (on
   both builders) says what the agent should do to the admin API's
   instruction writer, which writes the instruction for the agent as it's set

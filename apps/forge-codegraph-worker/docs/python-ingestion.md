@@ -29,13 +29,13 @@ dotted path (see [Graph behavior](#graph-behavior)).
 For a native worker, install Node 22 or later and build the pinned bridge:
 
 ```sh
-make python-analyzer
-make test-python
+make worker-install        # builds the Pyright and TypeScript bridges, then fetches the Go modules
+make worker-test-python
 ```
 
 The build verifies the SHA-256 of Pyright's pinned source archive, bundles the
 internal API behind a versioned JSONL protocol, and copies its typeshed and
-license. Generated files live in `packages/python-analyzer/dist/` and are ignored
+license. Generated files live in `apps/forge-codegraph-worker/python-analyzer/dist/` and are ignored
 by Git. `CODEGRAPH_PYTHON_ANALYZER` or `analyzer_path` can override the bridge path.
 
 ### Configuration
@@ -273,7 +273,7 @@ runtime implementation under monkey-patching or arbitrary dynamic dispatch.
 
 ## Validation
 
-`make test-python` runs both analyzer protocol tests and Go parser, environment,
+`make worker-test-python` runs both analyzer protocol tests and Go parser, environment,
 configuration and resolver tests. Tests cover ambiguous unions, callable origin
 identity, narrowing, source/stub targets, empty modules, overrides, unchanged
 sources, negative imports, Unicode positions, diagnostics, budgets and input
