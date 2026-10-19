@@ -1356,7 +1356,7 @@
     },
     "config_http": {
       "type": "object",
-      "description": "Calls a URL and hands on the response; a status of its own (404, 401, 4xx) can take a way of its own. Hands on {status, headers, body} by its success way, body held to output_schema when it declares one. Its error way hands on nothing; steps.<id>.error is {message, status?, body?, expression?}.",
+      "description": "Calls a URL and hands on the response; a status of its own (404, 401, 4xx) can take a way of its own. Hands on {status, headers, body} by its success way, body held to output_schema when it declares one. Its error way hands on nothing; steps.<id>.error is {message, status?, body?, expression?}. A POST or PATCH carries an Idempotency-Key; one cut off as it waited isn't sent again: its error way, with may_have_run and idempotency_key.",
       "required": [
         "method",
         "url",
@@ -1475,7 +1475,7 @@
     },
     "config_bash": {
       "type": "object",
-      "description": "Runs a shell command in the run's folder and hands on its output. Runs its command by bash in its folder of the run's folder (the start must allow a file system), its env variables and WORKSPACE (the run's folder) set; hands on {exit_code, stdout, stderr, cwd, truncated} by its success way when it exits with 0. Its error way (another exit code, a folder outside the run's, its timeout) hands on nothing; steps.<id>.error is {message, exit_code?, stdout?, stderr?}.",
+      "description": "Runs a shell command in the run's folder and hands on its output. Runs its command by bash in its folder of the run's folder (the start must allow a file system), its env variables and WORKSPACE (the run's folder) set; hands on {exit_code, stdout, stderr, cwd, truncated} by its success way when it exits with 0. Its error way (another exit code, a folder outside the run's, its timeout) hands on nothing; steps.<id>.error is {message, exit_code?, stdout?, stderr?}. A command cut off as it ran isn't run again: its error way, with may_have_run.",
       "required": [
         "command",
         "cwd",
@@ -1991,6 +1991,10 @@
         },
         "confirm": {
           "type": "boolean"
+        },
+        "show_to_person": {
+          "type": "boolean",
+          "description": "The people the agent talks with see what it was called with and what it answered; otherwise only that it ran. Whoever builds the agent always sees both."
         }
       }
     },
@@ -2119,6 +2123,10 @@
         "confirm": {
           "type": "boolean",
           "description": "A person confirms each call before it's made."
+        },
+        "show_to_person": {
+          "type": "boolean",
+          "description": "The people the agent talks with see what it was called with and what it answered; otherwise only that it ran. Whoever builds the agent always sees both."
         }
       }
     },
@@ -2160,6 +2168,10 @@
         },
         "confirm": {
           "type": "boolean"
+        },
+        "show_to_person": {
+          "type": "boolean",
+          "description": "The people the agent talks with see what it was called with and what it answered; otherwise only that it ran. Whoever builds the agent always sees both."
         }
       }
     },
@@ -2653,6 +2665,10 @@
         "confirm": {
           "type": "boolean",
           "description": "A person confirms each run, seeing the code, before it runs."
+        },
+        "show_to_person": {
+          "type": "boolean",
+          "description": "The people the agent talks with see what it was called with and what it answered; otherwise only that it ran. Whoever builds the agent always sees both."
         }
       }
     },

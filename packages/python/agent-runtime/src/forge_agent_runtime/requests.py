@@ -47,7 +47,7 @@ import datetime
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeVar
 
 from google.adk.tools.base_tool import BaseTool
 from google.genai import types
@@ -711,6 +711,9 @@ class ReviewRequests(_DeskTool):
 
 
 class SubmitRequests(_DeskTool):
+    #: A chat draws the runs it started (the person is shown its calls in full: ``SHOWN_ATTR``).
+    forge_shown: ClassVar[bool] = True
+
     def __init__(self, desk: RequestDesk) -> None:
         super().__init__(
             desk,

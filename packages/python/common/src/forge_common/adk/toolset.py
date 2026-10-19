@@ -54,6 +54,7 @@ from google.genai import types
 __all__ = [
     "DEFAULT_MAX_RESULT_CHARS",
     "DEFAULT_RESULT_DIR",
+    "SHOWN_ATTR",
     "ForgeBaseToolset",
     "ToolFailed",
     "ToolFailure",
@@ -71,6 +72,9 @@ DEFAULT_RESULT_DIR = Path(tempfile.gettempdir()) / "forge-tool-results"
 _MEDIA_DEPTH = 2
 # Set on a guarded tool, so a toolset built from another's tools guards them once.
 _GUARDED = "_forge_guarded"
+#: True on a tool whose calls a person is shown in full (its arguments and
+#: result): a toolset's (``ForgeBaseToolset.shown``), or a tool class's own.
+SHOWN_ATTR = "forge_shown"
 
 RunAsync = Callable[..., Awaitable[Any]]
 
@@ -158,6 +162,10 @@ class ForgeBaseToolset(BaseToolset):
     default_suggested_fixes: Sequence[str] = ()
     """What to suggest for a failure nothing more specific covers, and when
     ``suggest_fixes`` returns None."""
+
+    shown: bool = False
+    """Whether a person is shown its tools' calls in full: each tool it
+    guards is marked (:data:`SHOWN_ATTR`)."""
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -285,6 +293,10 @@ class ForgeBaseToolset(BaseToolset):
 
     def _guard(self, tool: BaseTool) -> BaseTool:
         if getattr(tool, _GUARDED, False):
+            if self.shown and not getattr(tool, SHOWN_ATTR, False):
+                # Another toolset's guarded tool, shown here: a copy says so.
+                tool = copy.copy(tool)
+                setattr(tool, SHOWN_ATTR, True)
             return tool
         run: RunAsync = tool.run_async
         detect: Callable[[Any], str | None] | None = getattr(
@@ -310,6 +322,8 @@ class ForgeBaseToolset(BaseToolset):
         guarded.run_async = run_async  # type: ignore[method-assign]
         guarded._detect_error_in_response = detect_error_in_response  # type: ignore[attr-defined]
         setattr(guarded, _GUARDED, True)
+        if self.shown:
+            setattr(guarded, SHOWN_ATTR, True)
         return guarded
 
     async def _run(

@@ -435,6 +435,7 @@ function ChatToolFields<K extends ToolKind>({
       organizationId={organizationId}
       self={self}
       confirmAbout="The chat asks before the call is made, showing what the model wants to send."
+      showToPersonAbout="People chatting with the agent see what it was called with and what it answered. Otherwise they see only that it ran; you see both when you test it."
       scope={scope}
       valuesAbout={
         <>

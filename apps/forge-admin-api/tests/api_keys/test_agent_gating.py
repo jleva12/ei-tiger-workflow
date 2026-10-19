@@ -359,12 +359,14 @@ def test_a_coordinator_may_answer_someone_a_sub_agent_of_it_doesnt(
 
     llm.turns = [[hand_to("billing")], [say("Billing isn't open to you.")]]
     said = chat(world, None, "My invoice", headers=finance)
-    assert said[0][0] == "support_assistant"
-    assert said[0][1].startswith(
+    # What Billing needs goes to the model, which tells the person: the hand-off's
+    # answer isn't theirs to see (forge_agent_runtime.views).
+    assert said == [("support_assistant", "Billing isn't open to you.")]
+    told = llm.requests[-1].model_dump_json()
+    assert (
         "You can't use Billing: it needs invoices:approve or both finance:read "
         "and finance:write."
-    )
-    assert said[-1] == ("support_assistant", "Billing isn't open to you.")
+    ) in told
 
     # finance:write too: both of the second way hold.
     link(world, write, groups=[FINANCE])
@@ -591,3 +593,81 @@ def test_a_run_carries_what_its_starter_holds_of_its_agents_rules(world: World) 
     assert world.run(lambda _: start(AgentUser(BUILDER, manager=True))).everything
     # Checking or publishing a workflow runs nothing, so holds nothing.
     assert world.run(lambda _: start(None)) is None
+
+
+# ------------------------------------------------------------ what callers see
+
+CONSOLE_CLIENT = {"X-Forge-Client": "console"}
+
+
+def turn_events(
+    world: World, user: str | None, message: str = "My invoice", **kw: Any
+) -> list[dict[str, Any]]:
+    """A turn's events as its caller is shown them (forge_agent_runtime.views)."""
+    who = "someone" if kw.get("key") else user or "someone"
+    created = world.call(
+        "POST", f"/apps/{AGENT}/users/{who}/sessions", user, {}, prefix=RUNTIME, **kw
+    )
+    assert created.status_code == 201, created.text
+    ran = world.call(
+        "POST",
+        "/run_sse",
+        user,
+        {
+            "appName": AGENT,
+            "userId": who,
+            "sessionId": created.json()["id"],
+            "newMessage": {"role": "user", "parts": [{"text": message}]},
+        },
+        prefix=RUNTIME,
+        **kw,
+    )
+    assert ran.status_code == 200, ran.text
+    return [
+        json.loads(chunk.removeprefix("data: "))
+        for chunk in ran.text.split("\n\n")
+        if chunk.startswith("data: ")
+    ]
+
+
+def calls_carried(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """:return: What each call in the events was made with, as shown."""
+    return [
+        part["functionCall"].get("args", {})
+        for event in events
+        for part in (event.get("content") or {}).get("parts") or []
+        if "functionCall" in part
+    ]
+
+
+def test_whoever_builds_the_agents_sees_what_its_calls_carry_in_the_console(
+    world: World, llm: ScriptedLlm, tmp_path: Path
+) -> None:
+    put(tmp_path, desk())
+    llm.turns = [[hand_to("billing")], [say("Billing here.")]]
+    events = turn_events(world, BUILDER, headers=CONSOLE_CLIENT)
+    assert calls_carried(events) == [{"agent_name": "billing"}]
+
+
+def test_everyone_else_sees_a_call_but_not_what_it_carries(
+    world: World, llm: ScriptedLlm, tmp_path: Path
+) -> None:
+    put(tmp_path, desk())
+    key = world.make_key(name="Outside app")["secret"]
+    callers: list[tuple[str | None, dict[str, Any]]] = [
+        # A member chatting in the console, who doesn't build the agents.
+        (MEMBER, {"headers": CONSOLE_CLIENT}),
+        # Whoever builds them, from anywhere but the console (the desktop app).
+        (BUILDER, {}),
+        # An outside app.
+        (None, {"key": key}),
+    ]
+    for user, kw in callers:
+        llm.turns = [[hand_to("billing")], [say("Billing here.")]]
+        events = turn_events(world, user, **kw)
+        assert calls_carried(events) == [{}], (user, kw)
+        assert any(
+            part.get("text") == "Billing here."
+            for event in events
+            for part in (event.get("content") or {}).get("parts") or []
+        )

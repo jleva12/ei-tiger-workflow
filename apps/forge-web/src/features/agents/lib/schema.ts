@@ -19,6 +19,12 @@ import { HANDS_OFF, ON_COMPLETE, TOOLS, type ChatKind } from "./model"
 
 const text = { type: "string" } as const
 const bool = { type: "boolean" } as const
+/** A tool's calls shown in full to the people its agent talks with (forge_agent_runtime.views). */
+const showToPerson = {
+  ...bool,
+  description:
+    "The people the agent talks with see what it was called with and what it answered; otherwise only that it ran. Whoever builds the agent always sees both.",
+} as const
 const oneOf = (...values: readonly string[]) => ({
   type: "string",
   enum: [...values],
@@ -308,6 +314,7 @@ export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
       ...bool,
       description: "A person confirms each call before it's made.",
     },
+    show_to_person: showToPerson,
   },
   openapi: {
     source: oneOf("url", "inline"),
@@ -328,6 +335,7 @@ export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
         "One of the organization's credentials, by ID: its auth goes with each call, and only to the URLs it's for. Empty for none.",
     },
     confirm: bool,
+    show_to_person: showToPerson,
   },
   mcp: {
     server: {
@@ -344,6 +352,7 @@ export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
         "The server's tools it may call, comma-separated; empty for all.",
     },
     confirm: bool,
+    show_to_person: showToPerson,
   },
   skills: {
     skills: {
@@ -385,6 +394,7 @@ export const CONFIGS: Record<ChatKind, Record<string, unknown>> = {
       description:
         "A person confirms each run, seeing the code, before it runs.",
     },
+    show_to_person: showToPerson,
   },
 }
 

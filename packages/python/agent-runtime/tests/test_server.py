@@ -31,6 +31,7 @@ from forge_agent_runtime.executor import (
 from forge_agent_runtime.leases import MemoryTurnLeases, TurnKey, TurnLease
 from forge_agent_runtime.server import KEEPALIVE, _stream, create_app, create_router
 from forge_agent_runtime.services import RuntimeServices
+from forge_agent_runtime.views import FULL_VIEW, EventView
 from forge_common.adk.models import ProviderModels
 from forge_common.model_provider import parse_model_provider_yaml
 from tests.conftest import EXAMPLE, EXAMPLE_HOSTS, PROVIDERS, ScriptedLlm, call, text, without
@@ -76,6 +77,28 @@ def client(agent_file, models, web, orders):
         yield client
 
 
+async def full_view(request: Any, agent: Any) -> EventView:
+    return FULL_VIEW
+
+
+@pytest.fixture
+def builders_client(agent_file, models, web, orders):
+    """A client shown everything (.views), as whoever builds the agent is."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        orders.append(request)
+        return httpx.Response(200, json={"order": "A1", "status": "shipped"})
+
+    executor = AgentExecutor(
+        FileAgentSource(agent_file),
+        models=models,
+        services=RuntimeServices(allowed_hosts=("api.example.com",)),
+        http=web(handler),
+    )
+    with TestClient(create_app(executor, view=full_view)) as client:
+        yield client
+
+
 def events(response, *, lifecycle=False) -> list[dict[str, Any]]:
     assert response.status_code == 200, response.text
     assert response.headers["content-type"].startswith("text/event-stream")
@@ -118,19 +141,41 @@ def test_a_turn_runs_with_its_instruction_filled_in_and_its_tools(client, llm, c
     first = llm.requests[0]
     assert first.config.system_instruction.startswith("Help ada, a pro customer.")
     assert calls[0].model.ref == "openai/gpt-other"
+    # A person isn't shown what the tool was called with, nor its answer
+    # (.views): its call and response still pair up, by name and ID.
+    tool_call = next(p["functionCall"] for e in got for p in e["content"]["parts"] if "functionCall" in p)
     tool_answer = next(
-        p["functionResponse"]["response"]
-        for e in got
-        for p in e["content"]["parts"]
-        if "functionResponse" in p
+        p["functionResponse"] for e in got for p in e["content"]["parts"] if "functionResponse" in p
     )
-    assert tool_answer["status"] == "success"
-    assert tool_answer["payload"]["body"] == {"order": "A1", "status": "shipped"}
+    assert tool_call["name"] == tool_answer["name"] == "look_up_order"
+    assert tool_call["id"] == tool_answer["id"]
+    assert tool_call.get("args", {}) == {}
+    assert tool_answer.get("response", {}) == {}
 
     kept = client.get(f"/apps/{AGENT}/users/ada/sessions/{sid}").json()
     assert kept["state"]["customer_tier"] == "pro"
     assert not any(key.startswith("temp:") for key in kept["state"])
     assert [s["id"] for s in client.get(f"/apps/{AGENT}/users/ada/sessions").json()] == [sid]
+
+
+def test_whoever_builds_the_agent_is_shown_what_its_tools_did(builders_client, llm):
+    llm.turns = [[call("look_up_order", order_id="A1")], [text("Your order A1 has shipped.")]]
+    sid = session(builders_client)
+    got = events(run(builders_client, sid, "Where's A1?"))
+
+    tool_call = next(p["functionCall"] for e in got for p in e["content"]["parts"] if "functionCall" in p)
+    tool_answer = next(
+        p["functionResponse"] for e in got for p in e["content"]["parts"] if "functionResponse" in p
+    )
+    assert tool_call["args"] == {"order_id": "A1"}
+    assert tool_answer["response"]["status"] == "success"
+    assert tool_answer["response"]["payload"]["body"] == {"order": "A1", "status": "shipped"}
+    kept = builders_client.get(f"/apps/{AGENT}/users/ada/sessions/{sid}").json()
+    assert any(
+        p.get("functionResponse", {}).get("response", {}).get("status") == "success"
+        for e in kept["events"]
+        for p in (e.get("content") or {}).get("parts", [])
+    )
 
 
 def test_a_turn_that_asks_for_follow_ups_ends_with_them(client, llm, calls):

@@ -47,7 +47,7 @@ import re
 from collections.abc import Iterable
 from functools import cache
 from importlib import resources
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_request import LlmRequest
@@ -403,6 +403,9 @@ class PresentHistoryPlugin(BasePlugin):
 
 class PresentTool(BaseTool):
     """Shows a composition in the chat, of the components it offers; it answers at once."""
+
+    #: What it shows is for the person (its calls are shown in full: ``SHOWN_ATTR``).
+    forge_shown: ClassVar[bool] = True
 
     def __init__(
         self, components: Iterable[Any] | None = None, team: Iterable[CompiledComponent] = ()

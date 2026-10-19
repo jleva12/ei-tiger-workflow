@@ -16,6 +16,7 @@ from forge_agent_runtime import a2a
 from forge_agent_runtime.a2a import api_key_security, create_a2a_router, owner_of, task_store
 from forge_agent_runtime.executor import AgentExecutor, DirectoryAgentSource
 from forge_agent_runtime.services import RuntimeServices
+from forge_agent_runtime.views import FAILED, MODEL_FAILED
 from forge_common.adk.turns import TURN_KEY, current_turn
 from tests.conftest import EXAMPLE_HOSTS, call, text, without
 
@@ -207,11 +208,12 @@ def test_a_context_id_a_conversation_cant_have_is_refused_before_a_task_is_kept(
     assert llm.requests == []
 
 
-def test_a_model_failure_fails_the_task_saying_why(client, llm):
+def test_a_failure_fails_the_task_saying_so_but_not_why(client, llm):
     llm.turns = [ValueError("The prompt is too long.")]
     task = rpc(client, "SendMessage", message_v1("Hi", "c7"), headers=V1)["result"]["task"]
     assert task["status"]["state"] == "TASK_STATE_FAILED"
-    assert task["status"]["message"]["parts"][0]["text"] == "The prompt is too long."
+    # Why it failed is the server's to know (.views); the caller is told it did.
+    assert task["status"]["message"]["parts"][0]["text"] == FAILED
 
 
 def model_replies(monkeypatch, llm, replies):
@@ -333,9 +335,8 @@ def test_an_error_on_a_partial_model_response_is_not_dropped(client, llm, monkey
     else:
         task = rpc(client, "SendMessage", message_v1("Hi", "partial-error"), headers=V1)["result"]["task"]
         assert task["status"]["state"] == "TASK_STATE_FAILED"
-    assert task["status"]["message"]["parts"][0]["text"] == (
-        "The model's service became unavailable. Please retry."
-    )
+    # The model's failure, as a caller is told of it (.views).
+    assert task["status"]["message"]["parts"][0]["text"] == MODEL_FAILED
     assert task["artifacts"][0]["parts"][0]["text"] == "Partial response"
     assert task["artifacts"][0]["metadata"]["forge"]["incomplete"] is True
 
@@ -375,7 +376,8 @@ def test_a_later_connection_error_preserves_the_original_failure_and_audit(
     task = rpc(client, "SendMessage", message_v1("Hi", "native-before-close"), headers=V1)["result"]["task"]
 
     assert task["status"]["state"] == "TASK_STATE_FAILED"
-    assert task["status"]["message"]["parts"][0]["text"] == explanation
+    # The caller is told the model failed; the audit keeps why.
+    assert task["status"]["message"]["parts"][0]["text"] == MODEL_FAILED
     assert task["artifacts"][0]["parts"] == [{"text": "Partial response"}]
     assert audited == [("failed", explanation)]
 
@@ -495,7 +497,9 @@ async def test_transport_failures_close_the_executor_with_a_failed_audit(
     assert len(markers) == 1
     marker = markers[0].custom_metadata[TURN_KEY]
     assert marker["status"] == "failed"
-    assert marker["errorMessage"] == task["status"]["message"]["parts"][0]["text"]
+    # The audit keeps why it failed; the caller is told it did (.views).
+    assert marker["errorMessage"].startswith("The reply could not be")
+    assert task["status"]["message"]["parts"][0]["text"] == FAILED
     answer = next(event for event in history.events if event.content and event.content.role == "model")
     assert markers[0].invocation_id == answer.invocation_id
 

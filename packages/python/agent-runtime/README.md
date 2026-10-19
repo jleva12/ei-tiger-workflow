@@ -282,6 +282,32 @@ model call:
 You're helping {{ request.userId }}, on the {{ state.customer_tier }} plan.
 ```
 
+## What callers see
+
+ADK's session holds everything an agent did. What a caller is sent of it
+(sessions, a turn's events, A2A tasks) is a view (`forge_agent_runtime.views`):
+
+- **Public**, unless the server says otherwise (`create_router(view=…)`,
+  `create_app(view=…)`), and always over A2A:
+  - no model thoughts;
+  - a tool call's arguments and result only for the tools a chat draws: rich
+    answers, workflow runs, knowledge-base citations, asking the person,
+    approvals, sign-ins, `finish_task`, `submit_requests` and task hand-offs.
+    Any other call keeps its name and ID, with `{}` for what it carried, so
+    calls and answers still pair up. A tool node with `show_to_person` is
+    shown in full too;
+  - only the state a chat reads: `forge:title`, `forge:follow_ups`,
+    `forge:context:*`, and what the agent declares;
+  - a failure's code, with a message saying it failed rather than why. A
+    refusal that says what the person needs is kept.
+- **Full**: everything, as ADK keeps it. The hosted runtime gives it to whoever
+  edits the organization's agents, in Forge's console, where the builder's test
+  chat draws a turn on the canvas.
+
+`ShownCallsPlugin` decides which calls are shown as each one is made, from the
+tool (`forge_shown`), and keeps that with the event. A conversation replayed
+later is shown just as it streamed.
+
 ## In your own app
 
 ```python

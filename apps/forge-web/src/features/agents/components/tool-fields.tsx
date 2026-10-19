@@ -109,6 +109,12 @@ type ToolProps<K extends ToolKind> = ToolBind<K> & {
   self?: string
   /** What a person confirming each call means where it runs. */
   confirmAbout: string
+  /**
+   * What showing a tool's calls to the people its agent talks with means
+   * where it runs; where none is given (a workflow's LLM agent), the setting
+   * isn't offered.
+   */
+  showToPersonAbout?: string
   /** What `{{ }}` in an HTTP tool's URL and body reads where it runs. */
   scope: Scope
   /** That in words: `{{ }}` puts in …. */
@@ -248,10 +254,32 @@ function MemoryFields({ config, set }: ToolProps<"memory">) {
   )
 }
 
+/** Whether the people an agent talks with see a tool's calls in full; offered only where `about` says what that means. */
+function ShowToPersonField({
+  checked,
+  onChange,
+  about,
+}: {
+  checked: boolean
+  onChange: (on: boolean) => void
+  about?: string
+}) {
+  if (about === undefined) return null
+  return (
+    <CheckField
+      label="Show its calls in the chat"
+      checked={checked}
+      onChange={onChange}
+      description={about}
+    />
+  )
+}
+
 function CodeExecutionFields({
   config,
   set,
   confirmAbout,
+  showToPersonAbout,
 }: ToolProps<"code_execution">) {
   return (
     <>
@@ -267,6 +295,11 @@ function CodeExecutionFields({
         checked={config.confirm}
         onChange={(on) => set("confirm", on)}
         description={confirmAbout}
+      />
+      <ShowToPersonField
+        checked={config.show_to_person}
+        onChange={(on) => set("show_to_person", on)}
+        about={showToPersonAbout}
       />
     </>
   )
@@ -847,6 +880,7 @@ function HttpToolFields({
   lookups,
   organizationId,
   confirmAbout,
+  showToPersonAbout,
   scope,
   valuesAbout,
 }: ToolProps<"http_tool">) {
@@ -962,6 +996,11 @@ function HttpToolFields({
         onChange={(on) => set("confirm", on)}
         description={confirmAbout}
       />
+      <ShowToPersonField
+        checked={config.show_to_person}
+        onChange={(on) => set("show_to_person", on)}
+        about={showToPersonAbout}
+      />
     </>
   )
 }
@@ -972,6 +1011,7 @@ function OpenApiFields({
   lookups,
   organizationId,
   confirmAbout,
+  showToPersonAbout,
 }: ToolProps<"openapi">) {
   return (
     <>
@@ -1031,6 +1071,11 @@ function OpenApiFields({
         onChange={(on) => set("confirm", on)}
         description={confirmAbout}
       />
+      <ShowToPersonField
+        checked={config.show_to_person}
+        onChange={(on) => set("show_to_person", on)}
+        about={showToPersonAbout}
+      />
     </>
   )
 }
@@ -1044,6 +1089,7 @@ function McpFields({
   patch,
   lookups,
   confirmAbout,
+  showToPersonAbout,
 }: ToolProps<"mcp">) {
   const servers = lookups.mcpServers
   const server = config.server ? servers[config.server] : undefined
@@ -1132,6 +1178,11 @@ function McpFields({
         onChange={(on) => set("confirm", on)}
         description={confirmAbout}
       />
+      <ShowToPersonField
+        checked={config.show_to_person}
+        onChange={(on) => set("show_to_person", on)}
+        about={showToPersonAbout}
+      />
     </>
   )
 }
@@ -1218,6 +1269,7 @@ export function ToolFields<K extends ToolKind>({
   organizationId,
   self,
   confirmAbout,
+  showToPersonAbout,
   scope,
   valuesAbout,
 }: {
@@ -1228,6 +1280,8 @@ export function ToolFields<K extends ToolKind>({
   organizationId: string
   self?: string
   confirmAbout: string
+  /** What showing a tool's calls to the people its agent talks with means; none to not offer it. */
+  showToPersonAbout?: string
   /** What `{{ }}` in an HTTP tool's URL and body reads where it runs. */
   scope: Scope
   /** That in words: `{{ }}` puts in …. */
@@ -1239,6 +1293,7 @@ export function ToolFields<K extends ToolKind>({
     organizationId,
     self,
     confirmAbout,
+    showToPersonAbout,
     scope,
     valuesAbout,
   }

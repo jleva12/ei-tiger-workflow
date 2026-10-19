@@ -2524,7 +2524,8 @@
         "body",
         "parameters",
         "credential",
-        "confirm"
+        "confirm",
+        "show_to_person"
       ],
       "additionalProperties": false,
       "properties": {
@@ -2608,6 +2609,10 @@
         "confirm": {
           "type": "boolean",
           "description": "A person confirms each call before it's made."
+        },
+        "show_to_person": {
+          "type": "boolean",
+          "description": "The people the agent talks with see what it was called with and what it answered; otherwise only that it ran. Whoever builds the agent always sees both."
         }
       }
     },
@@ -2620,7 +2625,8 @@
         "spec",
         "operations",
         "credential",
-        "confirm"
+        "confirm",
+        "show_to_person"
       ],
       "additionalProperties": false,
       "properties": {
@@ -2649,6 +2655,10 @@
         },
         "confirm": {
           "type": "boolean"
+        },
+        "show_to_person": {
+          "type": "boolean",
+          "description": "The people the agent talks with see what it was called with and what it answered; otherwise only that it ran. Whoever builds the agent always sees both."
         }
       }
     },
@@ -2661,7 +2671,8 @@
         "url",
         "headers",
         "tools",
-        "confirm"
+        "confirm",
+        "show_to_person"
       ],
       "additionalProperties": false,
       "properties": {
@@ -2708,6 +2719,10 @@
         },
         "confirm": {
           "type": "boolean"
+        },
+        "show_to_person": {
+          "type": "boolean",
+          "description": "The people the agent talks with see what it was called with and what it answered; otherwise only that it ran. Whoever builds the agent always sees both."
         }
       }
     },
@@ -2751,13 +2766,18 @@
       "type": "object",
       "description": "Runs Python the model writes, to calculate or transform data, and answers with what it printed.",
       "required": [
-        "confirm"
+        "confirm",
+        "show_to_person"
       ],
       "additionalProperties": false,
       "properties": {
         "confirm": {
           "type": "boolean",
           "description": "A person confirms each run, seeing the code, before it runs."
+        },
+        "show_to_person": {
+          "type": "boolean",
+          "description": "The people the agent talks with see what it was called with and what it answered; otherwise only that it ran. Whoever builds the agent always sees both."
         }
       }
     },

@@ -141,7 +141,8 @@
         "body": "",
         "parameters": {},
         "credential": "",
-        "confirm": false
+        "confirm": false,
+        "show_to_person": false
       }
     },
     {
@@ -160,7 +161,8 @@
         "spec": "",
         "operations": "",
         "credential": "",
-        "confirm": false
+        "confirm": false,
+        "show_to_person": false
       }
     },
     {
@@ -179,7 +181,8 @@
         "url": "",
         "headers": [],
         "tools": "",
-        "confirm": false
+        "confirm": false,
+        "show_to_person": false
       }
     },
     {
@@ -204,7 +207,7 @@
       "id_prefix": "code",
       "outputs": [],
       "workflow_tool": true,
-      "defaults": { "confirm": false }
+      "defaults": { "confirm": false, "show_to_person": false }
     },
     {
       "kind": "skills",

@@ -30,7 +30,7 @@ import logging
 import re
 from collections.abc import Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urljoin
 
 import httpx
@@ -296,6 +296,9 @@ class WorkflowTool(BaseTool):
     handed its failure to answer it with (its ``refused``).
     """
 
+    #: A chat draws its run (the person is shown its calls in full: ``SHOWN_ATTR``).
+    forge_shown: ClassVar[bool] = True
+
     def __init__(
         self,
         *,
@@ -339,6 +342,9 @@ class KnowledgeBaseTool(BaseTool):
     """Searches some of the organization's knowledge bases (their documents,
     parsed, chunked and embedded) for the passages that best match what the
     model asks, by meaning and by its words."""
+
+    #: A chat cites the passages it found (the person is shown its calls in full: ``SHOWN_ATTR``).
+    forge_shown: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -443,7 +449,9 @@ async def _always(args: dict[str, Any], tool_context: ToolContext) -> bool:
 class GuardedTools(ForgeBaseToolset):
     """
     Tools and toolsets that answer instead of raising (``ForgeBaseToolset``),
-    optionally each confirmed by a person before it runs.
+    optionally each confirmed by a person before it runs, and optionally
+    shown to the person in full (``shown``: their arguments and results,
+    which the chat's public view otherwise leaves out).
     """
 
     default_suggested_fixes = ("Check the arguments against the tool's parameters and call it again.",)
@@ -454,10 +462,12 @@ class GuardedTools(ForgeBaseToolset):
         *,
         confirm: bool = False,
         timeout_seconds: float | None = None,
+        shown: bool = False,
     ) -> None:
         super().__init__(timeout_seconds=timeout_seconds)
         self.items = items
         self.confirm = confirm
+        self.shown = shown
 
     async def get_raw_tools(self, readonly_context: ReadonlyContext | None = None) -> list[BaseTool]:
         tools: list[BaseTool] = []

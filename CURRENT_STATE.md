@@ -54,7 +54,6 @@ All of these were checked against the code on 2026-10-18/19.
 
 | ID | Sev | Area | Bug | Where |
 |---|---|---|---|---|
-| B-1 | High | Chat runtime | **Clients receive the raw ADK session.** Tool arguments and results, model thoughts, internal `forge:*` state and raw error strings reach chat-page visitors and A2A callers. | `forge_agent_runtime/wire.py`, `server.py`, the A2A event converter |
 | B-2 | High | Chat runtime | **No spend limits.** Callers pick any configured model and thinking level. Follow-up and compaction calls aren't metered. There are no request or attachment size caps and no rate limits, including on chat-page visitor-token issuance. | `executor.py` (`FIXED_STATE`), `forge_common/adk/follow_ups.py`, `context_window.py` |
 | B-3 | Med–High | Credentials | **Token requests for org API credentials skip the egress guard.** Client-credentials, refresh and code-exchange requests go out on a plain `httpx.AsyncClient`, and `token_url` is only pattern-checked. Client secrets can be POSTed to private or metadata addresses. | `forge_mcp_servers/api_credentials.py` (`http()`), built in `forge_admin/api/server.py` and `forge_task_adk_workflows/task.py` |
 | B-4 | Medium | Workflow runs | **Bash steps in OpenShell read output with no budget.** The SDK keeps every chunk until timeout. Code execution has the 1 MiB budget; Bash steps don't. | `support/sandbox_commands.py` (`_command`) |
@@ -84,7 +83,7 @@ All of these were checked against the code on 2026-10-18/19.
 
 ### Hardening, grouped into tasks
 
-1. **Client view model** (B-1, B-14, B-15): a projection per channel. Strip thoughts and internal state; show tool results only when a tool opts in. Bound the SSE buffer, and use a versioned A2A task store.
+1. **Client view model, what's left** (B-14, B-15): bound the SSE buffer, and use a versioned A2A task store. The per-channel projection itself is done (see Fixed).
 2. **Spend limits and fairness** (B-2, B-7, B-11): a model allowlist per agent and org; meter every LLM call through one sink; body and attachment caps; rate limits; a per-org concurrency cap in `claim`; compaction on the selected model.
 3. **Agent builds and hosted persistence** (B-8, B-9, B-10): a compiled build manifest with pinned dependency versions; close a draft's old runner on a new revision; MCP sessions per conversation; a persistent artifact service; save sessions to memory.
 4. **Egress gaps** (B-3, B-5, B-6, B-4): guarded clients for credential token requests and the worker's MCP registry; host pinning for git; an output budget for OpenShell Bash.
@@ -145,6 +144,7 @@ Run `make admin-migrate` before starting new admin API or worker code; the run s
 | `HYBRID_ADK_WORKFLOWS__HTTP_ALLOW_PRIVATE` / `…_HTTP_ALLOWED_HOSTS` | The same for workflow HTTP and git steps and MCP tools in workflow LLM steps. |
 | `FORGE_ADMIN_JWT_SECRET` (else `FORGE_ADMIN_SECRETS_KEY`) | Also derives the key that signs chat-page visitor tokens. With neither set, each process makes its own key, and visitors lose their conversations on restart or across replicas. |
 | `FORGE_ADMIN_AGENT_RUNTIME_PUBLIC` | **Removed.** There's no public runtime. Every call needs an org API key or a Forge sign-in; chat pages use signed visitor tokens (`X-Forge-Visitor`). |
+| `show_to_person` (Agents canvas: HTTP, OpenAPI, MCP and code tools; default off) | The people the agent talks with see the tool's calls in full. Off, they see only that it ran. Agent managers testing in the console always see everything. |
 | `IT_MYSQL_PORT` / `IT_REDIS_PORT` / `IT_ARGS`, plus `COMPOSE_PROJECT_NAME` | Ports and pytest arguments for the integration suite. Set a project name to run two stacks side by side. |
 
 New HTTP headers:
@@ -154,6 +154,7 @@ New HTTP headers:
 **Invariants to keep:**
 - **All outbound traffic goes through the guard.** Tools, workflow HTTP, OpenAPI and MCP use `http_client()`/`GuardedClient` or `mcp_guard`. Configured proxies make HTTP tools fail closed. Across origins, redirects keep only representation headers.
 - **Chat-page links are the only anonymous path in,** and every runtime entry point must keep the "organization still exists" check.
+- **Every route that returns a conversation's events or state goes through a view** (`forge_agent_runtime.views.Projector`). Only agent managers in the console get the full view; everyone else gets the public one. A new user-facing tool must say it's shown (`forge_shown` on the tool, or `show_to_person` on its node), or the person sees `{}` for its calls.
 - **Hosted chat-agent saves strip carried copies.** They drop `version`, `dependencies` and `ui_components` and force `organization_id`.
 - **`run_adk` liveness comes from the run-store lease alone** (SAQ heartbeat 0). `run_job` uses heartbeat 0, a 1800 s timeout and 3 retries. The worker applies its own job settings whatever the enqueuer sent.
 
@@ -182,6 +183,18 @@ Spanner needs no DDL for this.
 | IT-6 | Parents waiting on child runs held every worker slot | Parents pause at a `child_run` gate; the child's end wakes them |
 | IT-7 | A worker draining for shutdown kept taking new runs | `stop_taking` before the drain; `_let_go` queues a job; interruptions are counted apart |
 | IT-8 | Workers spun a CPU core while Redis was away | Dequeues back off |
+
+**B-1, fixed 2026-10-19: clients got the raw ADK session.** Sessions, SSE turns and A2A now go through a view (`forge_agent_runtime/views.py`).
+- **The full view** goes only to agent managers signed in to the console.
+- **The public view** goes to everyone else: chat pages, API keys, the desktop app, members, A2A.
+- **What the public view leaves out:**
+  - thoughts;
+  - the arguments and results of calls the person isn't shown. Names and IDs are kept, so calls and answers still pair up;
+  - state other than the title, follow-ups, the context meter and the agent's declared keys;
+  - custom metadata other than the turn's outcome and the chat's markers;
+  - why a failure happened. A refusal saying what someone needs still shows.
+- **What's always shown:** rich answers, workflow runs, knowledge-base citations, asking the person, approvals, sign-ins, `finish_task`, `submit_requests` and task hand-offs.
+- **What authors can show:** any other tool, through `show_to_person`. `ShownCallsPlugin` tags shown calls as they're made, so replayed history matches the live stream.
 
 **2026-10-18 review:**
 - Runtime identity: callers are bound to their conversations, drafts need `agents:manage`, the entry rule is checked every turn, and build errors are generic.

@@ -50,6 +50,12 @@ And one that decides how its turns reply passes ``streaming``: whether a
 turn's replies stream, whatever its request asks (``streaming``), e.g. as a
 chat page is set to.
 
+What a caller sees of a conversation (its sessions and a turn's events) is a
+view (:mod:`.views`): ``view`` says which; without it, the public one, which
+leaves out the model's thoughts, the arguments and results of calls the
+person isn't shown, the state the agent keeps for itself and why a failure
+failed. An app gives the full view to whoever builds its agents.
+
 Each turn starts only when the agent's chat agent node lets whoever it's for
 in (:meth:`AgentExecutor.refusal`): 403 otherwise, saying what it needs.
 """
@@ -85,6 +91,7 @@ from forge_agent_runtime.executor import (
     check_state,
 )
 from forge_agent_runtime.leases import TurnBusy, TurnLease
+from forge_agent_runtime.views import EventView, Projector, public_view
 from forge_agent_runtime.wire import sse, to_wire
 from forge_common.adk.turns import TurnOutcome, persist_turn, turn_scope
 from forge_common.model_provider import ModelProviderAuthError
@@ -208,6 +215,18 @@ class TurnStreaming(Protocol):
         ...
 
 
+class EventViewHook(Protocol):
+    """What a request is shown of an agent's conversations (:mod:`.views`)."""
+
+    async def __call__(self, request: Request, agent: ResolvedAgent) -> EventView:
+        """
+        :param request: The request, once ``admit`` and ``authorize`` let it through.
+        :param agent: The agent called.
+        :return: The view: ``FULL_VIEW``, or ``public_view(agent.document)``.
+        """
+        ...
+
+
 class SessionCreate(CamelModel):
     #: The conversation's starting state: what the agent's state schema declares.
     state: dict[str, Any] | None = None
@@ -242,6 +261,7 @@ async def _pump(
     author: str,
     failure: Callable[[str, Exception], Event],
     persist: Callable[[TurnOutcome], Awaitable[None]] | None,
+    project: Callable[[Event], Event],
 ) -> None:
     """
     Runs a turn from start to end in one task, putting its events on the
@@ -256,7 +276,7 @@ async def _pump(
                         outcome.observe(event)
                         # Serialize before resuming the iterator: a serialization
                         # failure must reach the still-open invocation's audit.
-                        queue.put_nowait(sse(event))
+                        queue.put_nowait(sse(project(event)))
                 except Exception as error:
                     public_error = failure(author, error)
                     outcome.fail(
@@ -280,7 +300,7 @@ async def _pump(
                 event.error_message or "The agent ran into a problem. Try again.",
                 replace=not outcome.native_failure,
             )
-            queue.put_nowait(sse(event))
+            queue.put_nowait(sse(project(event)))
         finally:
             try:
                 if persist is not None:
@@ -300,17 +320,22 @@ async def stream_events(
     keepalive: float | None = KEEPALIVE_SECONDS,
     failure: Callable[[str, Exception], Event] = error_event,
     persist: Callable[[TurnOutcome], Awaitable[None]] | None = None,
+    project: Callable[[Event], Event] | None = None,
 ) -> AsyncGenerator[str, None]:
     """One turn: start, ADK events/heartbeats, then exactly one final outcome.
 
     HTTP EOF is not the completion signal. The terminal control event is
     emitted only after the execution task and its audit have settled.
+
+    :param project: Each event as the caller sees it (``Projector.event``);
+        as it is when None.
     """
+    shown: Callable[[Event], Event] = project if project is not None else (lambda event: event)
     outcome = TurnOutcome()
     yield ":ok\n\n"
-    yield sse(outcome.event(author, started=True))
+    yield sse(shown(outcome.event(author, started=True)))
     queue: asyncio.Queue[Any] = asyncio.Queue()
-    turn = asyncio.create_task(_pump(events, queue, outcome, author, failure, persist))
+    turn = asyncio.create_task(_pump(events, queue, outcome, author, failure, persist, shown))
     try:
         while True:
             try:
@@ -319,7 +344,7 @@ async def stream_events(
                 yield KEEPALIVE
                 continue
             if item is _END:
-                yield sse(outcome.event(author))
+                yield sse(shown(outcome.event(author)))
                 return
             yield item
     finally:
@@ -339,6 +364,7 @@ async def _stream(
     lease: TurnLease,
     keepalive: float | None = KEEPALIVE_SECONDS,
     resolved: ResolvedAgent | None = None,
+    project: Callable[[Event], Event] | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     One turn's stream, holding its conversation's lease (taken before the
@@ -369,7 +395,9 @@ async def _stream(
             await lease.release()
 
     try:
-        async with aclosing(stream_events(events, author, keepalive=keepalive, persist=persist)) as stream:
+        async with aclosing(
+            stream_events(events, author, keepalive=keepalive, persist=persist, project=project)
+        ) as stream:
             async for chunk in stream:
                 yield chunk
     finally:
@@ -385,6 +413,7 @@ def create_router(
     authorize: AuthorizeCall | None = None,
     owner: ConversationOwner | None = None,
     streaming: TurnStreaming | None = None,
+    view: EventViewHook | None = None,
     keepalive: float | None = KEEPALIVE_SECONDS,
 ) -> APIRouter:
     """
@@ -396,6 +425,8 @@ def create_router(
     :param authorize: Decides per agent whether a request may call it, once it's found.
     :param owner: Whose conversations a call reaches; the ``userId`` it names when None.
     :param streaming: Whether a turn's replies stream, whatever it asks; as it asks when None.
+    :param view: What a request is shown of the agent's conversations; the
+        public view when None.
     :param keepalive: Seconds a turn's stream may be quiet before it sends a
         ``: keepalive`` comment; None never sends one.
     :return: The routes.
@@ -427,6 +458,11 @@ def create_router(
         """:return: The user ID the caller's conversations a call names are kept under."""
         return user_id if owner is None else await owner(request, user_id)
 
+    async def projector(request: Request, resolved: ResolvedAgent, events: Sequence[Event] = ()) -> Projector:
+        """:return: What the caller is shown of the agent's conversations, having seen ``events``."""
+        seen = public_view(resolved.document) if view is None else await view(request, resolved)
+        return Projector(seen, events)
+
     def shown(value: dict[str, Any], user_id: str) -> dict[str, Any]:
         """A conversation as the caller named it: with the ``userId`` the call did."""
         return {**value, "userId": user_id} if "userId" in value else value
@@ -439,11 +475,12 @@ def create_router(
     @router.get("/apps/{app_name}/users/{user_id}/sessions")
     async def list_sessions(request: Request, app_name: AppName, user_id: UserId) -> JSONResponse:
         """A person's conversations with the agent, most recently active first, without their events."""
-        agent = (await agent_of(request, app_name, action="sessions", user_id=user_id)).document.id
+        resolved = await agent_of(request, app_name, action="sessions", user_id=user_id)
         kept = await owner_of(request, user_id)
-        listed = await of(request).sessions.list_sessions(app_name=agent, user_id=kept)
+        listed = await of(request).sessions.list_sessions(app_name=resolved.document.id, user_id=kept)
         newest = sorted(listed.sessions, key=lambda s: s.last_update_time, reverse=True)
-        return JSONResponse([shown(to_wire(session), user_id) for session in newest])
+        seen = await projector(request, resolved)
+        return JSONResponse([shown(to_wire(seen.session(session)), user_id) for session in newest])
 
     @router.post("/apps/{app_name}/users/{user_id}/sessions", status_code=status.HTTP_201_CREATED)
     async def create_session(
@@ -462,20 +499,24 @@ def create_router(
             state=state or None,
             session_id=body.session_id if body else None,
         )
-        return JSONResponse(shown(to_wire(session), user_id), status_code=status.HTTP_201_CREATED)
+        seen = await projector(request, resolved)
+        return JSONResponse(
+            shown(to_wire(seen.session(session)), user_id), status_code=status.HTTP_201_CREATED
+        )
 
     @router.get("/apps/{app_name}/users/{user_id}/sessions/{session_id}")
     async def get_session(
         request: Request, app_name: AppName, user_id: UserId, session_id: SessionId
     ) -> JSONResponse:
         """A conversation with its events, which a chat replays to show it."""
-        agent = (await agent_of(request, app_name, action="sessions", user_id=user_id)).document.id
+        resolved = await agent_of(request, app_name, action="sessions", user_id=user_id)
         session = await of(request).sessions.get_session(
-            app_name=agent, user_id=await owner_of(request, user_id), session_id=session_id
+            app_name=resolved.document.id, user_id=await owner_of(request, user_id), session_id=session_id
         )
         if session is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "No such conversation")
-        return JSONResponse(shown(to_wire(session), user_id))
+        seen = await projector(request, resolved)
+        return JSONResponse(shown(to_wire(seen.session(session)), user_id))
 
     @router.delete(
         "/apps/{app_name}/users/{user_id}/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT
@@ -577,8 +618,16 @@ def create_router(
         except TurnBusy as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc), headers={"Retry-After": "2"}) from exc
         try:
+            # What the caller is shown of the turn: its events, as the conversation's so far are.
+            seen = await projector(request, resolved, session.events)
             stream = _stream(
-                executor_, body, runner.app_name, lease=lease, keepalive=keepalive, resolved=resolved
+                executor_,
+                body,
+                runner.app_name,
+                lease=lease,
+                keepalive=keepalive,
+                resolved=resolved,
+                project=seen.event,
             )
             # A stream that never starts (its client went first) gives it back as it's dropped.
             lease.held_by(stream)
@@ -590,8 +639,16 @@ def create_router(
     return router
 
 
-def create_app(executor: AgentExecutor, *, prefix: str = "", title: str = "Forge agent runtime") -> FastAPI:
+def create_app(
+    executor: AgentExecutor,
+    *,
+    prefix: str = "",
+    title: str = "Forge agent runtime",
+    view: EventViewHook | None = None,
+) -> FastAPI:
     """
+    :param view: What a request is shown of the agents' conversations; the
+        public view when None.
     :return: A server for ``executor``'s agents: the run API at ``prefix``,
         and ``GET /healthz``. Closing the app closes the executor.
     """
@@ -604,7 +661,7 @@ def create_app(executor: AgentExecutor, *, prefix: str = "", title: str = "Forge
             await executor.close()
 
     app = FastAPI(title=title, lifespan=lifespan)
-    app.include_router(create_router(executor), prefix=prefix)
+    app.include_router(create_router(executor, view=view), prefix=prefix)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -624,6 +681,7 @@ __all__ = [
     "AuthorizeCall",
     "ConversationOwner",
     "CallAction",
+    "EventViewHook",
     "TurnStreaming",
     "create_app",
     "create_router",

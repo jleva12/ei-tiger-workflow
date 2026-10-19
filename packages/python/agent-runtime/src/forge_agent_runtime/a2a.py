@@ -29,6 +29,11 @@ completes with the reply as its artifact, fails saying why, or waits
 (``input-required``) on a tool that asks for confirmation until the next
 message on it answers.
 
+A caller sees a turn's events in the public view (:mod:`.views`): no
+thoughts, no arguments or results of calls a person isn't shown (what it
+must answer, it is), only the state a chat reads, and a failure's code with
+a message saying so rather than why.
+
 Tasks are kept per agent and caller (:func:`task_store`), in memory or a
 database. Listing them (``ListTasks``) needs a caller the server knows (a
 sign-in or an API key): on an open server it would show everyone's.
@@ -102,6 +107,7 @@ from forge_agent_runtime.document import HANDED_TO, ChatAgentDocument
 from forge_agent_runtime.executor import AgentExecutor, AgentNotFound, RunRequest, StateRefused
 from forge_agent_runtime.leases import TurnBusy, TurnLease
 from forge_agent_runtime.server import CANT_BUILD, AdmitCall, AppName, AuthorizeCall, CallAction, error_event
+from forge_agent_runtime.views import FAILED, Projector, public_error, public_view
 from forge_common.adk.turns import current_turn, persist_turn, turn_scope
 
 if TYPE_CHECKING:
@@ -460,15 +466,18 @@ class ForgeA2aExecutor(A2aAgentExecutor):
             run = convert_a2a_request_to_agent_run_request(context, convert_a2a_part_to_genai_part)
             state = _state_of(context)
             user_id, session_id = str(run.user_id), str(run.session_id)
-            if (
-                await executor.sessions.get_session(
-                    app_name=resolved.document.id, user_id=user_id, session_id=session_id
-                )
-                is None
-            ):
+            existing = await executor.sessions.get_session(
+                app_name=resolved.document.id, user_id=user_id, session_id=session_id
+            )
+            if existing is None:
                 await executor.sessions.create_session(
                     app_name=resolved.document.id, user_id=user_id, session_id=session_id
                 )
+            # What a caller is shown of the turn (.views): the public view, as
+            # the conversation's events so far are.
+            projector = Projector(
+                public_view(resolved.document), existing.events if existing is not None else ()
+            )
             request = RunRequest(
                 app_name=app_name,
                 user_id=user_id,
@@ -495,7 +504,8 @@ class ForgeA2aExecutor(A2aAgentExecutor):
             )
             async with aclosing(executor.run(request, resolved=resolved, lease=held[0])) as events:
                 try:
-                    async for event in events:
+                    async for raw in events:
+                        event = projector.event(raw)
                         turn.remember_reply(event)
                         if event.interrupted and not (event.error_code or event.error_message):
                             turn.cancelled()
@@ -553,7 +563,7 @@ class ForgeA2aExecutor(A2aAgentExecutor):
             failed = error_event(app_name, error)
             if outcome := current_turn():
                 outcome.observe(failed)
-            turn.failed(failed.error_message or str(error))
+            turn.failed(public_error(failed.error_code, failed.error_message) or FAILED)
         await _finish(updater, turn, event_queue, task_id, context_id, save_outcome)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:

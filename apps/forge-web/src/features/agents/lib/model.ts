@@ -215,6 +215,8 @@ export type ChatConfigs = {
     credential: string
     /** A person confirms each call before it's made. */
     confirm: boolean
+    /** The people its agent talks with see its calls in full (what it was called with, what it answered). */
+    show_to_person: boolean
   }
   openapi: {
     /** Where the spec comes from: fetched from `url`, or pasted into `spec`. */
@@ -230,6 +232,8 @@ export type ChatConfigs = {
     /** One of the organization's credentials, by ID: how its calls sign in. Empty for none. */
     credential: string
     confirm: boolean
+    /** The people its agent talks with see its calls in full (what it was called with, what it answered). */
+    show_to_person: boolean
   }
   mcp: {
     /**
@@ -244,6 +248,8 @@ export type ChatConfigs = {
     /** The server's tools it may call, comma-separated; empty for all. */
     tools: string
     confirm: boolean
+    /** The people its agent talks with see its calls in full (what it was called with, what it answered). */
+    show_to_person: boolean
   }
   /**
    * Python the model writes, run where the deployment's sandbox mode says
@@ -254,6 +260,8 @@ export type ChatConfigs = {
   code_execution: {
     /** A person confirms each run, seeing the code, before it runs. */
     confirm: boolean
+    /** The people its agent talks with see its calls in full (what it was called with, what it answered). */
+    show_to_person: boolean
   }
   /**
    * Skills from the organization's vault (the Skills page): the model is

@@ -316,7 +316,8 @@ test("agents saved with Google's built-in tools open without them", () => {
 })
 
 test("a code_execution node is Forge's Code execution tool, not Google's built-in", () => {
-  // Google's built-in shares the name; it opens as Forge's run-code tool, a person not confirming each run.
+  // Google's built-in shares the name; it opens as Forge's run-code tool, a person not confirming each run,
+  // and its calls not shown to the people its agent talks with.
   const doc = example()
   doc.nodes.push({
     id: "code",
@@ -340,7 +341,7 @@ test("a code_execution node is Forge's Code execution tool, not Google's built-i
       id: "code",
       kind: "code_execution",
       name: "Code execution",
-      config: { confirm: false },
+      config: { confirm: false, show_to_person: false },
       outputs: [],
     }
   )

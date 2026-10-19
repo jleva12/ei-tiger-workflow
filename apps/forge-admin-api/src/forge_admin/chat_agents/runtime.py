@@ -22,6 +22,14 @@ are each caller's own. Each of an agent's agents with a rule on its node
 answers only those holding what it needs, telling the others what that is
 (``forge_admin.chat_agents.access``): the runtime checks it as the agent
 runs, and the chat agent's as each turn starts, for the caller recorded here.
+
+What a caller sees of a conversation is a view (``forge_agent_runtime.views``,
+``event_view``): whoever edits the organization's agents (agents:manage),
+signed in to Forge's console, sees everything, as the builder's test chat
+draws it on the canvas; everyone else (API keys, the desktop app, a member
+chatting with an agent; chat pages and A2A always) sees the public view: no
+thoughts, no arguments or results of calls a person isn't shown, none of the
+state the agent keeps for itself, and a failure's code without why.
 """
 
 from a2a.server.tasks import TaskStore
@@ -31,6 +39,7 @@ from forge_agent_runtime import AgentExecutor
 from forge_agent_runtime.a2a import api_key_security, create_a2a_router, known_caller
 from forge_agent_runtime.executor import LocatedAgent, ResolvedAgent
 from forge_agent_runtime.server import CallAction, create_router
+from forge_agent_runtime.views import FULL_VIEW, EventView, public_view
 
 from forge_admin.adk_workflows.a2a import workflow_a2a_service
 from forge_admin.auth.runtime_access import (
@@ -44,6 +53,7 @@ from forge_admin.chat_agents.access import (
     ANONYMOUS,
     AgentUser,
     agent_user,
+    current_agent_user,
     set_agent_user,
 )
 from forge_admin.config import Settings
@@ -159,11 +169,26 @@ def runtime_security() -> dict[str, SecurityScheme]:
     )
 
 
+async def event_view(request: Request, agent: ResolvedAgent) -> EventView:
+    """
+    What a caller is shown of an agent's conversations: everything for a
+    person signed in to Forge's console who edits the organization's agents
+    (the builder's test chat), the public view for everyone else.
+    """
+    caller = caller_of(request)
+    person = not (caller.is_anonymous or caller.is_api_key)
+    console = request.headers.get(CLIENT_HEADER) == CONSOLE
+    if person and console and current_agent_user().manager:
+        return FULL_VIEW
+    return public_view(agent.document)
+
+
 router = create_router(
     executor_of,
     admit=admit_agent,
     authorize=authorize_agent,
     owner=conversation_owner,
+    view=event_view,
 )
 
 

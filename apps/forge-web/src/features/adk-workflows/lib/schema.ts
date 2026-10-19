@@ -308,6 +308,9 @@ const SUB_CONFIGS: Record<SubAgentKind, Record<string, unknown>> = {
 
 const kinds: AgentKind[] = KNOWN_KINDS
 
+/** Tool settings a workflow's tools may leave out: the Agents canvas's own. */
+const CHAT_ONLY = new Set(["show_to_person"])
+
 const settings = (
   properties: Record<string, unknown>,
   description: string
@@ -459,10 +462,21 @@ export const agentJsonSchema = () => ({
       ])
     ),
     ...Object.fromEntries(
-      LLM_TOOL_KINDS.map((kind) => [
-        `tool_config_${kind}`,
-        settings(CHAT_CONFIGS[kind], `A tool: ${chatKindInfo(kind).summary}`),
-      ])
+      LLM_TOOL_KINDS.map((kind) => {
+        const tool = settings(
+          CHAT_CONFIGS[kind],
+          `A tool: ${chatKindInfo(kind).summary}`
+        )
+        // No one chats with a workflow's agent: what a person is shown of a
+        // tool's calls is the Agents canvas's to set, and optional here.
+        return [
+          `tool_config_${kind}`,
+          {
+            ...tool,
+            required: tool.required.filter((key) => !CHAT_ONLY.has(key)),
+          },
+        ]
+      })
     ),
     ...Object.fromEntries(
       SUB_AGENT_KINDS.map((kind) => [

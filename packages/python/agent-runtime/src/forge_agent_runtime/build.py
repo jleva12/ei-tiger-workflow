@@ -105,6 +105,7 @@ from forge_agent_runtime.tools import (
     header_dict,
     http_client,
 )
+from forge_agent_runtime.views import ShownCallsPlugin
 from forge_agent_runtime.whole_state import WholeStatePlugin
 from forge_common.adk.ask_person import ASK_PERSON_INSTRUCTION, ask_person, repair_input_schemas
 from forge_common.adk.attachments import AttachmentsPlugin
@@ -572,6 +573,8 @@ class _Builder:
     async def tool(self, node: Node) -> list[BaseTool | BaseToolset]:
         config = node.config
         guarded = self.services.tool_timeout
+        # Its calls shown to the person in full, should its node say so (.views).
+        shown = bool(config.get("show_to_person"))
         match node.kind:
             case "sub_agent":
                 return [CalledAgent(await self.agent(node, handed_to=False))]
@@ -602,17 +605,18 @@ class _Builder:
                     organization_id=self.organization_id,
                     label=node.name,
                 )
-                return [GuardedTools([tool], timeout_seconds=guarded)]
+                return [GuardedTools([tool], timeout_seconds=guarded, shown=shown)]
             case "openapi":
                 return [
                     GuardedTools(
                         [await self.openapi(node)],
                         confirm=bool(config.get("confirm")),
                         timeout_seconds=guarded,
+                        shown=shown,
                     )
                 ]
             case "mcp":
-                return [GuardedTools([await self.mcp(node)], timeout_seconds=guarded)]
+                return [GuardedTools([await self.mcp(node)], timeout_seconds=guarded, shown=shown)]
             case "knowledge_base":
                 return [GuardedTools(await self.knowledge_base(node), timeout_seconds=guarded)]
             case "adk_workflow":
@@ -622,7 +626,11 @@ class _Builder:
                 if executor is None:
                     raise BuildError(f"{node.name!r} runs code, and code execution is off here.")
                 runs = CodeTool(name=adk_name(node.name) or "run_code", executor=executor)
-                return [GuardedTools([runs], confirm=bool(config.get("confirm")), timeout_seconds=guarded)]
+                return [
+                    GuardedTools(
+                        [runs], confirm=bool(config.get("confirm")), timeout_seconds=guarded, shown=shown
+                    )
+                ]
             case "skills":
                 return [await self.skill_tools([node])]
             case "rich_answers":
@@ -1122,6 +1130,10 @@ async def build_app(
     # Hand-offs to tasks stay open in chats until the task hands back (.tasks).
     if not any(isinstance(plugin, TaskCallsPlugin) for plugin in plugins):
         plugins = [*plugins, TaskCallsPlugin()]
+    # Which calls a person is shown in full, noted as they're made (.views):
+    # first, so no plugin answering a model request before it hides its tools.
+    if not any(isinstance(plugin, ShownCallsPlugin) for plugin in plugins):
+        plugins = [ShownCallsPlugin(), *plugins]
     # Records and requests calls made together wrote, kept whole (.whole_state).
     if not any(isinstance(plugin, WholeStatePlugin) for plugin in plugins):
         plugins = [*plugins, WholeStatePlugin()]
